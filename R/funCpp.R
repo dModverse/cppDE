@@ -1,0 +1,900 @@
+#' Compile Algebraic Functions with Optional Derivatives
+#'
+#' Generates and compiles C++ code that evaluates a system of algebraic
+#' expressions \eqn{y = g(x, p)} on one or more rows of input, with
+#' optional first- and second-order derivatives. There is no time
+#' integration; the principal use cases are observation maps for
+#' likelihood-based inference and reparametrisation Jacobians for
+#' [solveODE()]. Both `derivMode = "dual"` and `derivMode = "symbolic"`
+#' support `deriv` and `deriv2`, and both expose the same `func` / `jac`
+#' / `hess` / `evaluate` API. The chain rule is available through the
+#' optional seed arguments `dX`, `dP`, `dX2`, and `dP2`. See
+#' `vignette("Methods", package = "cppDE")` for the two computational
+#' paths and the pass-through convention for unmodelled inputs.
+#'
+#' @param eqns Named character vector or list of algebraic expressions.
+#'   Names define the output variables; defaults to `f1`, `f2`, ... when
+#'   unnamed.
+#' @param variables Character vector of variable names supplied per
+#'   observation. Defaults to all symbols in `eqns` not in `parameters`.
+#' @param parameters Character vector of parameter names (constant
+#'   across observations).
+#' @param fixed Optional character vector of symbols excluded from
+#'   derivative computation.
+#' @param modelname Optional base name for generated C++ symbols and
+#'   files.
+#' @param outdir Directory for generated C++ source files. Default
+#'   `tempdir()`.
+#' @param compile Logical. Compile and load the generated C++ code.
+#'   Default `FALSE`.
+#' @param verbose Logical. Print progress messages.
+#' @param convenient Logical. Return wrappers that accept named
+#'   arguments rather than the low-level `(vars, params)` signature.
+#' @param deriv Logical. Generate first-order derivative entry points.
+#' @param deriv2 Logical. Generate Hessian entry points; implies
+#'   `deriv = TRUE`.
+#' @param derivMode One of `"dual"` (default) or `"symbolic"`. Selects
+#'   the computational path: forward-mode AD on `cppde::dual` (single-
+#'   or nested-dual) versus analytic SymPy-derived Jacobian/Hessian
+#'   contracted via BLAS. Both modes deliver `jac`, `hess`, and
+#'   `evaluate` with the same signatures.
+#'
+#' @return A list with components `func`, `jac`, `hess`, and
+#'   `evaluate` (`NULL` when not generated). Carries attributes
+#'   `equations`, `variables`, `parameters`, `fixed`, `modelname`,
+#'   `srcfile`, `derivMode`, and (for `derivMode = "symbolic"`)
+#'   `jacobian.symb`, `hessian.symb`.
+#'
+#' @seealso [compile()] for compilation; [derivSymb()] for symbolic
+#'   differentiation; [cppODE()] and [cvode()] for ODE integration;
+#'   `vignette("Methods", package = "cppDE")`.
+#' @export
+funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parameters = NULL,
+                   fixed = NULL, modelname = NULL, outdir = tempdir(), compile = FALSE,
+                   verbose = FALSE, convenient = TRUE, deriv = TRUE, deriv2 = FALSE,
+                   derivMode = c("dual", "symbolic")) {
+
+  derivMode <- match.arg(derivMode)
+  if (deriv2 && !deriv) { warning("deriv2 requires deriv. Setting deriv = TRUE."); deriv <- TRUE }
+  emit_deriv <- deriv || deriv2
+  use_ad     <- emit_deriv && derivMode == "dual"
+
+  outnames <- names(eqns) %||% paste0("f", seq_along(eqns))
+  if (!is.null(fixed)) { variables <- setdiff(variables, fixed); parameters <- union(parameters, fixed) }
+  innames <- variables; diff_params <- setdiff(parameters, fixed); diff_syms <- c(variables, diff_params)
+  if (!dir.exists(outdir)) stop("outdir does not exist: ", outdir)
+  modelname <- modelname %||% paste0("f", paste(sample(c(letters, 0:9), 8, TRUE), collapse = ""))
+  modelname <- unique_modelname(modelname)
+
+
+  # --- Symbolic derivatives (only in symbolic mode) ---
+  sym_jac <- sym_hess <- NULL
+  if (emit_deriv && derivMode == "symbolic") {
+    ds <- derivSymb(eqns, deriv2 = deriv2, real = TRUE, fixed = fixed, verbose = verbose)
+    sym_jac <- ds$jacobian; sym_hess <- ds$hessian
+  }
+  ## derivSymb() omits symbols absent from the equations; pad them with zeros
+  ## so both matrices span the full `diff_syms` the results are labelled with.
+  if (!is.null(sym_jac)) { rownames(sym_jac) <- rownames(sym_jac) %||% outnames; miss <- setdiff(diff_syms, colnames(sym_jac)); if (length(miss)) sym_jac <- cbind(sym_jac, matrix("0", nrow(sym_jac), length(miss), dimnames = list(rownames(sym_jac), miss))); sym_jac <- sym_jac[, diff_syms, drop = FALSE] }
+  if (!is.null(sym_hess)) for (nm in names(sym_hess)) { full <- matrix("0", length(diff_syms), length(diff_syms), dimnames = list(diff_syms, diff_syms)); av <- intersect(diff_syms, rownames(sym_hess[[nm]])); if (length(av)) full[av, av] <- sym_hess[[nm]][av, av, drop = FALSE]; sym_hess[[nm]] <- full }
+
+  # --- Expression parsing (R fallback for symbolic mode without compile) ---
+  fallback_ok <- TRUE
+  safeParse <- function(s) {
+    if (is.null(s) || s == "0") return(expression(0))
+    s <- gsub("Heaviside\\(([^)]+)\\)", "ifelse(\\1 >= 0, 1, 0)", s)
+    s <- gsub("exp10\\(([^)]+)\\)", "exp((\\1) * log(10))", s)
+    tryCatch(parse(text = s, keep.source = FALSE),
+             error = function(e) { fallback_ok <<- FALSE; NULL })
+  }
+  parsed_exprs <- lapply(eqns, safeParse)
+  parsed_jac <- if (!is.null(sym_jac)) { m <- matrix(vector("list", length(sym_jac)), nrow(sym_jac), dimnames = dimnames(sym_jac)); for (i in seq_along(sym_jac)) m[[i]] <- safeParse(sym_jac[i]); m }
+  parsed_hess <- if (!is.null(sym_hess)) lapply(sym_hess, function(H) { m <- matrix(vector("list", length(H)), nrow(H), dimnames = dimnames(H)); for (i in seq_along(H)) m[[i]] <- safeParse(H[i]); m })
+  if (!fallback_ok) warning("R fallback unavailable. Please compile.")
+
+  # --- C++ codegen ---
+  codegen <- get_codegen_funCpp_py()
+  toList <- function(mat) if (is.null(mat)) NULL else setNames(lapply(seq_len(nrow(mat)), function(i) as.list(as.character(mat[i,]))), rownames(mat))
+  toHess <- function(hl) if (is.null(hl)) NULL else setNames(lapply(hl, function(H) lapply(seq_len(nrow(H)), function(i) as.list(as.character(H[i,])))), names(hl))
+  cpp_file <- file.path(outdir, paste0(modelname, ".cpp"))
+  if (file.exists(cpp_file)) message("Overwriting: ", normalizePath(cpp_file, "/", FALSE))
+  codegen$generate_fun_cpp(exprs = setNames(as.list(eqns), outnames), variables = as.list(variables),
+                           parameters = as.list(parameters), jacobian = toList(sym_jac), hessian = toHess(sym_hess),
+                           ad = use_ad, deriv2 = deriv2,
+                           modelname = modelname, outdir = normalizePath(outdir, "/", FALSE), version = as.character(utils::packageVersion("cppDE")))
+
+  # --- Instance state and thin wrappers ---
+  ## All the engine needs and nothing else. The returned closures carry only
+  ## this environment, so a per-condition instance costs data, not code.
+  st <- list2env(list(innames = innames, parameters = parameters,
+                      outnames = outnames, modelname = modelname,
+                      diff_syms = diff_syms, use_ad = use_ad,
+                      parsed_exprs = parsed_exprs, parsed_jac = parsed_jac,
+                      parsed_hess = parsed_hess),
+                 parent = emptyenv())
+
+  fun_impl      <- function(...) .fun_impl(st, ...)
+  jac_impl      <- if (deriv)      function(...) .jac_impl(st, ...)
+  hess_impl     <- if (deriv2)     function(...) .hess_impl(st, ...)
+  evaluate_impl <- if (emit_deriv) function(...) .evaluate_impl(st, ...)
+  evaluateBatch_impl <- if (emit_deriv) function(...) .evaluateBatch_impl(st, ...)
+
+  # --- Output ---
+  ## Installed with keep.source, funCpp's body carries srcrefs, so the wrappers
+  ## built here would hand the caller a copy each.
+  .stripSource(environment())
+  outfn <- list(
+    func     = if (convenient) .makeFunWrapper(st, fun_impl) else fun_impl,
+    jac      = if (convenient) .makeDerivWrapper(st, jac_impl, FALSE) else jac_impl,
+    hess     = if (convenient) .makeDerivWrapper(st, hess_impl, TRUE) else hess_impl,
+    evaluate = if (convenient) .makeEvalWrapper(st, evaluate_impl) else evaluate_impl,
+    evaluateBatch = evaluateBatch_impl
+  )
+  attr(outfn, "equations") <- eqns; attr(outfn, "variables") <- variables; attr(outfn, "parameters") <- parameters
+  attr(outfn, "fixed") <- fixed; attr(outfn, "modelname") <- modelname; attr(outfn, "srcfile") <- normalizePath(cpp_file, "/", FALSE)
+  attr(outfn, "derivMode") <- derivMode
+  for (nm in c("func", "jac", "hess", "evaluate", "evaluateBatch")) {
+    if (!is.null(outfn[[nm]])) {
+      attr(outfn[[nm]], "modelname") <- modelname
+      attr(outfn[[nm]], "srcfile")   <- attr(outfn, "srcfile")
+    }
+  }
+  if (!is.null(sym_jac))  attr(outfn, "jacobian.symb") <- sym_jac
+  if (!is.null(sym_hess)) attr(outfn, "hessian.symb")  <- sym_hess
+  if (compile) compile(outfn, verbose = verbose)
+  outfn
+}
+
+
+# ============================================================================
+# Runtime engine
+# Package level, so a model with one instance per condition carries this code
+# once instead of once per condition; `st` holds the per-instance data. Bodies
+# are as they were inside funCpp(), with `st$` on the instance data.
+# ============================================================================
+
+
+# .Call needs plain doubles; a matrix already is one, so this is a no-op there.
+.asdbl <- function(x) if (is.double(x)) x else as.double(x)
+
+# --- Input validation ---
+
+.checkInputs <- function(st, vars, params, attach = FALSE) {
+  n_obs <- if (is.matrix(vars) || is.data.frame(vars)) nrow(vars)
+  else if (is.vector(vars) && !is.list(vars)) length(vars) / max(length(st$innames), 1L) else 1L
+  n_obs <- max(as.integer(n_obs), 1L); extra_vars <- extra_params <- NULL
+
+  if (!length(st$innames)) {
+    M <- matrix(0, n_obs, 0)
+    if (attach && !is.null(vars) && (is.matrix(vars) || is.data.frame(vars)) && ncol(vars) > 0) {
+      extra_vars <- as.matrix(vars); n_obs <- nrow(extra_vars)
+    }
+  } else {
+    if (is.null(vars)) stop("Variables defined but 'vars' is NULL.")
+    if (is.vector(vars) && !is.list(vars)) vars <- matrix(vars, ncol = length(st$innames), dimnames = list(NULL, st$innames))
+    cn <- colnames(vars)
+    if (is.null(cn)) { colnames(vars) <- st$innames; cn <- st$innames }
+    # match() does the same test as setdiff() without the unique()/coerce pass,
+    # and an already-matching column set needs no subset copy at all.
+    if (is.matrix(vars) && identical(cn, st$innames)) {
+      M <- vars
+    } else {
+      hit <- match(st$innames, cn, 0L)
+      if (any(hit == 0L))
+        stop("Missing variables: ", paste(st$innames[hit == 0L], collapse = ", "))
+      M <- vars[, hit, drop = FALSE]
+    }
+    n_obs <- nrow(M)
+    if (attach) { ex <- setdiff(cn, st$innames); if (length(ex)) extra_vars <- vars[, ex, drop = FALSE] }
+  }
+
+  if (!length(st$parameters)) {
+    p <- numeric(0); if (attach && length(params)) extra_params <- params
+  } else {
+    pn <- names(params)
+    if (is.null(pn)) stop("params must be named.")
+    hit <- match(st$parameters, pn, 0L)
+    if (any(hit == 0L))
+      stop("Missing parameters: ", paste(st$parameters[hit == 0L], collapse = ", "))
+    p <- params[hit]
+    if (attach) { ex <- setdiff(pn, st$parameters); if (length(ex)) extra_params <- params[ex] }
+  }
+  # M stays as R holds it, [n_obs, n_vars]: the generated entries index it as
+  # obs + n_obs * j, so no per-condition matrix has to be transposed.
+  list(M = M, p = p, n_obs = n_obs, extra_vars = extra_vars, extra_params = extra_params)
+}
+
+# --- Attach helpers (pass-through of unmodelled inputs) ---
+.abind3 <- function(a, b) { d <- dim(a); db <- dim(b); r <- array(0, c(d[1], d[2]+db[2], d[3]), list(dimnames(a)[[1]], c(dimnames(a)[[2]], dimnames(b)[[2]]), dimnames(a)[[3]])); r[,1:d[2],] <- a; r[,d[2]+1:db[2],] <- b; r }
+.abind4 <- function(a, b) { d <- dim(a); db <- dim(b); r <- array(0, c(d[1], d[2]+db[2], d[3], d[4]), list(dimnames(a)[[1]], c(dimnames(a)[[2]], dimnames(b)[[2]]), dimnames(a)[[3]], dimnames(a)[[4]])); r[,1:d[2],,] <- a; r[,d[2]+1:db[2],,] <- b; r }
+
+.attachExtras <- function(res, n_obs, ev, ep, type) {
+  if (is.null(ev) && is.null(ep)) return(res)
+  if (type == "fun") {
+    if (!is.null(ev)) res <- cbind(res, ev)
+    if (!is.null(ep)) res <- cbind(res, matrix(rep(ep, each = n_obs), n_obs, length(ep), dimnames = list(NULL, names(ep))))
+  } else if (type == "jac") {
+    cs <- dimnames(res)[[3]]; ncs <- length(cs)
+    if (!is.null(ev)) res <- .abind3(res, array(0, c(n_obs, ncol(ev), ncs), list(NULL, colnames(ev), cs)))
+    if (!is.null(ep)) { np <- length(ep); pn <- names(ep); d <- dim(res); new <- array(0, c(d[1], d[2]+np, d[3]+np), list(dimnames(res)[[1]], c(dimnames(res)[[2]], pn), c(dimnames(res)[[3]], pn))); new[,1:d[2],1:d[3]] <- res; for (k in seq_len(np)) new[,d[2]+k,d[3]+k] <- 1; res <- new }
+  } else {
+    cs <- dimnames(res)[[3]]; ncs <- length(cs)
+    if (!is.null(ev)) res <- .abind4(res, array(0, c(n_obs, ncol(ev), ncs, ncs), list(NULL, colnames(ev), cs, cs)))
+    if (!is.null(ep)) { np <- length(ep); pn <- names(ep); d <- dim(res); new <- array(0, c(d[1], d[2]+np, d[3]+np, d[4]+np), list(dimnames(res)[[1]], c(dimnames(res)[[2]], pn), c(dimnames(res)[[3]], pn), c(dimnames(res)[[4]], pn))); new[,1:d[2],1:d[3],1:d[4]] <- res; res <- new }
+  }
+  res
+}
+
+# --- Chain-rule helpers ---
+
+# Pull theta names from any seed; raise if seeds disagree.
+.resolveTheta <- function(dX, dP, dX2 = NULL, dP2 = NULL) {
+  cands <- list()
+  if (!is.null(dX))  cands[[length(cands) + 1L]] <- dimnames(dX)[[3]]
+  if (!is.null(dP))  cands[[length(cands) + 1L]] <- colnames(dP)
+  if (!is.null(dX2)) cands[[length(cands) + 1L]] <- dimnames(dX2)[[3]]
+  if (!is.null(dP2)) cands[[length(cands) + 1L]] <- dimnames(dP2)[[2]]
+  cands <- cands[lengths(cands) > 0]
+  if (!length(cands)) return(character(0))
+  theta <- cands[[1]]
+  for (k in seq_along(cands)[-1])
+    if (!identical(theta, cands[[k]]) && !setequal(theta, cands[[k]]))
+      stop("Seed theta names disagree across dX/dP/dX2/dP2")
+  theta
+}
+
+# Align seeds onto the function's internal (vars, params) order, in flat
+# arrays ready for the dual-mode .C() entries. dX2/dP2 are returned as
+# length-zero numeric vectors when not provided; the C side guards them
+# via the `has_dX2` / `has_dP2` flags.
+.alignSeedsDual <- function(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt) {
+  n_vars <- length(st$innames); n_params <- length(st$parameters); n_theta <- length(theta)
+  dX_arr <- array(0, c(n_obs, n_vars, n_theta))
+  dP_mat <- matrix(0, n_params, n_theta)
+  if (n_theta > 0) {
+    if (!is.null(dX) && n_vars > 0) {
+      idx <- match(st$innames, dimnames(dX)[[2]]); pres <- !is.na(idx)
+      # Character selection over n_theta names costs a lookup per element.
+      tX <- if (identical(dimnames(dX)[[3]], theta)) TRUE else theta
+      if (any(pres)) dX_arr[, pres, ] <- dX[, idx[pres], tX, drop = FALSE]
+    }
+    if (!is.null(dP) && n_params > 0) {
+      idx <- match(st$parameters, rownames(dP)); pres <- !is.na(idx)
+      tP <- if (identical(colnames(dP), theta)) TRUE else theta
+      if (any(pres)) dP_mat[pres, ] <- dP[idx[pres], tP, drop = FALSE]
+    }
+    if (length(fixed_rt) && n_params > 0) {
+      fp <- match(fixed_rt, st$parameters); fp <- fp[!is.na(fp)]
+      if (length(fp)) dP_mat[fp, ] <- 0
+    }
+  }
+  has_dX2 <- !is.null(dX2) && n_theta > 0 && n_vars > 0
+  has_dP2 <- !is.null(dP2) && n_theta > 0 && n_params > 0
+  dX2_arr <- if (has_dX2) {
+    r <- array(0, c(n_obs, n_vars, n_theta, n_theta))
+    idx <- match(st$innames, dimnames(dX2)[[2]]); pres <- !is.na(idx)
+    dn <- dimnames(dX2)
+    t3 <- if (identical(dn[[3]], theta)) TRUE else theta
+    t4 <- if (identical(dn[[4]], theta)) TRUE else theta
+    if (any(pres)) r[, pres, , ] <- dX2[, idx[pres], t3, t4, drop = FALSE]
+    r
+  } else double(0)
+  dP2_arr <- if (has_dP2) {
+    r <- array(0, c(n_params, n_theta, n_theta))
+    idx <- match(st$parameters, dimnames(dP2)[[1]]); pres <- !is.na(idx)
+    dn <- dimnames(dP2)
+    t2 <- if (identical(dn[[2]], theta)) TRUE else theta
+    t3 <- if (identical(dn[[3]], theta)) TRUE else theta
+    if (any(pres)) r[pres, , ] <- dP2[idx[pres], t2, t3, drop = FALSE]
+    if (length(fixed_rt)) {
+      fp <- match(fixed_rt, st$parameters); fp <- fp[!is.na(fp)]
+      if (length(fp)) r[fp, , ] <- 0
+    }
+    r
+  } else double(0)
+  # Kept as arrays: .C() and .Call() both read the REALSXP directly, and
+  # as.double() on an array is a full copy of the largest object in play.
+  list(dX = dX_arr, dP = dP_mat,
+       dX2 = dX2_arr, dP2 = dP2_arr,
+       has_dX2 = as.integer(has_dX2), has_dP2 = as.integer(has_dP2))
+}
+
+# Bundle dX/dP into S [n_obs, n_diff, n_theta] for the symbolic chain rule.
+.buildSeedMatrix <- function(st, dX, dP, n_obs, theta, fixed_rt) {
+  n_diff <- length(st$diff_syms); n_theta <- length(theta)
+  S <- array(0, c(n_obs, n_diff, n_theta), dimnames = list(NULL, st$diff_syms, theta))
+  if (n_theta > 0 && !is.null(dX)) {
+    var_part <- intersect(st$diff_syms, dimnames(dX)[[2]])
+    if (length(var_part)) S[, var_part, ] <- dX[, var_part, theta, drop = FALSE]
+  }
+  if (n_theta > 0 && !is.null(dP)) {
+    par_part <- intersect(st$diff_syms, rownames(dP))
+    if (length(par_part)) {
+      seed_p <- dP[par_part, theta, drop = FALSE]
+      for (k in seq_len(n_theta))
+        S[, par_part, k] <- rep(seed_p[, k], each = n_obs)
+    }
+  }
+  if (length(fixed_rt)) {
+    pf <- intersect(fixed_rt, st$diff_syms)
+    if (length(pf)) S[, pf, , drop = FALSE] <- 0
+  }
+  S
+}
+
+# Bundle dX2/dP2 into S2 [n_obs, n_diff, n_theta, n_theta]; NULL if both seeds absent.
+.buildSeedTensor2 <- function(st, dX2, dP2, n_obs, theta, fixed_rt) {
+  if (is.null(dX2) && is.null(dP2)) return(NULL)
+  n_diff <- length(st$diff_syms); n_theta <- length(theta)
+  S2 <- array(0, c(n_obs, n_diff, n_theta, n_theta),
+              dimnames = list(NULL, st$diff_syms, theta, theta))
+  if (n_theta > 0 && !is.null(dX2)) {
+    var_part <- intersect(st$diff_syms, dimnames(dX2)[[2]])
+    if (length(var_part)) S2[, var_part, , ] <- dX2[, var_part, theta, theta, drop = FALSE]
+  }
+  if (n_theta > 0 && !is.null(dP2)) {
+    par_part <- intersect(st$diff_syms, dimnames(dP2)[[1]])
+    if (length(par_part)) {
+      sp <- dP2[par_part, theta, theta, drop = FALSE]
+      for (k1 in seq_len(n_theta)) for (k2 in seq_len(n_theta))
+        S2[, par_part, k1, k2] <- rep(sp[, k1, k2], each = n_obs)
+    }
+  }
+  if (length(fixed_rt)) {
+    pf <- intersect(fixed_rt, st$diff_syms)
+    if (length(pf)) S2[, pf, , ] <- 0
+  }
+  S2
+}
+
+# Identity seeds for raw dual-mode J/H: dX = I on vars, dP = I on params.
+# The combined θ-basis is c(st$innames, st$parameters) so the dy/d2y output
+# carries the canonical-symbol axes that the symbolic mode also produces.
+# (Values for st$parameters listed in `fixed` carry zero seed at AD time but
+# their column is kept; the caller drops it.)
+.identitySeedsRaw <- function(st, n_obs, fixed_rt) {
+  n_vars <- length(st$innames); n_params <- length(st$parameters)
+  theta_full <- c(st$innames, st$parameters)
+  n_theta <- length(theta_full)
+  dX <- array(0, c(n_obs, n_vars, n_theta), dimnames = list(NULL, st$innames, theta_full))
+  if (n_vars > 0) for (i in seq_along(st$innames)) dX[, st$innames[i], st$innames[i]] <- 1
+  dP <- matrix(0, n_params, n_theta, dimnames = list(st$parameters, theta_full))
+  for (i in seq_along(st$parameters))
+    if (!(st$parameters[i] %in% fixed_rt))
+      dP[st$parameters[i], st$parameters[i]] <- 1
+  list(dX = dX, dP = dP, theta = theta_full)
+}
+
+# --- Core implementations (outputs time-first) ---
+
+.fun_impl <- function(st, vars, params = numeric(0), attach.input = FALSE, fixed = NULL) {
+  chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
+  # `.C()` copies every argument in and every result out; the _c entries take
+  # them by reference. Objects built by an older cppDE have no _c symbol.
+  symc <- .nativeSym(paste0(st$modelname, "_eval_c"))
+  sym <- if (is.null(symc)) .nativeSym(paste0(st$modelname, "_eval")) else NULL
+  if (!is.null(symc)) {
+    res <- .Call(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
+    dimnames(res) <- list(NULL, st$outnames)
+  } else if (!is.null(sym)) {
+    out <- .C(sym, x = as.double(M), y = double(length(st$outnames) * n_obs), p = as.double(p), n = as.integer(n_obs), k = as.integer(length(st$innames)), l = as.integer(length(st$outnames)))
+    res <- matrix(out$y, n_obs, length(st$outnames), dimnames = list(NULL, st$outnames))
+  } else {
+    res <- matrix(NA_real_, n_obs, length(st$outnames), dimnames = list(NULL, st$outnames))
+    for (i in seq_len(n_obs)) { env <- setNames(as.list(c(M[i,], p)), c(st$innames, st$parameters)); res[i,] <- vapply(st$parsed_exprs, function(e) eval(e, env), numeric(1)) }
+  }
+  .attachExtras(res, n_obs, chk$extra_vars, chk$extra_params, "fun")
+}
+
+# --- Dual-path .C() helpers ---
+
+# Single-dual AD pass; returns list(y, dy) with dy of shape [n_obs, n_out, n_theta]
+# (or [..., 0] if n_theta == 0). Used by the dual path for jac and for
+# evaluate() at deriv2 = FALSE.
+.call_eval_ad <- function(st, M, p, dX_seed, dP_seed, n_obs, theta) {
+  funsym <- paste0(st$modelname, "_eval_ad"); n_out <- length(st$outnames); n_theta <- length(theta)
+  symc <- .nativeSym(paste0(funsym, "_c"))
+  if (!is.null(symc)) {
+    r <- .Call(symc, .asdbl(M), .asdbl(p), .asdbl(dX_seed), .asdbl(dP_seed),
+               as.integer(n_obs), as.integer(n_theta))
+    y <- r[[1L]]; dimnames(y) <- list(NULL, st$outnames)
+    dy <- if (n_theta > 0) {
+      d <- r[[2L]]; dimnames(d) <- list(NULL, st$outnames, theta); d
+    } else array(0, c(n_obs, n_out, 0L), list(NULL, st$outnames, NULL))
+    return(list(y = y, dy = dy))
+  }
+  sym <- .nativeSym(funsym)
+  if (is.null(sym)) stop("AD entry '", funsym, "' is not loaded.")
+  out <- .C(sym,
+            x        = as.double(M),
+            p        = as.double(p),
+            dX       = dX_seed,
+            dP       = dP_seed,
+            y        = double(n_out * n_obs),
+            dy       = double(n_out * max(n_theta, 1L) * n_obs),
+            n_obs    = as.integer(n_obs),
+            n_vars   = as.integer(length(st$innames)),
+            n_params = as.integer(length(st$parameters)),
+            n_out    = as.integer(n_out),
+            n_theta  = as.integer(n_theta))
+  y <- matrix(out$y, n_obs, n_out, dimnames = list(NULL, st$outnames))
+  dy <- if (n_theta > 0)
+    array(out$dy[seq_len(n_out * n_theta * n_obs)], c(n_obs, n_out, n_theta),
+          list(NULL, st$outnames, theta))
+  else array(0, c(n_obs, n_out, 0L), list(NULL, st$outnames, NULL))
+  list(y = y, dy = dy)
+}
+
+# Nested-dual AD pass; returns list(y, dy, d2y).
+.call_eval_ad2 <- function(st, M, p, aligned, n_obs, theta) {
+  funsym <- paste0(st$modelname, "_eval_ad2"); n_out <- length(st$outnames); n_theta <- length(theta)
+  symc <- .nativeSym(paste0(funsym, "_c"))
+  if (!is.null(symc)) {
+    r <- .Call(symc, .asdbl(M), .asdbl(p), .asdbl(aligned$dX), .asdbl(aligned$dP),
+               if (aligned$has_dX2 != 0L) .asdbl(aligned$dX2) else NULL,
+               if (aligned$has_dP2 != 0L) .asdbl(aligned$dP2) else NULL,
+               as.integer(n_obs), as.integer(n_theta))
+    y <- r[[1L]]; dimnames(y) <- list(NULL, st$outnames)
+    if (n_theta > 0) {
+      dy <- r[[2L]];  dimnames(dy)  <- list(NULL, st$outnames, theta)
+      d2y <- r[[3L]]; dimnames(d2y) <- list(NULL, st$outnames, theta, theta)
+    } else {
+      dy  <- array(0, c(n_obs, n_out, 0L), list(NULL, st$outnames, NULL))
+      d2y <- array(0, c(n_obs, n_out, 0L, 0L), list(NULL, st$outnames, NULL, NULL))
+    }
+    return(list(y = y, dy = dy, d2y = d2y))
+  }
+  sym <- .nativeSym(funsym)
+  if (is.null(sym)) stop("AD entry '", funsym, "' is not loaded.")
+  out <- .C(sym,
+            x        = as.double(M),
+            p        = as.double(p),
+            dX       = as.double(aligned$dX),
+            dP       = as.double(aligned$dP),
+            dX2_in   = as.double(aligned$dX2),
+            dP2_in   = as.double(aligned$dP2),
+            has_dX2  = aligned$has_dX2,
+            has_dP2  = aligned$has_dP2,
+            y        = double(n_out * n_obs),
+            dy       = double(n_out * max(n_theta, 1L) * n_obs),
+            d2y      = double(n_out * max(n_theta, 1L)^2 * n_obs),
+            n_obs    = as.integer(n_obs),
+            n_vars   = as.integer(length(st$innames)),
+            n_params = as.integer(length(st$parameters)),
+            n_out    = as.integer(n_out),
+            n_theta  = as.integer(n_theta))
+  y <- matrix(out$y, n_obs, n_out, dimnames = list(NULL, st$outnames))
+  if (n_theta > 0) {
+    dy  <- array(out$dy[seq_len(n_out * n_theta * n_obs)], c(n_obs, n_out, n_theta),
+                 list(NULL, st$outnames, theta))
+    d2y <- array(out$d2y[seq_len(n_out * n_theta^2 * n_obs)], c(n_obs, n_out, n_theta, n_theta),
+                 list(NULL, st$outnames, theta, theta))
+  } else {
+    dy  <- array(0, c(n_obs, n_out, 0L), list(NULL, st$outnames, NULL))
+    d2y <- array(0, c(n_obs, n_out, 0L, 0L), list(NULL, st$outnames, NULL, NULL))
+  }
+  list(y = y, dy = dy, d2y = d2y)
+}
+
+# --- Symbolic-path raw evaluators ---
+
+.raw_jac_sym <- function(st, M, p, n_obs, fixed_rt) {
+  n_out <- length(st$outnames); n_diff <- length(st$diff_syms)
+  symc <- .nativeSym(paste0(st$modelname, "_jacobian_c"))
+  sym <- if (is.null(symc)) .nativeSym(paste0(st$modelname, "_jacobian")) else NULL
+  if (!is.null(symc)) {
+    arr <- .Call(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
+    dimnames(arr) <- list(NULL, st$outnames, st$diff_syms)
+  } else if (!is.null(sym)) {
+    out <- .C(sym, x = as.double(M), jac = double(n_obs * n_out * n_diff),
+              p = as.double(p), n = as.integer(n_obs),
+              k = as.integer(length(st$innames)), l = as.integer(n_out))
+    arr <- array(out$jac, c(n_obs, n_out, n_diff), list(NULL, st$outnames, st$diff_syms))
+  } else {
+    arr <- array(0, c(n_obs, n_out, n_diff), list(NULL, st$outnames, st$diff_syms))
+    for (i in seq_len(n_obs)) {
+      env <- setNames(as.list(c(M[i,], p)), c(st$innames, st$parameters))
+      for (o in seq_len(n_out)) for (s in seq_len(n_diff))
+        if (!(st$diff_syms[s] %in% fixed_rt)) {
+          e <- st$parsed_jac[[st$outnames[o], st$diff_syms[s]]]
+          if (!is.null(e)) arr[i, o, s] <- eval(e, env)
+        }
+    }
+  }
+  arr
+}
+
+.raw_hess_sym <- function(st, M, p, n_obs, fixed_rt) {
+  n_out <- length(st$outnames); n_diff <- length(st$diff_syms)
+  symc <- .nativeSym(paste0(st$modelname, "_hessian_c"))
+  sym <- if (is.null(symc)) .nativeSym(paste0(st$modelname, "_hessian")) else NULL
+  if (!is.null(symc)) {
+    arr <- .Call(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
+    dimnames(arr) <- list(NULL, st$outnames, st$diff_syms, st$diff_syms)
+  } else if (!is.null(sym)) {
+    out <- .C(sym, x = as.double(M), hess = double(n_obs * n_out * n_diff^2),
+              p = as.double(p), n = as.integer(n_obs),
+              k = as.integer(length(st$innames)), l = as.integer(n_out))
+    arr <- array(out$hess, c(n_obs, n_out, n_diff, n_diff), list(NULL, st$outnames, st$diff_syms, st$diff_syms))
+  } else {
+    arr <- array(0, c(n_obs, n_out, n_diff, n_diff), list(NULL, st$outnames, st$diff_syms, st$diff_syms))
+    for (i in seq_len(n_obs)) {
+      env <- setNames(as.list(c(M[i,], p)), c(st$innames, st$parameters))
+      for (o in seq_len(n_out)) {
+        Hmat <- st$parsed_hess[[st$outnames[o]]]
+        for (s1 in seq_len(n_diff)) for (s2 in seq_len(n_diff))
+          if (!(st$diff_syms[s1] %in% fixed_rt) && !(st$diff_syms[s2] %in% fixed_rt)) {
+            e <- Hmat[[st$diff_syms[s1], st$diff_syms[s2]]]
+            if (!is.null(e)) arr[i, o, s1, s2] <- eval(e, env)
+          }
+      }
+    }
+  }
+  arr
+}
+
+# BLAS-3 chain rule for symbolic mode. Falls back to per-obs %*% if the C
+# entry isn't loaded (e.g. compile = FALSE).
+.chain_jac_sym <- function(st, J_raw, S, n_obs) {
+  n_out <- length(st$outnames); n_diff <- length(st$diff_syms); n_theta <- dim(S)[3]
+  sym <- .nativeSym(paste0(st$modelname, "_chain_jac"))
+  theta <- dimnames(S)[[3]]
+  if (!is.null(sym)) {
+    out <- .C(sym,
+              J        = as.double(J_raw),
+              S        = as.double(S),
+              J_theta  = double(n_obs * n_out * n_theta),
+              n_obs    = as.integer(n_obs),
+              n_out    = as.integer(n_out),
+              n_diff   = as.integer(n_diff),
+              n_theta  = as.integer(n_theta))
+    array(out$J_theta, c(n_obs, n_out, n_theta), list(NULL, st$outnames, theta))
+  } else {
+    arr <- array(0, c(n_obs, n_out, n_theta), list(NULL, st$outnames, theta))
+    for (obs in seq_len(n_obs))
+      arr[obs,,] <- matrix(J_raw[obs,,], n_out, n_diff) %*% matrix(S[obs,,], n_diff, n_theta)
+    arr
+  }
+}
+
+.chain_hess_sym <- function(st, H_raw, J_raw, S, S2, n_obs) {
+  n_out <- length(st$outnames); n_diff <- length(st$diff_syms); n_theta <- dim(S)[3]
+  sym <- .nativeSym(paste0(st$modelname, "_chain_hess")); theta <- dimnames(S)[[3]]
+  has_S2 <- !is.null(S2)
+  S2_flat <- if (has_S2) as.double(S2) else double(0)
+  if (!is.null(sym)) {
+    out <- .C(sym,
+              H        = as.double(H_raw),
+              J        = as.double(J_raw),
+              S        = as.double(S),
+              S2_in    = S2_flat,
+              H_theta  = double(n_obs * n_out * n_theta * n_theta),
+              has_S2   = as.integer(has_S2),
+              n_obs    = as.integer(n_obs),
+              n_out    = as.integer(n_out),
+              n_diff   = as.integer(n_diff),
+              n_theta  = as.integer(n_theta))
+    array(out$H_theta, c(n_obs, n_out, n_theta, n_theta),
+          list(NULL, st$outnames, theta, theta))
+  } else {
+    arr <- array(0, c(n_obs, n_out, n_theta, n_theta),
+                 list(NULL, st$outnames, theta, theta))
+    for (obs in seq_len(n_obs)) {
+      Sobs <- matrix(S[obs,,], n_diff, n_theta)
+      for (o in seq_len(n_out)) {
+        Hslice <- matrix(H_raw[obs, o, , ], n_diff, n_diff)
+        arr[obs, o, , ] <- t(Sobs) %*% Hslice %*% Sobs
+        if (has_S2) {
+          Jslice <- as.numeric(J_raw[obs, o, ])
+          for (i in seq_len(n_diff))
+            arr[obs, o, , ] <- arr[obs, o, , ] + Jslice[i] * matrix(S2[obs, i, , ], n_theta, n_theta)
+        }
+      }
+    }
+    arr
+  }
+}
+
+# --- Public derivative implementations ---
+
+.jac_impl <- function(st, vars, params = numeric(0), dX = NULL, dP = NULL,
+                                attach.input = FALSE, fixed = NULL) {
+  if (is.null(dX)) dX <- attr(vars, "deriv")
+  if (is.null(dP)) dP <- attr(params, "deriv")
+  has_seeds <- !is.null(dX) || !is.null(dP)
+  chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
+  fixed_rt <- if (is.null(fixed)) character(0) else intersect(fixed, st$parameters)
+
+  if (st$use_ad) {
+    # Dual path: AD-seeded, identity seed for the raw case.
+    if (!has_seeds) {
+      seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
+      dX <- seeds$dX; dP <- seeds$dP
+    }
+    theta <- .resolveTheta(dX, dP)
+    aligned <- .alignSeedsDual(st, dX, dP, NULL, NULL, n_obs, theta, fixed_rt)
+    res <- .call_eval_ad(st, M, p, aligned$dX, aligned$dP, n_obs, theta)
+    arr <- res$dy
+    if (!has_seeds) {
+      # Drop runtime-fixed columns from the canonical-basis output.
+      dsyms <- setdiff(theta, fixed_rt)
+      arr <- arr[, , dsyms, drop = FALSE]
+    }
+  } else {
+    # Symbolic path.
+    raw <- .raw_jac_sym(st, M, p, n_obs, fixed_rt)
+    if (!has_seeds) {
+      dsyms <- setdiff(st$diff_syms, fixed_rt)
+      arr <- raw[, , dsyms, drop = FALSE]
+    } else {
+      theta <- .resolveTheta(dX, dP)
+      S <- .buildSeedMatrix(st, dX, dP, n_obs, theta, fixed_rt)
+      arr <- .chain_jac_sym(st, raw, S, n_obs)
+    }
+  }
+  .attachExtras(arr, n_obs, chk$extra_vars, chk$extra_params, "jac")
+}
+
+.hess_impl <- function(st, vars, params = numeric(0),
+                                  dX = NULL, dP = NULL, dX2 = NULL, dP2 = NULL,
+                                  attach.input = FALSE, fixed = NULL) {
+  if (is.null(dX))  dX  <- attr(vars,   "deriv")
+  if (is.null(dP))  dP  <- attr(params, "deriv")
+  if (is.null(dX2)) dX2 <- attr(vars,   "deriv2")
+  if (is.null(dP2)) dP2 <- attr(params, "deriv2")
+  has_seeds <- !is.null(dX) || !is.null(dP) || !is.null(dX2) || !is.null(dP2)
+  chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
+  fixed_rt <- if (is.null(fixed)) character(0) else intersect(fixed, st$parameters)
+
+  if (st$use_ad) {
+    if (!has_seeds) {
+      seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
+      dX <- seeds$dX; dP <- seeds$dP
+    }
+    theta <- .resolveTheta(dX, dP, dX2, dP2)
+    aligned <- .alignSeedsDual(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt)
+    res <- .call_eval_ad2(st, M, p, aligned, n_obs, theta)
+    arr <- res$d2y
+    if (!has_seeds) {
+      dsyms <- setdiff(theta, fixed_rt)
+      arr <- arr[, , dsyms, dsyms, drop = FALSE]
+    }
+  } else {
+    raw <- .raw_hess_sym(st, M, p, n_obs, fixed_rt)
+    if (!has_seeds) {
+      dsyms <- setdiff(st$diff_syms, fixed_rt)
+      arr <- raw[, , dsyms, dsyms, drop = FALSE]
+    } else {
+      theta <- .resolveTheta(dX, dP, dX2, dP2)
+      S  <- .buildSeedMatrix(st, dX, dP, n_obs, theta, fixed_rt)
+      S2 <- .buildSeedTensor2(st, dX2, dP2, n_obs, theta, fixed_rt)
+      # Need the raw Jacobian for the J*S2 contribution.
+      J_raw <- if (!is.null(S2)) .raw_jac_sym(st, M, p, n_obs, fixed_rt)
+               else array(0, c(n_obs, length(st$outnames), length(st$diff_syms)),
+                          list(NULL, st$outnames, st$diff_syms))
+      arr <- .chain_hess_sym(st, raw, J_raw, S, S2, n_obs)
+    }
+  }
+  .attachExtras(arr, n_obs, chk$extra_vars, chk$extra_params, "hess")
+}
+
+# Many argument sets in one .Call. Only the first-order dual path is batched;
+# everything else loops, so the caller never has to branch.
+#
+# `sets` is a list of lists with the arguments of evaluate(): vars, params and
+# optionally dX, dP, attach.input, fixed.
+.evaluateBatch_impl <- function(st, sets, cores = 1L, deriv2 = FALSE) {
+
+  one <- function(a) do.call(.evaluate_impl,
+                             c(list(st), a, list(deriv2 = deriv2)))
+  sym <- if (isTRUE(st$use_ad))
+    .nativeSym(paste0(st$modelname,
+                      if (deriv2) "_eval_ad2_batch" else "_eval_ad_batch")) else NULL
+  if (is.null(sym) || length(sets) < 2L) return(lapply(sets, one))
+
+  n_out <- length(st$outnames)
+  # The requests of one batch are the same function at different numbers: the
+  # `fixed` set and the theta basis are almost always shared. Carry the last
+  # result forward instead of redoing the name algebra per request.
+  fx_in <- NULL; fx_out <- character(0)
+  th_key <- NULL; th_val <- NULL
+  prep <- lapply(sets, function(a) {
+    vars <- a$vars; params <- if (is.null(a$params)) numeric(0) else a$params
+    dX <- if (is.null(a$dX)) attr(vars, "deriv")   else a$dX
+    dP <- if (is.null(a$dP)) attr(params, "deriv") else a$dP
+    dX2 <- if (deriv2) (if (is.null(a$dX2)) attr(vars,   "deriv2") else a$dX2)
+    dP2 <- if (deriv2) (if (is.null(a$dP2)) attr(params, "deriv2") else a$dP2)
+    has_seeds <- !is.null(dX) || !is.null(dP) || !is.null(dX2) || !is.null(dP2)
+    att <- isTRUE(a$attach.input)
+    chk <- .checkInputs(st, vars, params, att)
+    if (is.null(a$fixed)) {
+      fixed_rt <- character(0)
+    } else if (!is.null(fx_in) && identical(fx_in, a$fixed)) {
+      fixed_rt <- fx_out
+    } else {
+      fixed_rt <- a$fixed[match(a$fixed, st$parameters, 0L) > 0L]
+      fx_in <<- a$fixed; fx_out <<- fixed_rt
+    }
+    if (!has_seeds) {
+      sd <- .identitySeedsRaw(st, chk$n_obs, fixed_rt)
+      dX <- sd$dX; dP <- sd$dP
+    }
+    key <- list(dimnames(dX)[[3]], colnames(dP),
+                if (deriv2) dimnames(dX2)[[3]], if (deriv2) dimnames(dP2)[[2]])
+    if (!is.null(th_key) && identical(th_key, key)) {
+      theta <- th_val
+    } else {
+      theta <- .resolveTheta(dX, dP, dX2, dP2)
+      th_key <<- key; th_val <<- theta
+    }
+    al <- .alignSeedsDual(st, dX, dP, dX2, dP2, chk$n_obs, theta, fixed_rt)
+    list(M = chk$M, p = chk$p, n_obs = chk$n_obs, theta = theta,
+         aligned = al, has_seeds = has_seeds, fixed_rt = fixed_rt,
+         extra_vars = chk$extra_vars, extra_params = chk$extra_params)
+  })
+
+  nullIf <- function(x)
+    if (is.null(x) || !length(x)) NULL else if (is.double(x)) x else as.double(x)
+  call_sets <- lapply(prep, function(q) {
+    head <- list(as.double(q$M), as.double(q$p),
+                 nullIf(q$aligned$dX), nullIf(q$aligned$dP))
+    if (deriv2)
+      head <- c(head, list(if (identical(q$aligned$has_dX2, 1L))
+                             nullIf(q$aligned$dX2) else NULL,
+                           if (identical(q$aligned$has_dP2, 1L))
+                             nullIf(q$aligned$dP2) else NULL))
+    c(head, list(as.integer(q$n_obs), as.integer(length(st$innames)),
+                 as.integer(length(st$parameters)), as.integer(n_out),
+                 as.integer(length(q$theta))))
+  })
+
+  raw <- .Call(sym, call_sets, as.integer(cores))
+
+  lapply(seq_along(prep), function(i) {
+    q <- prep[[i]]; nt <- length(q$theta)
+    keep <- if (q$has_seeds) q$theta else setdiff(q$theta, q$fixed_rt)
+    y <- matrix(raw[[i]][[1L]], q$n_obs, n_out,
+                dimnames = list(NULL, st$outnames))
+    dy <- if (nt > 0)
+      array(raw[[i]][[2L]][seq_len(n_out * nt * q$n_obs)],
+            c(q$n_obs, n_out, nt), list(NULL, st$outnames, q$theta))
+    else array(0, c(q$n_obs, n_out, 0L), list(NULL, st$outnames, NULL))
+    if (!q$has_seeds) dy <- dy[, , keep, drop = FALSE]
+    res <- list(y  = .attachExtras(y,  q$n_obs, q$extra_vars, q$extra_params, "fun"),
+                dy = .attachExtras(dy, q$n_obs, q$extra_vars, q$extra_params, "jac"))
+    if (deriv2) {
+      d2y <- if (nt > 0)
+        array(raw[[i]][[3L]][seq_len(n_out * nt * nt * q$n_obs)],
+              c(q$n_obs, n_out, nt, nt),
+              list(NULL, st$outnames, q$theta, q$theta))
+      else array(0, c(q$n_obs, n_out, 0L, 0L),
+                 list(NULL, st$outnames, NULL, NULL))
+      res$d2y <- if (q$has_seeds) d2y else d2y[, , keep, keep, drop = FALSE]
+    }
+    res
+  })
+}
+
+
+.evaluate_impl <- function(st, vars, params = numeric(0),
+                                          dX = NULL, dP = NULL,
+                                          dX2 = NULL, dP2 = NULL,
+                                          deriv2 = FALSE,
+                                          attach.input = FALSE, fixed = NULL) {
+  if (is.null(dX))  dX  <- attr(vars,   "deriv")
+  if (is.null(dP))  dP  <- attr(params, "deriv")
+  if (is.null(dX2)) dX2 <- attr(vars,   "deriv2")
+  if (is.null(dP2)) dP2 <- attr(params, "deriv2")
+  has_seeds <- !is.null(dX) || !is.null(dP) || !is.null(dX2) || !is.null(dP2)
+  chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
+  fixed_rt <- if (is.null(fixed)) character(0) else intersect(fixed, st$parameters)
+  n_out <- length(st$outnames)
+
+  if (st$use_ad) {
+    if (!has_seeds) {
+      seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
+      dX <- seeds$dX; dP <- seeds$dP
+    }
+    theta <- .resolveTheta(dX, dP, dX2, dP2)
+    aligned <- .alignSeedsDual(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt)
+    if (deriv2) {
+      res <- .call_eval_ad2(st, M, p, aligned, n_obs, theta)
+      y <- res$y; dy <- res$dy; d2y <- res$d2y
+      if (!has_seeds) {
+        dsyms <- setdiff(theta, fixed_rt)
+        dy  <- dy [, , dsyms, drop = FALSE]
+        d2y <- d2y[, , dsyms, dsyms, drop = FALSE]
+      }
+    } else {
+      res <- .call_eval_ad(st, M, p, aligned$dX, aligned$dP, n_obs, theta)
+      y <- res$y; dy <- res$dy; d2y <- NULL
+      if (!has_seeds) {
+        dsyms <- setdiff(theta, fixed_rt)
+        dy <- dy[, , dsyms, drop = FALSE]
+      }
+    }
+  } else {
+    # Symbolic path: separate eval / jac / hess, optional chain rule.
+    y <- {
+      sym <- .nativeSym(paste0(st$modelname, "_eval"))
+      if (!is.null(sym)) {
+        out <- .C(sym, x = as.double(M), y = double(n_out * n_obs), p = as.double(p),
+                  n = as.integer(n_obs), k = as.integer(length(st$innames)),
+                  l = as.integer(n_out))
+        matrix(out$y, n_obs, n_out, dimnames = list(NULL, st$outnames))
+      } else {
+        res <- matrix(NA_real_, n_obs, n_out, dimnames = list(NULL, st$outnames))
+        for (i in seq_len(n_obs)) { env <- setNames(as.list(c(M[i,], p)), c(st$innames, st$parameters)); res[i,] <- vapply(st$parsed_exprs, function(e) eval(e, env), numeric(1)) }
+        res
+      }
+    }
+    raw_J <- .raw_jac_sym(st, M, p, n_obs, fixed_rt)
+    if (has_seeds) {
+      theta <- .resolveTheta(dX, dP, dX2, dP2)
+      S <- .buildSeedMatrix(st, dX, dP, n_obs, theta, fixed_rt)
+      dy <- .chain_jac_sym(st, raw_J, S, n_obs)
+    } else {
+      dsyms <- setdiff(st$diff_syms, fixed_rt)
+      dy <- raw_J[, , dsyms, drop = FALSE]
+    }
+    if (deriv2) {
+      raw_H <- .raw_hess_sym(st, M, p, n_obs, fixed_rt)
+      if (has_seeds) {
+        S2 <- .buildSeedTensor2(st, dX2, dP2, n_obs, theta, fixed_rt)
+        d2y <- .chain_hess_sym(st, raw_H, raw_J, S, S2, n_obs)
+      } else {
+        d2y <- raw_H[, , dsyms, dsyms, drop = FALSE]
+      }
+    } else d2y <- NULL
+  }
+
+  y   <- .attachExtras(y,   n_obs, chk$extra_vars, chk$extra_params, "fun")
+  dy  <- .attachExtras(dy,  n_obs, chk$extra_vars, chk$extra_params, "jac")
+  out <- list(y = y, dy = dy)
+  if (deriv2) out$d2y <- .attachExtras(d2y, n_obs, chk$extra_vars, chk$extra_params, "hess")
+  out
+}
+
+# --- Convenient wrappers ---
+
+.makeFunWrapper <- function(st, impl) {
+  if (is.null(impl)) return(NULL)
+  function(..., attach.input = FALSE, fixed = NULL) {
+    args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
+    if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
+    for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
+    impl(M, p, attach.input, fixed)
+  }
+}
+
+.makeDerivWrapper <- function(st, impl, has_d2 = FALSE) {
+  if (is.null(impl)) return(NULL)
+  if (has_d2) {
+    function(..., dX = NULL, dP = NULL, dX2 = NULL, dP2 = NULL,
+             attach.input = FALSE, fixed = NULL) {
+      args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
+      if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
+      for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
+      impl(M, p, dX, dP, dX2, dP2, attach.input, fixed)
+    }
+  } else {
+    function(..., dX = NULL, dP = NULL,
+             attach.input = FALSE, fixed = NULL) {
+      args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
+      if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
+      for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
+      impl(M, p, dX, dP, attach.input, fixed)
+    }
+  }
+}
+
+.makeEvalWrapper <- function(st, impl) {
+  if (is.null(impl)) return(NULL)
+  function(..., dX = NULL, dP = NULL, dX2 = NULL, dP2 = NULL, deriv2 = FALSE,
+           attach.input = FALSE, fixed = NULL) {
+    args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
+    if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
+    for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
+    impl(M, p, dX, dP, dX2, dP2, deriv2, attach.input, fixed)
+  }
+}
