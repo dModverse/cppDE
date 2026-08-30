@@ -1,3 +1,7 @@
+# cppDE 0.7.5
+
+* AD aware dense LU through LAPACK and sparse LU through KLU.
+
 # cppDE 0.7.4
 
 * Thread-local bump arena and contiguous tangent slab as tangent storage.
