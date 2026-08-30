@@ -1,3 +1,8 @@
+# cppDE 0.8.3
+
+* `funCpp()` compiles algebraic functions with optional derivatives, through
+  forward-mode AD or analytic SymPy derivatives.
+
 # cppDE 0.8.2
 
 * `solveODE()` integrates a model and returns states with first and second
