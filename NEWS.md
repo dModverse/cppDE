@@ -1,3 +1,10 @@
+# cppDE 0.9.0
+
+* `solveODEBatch()` solves many conditions in one `.Call`, over OpenMP
+  threads, with results identical to the serial path.
+* `prepareBatch()` and `solveBatch()` reuse a validated handle across solves.
+* `batchAvailable()` reports why a batch would run serially.
+
 # cppDE 0.8.4
 
 * `./configure` detects SUNDIALS, SuiteSparse/KLU and OpenMP by linking a
