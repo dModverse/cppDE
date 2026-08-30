@@ -1,3 +1,8 @@
+# cppDE 0.7.6
+
+* Variable-order BDF/NDF and Adams multistep steppers in Nordsieck form,
+  with a Newton corrector.
+
 # cppDE 0.7.5
 
 * AD aware dense LU through LAPACK and sparse LU through KLU.
