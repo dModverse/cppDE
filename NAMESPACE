@@ -2,6 +2,9 @@
 
 export(clearNativeSymbols)
 export(compile)
+export(cppODE)
+export(cvode)
 export(derivSymb)
 importFrom(reticulate,import_from_path)
 importFrom(reticulate,py_require)
+importFrom(stats,setNames)

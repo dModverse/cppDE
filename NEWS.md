@@ -1,3 +1,8 @@
+# cppDE 0.8.1
+
+* `cppODE()` and `cvode()` generate, compile and load a solver for an ODE
+  system and return a model handle.
+
 # cppDE 0.8.0
 
 * `compile()` builds generated sources through `R CMD SHLIB`.
