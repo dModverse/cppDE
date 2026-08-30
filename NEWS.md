@@ -1,3 +1,7 @@
+# cppDE 0.7.4
+
+* Thread-local bump arena and contiguous tangent slab as tangent storage.
+
 # cppDE 0.7.3
 
 * `dual2nd<T, N>` for second order sensitivities.

@@ -1,6 +1,6 @@
 Package: cppDE
 Title: Automated 'C++' Code Generation for ODE Integration with Sensitivity Analysis
-Version: 0.7.3
+Version: 0.7.4
 Authors@R: c(
     person("Simon", "Beyer", , "simon.beyer@fdm.uni-freiburg.de", role = c("aut", "cre")),
     person("Lawrence Livermore National Security", role = "cph",
