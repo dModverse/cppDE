@@ -1,0 +1,894 @@
+#!/bin/sh
+# =====================================================================
+# cppDE configure: detect optional system libraries at install time.
+#
+# Two independent capabilities are probed:
+#
+#   1. SUNDIALS (>= 6.0): required by the cvode() backend.
+#   2. SuiteSparse / KLU: required by the sparse Jacobian path of
+#      both cppODE() and cvode().
+#
+# Both are optional: if a library is missing the relevant runtime
+# entry points fail with a clear, distro-specific install hint. The
+# install itself always succeeds.
+#
+# The detected flags are written to inst/cvodeConfig.dcf, which is
+# read at package load time (R/zzz.R) into an internal `cvodeConfig`
+# environment consumed by R/cvode.R and R/tools.R at runtime.
+# =====================================================================
+set -e
+
+PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
+
+: "${R_HOME:=$(R RHOME 2>/dev/null || true)}"
+if [ -z "${R_HOME}" ]; then
+  echo "configure: cannot locate R_HOME: aborting." >&2
+  exit 1
+fi
+RBIN="${R_HOME}/bin/R"
+
+CXX=$("${RBIN}" CMD config CXX)
+CXXFLAGS=$("${RBIN}" CMD config CXXFLAGS)
+CPPFLAGS=$("${RBIN}" CMD config CPPFLAGS)
+
+log() { echo "configure: $*"; }
+
+# ---------------------------------------------------------------------
+# Abort handling.
+#
+# R stages the installation inside $R_LIBRARY_DIR/00LOCK-<pkg>, keeps any
+# previously installed version there as a backup, and cleans both up in
+# its own failure path. That path only runs if configure *returns* an
+# error; a configure killed outright by a signal leaves the lock behind
+# and blocks the next install.
+#
+# Catching the signal and exiting non-zero turns an abort into an
+# ordinary configure failure, which R then handles itself: it removes
+# the staged installation and the lock. Nothing here touches the lock
+# directory -- it is R's workspace, and deleting it breaks the very
+# cleanup that has to run.
+# ---------------------------------------------------------------------
+# Signal set and behaviour follow the autoconf boilerplate
+# (trap 'as_fn_exit 1' 1 2 13 15), spelled with names rather than numbers
+# because R CMD check flags numeric signals as a possible bashism.
+on_abort() {
+  trap - HUP INT PIPE TERM
+  log "aborted by signal; leaving cleanup to R CMD INSTALL"
+  exit 1
+}
+trap on_abort HUP INT PIPE TERM
+
+# ---------------------------------------------------------------------
+# Where the optional libraries may come from, in order of precedence:
+#
+#   CPPDE_CVODE_{CFLAGS,LIBS}, CPPDE_CVODE_KLU_{CFLAGS,LIBS}
+#       Hand-written compiler and linker flags, used verbatim. For
+#       layouts the prefix scan cannot express: split include/lib trees,
+#       static linking, additional -l entries. Each set is verified by a
+#       test compile; a failure is reported here rather than at the
+#       first model compile.
+#
+#   CPPDE_SUNDIALS_HOME=<prefix>
+#       A `cmake --install` prefix. lib vs lib64, include flags, the -l
+#       list, the presence of libsundials_core, the rpath and the origin
+#       of KLU are all derived from it and verified by a test compile.
+#
+#   CPPDE_BUILD_SUITESPARSE=1 / CPPDE_BUILD_SUNDIALS=1
+#       Build the libraries from upstream sources into a per-user cache
+#       (inst/tools/build-libs.sh). See the "not found" messages below.
+#
+#   Implicit scan
+#       System directories, ~/.local, SUNDIALS_ROOT / SUNDIALS_DIR as
+#       set by HPC module systems, and the per-user cache.
+# ---------------------------------------------------------------------
+sundials_home="${CPPDE_SUNDIALS_HOME:-}"
+sundials_home_label="CPPDE_SUNDIALS_HOME"
+prefix_roots=""
+for root in "$sundials_home" "${SUNDIALS_ROOT:-}" "${SUNDIALS_DIR:-}" "$HOME/.local"; do
+  if [ -n "$root" ]; then
+    prefix_roots="$prefix_roots $root"
+  fi
+done
+
+# ---------------------------------------------------------------------
+# Per-user cache written by build-libs.sh. Scanned on every run, not
+# only when a build flag is set, so that re-installs and upgrades keep
+# using an existing build without the flag.
+# ---------------------------------------------------------------------
+cache_root="${CPPDE_LIBS_CACHE:-}"
+if [ -z "$cache_root" ]; then
+  cache_root=$("${RBIN}" --slave --no-save -e \
+    'cat(tools::R_user_dir("cppDE", "cache"))' 2>/dev/null || true)
+fi
+scan_libs_cache() {
+  # Prefixes are version-keyed; the lexically last usable one is the
+  # newest pin. A prefix may hold SuiteSparse only, so the two libraries
+  # are looked for independently.
+  [ -n "$cache_root" ] && [ -d "$cache_root" ] || return 0
+  cached_prefix=""
+  # Only prefixes whose build ran to completion; build-libs.sh writes the
+  # stamps last, so an interrupted build is not mistaken for a usable one.
+  for d in "$cache_root"/deps-*; do
+    if [ -f "$d/.suitesparse-complete" ] || [ -f "$d/.sundials-complete" ]; then
+      cached_prefix="$d"
+    fi
+  done
+  [ -n "$cached_prefix" ] || return 0
+  case " $prefix_roots " in
+    *" $cached_prefix "*) ;;
+    *) prefix_roots="$prefix_roots $cached_prefix" ;;
+  esac
+  if [ -z "$sundials_home" ] && [ -f "$cached_prefix/.sundials-complete" ]; then
+    sundials_home="$cached_prefix"
+    sundials_home_label="per-user cache"
+  fi
+}
+scan_libs_cache
+
+sundials_cflags="${CPPDE_CVODE_CFLAGS:-}"
+sundials_libs="${CPPDE_CVODE_LIBS:-}"
+klu_cflags="${CPPDE_CVODE_KLU_CFLAGS:-}"
+klu_libs="${CPPDE_CVODE_KLU_LIBS:-}"
+sundials_available=0
+klu_available=0
+sundials_libdir=""
+if [ -n "$sundials_libs" ]; then
+  sundials_available=1
+  log "SUNDIALS configured via CPPDE_CVODE_LIBS env var"
+fi
+if [ -n "$klu_libs" ]; then
+  klu_available=1
+  log "KLU configured via CPPDE_CVODE_KLU_LIBS env var"
+fi
+
+# ---------------------------------------------------------------------
+# Source build. Opt-in because it needs network access and runs for
+# several minutes.
+#
+#   CPPDE_BUILD_SUITESPARSE=1   SuiteSparse/KLU only
+#   CPPDE_BUILD_SUNDIALS=1      SUNDIALS, which requires SuiteSparse
+#                                and therefore builds both
+#
+# The result is handed to the normal detection below, so probing, rpath
+# handling and cvodeConfig.dcf stay on one code path.
+# ---------------------------------------------------------------------
+build_component=""
+if [ "${CPPDE_BUILD_SUNDIALS:-0}" = "1" ]; then
+  build_component="sundials"
+elif [ "${CPPDE_BUILD_SUITESPARSE:-0}" = "1" ]; then
+  build_component="suitesparse"
+fi
+
+if [ -n "$build_component" ]; then
+  builder="$(dirname "$0")/inst/tools/build-libs.sh"
+  if [ ! -f "$builder" ]; then
+    log "source build requested but $builder is missing; skipping."
+  else
+    log "----------------------------------------------------------------"
+    log "Building $build_component from source. This runs inside"
+    log "R CMD INSTALL and takes from well under a minute on many cores"
+    log "to several minutes on few."
+    log ""
+    log "R holds a lock on the package library for the duration. Aborting"
+    log "leaves a stale 00LOCK-cppDE that the next install refuses to"
+    log "overwrite; recover with"
+    log "  unlink(file.path(.libPaths()[1], \"00LOCK-cppDE\"), recursive = TRUE)"
+    log ""
+    log "Two ways to avoid that. Build separately, so only the short"
+    log "install holds the lock:"
+    log "  cppDE::install_libs(\"$build_component\"); devtools::install()"
+    log "Or install without locking, so an abort never blocks a retry:"
+    log "  devtools::install(args = \"--no-lock\")"
+    log ""
+    log "An interrupted build itself is harmless: each library is marked"
+    log "complete only after it is installed and verified, so a partial"
+    log "one is neither used nor kept, and a rerun resumes what is missing."
+    log "----------------------------------------------------------------"
+    if [ -z "${CPPDE_LIBS_CACHE:-}" ] && [ -n "$cache_root" ]; then
+      CPPDE_LIBS_CACHE="$cache_root"
+      export CPPDE_LIBS_CACHE
+    fi
+    # build-libs.sh logs to stderr and prints only the prefix on stdout.
+    # A failed build yields an empty string and detection continues.
+    built_prefix=$(sh "$builder" "$build_component" || true)
+    if [ -n "$built_prefix" ] && [ -d "$built_prefix" ]; then
+      prefix_roots="$built_prefix $prefix_roots"
+      if [ -f "$built_prefix/include/cvodes/cvodes.h" ]; then
+        sundials_home="$built_prefix"
+        sundials_home_label="source build"
+      fi
+    else
+      log "----------------------------------------------------------------"
+      log "The source build did not complete; see the messages above for"
+      log "the failing step. Usual causes are missing network access, a"
+      log "missing cmake, or insufficient disk space in the cache."
+      log "Detection continues with the system-wide search."
+      log "----------------------------------------------------------------"
+    fi
+  fi
+fi
+
+# Version string from an install prefix, for human-readable logging.
+sundials_version() {
+  sv=$(grep -E '^#define SUNDIALS_VERSION ' "$1/sundials/sundials_config.h" 2>/dev/null \
+       | sed 's/.*"\(.*\)".*/\1/' || true)
+  if [ -n "$sv" ]; then printf '%s' "$sv"; else printf 'unknown version'; fi
+}
+
+PROBE_LAST_CMD=""
+PROBE_LAST_ERR=""
+
+probe_compile() {
+  # $1: source snippet; $2: extra cflags; $3: extra libs
+  # On failure, captures the compile/link command + stderr into
+  # PROBE_LAST_{CMD,ERR} so the caller can surface it in the
+  # final diagnostic: the install temp dir doesn't survive a
+  # successful R CMD INSTALL, so we can't rely on a config.log file.
+  snippet="$1"; extra_cflags="$2"; extra_libs="$3"
+  tmpdir=$(mktemp -d 2>/dev/null || mktemp -d -t conftest)
+  printf '%s\n' "$snippet" > "$tmpdir/conftest.cpp"
+  PROBE_LAST_CMD="$CXX $CPPFLAGS $CXXFLAGS $extra_cflags -o conftest conftest.cpp $extra_libs"
+  PROBE_LAST_ERR=$($CXX $CPPFLAGS $CXXFLAGS $extra_cflags -o "$tmpdir/conftest" \
+      "$tmpdir/conftest.cpp" $extra_libs 2>&1)
+  rc=$?
+  rm -rf "$tmpdir"
+  return $rc
+}
+
+append_probe_err() {
+  # $1: name var holding accumulated errors; $2: tag
+  eval "prev=\$$1"
+  new=$(printf '%s\n  --- %s ---\n  $ %s\n%s' \
+        "$prev" "$2" "$PROBE_LAST_CMD" \
+        "$(printf '%s' "$PROBE_LAST_ERR" | sed 's/^/  /')")
+  eval "$1=\$new"
+}
+
+# ---------------------------------------------------------------------
+# rpath flavour: DT_RPATH rather than DT_RUNPATH.
+#
+# Every -L emitted below is paired with an -rpath, so that a model .so
+# loaded through dyn.load() resolves libsundials_*.so at run time.
+# --disable-new-dtags makes that a DT_RPATH, which outranks
+# LD_LIBRARY_PATH and is inherited by a dependency's own lookups;
+# DT_RUNPATH, the linker default, does neither.  Apple's linker does not
+# have the flag, so it is probed rather than assumed.
+# ---------------------------------------------------------------------
+dtags_flag=""
+if probe_compile "int main() { return 0; }" "" "-Wl,--disable-new-dtags"; then
+  dtags_flag=" -Wl,--disable-new-dtags"
+  log "linker accepts --disable-new-dtags: embedding DT_RPATH"
+else
+  log "linker rejects --disable-new-dtags: falling back to DT_RUNPATH"
+fi
+
+# -L plus rpath for directory $1, in the flavour settled above.
+rpath_flags() {
+  printf -- '-L%s -Wl,-rpath,%s%s' "$1" "$1" "$dtags_flag"
+}
+
+# Whether a header exists in any directory the probes search.
+# $1: header path relative to an include directory.
+header_exists_somewhere() {
+  for p in /usr/include /usr/local/include /opt/homebrew/include /opt/local/include \
+           $prefix_roots; do
+    case "$p" in
+      */include) d="$p" ;;
+      *)         d="$p/include" ;;
+    esac
+    if [ -f "$d/$1" ]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+dump_probe_errs() {
+  # $1: variable holding the accumulated probe errors
+  # $2: header whose absence makes those errors uninformative
+  #
+  # R CMD INSTALL removes its temporary directory on success, so there is
+  # no config.log to inspect afterwards; the probe commands and their
+  # compiler output are the only record. They are printed when the header
+  # exists and the probe failed anyway, which covers multiarch layouts,
+  # lib vs lib64 mismatches and builds without a generated config header.
+  # When the header is absent the cause is already stated above, so the
+  # output is suppressed unless CPPDE_CONFIGURE_VERBOSE=1.
+  eval "errs=\$$1"
+  [ -z "$errs" ] && return 0
+  if [ -n "${2:-}" ] && ! header_exists_somewhere "$2" \
+     && [ "${CPPDE_CONFIGURE_VERBOSE:-0}" != "1" ]; then
+    log "  (no $2 anywhere on this system; re-run with"
+    log "  CPPDE_CONFIGURE_VERBOSE=1 to see the probe commands and errors)"
+    return 0
+  fi
+  log "Probe diagnostics:"
+  printf '%s\n' "$errs" | while IFS= read -r line; do log "$line"; done
+}
+
+# ---------------------------------------------------------------------
+# SUNDIALS (CVODES + NVector_Serial + dense matrix / solver)
+#
+# Detection order (each step skipped if a previous one populated
+# sundials_libs):
+#   1. CPPDE_CVODE_{CFLAGS,LIBS} env vars (set above)
+#   2. pkg-config: Debian's libsundials-dev does NOT ship .pc files,
+#      so this typically only catches non-Debian / source builds with
+#      pkg-config integration.
+#   3. Compile probe with default include / lib paths.
+#   4. File probe: locate headers + libs in known prefixes and emit
+#      explicit -I / -L flags. Catches the common Debian failure mode
+#      where R's compiler driver doesn't search the multiarch dir
+#      `/usr/lib/x86_64-linux-gnu` by default, so the bare `-lsundials_*`
+#      probe (step 3) fails even though libsundials-dev is installed.
+# ---------------------------------------------------------------------
+sundials_probe_errs=""
+
+# The context is created exactly as the generated model creates it
+# (inst/python/codegen_cvode.py): SUN_COMM_NULL, not a literal 0, which
+# under an MPI-enabled SUNDIALS is not the same value.
+snippet='
+#include <cvodes/cvodes.h>
+#include <nvector/nvector_serial.h>
+#include <sunmatrix/sunmatrix_dense.h>
+#include <sunlinsol/sunlinsol_dense.h>
+int main() {
+  SUNContext ctx = 0;
+#if SUNDIALS_VERSION_MAJOR >= 7
+  if (SUNContext_Create(SUN_COMM_NULL, &ctx) < 0) return 1;
+#else
+  if (SUNContext_Create(nullptr, &ctx) < 0) return 1;
+#endif
+  if (ctx) SUNContext_Free(&ctx);
+  return 0;
+}
+'
+
+# ---------------------------------------------------------------------
+# MPI dependency: Debian builds libsundials-dev with SUNDIALS_MPI_ENABLED=1,
+# so <sundials/sundials_types.h> unconditionally `#include <mpi.h>`. We
+# only need MPI's *include* path (no link flags: our generated code
+# never calls MPI_*; the SUNComm typedef is used as a value only).
+#
+# Detection: gate on the SUNDIALS_MPI_ENABLED macro in sundials_config.h
+# (skips the MPI probe entirely on builds that don't need it), then try
+# pkg-config (mpi-cxx is Debian's implementation-agnostic alias), then
+# fall back to `mpicxx -showme:compile` / `-compile-info` for non-pkg-
+# config installs. Any empty result is harmless: it just means the
+# SUNDIALS compile probes below run without an `-I<mpi>` prepend.
+# ---------------------------------------------------------------------
+sundials_mpi_cflags=""
+sundials_needs_mpi=0
+for hdr in /usr/include/sundials/sundials_config.h \
+           /usr/local/include/sundials/sundials_config.h \
+           /opt/homebrew/include/sundials/sundials_config.h \
+           /opt/local/include/sundials/sundials_config.h; do
+  if [ -f "$hdr" ] && grep -q '^#define SUNDIALS_MPI_ENABLED 1' "$hdr"; then
+    sundials_needs_mpi=1
+    break
+  fi
+done
+if [ "$sundials_needs_mpi" = "1" ]; then
+  if command -v "$PKG_CONFIG" >/dev/null 2>&1; then
+    for pc in mpi-cxx ompi-cxx mpich mpi; do
+      if "$PKG_CONFIG" --exists "$pc" 2>/dev/null; then
+        sundials_mpi_cflags=$("$PKG_CONFIG" --cflags-only-I "$pc" 2>/dev/null || true)
+        if [ -n "$sundials_mpi_cflags" ]; then
+          log "MPI include flags from pkg-config ($pc): $sundials_mpi_cflags"
+          break
+        fi
+      fi
+    done
+  fi
+  if [ -z "$sundials_mpi_cflags" ] && command -v mpicxx >/dev/null 2>&1; then
+    raw=$(mpicxx -showme:compile 2>/dev/null || mpicxx -compile-info 2>/dev/null || true)
+    sundials_mpi_cflags=$(printf '%s' "$raw" | tr ' ' '\n' | grep '^-I' | tr '\n' ' ')
+    [ -n "$sundials_mpi_cflags" ] && log "MPI include flags from mpicxx: $sundials_mpi_cflags"
+  fi
+  # File-probe fallback: mpi.h is often in a vendor subdir that the bare
+  # compiler driver doesn't search (e.g. Debian's OpenMPI ships it at
+  # /usr/include/x86_64-linux-gnu/openmpi/mpi.h).
+  if [ -z "$sundials_mpi_cflags" ]; then
+    for d in /usr/include /usr/include/x86_64-linux-gnu/openmpi \
+             /usr/include/x86_64-linux-gnu/mpich \
+             /usr/include/aarch64-linux-gnu/openmpi \
+             /usr/include/aarch64-linux-gnu/mpich \
+             /usr/include/openmpi /usr/include/mpich \
+             /usr/local/include /opt/homebrew/include /opt/local/include; do
+      if [ -f "$d/mpi.h" ]; then
+        # /usr/include is on the default search path; no -I needed.
+        [ "$d" != "/usr/include" ] && sundials_mpi_cflags="-I$d"
+        log "MPI include path located by file probe: ${sundials_mpi_cflags:-/usr/include (implicit)}"
+        break
+      fi
+    done
+  fi
+  if [ -z "$sundials_mpi_cflags" ] \
+     && [ ! -f /usr/include/mpi.h ]; then
+    log "SUNDIALS was built with MPI (SUNDIALS_MPI_ENABLED=1) but mpi.h"
+    log "  was not located via pkg-config, mpicxx, or known include paths"
+    log " : install libopenmpi-dev (or mpich-dev) to provide it."
+  fi
+fi
+
+# ---------------------------------------------------------------------
+# Prefix scan, shared by the explicit-prefix step below and the
+# last-resort file probe. Locates headers + libs under a set of
+# candidate directories, works out whether libsundials_core exists
+# (7+ split it out; 6.x has no such library and the linker errors on
+# it), emits explicit -I/-L, and embeds an rpath so the per-model .so
+# loaded via dyn.load() resolves libsundials_*.so at runtime even when
+# the prefix is off the dynamic linker's default search path.
+#
+#   $1 include candidates, $2 lib candidates, $3 tag for the log line
+# ---------------------------------------------------------------------
+sundials_file_probe() {
+  fp_inc=""
+  for p in $1; do
+    if [ -f "$p/cvodes/cvodes.h" ] && [ -f "$p/sundials/sundials_config.h" ]; then
+      fp_inc="$p"; break
+    fi
+  done
+  fp_lib=""
+  for d in $2; do
+    for ext in so dylib a; do
+      if ls "$d"/libsundials_cvodes.$ext* >/dev/null 2>&1; then
+        fp_lib="$d"; break 2
+      fi
+    done
+  done
+  if [ -z "$fp_inc" ] || [ -z "$fp_lib" ]; then
+    return 1
+  fi
+
+  fp_core=0
+  for ext in so dylib a; do
+    if ls "$fp_lib"/libsundials_core.$ext* >/dev/null 2>&1; then
+      fp_core=1; break
+    fi
+  done
+
+  fp_cflags="$sundials_mpi_cflags"
+  if [ "$fp_inc" != "/usr/include" ]; then
+    fp_cflags="$fp_cflags -I$fp_inc"
+  fi
+  fp_libs="$(rpath_flags "$fp_lib") -lsundials_cvodes -lsundials_nvecserial -lsundials_sunmatrixdense -lsundials_sunlinsoldense"
+  if [ "$fp_core" = "1" ]; then
+    fp_libs="$fp_libs -lsundials_core"
+  fi
+
+  if probe_compile "$snippet" "$fp_cflags" "$fp_libs"; then
+    sundials_cflags="$fp_cflags"
+    sundials_libs="$fp_libs"
+    sundials_libdir="$fp_lib"
+    sundials_available=1
+    log "SUNDIALS $(sundials_version "$fp_inc") found in $fp_lib ($3)"
+    return 0
+  fi
+  append_probe_err sundials_probe_errs "file probe ($fp_inc, $fp_lib)"
+  return 1
+}
+
+# Named prefix. Probed before the system-wide search so that an
+# explicit prefix takes precedence over an installed system copy.
+if [ "$sundials_available" = "0" ] && [ -n "$sundials_home" ]; then
+  if ! sundials_file_probe "$sundials_home/include" \
+                           "$sundials_home/lib64 $sundials_home/lib" \
+                           "$sundials_home_label"; then
+    log "----------------------------------------------------------------"
+    log "CPPDE_SUNDIALS_HOME=$sundials_home holds no usable SUNDIALS."
+    log "  Expected to find:"
+    log "    \$CPPDE_SUNDIALS_HOME/include/cvodes/cvodes.h"
+    log "    \$CPPDE_SUNDIALS_HOME/include/sundials/sundials_config.h"
+    log "    \$CPPDE_SUNDIALS_HOME/lib{,64}/libsundials_cvodes.*"
+    log "  If you built SUNDIALS from source: 'cmake --build' alone is"
+    log "  not enough, the build tree has no usable include/ layout."
+    log "  Run 'cmake --install <builddir>' and point this variable at"
+    log "  the CMAKE_INSTALL_PREFIX you used."
+    log "  Falling back to the normal system-wide detection."
+    log "----------------------------------------------------------------"
+  fi
+fi
+
+# Overrides are verified rather than trusted: an unusable flag set is
+# reported here instead of at the first model compile.
+if [ -n "${CPPDE_CVODE_LIBS:-}" ]; then
+  if probe_compile "$snippet" "$sundials_cflags $sundials_mpi_cflags" "$sundials_libs"; then
+    log "SUNDIALS override verified by test compile"
+  else
+    log "----------------------------------------------------------------"
+    log "WARNING: CPPDE_CVODE_LIBS is set, but the test compile FAILED."
+    log "  Installation continues and these flags are recorded, but"
+    log "  compiling a cvode() model will fail. Frequent causes:"
+    log "    - the prefix variable was unset when 'export' ran, leaving"
+    log "      a bare '-L/lib' in the link line"
+    log "    - CPPDE_CVODE_CFLAGS not set (needs -I<prefix>/include)"
+    log "    - lib vs lib64 mismatch for the prefix"
+    log "  Simpler alternative: unset the four CPPDE_CVODE_* variables"
+    log "  and set CPPDE_SUNDIALS_HOME=<prefix> instead."
+    log "----------------------------------------------------------------"
+    append_probe_err sundials_probe_errs "CPPDE_CVODE_LIBS override"
+    dump_probe_errs sundials_probe_errs cvodes/cvodes.h
+    sundials_probe_errs=""
+  fi
+fi
+
+# Step 2: pkg-config
+if [ "$sundials_available" = "0" ] \
+    && command -v "$PKG_CONFIG" >/dev/null 2>&1 \
+    && "$PKG_CONFIG" --exists sundials-cvodes 2>/dev/null; then
+  pc_cflags=$("$PKG_CONFIG" --cflags \
+      sundials-cvodes sundials-nvecserial \
+      sundials-sunmatrixdense sundials-sunlinsoldense 2>/dev/null || true)
+  sundials_libs=$("$PKG_CONFIG" --libs \
+      sundials-cvodes sundials-nvecserial \
+      sundials-sunmatrixdense sundials-sunlinsoldense 2>/dev/null || true)
+  if [ -n "$sundials_libs" ]; then
+    sundials_cflags=$(echo "$sundials_mpi_cflags $pc_cflags" | sed 's/^ *//; s/ *$//')
+    sundials_available=1
+    log "SUNDIALS detected via pkg-config"
+  fi
+fi
+
+# Step 3: compile probe with default paths.
+# SUNDIALS 7+ split out libsundials_core; older 6.x linked it into
+# the per-algorithm libs and does NOT ship libsundials_core at all
+# (the linker errors out instead of silently dropping it). Try the
+# 6.x-style link first, then add -lsundials_core for 7+.
+if [ "$sundials_available" = "0" ]; then
+  base_libs="-lsundials_cvodes -lsundials_nvecserial -lsundials_sunmatrixdense -lsundials_sunlinsoldense"
+  for trial_libs in "$base_libs" "$base_libs -lsundials_core"; do
+    if probe_compile "$snippet" "$sundials_mpi_cflags" "$trial_libs"; then
+      sundials_cflags="$sundials_mpi_cflags"
+      sundials_libs="$trial_libs"
+      sundials_available=1
+      log "SUNDIALS detected via compile probe (default include paths, libs: $trial_libs)"
+      break
+    fi
+    append_probe_err sundials_probe_errs "default-path probe with libs: $trial_libs"
+  done
+fi
+
+# Step 4: file probe with explicit -I / -L. This is the route that wins
+# on Debian/Ubuntu when R's gcc driver doesn't auto-search multiarch.
+if [ "$sundials_available" = "0" ]; then
+  # System prefixes first, then user-local ones (XDG ~/.local plus the
+  # env-var conventions used by HPC module systems and CMake).
+  inc_candidates="/usr/include /usr/local/include /opt/homebrew/include /opt/local/include"
+  lib_candidates="/usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /usr/lib64 /usr/lib /usr/local/lib /opt/homebrew/lib /opt/local/lib"
+  for root in $prefix_roots; do
+    inc_candidates="$inc_candidates $root/include"
+    lib_candidates="$lib_candidates $root/lib64 $root/lib"
+  done
+  sundials_file_probe "$inc_candidates" "$lib_candidates" "file probe" || true
+fi
+
+# ---------------------------------------------------------------------
+# Verify by *running* the probe, not only by linking it: which
+# libsundials the loader ends up picking is not visible to a link check.
+#
+# 126/127 -- noexec temp directory, sandboxed build, cross-compile --
+# counts as "could not check" and is passed over.  A probe that runs and
+# fails is reported but leaves the backend enabled.
+# ---------------------------------------------------------------------
+if [ "$sundials_available" = "1" ] && [ "${CPPDE_SKIP_RUN_CHECK:-0}" != "1" ]; then
+  rc_dir=$(mktemp -d 2>/dev/null || mktemp -d -t conftest)
+  printf '%s\n' "$snippet" > "$rc_dir/conftest.cpp"
+  if $CXX $CPPFLAGS $CXXFLAGS $sundials_cflags -o "$rc_dir/conftest" \
+       "$rc_dir/conftest.cpp" $sundials_libs >/dev/null 2>&1; then
+    rc_out=$("$rc_dir/conftest" 2>&1)
+    rc_status=$?
+    case "$rc_status" in
+      0)
+        log "SUNDIALS run check passed"
+        ;;
+      126|127)
+        log "SUNDIALS run check skipped (probe not executable in this environment)"
+        ;;
+      *)
+        log "----------------------------------------------------------------"
+        log "WARNING: SUNDIALS links, but the probe FAILED TO RUN (exit $rc_status)."
+        log "  A cvode() model will compile and then die at the first solve."
+        log "  The usual cause is a second SUNDIALS on the loader's default"
+        log "  search path displacing the one detected here."
+        [ -n "$sundials_libdir" ] && log "    detected: $sundials_libdir"
+        if command -v ldd >/dev/null 2>&1; then
+          ldd "$rc_dir/conftest" 2>/dev/null | grep sundials | \
+            while IFS= read -r rc_line; do
+              log "    loads:    $(printf '%s' "$rc_line" | sed 's/^[[:space:]]*//')"
+            done
+        fi
+        if [ -n "$rc_out" ]; then
+          log "    output:   $(printf '%s' "$rc_out" | head -n 2 | tr '\n' ' ')"
+        fi
+        log "  Check LD_LIBRARY_PATH and, on Debian-family systems,"
+        log "  \$R_HOME/etc/ldpaths, which prepends the multiarch directory."
+        log "----------------------------------------------------------------"
+        ;;
+    esac
+  fi
+  rm -rf "$rc_dir"
+fi
+
+if [ "$sundials_available" = "0" ]; then
+  log "----------------------------------------------------------------"
+  log "SUNDIALS not found: the cvode() backend will be disabled."
+  log "  cppODE()'s own solvers are unaffected."
+  log ""
+  log "  Build it from source (no administrator rights, includes"
+  log "  SuiteSparse/KLU) by setting the flag and repeating this install:"
+  log "      Sys.setenv(CPPDE_BUILD_SUNDIALS = 1)"
+  log "      devtools::install()   # or install.packages() / remotes::install_github()"
+  log "  From a shell:"
+  log "      CPPDE_BUILD_SUNDIALS=1 R CMD INSTALL <path/to/cppDE>"
+  log "  Or from R, without re-installing twice:"
+  log "      cppDE::install_libs(\"sundials\")"
+  log ""
+  log "  System packages instead:"
+  log "      Debian/Ubuntu : sudo apt install libsundials-dev"
+  log "      Fedora        : sudo dnf install sundials-devel"
+  log "      Arch          : sudo pacman -S sundials"
+  log "      macOS (brew)  : brew install sundials"
+  log ""
+  log "  An existing build:"
+  log "      CPPDE_SUNDIALS_HOME=<prefix> R CMD INSTALL <path/to/cppDE>"
+  log "----------------------------------------------------------------"
+  dump_probe_errs sundials_probe_errs cvodes/cvodes.h
+fi
+
+# ---------------------------------------------------------------------
+# SuiteSparse / KLU (needed by both cppODE() and cvode() sparse paths)
+#
+# Two libraries are in play and they need not live together:
+#   - KLU itself (libklu + amd/colamd/btf/suitesparseconfig), often
+#     from the distribution;
+#   - the SUNDIALS sparse wrappers (sunmatrixsparse, sunlinsolklu),
+#     which always live wherever SUNDIALS lives.
+# The two need not share a prefix: a source-built SUNDIALS linked
+# against a system SuiteSparse is a supported combination. The wrapper
+# -L is therefore derived from the SUNDIALS library directory.
+# ---------------------------------------------------------------------
+# Prepends the SUNDIALS sparse wrappers to $klu_libs, with an explicit
+# -L/-rpath when SUNDIALS was found outside the default search paths.
+add_sundials_klu_wrappers() {
+  if [ "$sundials_available" != "1" ]; then
+    return 0
+  fi
+  wrappers="-lsundials_sunmatrixsparse -lsundials_sunlinsolklu"
+  if [ -n "$sundials_libdir" ]; then
+    wrappers="$(rpath_flags "$sundials_libdir") $wrappers"
+    wrapper_found=0
+    for ext in so dylib a; do
+      if ls "$sundials_libdir"/libsundials_sunlinsolklu.$ext* >/dev/null 2>&1; then
+        wrapper_found=1; break
+      fi
+    done
+    if [ "$wrapper_found" = "0" ]; then
+      log "WARNING: KLU found, but $sundials_libdir has no"
+      log "  libsundials_sunlinsolklu: this SUNDIALS was built without"
+      log "  -DENABLE_KLU=ON, so cvode(sparse = TRUE) will fail to link."
+      log "  cppODE(sparse = TRUE) is unaffected."
+    fi
+  fi
+  klu_libs="$wrappers $klu_libs"
+}
+
+klu_snippet="#include <klu.h>
+int main() { klu_common c; klu_defaults(&c); return 0; }"
+klu_probe_errs=""
+
+# Include candidates are split so a KLU inside a custom prefix is tried
+# before pkg-config resolves the system one. When SuiteSparse shares the
+# prefix with SUNDIALS, the wrappers were compiled against that copy and
+# must be paired with it.
+klu_prefix_inc_candidates=""
+for root in $prefix_roots; do
+  klu_prefix_inc_candidates="$klu_prefix_inc_candidates $root/include/suitesparse"
+done
+klu_sys_inc_candidates="/usr/include/suitesparse /usr/local/include/suitesparse /opt/homebrew/include/suitesparse /opt/local/include/suitesparse"
+
+# Compile probe over a list of include dirs. Tries the minimal `-lklu`
+# first: modern shared KLU pulls its SuiteSparse deps (amd, colamd, btf,
+# suitesparseconfig) in transitively via SONAME. Only if that fails does
+# it fall back to the explicit list (static KLU, or linkers configured
+# with --as-needed). An explicit `-L<libdir>` is added because R's gcc
+# driver may not search Debian's multiarch dir by default.
+#
+#   $1 include candidates, $2 tag for the log line
+klu_file_probe() {
+  for d in $1; do
+    if [ ! -f "$d/klu.h" ]; then
+      continue
+    fi
+    kp_cflags="-I$d"
+    case "$d" in
+      /usr/include/*)          ld_candidates="/usr/lib/x86_64-linux-gnu /usr/lib/aarch64-linux-gnu /usr/lib64 /usr/lib" ;;
+      /usr/local/include/*)    ld_candidates="/usr/local/lib64 /usr/local/lib" ;;
+      /opt/homebrew/include/*) ld_candidates="/opt/homebrew/lib" ;;
+      /opt/local/include/*)    ld_candidates="/opt/local/lib" ;;
+      *)                       klu_root=${d%/include/suitesparse}
+                               ld_candidates="$klu_root/lib64 $klu_root/lib" ;;
+    esac
+    libdir_flag=""
+    for ld in $ld_candidates; do
+      for ext in so dylib a; do
+        if ls "$ld"/libklu.$ext* >/dev/null 2>&1; then
+          # Embed rpath alongside -L so dyn.load() resolves libklu.so at
+          # runtime even when $ld isn't on the loader's default search
+          # path (e.g. /usr/local/lib on macOS, or a private prefix).
+          libdir_flag="$(rpath_flags "$ld") "; break 2
+        fi
+      done
+    done
+    for kp_libs in "${libdir_flag}-lklu" "${libdir_flag}-lklu -lamd -lcolamd -lbtf -lsuitesparseconfig"; do
+      if probe_compile "$klu_snippet" "$kp_cflags" "$kp_libs"; then
+        klu_cflags="$kp_cflags"
+        klu_libs="$kp_libs"
+        add_sundials_klu_wrappers
+        klu_available=1
+        log "KLU found in $d ($2)"
+        return 0
+      fi
+      append_probe_err klu_probe_errs "klu probe ($d, libs: $kp_libs)"
+    done
+  done
+  return 1
+}
+
+# Step 1: KLU from the same custom prefix as SUNDIALS, if there is one.
+if [ "$klu_available" = "0" ] && [ -n "$klu_prefix_inc_candidates" ]; then
+  klu_file_probe "$klu_prefix_inc_candidates" "custom prefix" || true
+fi
+
+# Same verification as for the SUNDIALS override.
+if [ -n "${CPPDE_CVODE_KLU_LIBS:-}" ]; then
+  if probe_compile "$klu_snippet" "$klu_cflags" "$klu_libs"; then
+    log "KLU override verified by test compile"
+  else
+    log "----------------------------------------------------------------"
+    log "WARNING: CPPDE_CVODE_KLU_LIBS is set, but the test compile"
+    log "  FAILED. sparse = TRUE will not compile. Check that"
+    log "  CPPDE_CVODE_KLU_CFLAGS points at the directory holding"
+    log "  klu.h (usually <prefix>/include/suitesparse), and that the"
+    log "  -L path matches lib vs lib64 for your prefix."
+    log "----------------------------------------------------------------"
+  fi
+fi
+
+# pkg-config: Debian ships an uppercase `KLU` package
+if [ "$klu_available" = "0" ] && command -v "$PKG_CONFIG" >/dev/null 2>&1; then
+  for name in KLU klu; do
+    if "$PKG_CONFIG" --exists "$name" 2>/dev/null; then
+      pc_cflags=$("$PKG_CONFIG" --cflags "$name" 2>/dev/null || true)
+      pc_libs=$("$PKG_CONFIG" --libs "$name" 2>/dev/null || true)
+      if [ -n "$pc_libs" ]; then
+        klu_cflags="$pc_cflags"
+        klu_libs="$pc_libs"
+        # The SUNDIALS sparse linsol wrappers (needed by CVODE only) are
+        # gated at compile time by -DCVODE_KLU; appending them here is
+        # harmless for the cppODE() path that doesn't reference them.
+        add_sundials_klu_wrappers
+        klu_available=1
+        log "KLU detected via pkg-config ($name)"
+        break
+      fi
+    fi
+  done
+fi
+
+if [ "$klu_available" = "0" ]; then
+  klu_file_probe "$klu_sys_inc_candidates" "compile probe" || true
+fi
+
+if [ "$klu_available" = "0" ]; then
+  log "----------------------------------------------------------------"
+  log "SuiteSparse/KLU not found: the sparse Jacobian path will be"
+  log "  disabled for both cppODE() and cvode(). sparse = TRUE then"
+  log "  errors; sparse = NULL falls back to a dense Jacobian."
+  log ""
+  log "  Build it from source (no administrator rights) by setting the"
+  log "  flag and repeating this install:"
+  log "      Sys.setenv(CPPDE_BUILD_SUITESPARSE = 1)"
+  log "      devtools::install()   # or install.packages() / remotes::install_github()"
+  log "  From a shell:"
+  log "      CPPDE_BUILD_SUITESPARSE=1 R CMD INSTALL <path/to/cppDE>"
+  log "  Or from R, without re-installing twice:"
+  log "      cppDE::install_libs(\"suitesparse\")"
+  log "  CPPDE_BUILD_SUNDIALS=1 covers this as well."
+  log ""
+  log "  System packages instead:"
+  log "      Debian/Ubuntu : sudo apt install libsuitesparse-dev"
+  log "      Fedora        : sudo dnf install suitesparse-devel"
+  log "      Arch          : sudo pacman -S suitesparse"
+  log "      macOS (brew)  : brew install suite-sparse"
+  log "----------------------------------------------------------------"
+  dump_probe_errs klu_probe_errs suitesparse/klu.h
+fi
+
+# ---------------------------------------------------------------------
+# SUNDIALS' LAPACK-backed dense solver, used by the cvode() backend only.
+# Present when SUNDIALS was built with ENABLE_LAPACK. This is unrelated to
+# whether cppDE uses LAPACK at all: the in-tree solvers always reach
+# LAPACK through R, independently of SUNDIALS.
+# ---------------------------------------------------------------------
+cvode_lapack_available=0
+cvode_lapack_libs=""
+if [ "$sundials_available" = "1" ]; then
+  lapack_snippet='
+#include <cvodes/cvodes.h>
+#include <nvector/nvector_serial.h>
+#include <sunmatrix/sunmatrix_dense.h>
+#include <sunlinsol/sunlinsol_lapackdense.h>
+int main() {
+  SUNContext ctx = 0;
+  SUNContext_Create(0, &ctx);
+  if (ctx) SUNContext_Free(&ctx);
+  return 0;
+}
+'
+  trial_lapack_libs="-lsundials_sunlinsollapackdense"
+  if probe_compile "$lapack_snippet" "$sundials_cflags" \
+                   "$trial_lapack_libs $sundials_libs"; then
+    cvode_lapack_available=1
+    cvode_lapack_libs="$trial_lapack_libs"
+    log "SUNDIALS LAPACK dense solver available"
+  else
+    log "SUNDIALS has no LAPACK dense solver; cvode() uses SUNLinSol_Dense"
+  fi
+fi
+
+# ---------------------------------------------------------------------
+# OpenMP.  Optional: without it solveODEBatch() still works, just serially.
+# The flag being non-empty is not enough -- macOS ships -Xclang -fopenmp
+# but often no libomp -- so link a real binary.
+# ---------------------------------------------------------------------
+openmp_available=0
+openmp_cxxflags=""
+openmp_libs=""
+omp_flag=$(sed -n 's/^[[:space:]]*SHLIB_OPENMP_CXXFLAGS[[:space:]]*=[[:space:]]*//p' \
+             "${R_HOME}/etc/Makeconf" 2>/dev/null | head -n1)
+if [ -n "$omp_flag" ]; then
+  omp_snippet='#include <omp.h>
+int main(){ int n = 0;
+#pragma omp parallel
+  { n = omp_get_num_threads(); }
+  return n > 0 ? 0 : 1; }'
+  if probe_compile "$omp_snippet" "$omp_flag" "$omp_flag"; then
+    openmp_available=1
+    openmp_cxxflags="$omp_flag"
+    openmp_libs="$omp_flag"
+    log "OpenMP: enabled ($omp_flag)"
+  else
+    log "OpenMP: flag '$omp_flag' present but does not link; disabled"
+  fi
+else
+  log "OpenMP: no SHLIB_OPENMP_CXXFLAGS in Makeconf; disabled"
+fi
+
+# ---------------------------------------------------------------------
+# Write inst/cvodeConfig.dcf.  Consumed by R/zzz.R at package load time.
+# R source files are never rewritten.
+# ---------------------------------------------------------------------
+bool() { [ "$1" = "1" ] && echo TRUE || echo FALSE; }
+
+sundials_on=$(bool $sundials_available)
+klu_on=$(bool $klu_available)
+
+mkdir -p inst
+cvode_lapack_on=$(bool $cvode_lapack_available)
+
+cat > inst/cvodeConfig.dcf <<EOF
+available: $sundials_on
+cflags: $sundials_cflags
+libs: $sundials_libs
+klu_available: $klu_on
+klu_cflags: $klu_cflags
+klu_libs: $klu_libs
+cvode_lapack_available: $cvode_lapack_on
+cvode_lapack_libs: $cvode_lapack_libs
+openmp_available: $(bool $openmp_available)
+openmp_cxxflags: $openmp_cxxflags
+openmp_libs: $openmp_libs
+EOF
+
+log "Summary:  CVODE=$([ $sundials_available = 1 ] && echo ON || echo off), KLU=$([ $klu_available = 1 ] && echo ON || echo off), CVODE_LAPACK=$([ $cvode_lapack_available = 1 ] && echo ON || echo off), OPENMP=$([ $openmp_available = 1 ] && echo ON || echo off)"
