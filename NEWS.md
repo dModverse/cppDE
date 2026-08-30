@@ -1,3 +1,7 @@
+# cppDE 0.7.9
+
+* `derivSymb()` exposes symbolic first and second derivatives through SymPy.
+
 # cppDE 0.7.8
 
 * Event engine with saltation corrections, root finding and PCHIP forcings.
