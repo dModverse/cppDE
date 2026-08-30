@@ -1,3 +1,8 @@
+# cppDE 0.7.7
+
+* Rosenbrock4 and Tsit5 single-step steppers with embedded error estimate
+  and dense output.
+
 # cppDE 0.7.6
 
 * Variable-order BDF/NDF and Adams multistep steppers in Nordsieck form,
