@@ -1,3 +1,8 @@
+# cppDE 0.7.2
+
+* Expression templates collapse right-hand side temporaries into one fused
+  chain-rule loop.
+
 # cppDE 0.7.1
 
 * Forward-mode dual numbers `dual<T, N>` for first order sensitivities,
