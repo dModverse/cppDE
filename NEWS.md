@@ -1,3 +1,8 @@
+# cppDE 0.8.0
+
+* `compile()` builds generated sources through `R CMD SHLIB`.
+* Native symbol lookups are cached; `clearNativeSymbols()` drops the cache.
+
 # cppDE 0.7.10
 
 * C++ generation for ODE, CVODE and funCpp models, with common
