@@ -1,5 +1,5 @@
-# Marshal one condition into the 14 positional .Call arguments. Kept separate
-# so every entry point sees identical validation.
+# Marshal one condition into the 14 positional .Call arguments.  Shared by
+# solveODE() and solveODEBatch() so both see identical validation.
 .odeCallArgs <- function(model, times, parms,
                          sens1ini = NULL, sens2ini = NULL,
                          fixed = NULL, forcings = NULL,
@@ -618,6 +618,335 @@ solveODE <- function(model, times, parms,
 
   .odeFinish(result, model, prep, onFailure, traceFile)
 }
+
+
+#' Solve Many Conditions in One Call
+#'
+#' @description
+#' Integrates a compiled ODE model over several independent parameter sets --
+#' experimental conditions, or the subjects of a mixed-effects fit -- inside a
+#' single `.Call`, using OpenMP where the toolchain provides it.
+#'
+#' @details
+#' Compared with looping [solveODE()] over conditions in R, or with
+#' `parallel::mclapply()`, this avoids both the per-call fork and the
+#' serialization of each result back through a pipe; with sensitivities that
+#' return trip is usually the dominant cost. Conditions are scheduled
+#' dynamically, so unequal solve times even out.
+#'
+#' Results are identical to the serial path, not merely close: each condition
+#' runs the same steps on its own thread-local state.
+#'
+#' Two situations silently fall back to a serial loop, both deliberately:
+#' inside a forked child (`mclapply()`), because the OpenMP thread pool does
+#' not survive `fork()`; and inside an existing OpenMP region, because the
+#' caller that spread the wider axis across threads already owns them.
+#' A model compiled before this entry point existed, or a build without
+#' OpenMP, falls back to [solveODE()] per condition.
+#'
+#' @param model A model handle from [cppODE()] or [cvode()].
+#' @param conditions A list of per-condition argument lists. Recognized names
+#'   are `times`, `parms`, `sens1ini`, `sens2ini`, `fixed`, `forcings` and the
+#'   solver options `abstol`, `reltol`, `maxattemps`, `maxsteps`, `hini`,
+#'   `roottol`, `maxroot`; anything given here overrides the batch-wide value
+#'   of the same name.
+#' @param traceFile Optional. Either one path per condition, or a single path
+#'   used as a template, in which case the condition's name (or its index) is
+#'   inserted before the extension. Needs a model built with `stepTrace = TRUE`.
+#'   The traces are collected by the workers and written afterwards, on the R
+#'   thread.
+#' @param cores Number of threads, capped by `length(conditions)`. `NULL`
+#'   (default) takes the first of `getOption("cppDE.cores")`,
+#'   `getOption("Ncpus")` and `detectCores(logical = FALSE)` that is set.
+#'   `1` forces the serial loop.
+#' @param onFailure Applied once over all conditions after the batch
+#'   completes, naming the ones that failed. Unlike [solveODE()], `"stop"`
+#'   does not discard the results that did succeed until every condition has
+#'   been run.
+#' @inheritParams solveODE
+#'
+#' @return A list of [solveODE()] results, one per condition, carrying the
+#'   names of `conditions`.
+#'
+#' @seealso [solveODE()]
+#' @export
+solveODEBatch <- function(model, conditions,
+                          times = NULL, parms = NULL,
+                          sens1ini = NULL, sens2ini = NULL,
+                          fixed = NULL, forcings = NULL,
+                          abstol = 1e-6, reltol = 1e-6,
+                          maxattemps = 50L, maxsteps = 1e6L,
+                          hini = 0, roottol = 1e-6, maxroot = 1L,
+                          cores = NULL,
+                          traceFile = NULL,
+                          onFailure = c("warn", "stop", "silent")) {
+
+  onFailure <- match.arg(onFailure)
+  preps <- .batchPreps(model, conditions, times, parms, sens1ini, sens2ini,
+                       fixed, forcings, abstol, reltol, maxattemps, maxsteps,
+                       hini, roottol, maxroot)
+
+  SYM <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
+  .batchRun(model, preps, SYM, .batchDimnames(preps, SYM), names(conditions),
+            .batchCores(cores, length(conditions)), onFailure, traceFile)
+}
+
+
+# Dimnames handed to the C++ side so it can label the freshly allocated arrays.
+# Setting them in R afterwards duplicates the sensitivity array, which is the
+# largest object in flight. Conditions that disagree get one entry each.
+.batchDimnames <- function(preps, sym) {
+  if (is.null(sym)) return(NULL)
+  sens_nms <- lapply(preps, `[[`, "sens_col_names")
+  if (length(unique(sens_nms)) == 1L)
+    return(list(preps[[1L]]$variables, sens_nms[[1L]]))
+  lapply(preps, function(p) list(p$variables, p$sens_col_names))
+}
+
+
+# Validate and marshal every condition. Serial R work, shared by solveODEBatch()
+# and prepareBatch().
+.batchPreps <- function(model, conditions, times, parms, sens1ini, sens2ini,
+                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
+                        hini, roottol, maxroot) {
+
+  if (!is.list(conditions) || !length(conditions))
+    stop("'conditions' must be a non-empty list", call. = FALSE)
+  if (!all(vapply(conditions, is.list, logical(1))))
+    stop("every element of 'conditions' must be a list of arguments", call. = FALSE)
+
+  known <- c("times", "parms", "sens1ini", "sens2ini", "fixed", "forcings",
+             "abstol", "reltol", "maxattemps", "maxsteps", "hini", "roottol",
+             "maxroot")
+  bad <- setdiff(unlist(lapply(conditions, names)), known)
+  if (length(bad))
+    stop("unknown per-condition argument(s): ", paste(unique(bad), collapse = ", "),
+         "\n  Per-condition arguments are: ", paste(known, collapse = ", "),
+         call. = FALSE)
+
+  shared <- list(times = times, parms = parms, sens1ini = sens1ini,
+                 sens2ini = sens2ini, fixed = fixed, forcings = forcings,
+                 abstol = abstol, reltol = reltol, maxattemps = maxattemps,
+                 maxsteps = maxsteps, hini = hini, roottol = roottol,
+                 maxroot = maxroot)
+
+  lapply(seq_along(conditions), function(i) {
+    a <- utils::modifyList(shared, conditions[[i]])
+    if (is.null(a$times) || is.null(a$parms))
+      stop("condition ", i, " has no 'times' or no 'parms', and none was given ",
+           "batch-wide", call. = FALSE)
+    .odeCallArgs(model, a$times, a$parms, a$sens1ini, a$sens2ini, a$fixed,
+                 a$forcings, a$abstol, a$reltol, a$maxattemps, a$maxsteps,
+                 a$hini, a$roottol, a$maxroot)
+  })
+}
+
+
+# Resolve `traceFile` to one path per condition. A single path is a template:
+# the condition's name (or index) goes in front of the extension, so a batch
+# never has its conditions overwrite one another's trace.
+.batchTraceFiles <- function(traceFile, k, nms) {
+  if (is.null(traceFile)) return(vector("list", k))
+  if (!is.character(traceFile) || !all(nzchar(traceFile)))
+    stop("'traceFile' must be a non-empty character vector.", call. = FALSE)
+  if (length(traceFile) == k) return(as.list(traceFile))
+  if (length(traceFile) != 1L)
+    stop("'traceFile' must be a single path or one per condition (",
+         k, ").", call. = FALSE)
+  tag <- if (!is.null(nms)) make.names(nms) else as.character(seq_len(k))
+  ext <- sub("^.*(\\.[^.]+)$", "\\1", traceFile)
+  if (identical(ext, traceFile)) ext <- ""
+  as.list(paste0(sub("\\.[^.]+$", "", traceFile), "_", tag, ext))
+}
+
+
+# Fire the batch (or loop when the entry point is missing) and finish results.
+.batchRun <- function(model, preps, SYM, dn, nms, nt, onFailure,
+                      traceFile = NULL) {
+
+  raw <- if (is.null(SYM)) {
+    single <- .nativeSym(paste0("solve_", as.character(model)))
+    if (is.null(single)) stop("Model not loaded. Run compile() first.", call. = FALSE)
+    lapply(preps, function(p)
+      do.call(.Call, c(list(single), p$call_args,
+                       list(list(p$variables, p$sens_col_names)))))
+  } else {
+    tryCatch(.Call(SYM, lapply(preps, `[[`, "call_args"), as.integer(nt), dn),
+             error = function(e) stop("ODE solver error: ", e$message, call. = FALSE))
+  }
+
+  # One trace per condition. The workers only fill the buffers; the files are
+  # written here, on the R thread, after the parallel region.
+  tf <- .batchTraceFiles(traceFile, length(preps), nms)
+  out <- Map(function(r, p, f) .odeFinish(r, model, p, "silent", f),
+             raw, preps, tf)
+  names(out) <- nms
+
+  rc <- vapply(out, function(r) {
+    d <- r$diagnostics
+    if (is.null(d)) 0L else as.integer(d$return_code)
+  }, integer(1))
+  if (any(rc != 0L) && onFailure != "silent") {
+    who <- if (is.null(names(out))) which(rc != 0L) else names(out)[rc != 0L]
+    msg <- paste0(sum(rc != 0L), " of ", length(rc),
+                  " conditions did not complete: ", paste(who, collapse = ", "))
+    switch(onFailure,
+           stop = stop(msg, call. = FALSE),
+           warn = warning(paste0(msg, "\n  Returning partial results."),
+                          call. = FALSE, immediate. = TRUE))
+  }
+  # The C++ side reports what it actually used; fall back to the request when
+  # the batch entry is missing.
+  if (is.null(attr(raw, "threads"))) attr(out, "threads") <- as.integer(nt)
+  else attr(out, "threads") <- attr(raw, "threads")
+  out
+}
+
+
+#' Will a Batch Run in Parallel?
+#'
+#' @description
+#' `solveODEBatch()` degrades to a serial loop without saying so. This reports
+#' the conditions it depends on, so a caller can warn instead of silently
+#' losing its threads.
+#'
+#' @param model A model handle from [cppODE()] or [cvode()].
+#' @return List with `symbol` (the batch entry resolved), `openmp` (cppDE was
+#'   built with OpenMP), `modelOpenmp` (this model's shared object was), and
+#'   `parallel` (all three). Two further fallbacks are decided at run time and
+#'   are not visible here: inside a forked child, and inside an enclosing
+#'   OpenMP region.
+#' @seealso [solveODEBatch()]
+#' @export
+batchAvailable <- function(model) {
+  sym  <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
+  flags <- paste(attr(model, "compileArgs"), attr(model, "linkArgs"))
+  mo <- grepl("fopenmp|openmp", flags, ignore.case = TRUE)
+  ok <- !is.null(sym) && isTRUE(cvodeConfig$openmp_available) && mo
+  list(symbol = !is.null(sym), openmp = isTRUE(cvodeConfig$openmp_available),
+       modelOpenmp = mo, parallel = ok)
+}
+
+
+#' Prepare a Batch for Repeated Solving
+#'
+#' @description
+#' Validates and marshals a set of conditions once, so that repeated solves --
+#' an optimiser evaluating the same model at new parameters -- only pay for the
+#' numbers that actually changed. [solveODEBatch()] redoes the full argument
+#' marshalling on every call, which caps how well the batch scales.
+#'
+#' @inheritParams solveODEBatch
+#' @return An object of class `"cppDEbatch"` for [solveBatch()].
+#' @seealso [solveBatch()], [solveODEBatch()]
+#' @export
+prepareBatch <- function(model, conditions,
+                         times = NULL, parms = NULL,
+                         sens1ini = NULL, sens2ini = NULL,
+                         fixed = NULL, forcings = NULL,
+                         abstol = 1e-6, reltol = 1e-6,
+                         maxattemps = 50L, maxsteps = 1e6L,
+                         hini = 0, roottol = 1e-6, maxroot = 1L) {
+
+  preps <- .batchPreps(model, conditions, times, parms, sens1ini, sens2ini,
+                       fixed, forcings, abstol, reltol, maxattemps, maxsteps,
+                       hini, roottol, maxroot)
+
+  sym <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
+  structure(list(
+    model     = model,
+    names     = names(conditions),
+    preps     = preps,
+    required  = c(attr(model, "variables"), attr(model, "parameters")),
+    sens_dim  = lapply(preps, function(p) dim(p$call_args[[3L]])),
+    sym       = sym,
+    dn        = .batchDimnames(preps, sym)),
+    class = "cppDEbatch")
+}
+
+
+#' Solve a Prepared Batch
+#'
+#' @description
+#' Re-solves the conditions of a [prepareBatch()] handle with new numbers.
+#' Only `parms`, `sens1ini` and `sens2ini` may change; anything else needs a
+#' fresh handle.
+#'
+#' @param handle A `"cppDEbatch"` object from [prepareBatch()].
+#' @param parms List of named numeric vectors, one per condition, or `NULL` to
+#'   reuse the prepared values.
+#' @param sens1ini,sens2ini Lists of sensitivity initial values, one per
+#'   condition, or `NULL` to reuse. Shapes must match the prepared ones.
+#' @param cores,traceFile,onFailure As in [solveODEBatch()].
+#' @return A list of [solveODE()] results, named as the prepared conditions.
+#' @seealso [prepareBatch()]
+#' @export
+solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
+                       cores = NULL, traceFile = NULL,
+                       onFailure = c("warn", "stop", "silent")) {
+
+  onFailure <- match.arg(onFailure)
+  if (!inherits(handle, "cppDEbatch"))
+    stop("'handle' must come from prepareBatch()", call. = FALSE)
+
+  preps <- handle$preps
+  K <- length(preps)
+  chk <- function(x, what) {
+    if (is.null(x)) return(NULL)
+    if (!is.list(x) || length(x) != K)
+      stop("'", what, "' must be a list with one element per condition",
+           call. = FALSE)
+    x
+  }
+  parms <- chk(parms, "parms"); sens1ini <- chk(sens1ini, "sens1ini")
+  sens2ini <- chk(sens2ini, "sens2ini")
+
+  for (k in seq_len(K)) {
+    if (!is.null(parms)) {
+      pk <- parms[[k]]
+      if (is.null(names(pk))) stop("'parms' elements must be named", call. = FALSE)
+      miss <- setdiff(handle$required, names(pk))
+      if (length(miss))
+        stop("condition ", k, ": 'parms' missing ", paste(miss, collapse = ", "),
+             call. = FALSE)
+      v <- as.double(pk[handle$required])
+      if (anyNA(v) || any(!is.finite(v)))
+        stop("condition ", k, ": 'parms' must be finite", call. = FALSE)
+      preps[[k]]$call_args[[2L]] <- v
+    }
+    # Assigning NULL into a list slot removes it and shifts every later
+    # positional argument, so a NULL element means "keep the prepared value".
+    if (!is.null(sens1ini) && !is.null(sens1ini[[k]])) {
+      if (!identical(dim(sens1ini[[k]]), handle$sens_dim[[k]]))
+        stop("condition ", k, ": sens1ini shape changed; call prepareBatch() again.",
+             call. = FALSE)
+      preps[[k]]$call_args[[3L]] <- sens1ini[[k]]
+    }
+    if (!is.null(sens2ini) && !is.null(sens2ini[[k]]))
+      preps[[k]]$call_args[[4L]] <- sens2ini[[k]]
+  }
+
+  .batchRun(handle$model, preps, handle$sym, handle$dn, handle$names,
+            .batchCores(cores, K), onFailure, traceFile)
+}
+
+
+# Thread count for a batch of K conditions.  Deliberately not read from
+# OMP_NUM_THREADS: the BLAS pinning in cppde_ad_lu.hpp used to overwrite it
+# process-wide, so it is not a trustworthy source.
+.batchCores <- function(cores, K) {
+  if (!is.null(cores)) {
+    cores <- as.integer(cores)
+    if (is.na(cores) || cores < 1L) stop("'cores' must be a positive integer", call. = FALSE)
+    return(min(cores, K))
+  }
+  n <- getOption("cppDE.cores", NULL)
+  if (is.null(n)) n <- getOption("Ncpus", NULL)
+  if (is.null(n)) n <- parallel::detectCores(logical = FALSE)
+  if (!is.numeric(n) || !is.finite(n) || n < 1) n <- 1L
+  min(as.integer(n), K)
+}
+
 
 
 #' Print Solver Diagnostics
