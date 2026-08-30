@@ -1,3 +1,9 @@
+# cppDE 0.8.4
+
+* `./configure` detects SUNDIALS, SuiteSparse/KLU and OpenMP by linking a
+  test binary; a missing library disables only its own feature.
+* `install_libs()` builds SUNDIALS and SuiteSparse into a per-user cache.
+
 # cppDE 0.8.3
 
 * `funCpp()` compiles algebraic functions with optional derivatives, through
