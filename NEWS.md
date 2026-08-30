@@ -1,3 +1,8 @@
+# cppDE 0.7.10
+
+* C++ generation for ODE, CVODE and funCpp models, with common
+  subexpression elimination and Jacobian sparsity detection.
+
 # cppDE 0.7.9
 
 * `derivSymb()` exposes symbolic first and second derivatives through SymPy.
