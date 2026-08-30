@@ -1,3 +1,7 @@
+# cppDE 0.7.3
+
+* `dual2nd<T, N>` for second order sensitivities.
+
 # cppDE 0.7.2
 
 * Expression templates collapse right-hand side temporaries into one fused
