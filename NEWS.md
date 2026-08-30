@@ -1,3 +1,7 @@
+# cppDE 0.7.8
+
+* Event engine with saltation corrections, root finding and PCHIP forcings.
+
 # cppDE 0.7.7
 
 * Rosenbrock4 and Tsit5 single-step steppers with embedded error estimate
