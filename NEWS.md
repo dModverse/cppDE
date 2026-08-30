@@ -1,3 +1,9 @@
+# cppDE 0.8.2
+
+* `solveODE()` integrates a model and returns states with first and second
+  order parameter sensitivities.
+* `diagnostics()` prints the solver statistics.
+
 # cppDE 0.8.1
 
 * `cppODE()` and `cvode()` generate, compile and load a solver for an ODE
