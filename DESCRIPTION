@@ -1,0 +1,55 @@
+Package: cppDE
+Title: Automated 'C++' Code Generation for ODE Integration with Sensitivity Analysis
+Version: 0.7.0
+Authors@R: c(
+    person("Simon", "Beyer", , "simon.beyer@fdm.uni-freiburg.de", role = c("aut", "cre")),
+    person("Lawrence Livermore National Security", role = "cph",
+           comment = "Portions of cppde_multistepper(_controller).hpp and cppde_newton.hpp derived from SUNDIALS/CVODE(S); see inst/COPYRIGHTS"),
+    person("Southern Methodist University", role = "cph",
+           comment = "SUNDIALS/CVODE(S) co-copyright holder; see inst/COPYRIGHTS"),
+    person("Karsten", "Ahnert", role = "cph",
+           comment = "Boost.Odeint Rosenbrock4 base implementation; see inst/COPYRIGHTS"),
+    person("Mario", "Mulansky", role = "cph",
+           comment = "Boost.Odeint Rosenbrock4 co-copyright holder; see inst/COPYRIGHTS"),
+    person("Christoph", "Koke", role = "cph",
+           comment = "Boost.Odeint Rosenbrock4 co-copyright holder; see inst/COPYRIGHTS"))
+Description: Generates, compiles, and runs 'C++' solvers for systems of ordinary
+    differential equations. Includes a variable-order BDF integrator with
+    LAPACK/KLU linear algebra and a Rosenbrock4 method derived from
+    'Boost.Numeric.Odeint'. First- and second-order parameter sensitivities are
+    computed automatically via forward-mode automatic differentiation using
+    in-tree dual numbers. Supports time-based and root-triggered events,
+    symbolic Jacobian generation, and sparse matrix factorization for large
+    systems.
+Language: en-US
+License: MIT + file LICENSE
+SystemRequirements: C++17; Python (>= 3.8) with SymPy. Two further
+    features are gated on external libraries that ./configure detects at
+    install time: the cvode() backend and the sparse Jacobian path.
+    Neither is required to install or use the package, and neither is
+    listed here for that reason: when one is absent, only the
+    corresponding feature is disabled and reports how to enable it. The
+    libraries can be installed as system packages or built from source
+    by cppDE itself; see ?cppDE::install_libs and the README.
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+Depends:
+    R (>= 4.0)
+Imports:
+    parallel,
+    reticulate,
+    tools,
+    utils
+Suggests:
+    spelling,
+    testthat,
+    knitr,
+    rmarkdown,
+    R.rsp,
+    ggplot2,
+    tidyr,
+    dplyr
+VignetteBuilder: R.rsp
+Config/roxygen2/version: 8.0.0
+Config/testthat/edition: 3
+Config/testthat/parallel: true
