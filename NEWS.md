@@ -1,3 +1,8 @@
+# cppDE 0.9.1
+
+* Test suite over solvers, sensitivities, events, reparametrisation and the
+  batch path.
+
 # cppDE 0.9.0
 
 * `solveODEBatch()` solves many conditions in one `.Call`, over OpenMP
