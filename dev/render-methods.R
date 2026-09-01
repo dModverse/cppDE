@@ -11,6 +11,12 @@
 # Workflow: edit dev/methods/Methods.Rmd, run this script locally, commit
 # the regenerated vignettes/Methods.pdf alongside the source change.
 #
+# Do not run devtools::build_vignettes(). tools::pkgVignettes() reports
+# Methods.pdf as the *output* of Methods.pdf.asis, and copy_vignettes() moves
+# every output into doc/ and deletes it from vignettes/. For an .Rmd vignette
+# that is right, the output being regenerable; here it deletes the only copy of
+# the content. R CMD build and R CMD check leave the file alone.
+#
 # Requirements (only on the maintainer's machine, not on CI):
 #   lualatex, fontspec, unicode-math, CMU Serif, NewCMMath.
 

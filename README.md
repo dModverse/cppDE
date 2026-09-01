@@ -139,7 +139,7 @@ CPPDE_SUNDIALS_HOME=$HOME/opt/sundials-7.4.0 R CMD INSTALL .
 ```
 
 Point it at the `CMAKE_INSTALL_PREFIX`, i.e. the directory containing
-`include/` and `lib/` (or `lib64/`) — **not** a build tree, which has no
+`include/` and `lib/` (or `lib64/`), **not** a build tree, which has no
 usable `include/` layout. Everything else is derived and verified by a
 test compile. Not implemented on Windows.
 
@@ -150,7 +150,7 @@ test compile. Not implemented on Windows.
 <b>Expert: hand-written compiler and linker flags</b>
 </summary>
 
-For layouts the prefix scan cannot express — split include/lib trees,
+For layouts the prefix scan cannot express, split include/lib trees,
 static linking, extra `-l` entries. Setting any of these skips the
 corresponding probe; the flags are still verified by a test compile.
 
@@ -174,7 +174,7 @@ export CPPDE_CVODE_KLU_LIBS="-L$LIBDIR -Wl,-rpath,$LIBDIR \
   -lsundials_sunmatrixsparse -lsundials_sunlinsolklu -lklu"
 ```
 
-You own the whole line, including `-Wl,-rpath` — without it linking
+You own the whole line, including `-Wl,-rpath`: without it linking
 succeeds but `dyn.load()` fails later. `-lsundials_core` must come last
 and exists only in SUNDIALS \>= 7. The `KLU_*` variables may point
 elsewhere: a source-built SUNDIALS against the distribution’s
@@ -227,7 +227,7 @@ session.
 Sys.setenv(CPPDE_EXTRA_CXXFLAGS = "-march=native")
 ```
 
-Exporting `PKG_CXXFLAGS` instead has no effect — `compile()` sets that
+Exporting `PKG_CXXFLAGS` instead has no effect, `compile()` sets that
 variable itself, from each model’s `compileArgs` attribute.
 
 </details>

@@ -12,6 +12,19 @@ Author: Simon Beyer
 import re
 import keyword
 import sympy as sp
+
+def _sbml_piecewise(*args):
+    """SBML's flat `piecewise(v1, c1, v2, c2, ..., otherwise)` as sp.Piecewise.
+
+    libsbml's L3 formatter emits the branches as one flat argument list. An
+    odd argument count means the last entry is the otherwise branch.
+    """
+    pairs = [(args[i], args[i + 1]) for i in range(0, len(args) - 1, 2)]
+    if len(args) % 2:
+        pairs.append((args[-1], True))
+    return sp.Piecewise(*pairs)
+
+
 from sympy.parsing.sympy_parser import (
     parse_expr,
     standard_transformations,
@@ -95,7 +108,7 @@ def _get_safe_parse_dict_cached():
         'Heaviside': sp.Heaviside, 'DiracDelta': sp.DiracDelta,
         
         # Piecewise
-        'Piecewise': sp.Piecewise,
+        'Piecewise': sp.Piecewise, 'piecewise': _sbml_piecewise,
         
         # Constants
         'pi': sp.pi, 'E': sp.E, 'oo': sp.oo,

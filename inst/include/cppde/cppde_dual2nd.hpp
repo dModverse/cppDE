@@ -50,7 +50,7 @@ namespace cppde {
 // Forward-declare the ET CRTP base so dual2nd can declare templated
 // assignment / construction from any Expr2nd<D> tree. Definitions live in
 // cppde_dual2nd_expr.hpp.
-namespace expr2 {
+namespace dual2nd_expr {
   template<class Derived> struct Expr2nd;
 }
 
@@ -82,13 +82,9 @@ public:
   using value_type   = inner_dual_t;
   static constexpr unsigned static_size = N;
 
-  // Inherit base ctors and assignments. base provides:
-  //   - default ctor                     dual2nd()
-  //   - converting ctor from arithmetic  dual2nd(const U&)
-  //   - copy / move ctors and assigns
-  //   - operator=(arithmetic U)
-  //   - operator=(const dual<U,M>&) via the nested instantiation
-  //   - operator+= / -= / *= / /= for plain dual + arithmetic operands
+    // Inherit the base ctors and assignments: default, converting from an
+    // arithmetic type, copy and move, and the compound operators for plain dual
+    // and arithmetic operands.
   using base::base;
   using base::operator=;
   using base::operator+=;
@@ -103,36 +99,15 @@ public:
   // Implicit copy / move are generated and copy/move the base subobject.
   // No new data members, so default copy/move are correct.
 
-  // ---------------------------------------------------------------------------
-  // Triangular accessors. Implementation detail: the underlying nested-dual
-  // storage holds the gradient redundantly in two places:
-  //
-  //   outer.val_.tan_[i]   (the first-order tangent of the value layer)
-  //   outer.tan_[i].x()    (the value of the i-th outer tangent)
-  //
-  // For a function f(theta), both equal df/dtheta_i. The LU IFT recursion
-  // reads outer.val_ when extracting "the value layer" (peeling one AD
-  // layer), so primitives must keep both copies in sync to remain correct
-  // under LU.
-  //
-  // Math primitives use d1_at(i) (the tan_-side copy) for iteration and
-  // call sync_d1_redundant() at the end of each operation to mirror into
-  // the val_-side copy. dd_at(i, j) is the canonical lower-triangle Hessian
-  // slot; primitives compute j <= i and rely on dd_at to canonicalise on
-  // unordered queries.
-  // ---------------------------------------------------------------------------
+    // ---------------------------------------------------------------------------
+    // Triangular accessors. The gradient lives in outer.tan_[i].x(), which is
+    // what d1_at(i) reads. dd_at(i, j) is the canonical lower-triangle Hessian
+    // slot and canonicalises an unordered index pair.
+    // ---------------------------------------------------------------------------
 
-  // First-order tangent g_i = df/dtheta_i. Returns the tan_-side copy
-  // (outer.tan_[i].x()).
-  //
-  // Mutable overload: caller has armed the storage (math primitives call
-  // arm_full before writing via d1_at). Returns a reference into the
-  // outer.tan_[i] cell directly.
-  //
-  // Const overload: routes through base::d(i) which is bounds-safe and
-  // returns a thread-local zero if the outer layer is not yet armed (e.g.
-  // a freshly seeded operand on which only base::diff(0) was called and
-  // whose inner tangents are nullptr).
+    // First-order tangent df/dtheta_i, the tan_-side copy. The mutable overload
+    // writes into outer.tan_[i] and needs armed storage; the const one goes
+    // through base::d(i), which is bounds-safe on an unarmed operand.
   T& d1_at(unsigned i) {
     return base::operator[](i).x();
   }
@@ -140,12 +115,9 @@ public:
     return static_cast<const base*>(this)->d(i).x();
   }
 
-  // Second-order tangent H_ij = d^2 f / dtheta_i dtheta_j. Stored at
-  // outer.tan_[max(i,j)].tan_[min(i,j)] (the canonical lower-triangle slot).
-  //
-  // Mutable overload: armed storage required, canonicalises (i, j) -> lower.
-  // Const overload: bounds-safe via the inherited .d(j).d(k) accessors,
-  // canonicalises (i, j) -> lower.
+    // Second-order tangent d^2f/dtheta_i dtheta_j, stored at
+    // outer.tan_[max(i,j)].tan_[min(i,j)]. Both overloads canonicalise the pair,
+    // the mutable one needs armed storage.
   T& dd_at(unsigned i, unsigned j) {
     const unsigned r = (j <= i) ? i : j;
     const unsigned c = (j <= i) ? j : i;
@@ -157,11 +129,9 @@ public:
     return static_cast<const base*>(this)->d(r).d(c);
   }
 
-  // Raw access to the (i, j) inner-tangent slot WITHOUT canonicalisation.
-  // Reads/writes operator[](i)[j] directly. Used by mirror_upper_dd to
-  // copy the lower-triangle Hessian into the upper triangle of the
-  // underlying N x N inner-tangent block, so downstream LU IFT extraction
-  // (which reads the natural [j][i] slot for j > i) sees a populated cell.
+    // Raw (i, j) inner-tangent slot, without canonicalisation. mirror_upper_dd
+    // copies the lower triangle into the upper one with it, so the LU's IFT
+    // extraction finds a populated [j][i] cell.
   T& dd_raw(unsigned i, unsigned j) {
     return base::operator[](i)[j];
   }
@@ -169,22 +139,14 @@ public:
     return base::operator[](i)[j];
   }
 
-  // sync_d1_redundant: NO-OP STUB. Historically this mirrored the inline
-  // gradient (outer.tan_[k].x()) into outer.val_.tan_[k] (val_tan_block)
-  // so the LU value-layer extraction could read .x().d(k) and get the
-  // gradient. The LU now reads gradient via first_order_view from inline
-  // outer.tan_[k].x() directly (cppde_ad_lu.hpp / cppde_sparse_ad_lu.hpp
-  // dual2nd dispatch), so no mirroring is needed. Kept as a no-op for
-  // back-compat with old call sites; can be removed once those are gone.
+    // No-op. The LU reads the gradient from the inline outer.tan_[k].x() slot
+    // through first_order_view, so there is nothing to mirror. Kept for the call
+    // sites that still invoke it.
   void sync_d1_redundant() noexcept {}
 
-  // Convenience: arm the outer tangent slots so d1_at and dd_at writes go
-  // into pre-allocated storage. After this call, base::depend() is true and
-  // base::operator[](i).depend() is true for all i in [0, m).
-  //
-  // The outer.val_ layer is no longer armed: with the val_tan_block
-  // dropped, outer.val_.tan_ stays nullptr and the LU reads gradient via
-  // first_order_view from inline outer.tan_[k].x() instead.
+    // Arm the outer tangent slots so d1_at and dd_at write into allocated
+    // storage: afterwards base::depend() and every base::operator[](i).depend()
+    // hold. The outer.val_ layer stays unarmed, the LU does not read it.
   void arm_full(unsigned m) {
     if constexpr (N > 0) {
       (void)m;
@@ -216,30 +178,28 @@ public:
   T& scalar()             { return base::x().x(); }
   const T& scalar() const { return base::x().x(); }
 
-  // -- Expression-template assignment / construction -------------------------
-  // Materialises any Expr2nd<D> tree directly into this dual2nd's storage.
-  // Definitions live in cppde_dual2nd_expr.hpp (after Expr2nd<D> is complete).
-  // Argument deduction against `const expr2::Expr2nd<D>&` only matches CRTP
-  // derivations; dual2nd-to-dual2nd or dual2nd-from-scalar paths fall back
-  // to the base class operators inherited via using base::operator=.
+    // -- Expression-template assignment / construction -------------------------
+    // Materialises an Expr2nd<D> tree into this dual2nd's storage, defined in
+    // cppde_dual2nd_expr.hpp. Deduction matches CRTP derivations only, so the
+    // dual2nd-to-dual2nd and scalar paths fall back to the base operators.
   template<class D>
-  inline dual2nd& operator=(const expr2::Expr2nd<D>& e);
+  inline dual2nd& operator=(const dual2nd_expr::Expr2nd<D>& e);
 
   template<class D>
-  inline dual2nd(const expr2::Expr2nd<D>& e);
+  inline dual2nd(const dual2nd_expr::Expr2nd<D>& e);
 
   // Compound assignment from Expr2nd: route through (*this op other) which
   // builds a BinExpr2 and materialises into *this. The eager nested base
   // operator+=(const dual<dual<T,N>,N>&) is preserved for plain dual2nd
   // operands via inheritance.
   template<class D>
-  inline dual2nd& operator+=(const expr2::Expr2nd<D>& e);
+  inline dual2nd& operator+=(const dual2nd_expr::Expr2nd<D>& e);
   template<class D>
-  inline dual2nd& operator-=(const expr2::Expr2nd<D>& e);
+  inline dual2nd& operator-=(const dual2nd_expr::Expr2nd<D>& e);
   template<class D>
-  inline dual2nd& operator*=(const expr2::Expr2nd<D>& e);
+  inline dual2nd& operator*=(const dual2nd_expr::Expr2nd<D>& e);
   template<class D>
-  inline dual2nd& operator/=(const expr2::Expr2nd<D>& e);
+  inline dual2nd& operator/=(const dual2nd_expr::Expr2nd<D>& e);
 };
 
 // ----------------------------------------------------------------------------

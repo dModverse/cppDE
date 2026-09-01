@@ -47,12 +47,12 @@ public:
   klu_lu_solver()  {
     klu_defaults(&m_common);
     // BTF: determined at codegen time by SCC analysis of the Jacobian graph.
-    // nblocks > 1 (e.g. pathway models with causal chains) → BTF on.
-    // nblocks == 1 (e.g. PDE stencils, strongly connected) → BTF off.
+    // nblocks > 1 (e.g. pathway models with causal chains): BTF on.
+    // nblocks == 1 (e.g. PDE stencils, strongly connected): BTF off.
     m_common.btf = KLUBTF;
     // Ordering: determined at codegen time by row-degree variance heuristic.
-    // Low variance (uniform stencil patterns) → AMD (0).
-    // High variance (hub nodes, irregular networks) → COLAMD (1).
+    // Low variance (uniform stencil patterns): AMD (0).
+    // High variance (hub nodes, irregular networks): COLAMD (1).
     m_common.ordering = KLUAMD;
     // Disable row scaling.  BDF iteration matrices W = 1/(γh)I − J
     // are diagonally dominant, so scaling adds O(nnz) work per

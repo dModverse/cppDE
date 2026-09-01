@@ -12,3 +12,4 @@
 ^\.claude$
 ^CLAUDE\.md$
 ^benchmarks$
+^cran-comments\.md$

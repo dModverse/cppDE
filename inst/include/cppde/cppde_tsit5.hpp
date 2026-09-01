@@ -91,10 +91,9 @@ public:
   // ====================================================================
   //  prepare_sensitivities
   //
-  //  Primes the SoA tangent slabs for the heap-AD path so the per-stage
-  //  ET assignments hit the in-place reuse branch from the very first
-  //  step instead of arena-allocating each m_k*[i].tan_ on first write.
-  //  No-op for non-dynamic-dual value_type.
+  //  Primes the tangent slabs so the per-stage assignments hit the in-place
+  //  branch from the first step instead of allocating each tangent on write.
+  //  No-op unless the value type is a slab-backed dual.
   // ====================================================================
 
   void prepare_sensitivities(unsigned n_sens)
@@ -131,11 +130,9 @@ public:
   // ====================================================================
   //  do_step (with error output)
   //
-  //  Computes one Tsit5 step from (x, t) to (xout, t+dt) and fills
-  //  xerr with the embedded error estimate.
-  //
-  //  The jacobian_hint parameter is accepted for API compatibility
-  //  with the onestep_controller but is ignored.
+  //  One Tsit5 step from (x, t) to (xout, t + dt), filling xerr with the
+  //  embedded estimate. jacobian_hint is taken for interface compatibility with
+  //  the controller and ignored.
   // ====================================================================
 
   template<class Sys, class TimeArg>
@@ -153,15 +150,11 @@ public:
     // --- Resize scratch vectors ---
     resize_if_needed(n);
 
-    // --- Stage 1 (FSAL: reuse k7 from the previous accepted step) ---
-    //
-    // With the unified stage matrix m_K, m_k1.m_v[i].tan_ always points
-    // to physical column 0 of the tangent buffer, and m_k7's tan_ to
-    // column 6: these bindings stay stable across steps. To reuse the
-    // previous step's k7 as the new step's k1 we copy m_k7 -> m_k1: a
-    // per-element value copy plus a flat memcpy of the column-6 tangent
-    // slice into column 0. After this copy m_k1 holds f(x, t) and the
-    // rest of the step assembly reads m_k1 unchanged.
+  // --- Stage 1 (FSAL: reuse k7 from the previous accepted step) ---
+  //
+  // The stage matrix binds m_k1's tangents to column 0 and m_k7's to column 6,
+  // and those bindings hold across steps. Reusing k7 as the next k1 is therefore
+  // a value copy plus a memcpy of the column slice; afterwards m_k1 is f(x, t).
     if (m_fsal_valid && m_k1.m_v.size() == n) {
       if constexpr (detail::is_dynamic_dual<value_type>::value) {
         // Per-element value copy preserves the dual's tan_ binding to
@@ -234,11 +227,10 @@ public:
     deriv_func(m_xtmp.m_v, m_k6.m_v, t + c6 * h);
     ++m_n_fevals;
 
-    // --- Solution (5th order) and Stage 7 (FSAL) ---
-    // xout is controller-owned (m_xnew) and not slab-bound: we use plain
-    // vec_copy / vec_axpy here. Each axpy iteration is a single ScalarLeaf *
-    // DualLeaf binop, which the ET path materialises as one fused N-element
-    // tangent loop without nested template depth.
+  // --- Solution (5th order) and Stage 7 (FSAL) ---
+  // xout belongs to the controller and is not slab-bound, so plain vec_copy and
+  // vec_axpy are used. Each axpy is one scalar-times-dual binop, which the
+  // expression path fuses into a single tangent loop.
     vec_copy(xout, x);
     vec_axpy(xout, h_s * b1, m_k1.m_v);
     vec_axpy(xout, h_s * b2, m_k2.m_v);
@@ -274,19 +266,13 @@ public:
 
   void prepare_dense_output()
   {
-    // After an accepted step, mark FSAL as valid. With the unified
-    // stage matrix the FSAL recycle (k7 -> next step's k1) is handled
-    // by an explicit memcpy at the start of the next do_step rather
-    // than by a vector/slab swap here, so prepare_dense_output is just
-    // a flag flip.
-    //
-    // Convention used by calc_state below:
-    //   m_k1 = f(x_old, t_old)   (= old k1, set at start of just-accepted step)
-    //   m_k7 = f(x_new, t_new)   (= old k7, set at end of just-accepted step)
-    //
-    // Dense output coefficients are computed lazily in calc_state
-    // from the stored k1..k7 stages.  The stages must not be
-    // overwritten until the next do_step call.
+  // After an accepted step FSAL is only flagged valid: the recycle of k7 into
+  // the next k1 happens as a memcpy at the start of the next do_step.
+  //
+  //   m_k1 = f(x_old, t_old), m_k7 = f(x_new, t_new)
+  //
+  // calc_state builds the dense coefficients lazily from k1..k7, so the stages
+  // must survive until the next do_step.
     m_fsal_valid = true;
   }
 

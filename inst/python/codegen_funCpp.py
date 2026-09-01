@@ -9,6 +9,19 @@ Author: Simon Beyer
 """
 
 import sympy as sp
+
+def _sbml_piecewise(*args):
+    """SBML's flat `piecewise(v1, c1, v2, c2, ..., otherwise)` as sp.Piecewise.
+
+    libsbml's L3 formatter emits the branches as one flat argument list. An
+    odd argument count means the last entry is the otherwise branch.
+    """
+    pairs = [(args[i], args[i + 1]) for i in range(0, len(args) - 1, 2)]
+    if len(args) % 2:
+        pairs.append((args[-1], True))
+    return sp.Piecewise(*pairs)
+
+
 from sympy.parsing.sympy_parser import (
     parse_expr,
     standard_transformations,
@@ -135,6 +148,7 @@ def _get_safe_parse_dict_cached():
         # Special functions
         'Heaviside': sp.Heaviside, 'DiracDelta': sp.DiracDelta,
         'KroneckerDelta': sp.KroneckerDelta, 'Piecewise': sp.Piecewise,
+        'piecewise': _sbml_piecewise,
         
         # Constants
         'pi': sp.pi, 'E': sp.E, 'euler_gamma': sp.EulerGamma, 'oo': sp.oo,
@@ -183,12 +197,16 @@ class CodeGenContext:
         for i, p in enumerate(self.parameters):
             self.replacements[p] = f"p[{i}]"
         
-        # Precompile regex patterns (sorted by length, longest first)
-        all_names = sorted(self.replacements.keys(), key=len, reverse=True)
-        self.compiled_patterns = [
-            (re.compile(r"\b" + re.escape(name) + r"\b"), self.replacements[name])
-            for name in all_names
-        ]
+        # One pattern over every name, substituted in a single pass. Name by
+        # name, a symbol called p or x_obs would rewrite the slots already
+        # emitted for the others: q, p becomes p[0], p[1] and then p[1][0].
+        # Longest first so a name that is a prefix of another cannot win.
+        names_sorted = sorted(self.replacements.keys(), key=len, reverse=True)
+        self.symbol_pattern = re.compile(
+            r"(?<![a-zA-Z0-9_])(?:"
+            + "|".join(re.escape(name) for name in names_sorted)
+            + r")(?![a-zA-Z0-9_\[])"
+        ) if names_sorted else None
         
         # Custom printer for faster code generation
         self.printer = CXX17CodePrinter()
@@ -233,9 +251,10 @@ class CodeGenContext:
         for macro, repl in _MATH_MACRO_MAP.items():
             cpp_code = cpp_code.replace(macro, repl)
         
-        # Apply all replacements using precompiled patterns
-        for pattern, replacement in self.compiled_patterns:
-            cpp_code = pattern.sub(replacement, cpp_code)
+        # Apply all replacements in one pass
+        if self.symbol_pattern is not None:
+            cpp_code = self.symbol_pattern.sub(
+                lambda m: self.replacements[m.group(0)], cpp_code)
         
         # Convert integer literals to double literals to avoid C++ template deduction issues
         cpp_code = _ensure_double_literals(cpp_code)

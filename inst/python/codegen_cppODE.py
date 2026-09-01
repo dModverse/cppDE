@@ -41,6 +41,19 @@ import keyword
 import math
 import numbers
 import sympy as sp
+
+def _sbml_piecewise(*args):
+    """SBML's flat `piecewise(v1, c1, v2, c2, ..., otherwise)` as sp.Piecewise.
+
+    libsbml's L3 formatter emits the branches as one flat argument list. An
+    odd argument count means the last entry is the otherwise branch.
+    """
+    pairs = [(args[i], args[i + 1]) for i in range(0, len(args) - 1, 2)]
+    if len(args) % 2:
+        pairs.append((args[-1], True))
+    return sp.Piecewise(*pairs)
+
+
 from sympy.parsing.sympy_parser import (
     parse_expr,
     standard_transformations,
@@ -101,7 +114,7 @@ def _get_safe_parse_dict():
         "besselj": sp.besselj, "bessely": sp.bessely,
         "besseli": sp.besseli, "besselk": sp.besselk,
         "Heaviside": sp.Heaviside, "DiracDelta": sp.DiracDelta,
-        "Piecewise": sp.Piecewise,
+        "Piecewise": sp.Piecewise, "piecewise": _sbml_piecewise,
         "pi": sp.pi, "E": sp.E, "oo": sp.oo,
     }
 _IDENT_RE = re.compile(r'(?<![\.\w])[A-Za-z_][A-Za-z0-9_]*')
@@ -192,7 +205,7 @@ class _SymbolReplacer:
         return self._pattern.sub(lambda m: self._map[m.group(0)], cpp_code)
 @lru_cache(maxsize=8)
 def _get_replacer(states_tuple, params_tuple, n_states, forcings_tuple, use_initial_states):
-    """Cached factory – the replacer is rebuilt only when the signature changes."""
+    """Cached factory: the replacer is rebuilt only when the signature changes."""
     return _SymbolReplacer(
         list(states_tuple), list(params_tuple), n_states,
         list(forcings_tuple), use_initial_states,
@@ -235,7 +248,7 @@ _AD_PREFIX = "cppde"
 # Precompiled whitespace collapse pattern
 _WHITESPACE_PATTERN = re.compile(r"\s+")
 
-# Precompiled regex for std::pow(expr, 2.0) → (expr)*(expr) optimization.
+# Precompiled regex for std::pow(expr, 2.0) to (expr)*(expr) optimization.
 # Matches std::pow(ARG, 2.0) or std::pow(ARG, 2) where ARG may contain
 # nested parentheses (up to 2 levels) or simple identifiers.
 def _optimize_pow2(cpp_str):
@@ -478,7 +491,7 @@ def generate_ode_cpp(
     # Instead of parsing + differentiating all n_states expressions individually,
     # we:
     #   1. Fingerprint each RHS string by replacing state names with positional
-    #      placeholders (_s0, _s1, ...) → canonical form
+    #      placeholders (_s0, _s1, ...) to canonical form
     #   2. Group expressions with identical canonical form
     #   3. Parse & differentiate only ONCE per unique template
     #   4. Expand to all instances via fast string substitution
@@ -642,7 +655,7 @@ def generate_ode_cpp(
                 lines.append("        " + ",".join(str(v) for v in chunk))
             return ",\n".join(lines)
 
-        # --- Build CSC-sorted (row, col) → Ax index mapping ---
+        # --- Build CSC-sorted (row, col) to Ax index mapping ---
         # Merge real entries + missing diagonal zeros
         all_rows = list(jac_nnz_rows) + missing_diags
         all_cols = list(jac_nnz_cols) + missing_diags
@@ -654,7 +667,7 @@ def generate_ode_cpp(
         sorted_cols = [all_cols[k] for k in csc_order]
         sorted_exprs = [all_exprs[k] for k in csc_order]
 
-        # Build (row, col) → Ax index lookup for the loop-based path
+        # Build (row, col) to Ax index lookup for the loop-based path
         rc_to_ax = {}
         for ax_k, (r, c) in enumerate(zip(sorted_rows, sorted_cols)):
             rc_to_ax[(r, c)] = ax_k
@@ -701,7 +714,7 @@ def generate_ode_cpp(
         if use_loop:
             # =============================================================
             # LOOP-BASED: one loop per template group.
-            # Each (row, dep[j]) → Ax offset is precomputed into a static
+            # Each (row, dep[j]) to Ax offset is precomputed into a static
             # table.  The loop body writes W.Ax[ax_offsets[c*n_jac+j]].
             # =============================================================
             groups = dedup_result['groups']
@@ -811,7 +824,7 @@ def generate_ode_cpp(
             # Each sorted entry gets its Ax index directly in the code.
             # =============================================================
 
-            # Build (row, col) → expression mapping from the dense Jacobian code
+            # Build (row, col) to expression mapping from the dense Jacobian code
             dense_jac_entries = {}
             dfdt_lines = []
             in_body = False
@@ -1244,7 +1257,7 @@ def _try_template_dedup(odes_list, states_list, params_list, n_states, num_type,
         td_cpp = _template_to_cpp(tdata['time_deriv'])
         template_cpp[key] = {'rhs': rhs_cpp, 'jac': jac_cpp, 'time_deriv': td_cpp}
 
-    # --- Step 4: Build symbol → C++ replacement map ---
+    # --- Step 4: Build symbol to C++ replacement map ---
     name_to_state_idx = {n: i for i, n in enumerate(states_list)}
 
     sym_to_cpp = {}
@@ -1261,7 +1274,7 @@ def _try_template_dedup(odes_list, states_list, params_list, n_states, num_type,
     )
 
     def _expand_template(template_str, dep_names):
-        """Expand a template C++ string by substituting _sN → concrete symbols → C++."""
+        """Expand a template C++ string by substituting _sN by the concrete symbols."""
         # Step 1: _sN -> actual state name
         concrete = _GENERIC_PATTERN.sub(lambda m: dep_names[int(m.group(1))], template_str)
         # Step 2: all symbols -> C++ (x[i], params[j], t)
@@ -2106,15 +2119,15 @@ def analyze_klu_settings(n, jac_nnz_rows, jac_nnz_cols):
     BTF decision:
       Find strongly connected components of the directed graph defined
       by the Jacobian pattern.  If nblocks > 1, BTF can decompose the
-      problem into smaller independent blocks → enable BTF.
-      If nblocks == 1 (strongly connected), BTF is pure overhead → disable.
+      problem into smaller independent blocks, so BTF pays.
+      If nblocks == 1 (strongly connected), BTF is pure overhead and stays off.
 
     Ordering decision:
       For PDE-like patterns (uniform row degree, wide bandwidth),
       AMD typically produces less fill-in than COLAMD.
       For irregular patterns (high degree variance, hub nodes),
       COLAMD often wins.
-      Heuristic: if the coefficient of variation of row degrees > 0.5 → COLAMD.
+      Heuristic: if the coefficient of variation of row degrees > 0.5, use COLAMD.
     """
     rows = list(jac_nnz_rows)
     cols = list(jac_nnz_cols)
@@ -2190,8 +2203,8 @@ def analyze_klu_settings(n, jac_nnz_rows, jac_nnz_cols):
     var_deg = sum((d - mean_deg) ** 2 for d in row_degrees) / n
     cv = math.sqrt(var_deg) / mean_deg if mean_deg > 0 else 0.0
 
-    # High CV → irregular pattern (pathway models with hub nodes) → COLAMD
-    # Low CV → uniform pattern (PDE stencils) → AMD
+    # High CV means an irregular pattern (pathway models with hub nodes): COLAMD
+    # Low CV means a uniform pattern (PDE stencils): AMD
     ordering = 1 if cv > 0.5 else 0
     ordering_name = "COLAMD" if ordering == 1 else "AMD"
 

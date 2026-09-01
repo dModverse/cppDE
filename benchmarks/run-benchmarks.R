@@ -34,6 +34,7 @@ OPTS <- list(
   tier         = "medium",    # tiny | medium | full
   suite        = "all",       # all | petab | classic
   models       = "",          # comma-separated substrings; "" = every model
+  skip         = "",          # comma-separated substrings to leave out
   conditions   = "1",         # integer, or "all"
   modes        = "nosens,sens1",
   `max-sens2`  = "10",
@@ -108,6 +109,8 @@ cppDE benchmark suite -- cppDE vs SUNDIALS CVODE(S)
         full    everything the size limit allows
   --suite <all|petab|classic>   which problem sources to run     [all]
   --models <a,b,c>              only models whose name contains one of these
+  --skip <a,b,c>                leave out models whose name contains one of
+                                these; applied after --models
   --conditions <n|all>          PEtab conditions per model       [1]
   --modes <nosens,sens1,sens2>  integration modes                [nosens,sens1]
         sens2 measures second-order (Hessian) runtimes.  CVODES has no
@@ -229,6 +232,8 @@ configs <- solver_configs(extra = as_bool(OPTS$`extra-solvers`))
 sweep_configs <- if (SPARSE_SWEEP) sparse_sweep_configs() else NULL
 model_filter <- trimws(strsplit(OPTS$models, ",")[[1L]])
 model_filter <- model_filter[nzchar(model_filter)]
+model_skip <- trimws(strsplit(OPTS$skip, ",")[[1L]])
+model_skip <- model_skip[nzchar(model_skip)]
 
 n_conditions <- if (identical(OPTS$conditions, "all")) "all" else
                   as.integer(OPTS$conditions)
@@ -313,6 +318,9 @@ if (OPTS$suite %in% c("all", "petab")) {
     if (length(model_filter))
       idx <- idx[Reduce(`|`, lapply(model_filter, function(f)
         grepl(f, idx$name, fixed = TRUE))), , drop = FALSE]
+    if (length(model_skip))
+      idx <- idx[!Reduce(`|`, lapply(model_skip, function(f)
+        grepl(f, idx$name, fixed = TRUE))), , drop = FALSE]
     if (QUICK) idx <- idx[idx$name %in% c("Boehm_JProteomeRes2014",
                                           "Crauste_CellSystems2017",
                                           "Elowitz_Nature2000"), , drop = FALSE]
@@ -356,6 +364,13 @@ if (length(model_filter)) {
     grepl(f, names(problems), ignore.case = TRUE) |
     grepl(f, disp, ignore.case = TRUE)))
   problems <- problems[hit]
+}
+if (length(model_skip)) {
+  disp <- vapply(problems, function(cases) cases[[1L]]$name, "")
+  out <- Reduce(`|`, lapply(model_skip, function(f)
+    grepl(f, names(problems), ignore.case = TRUE) |
+    grepl(f, disp, ignore.case = TRUE)))
+  problems <- problems[!out]
 }
 
 if (!length(problems)) stop("no problems selected")

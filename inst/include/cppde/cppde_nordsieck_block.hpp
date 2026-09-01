@@ -159,10 +159,8 @@ private:
 // =============================================================================
 //  nordsieck_block specialisation for dual2nd<S, N>: K-slot two-block storage
 //
-//  Owns two concatenated buffers (val_tan_block dropped after the LU dual2nd
-//  dispatch started reading gradient via first_order_view from inline_d1):
-//    outer_block_   : K * n_rows * n_cols  dual<S, N>      (outer.tan_ values)
-//    hess_block_    : K * n_rows * n_cols * n_cols  S      (Hessian rows)
+//    outer_block_ : K * n_rows * n_cols              dual<S, N>
+//    hess_block_  : K * n_rows * n_cols * n_cols     S
 // =============================================================================
 template<class S, unsigned N, unsigned K>
 class nordsieck_block<cppde::dual2nd<S, N>, K, true> {

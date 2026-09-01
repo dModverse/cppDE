@@ -100,11 +100,9 @@ public:
     }
   }
 
-  // Swap stage columns i and j (used for FSAL: stage 0 <-> stage S-1
-  // after step acceptance).  Swaps both the values inside the contiguous
-  // tangent buffer; the dual elements' tan_ pointers continue to point
-  // at the same slots so caller-side facade vectors (with their .x()
-  // values) must be std::swap'd separately.
+  // Swap stage columns i and j, used by FSAL after acceptance. Only the values
+  // inside the tangent buffer move, the tan_ pointers keep pointing at the same
+  // slots, so the caller's facade vectors have to be swapped separately.
   void swap_stage_tangents(unsigned i, unsigned j) {
     assert(i < S && j < S);
     if (i == j || n_cols_ == 0) return;

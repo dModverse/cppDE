@@ -1,6 +1,10 @@
 /*
- Main header for cppDE – ODE integration and sensitivity calculation
+ Main header for cppDE: ODE integration and sensitivity calculation
  using in-tree forward-mode dual numbers for automatic differentiation.
+
+ This is the ODE surface, not the whole library. The batch entry point, the
+ chain-rule kernels and the return codes are included by the generated sources
+ that need them, so they are not reachable from here.
 
  The stepper architecture (Rosenbrock4, NDF/BDF) is derived from Boost.Odeint
  by Karsten Ahnert, Mario Mulansky, and Christoph Koke (2011–2015),
@@ -81,11 +85,9 @@
 // ============================================================================
 //  cppDE multistep family (BDF / Adams)
 //
-//  Single unified multistepper class (cppde::multistepper) with a
-//  method selector (multistep_method enum).  Default coefficients are
-//  the Klopfenstein-Shampine NDF family (Shampine & Reichelt 1997);
-//  classical BDF and pure Adams-Moulton are both instantiations of the
-//  same class.
+//  One multistepper class with a method selector. The default coefficients are
+//  the Klopfenstein-Shampine NDF family; classical BDF and Adams-Moulton are
+//  instantiations of the same class.
 // ============================================================================
 #include <cppde/cppde_multistepper.hpp>
 #include <cppde/cppde_multistepper_controller.hpp>

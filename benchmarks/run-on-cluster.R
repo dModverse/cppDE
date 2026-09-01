@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 ## =====================================================================
 ##  run-on-cluster.R -- submit the benchmark to a SLURM cluster (helix)
-##  through dMod's distributedComputing().
+##  through dMod2's distributedComputing().
 ##
 ##      Rscript benchmarks/run-on-cluster.R --dry-run          # check locally
 ##      Rscript benchmarks/run-on-cluster.R --machine you@helix --submit
@@ -35,8 +35,8 @@
 
 suppressPackageStartupMessages({
   library(cppDE)
-  if (!requireNamespace("dMod", quietly = TRUE))
-    stop("dMod is required for cluster submission")
+  if (!requireNamespace("dMod2", quietly = TRUE))
+    stop("dMod2 is required for cluster submission")
 })
 
 ROOT <- local({
@@ -106,7 +106,7 @@ while (i <= length(args)) {
 tf <- function(x) isTRUE(as.logical(x))
 
 if (tf(OPT$help)) {
-  cat("\nSubmit the cppDE benchmark to a SLURM cluster via dMod.\n\n")
+  cat("\nSubmit the cppDE benchmark to a SLURM cluster via dMod2.\n\n")
   cat(sprintf("  --%-14s [%s]\n", names(OPT), unlist(OPT)), sep = "")
   cat("\n  --dry-run   build the shards locally and report, submit nothing",
       "\n  --submit    build, transfer and submit",
@@ -177,9 +177,9 @@ if (tf(OPT$collect)) {
         "If --shards differs from the submission, the fetch will not line up.\n",
         sep = "")
   }
-  ## dMod validates var_values/no_rep before it looks at `recover`, so
+  ## dMod2 validates var_values/no_rep before it looks at `recover`, so
   ## the array shape has to be restated even when only fetching.
-  job <- dMod::distributedComputing({ NULL }, jobname = OPT$jobname,
+  job <- dMod2::distributedComputing({ NULL }, jobname = OPT$jobname,
                                     machine = OPT$machine, recover = TRUE,
                                     var_values = list(seq_len(n_shards)))
   if (!job$check()) message("note: the cluster reports the job as incomplete; ",
@@ -287,7 +287,7 @@ maxs2    <- as.integer(OPT$`max-sens2`)
 cat(sprintf("\nsubmitting '%s' to %s\n  partition %s, %d cores allocated, %d workers, walltime %s\n",
             OPT$jobname, OPT$machine, OPT$partition, cores, bench_cores, OPT$walltime))
 
-job <- dMod::distributedComputing(
+job <- dMod2::distributedComputing(
   {
     ## Runs on a compute node.  `var_1` is this task's shard index; the
     ## benchmark functions and `shards` arrive in the workspace.

@@ -354,4 +354,17 @@ fi
 # above. (This was the bug that broke Windows CI: the trailing
 # `[ -n "$runtime_dll_path" ] && log ...` returned 1 when the var
 # was empty, and that became the script's exit code.)
+# ---------------------------------------------------------------------------
+# Vignette: carry it into an install that did not go through a full build.
+#
+# Only R CMD build moves the PDF into inst/doc, so a source tree and the
+# tarball install_github makes would both install without the vignette. The
+# guard is the PDF itself: a CRAN tarball has only the .asis left here.
+# Revisit this block for a CRAN submission.
+# ---------------------------------------------------------------------------
+if [ -f vignettes/Methods.pdf ]; then
+  mkdir -p inst/doc
+  cp -f vignettes/Methods.pdf vignettes/Methods.pdf.asis inst/doc/
+fi
+
 exit 0

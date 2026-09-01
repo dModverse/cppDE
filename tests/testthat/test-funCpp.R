@@ -21,6 +21,32 @@ test_that("funCpp returns correct output", {
   expect_equal(unname(res[1, "y2"]), 2.5, tolerance = 1e-10)
 })
 
+test_that("parameters named like the generated arrays do not collide", {
+  # The emitted code indexes p[] and x_obs[]. Substituting one symbol at a time
+  # let a parameter of that name rewrite the slots already emitted for the
+  # others, so what came out depended on the order the parameters were listed
+  # in: q, p turned into p[0], p[1] and then into p[1][0].
+  trafo <- c(o1 = "p + 2 * x", o2 = "y * k",
+             o3 = "x_obs + y_local", o4 = "p * y_local - k")
+  pars   <- c(p = 2, x = 3, y = 5, k = 7, x_obs = 11, y_local = 13)
+  orders <- list(names(pars), rev(names(pars)),
+                 c("k", "p", "y_local", "x", "y", "x_obs"))
+
+  for (i in seq_along(orders)) {
+    f <- funCpp(trafo, parameters = orders[[i]], deriv = TRUE,
+                derivMode = "symbolic", modelname = paste0("collide_", i),
+                convenient = TRUE)
+    res <- do.call(f$func, as.list(pars[orders[[i]]]))
+    jac <- do.call(f$jac, as.list(pars[orders[[i]]]))[1, , ]
+
+    expect_equal(unname(res[1, ]), c(8, 35, 24, 19), tolerance = 1e-10,
+                 label = paste("values, order", i))
+    expect_equal(unname(jac["o1", "x"]), 2, tolerance = 1e-10)
+    expect_equal(unname(jac["o4", "p"]), 13, tolerance = 1e-10)
+    expect_equal(unname(jac["o4", "y_local"]), 2, tolerance = 1e-10)
+  }
+})
+
 # -- Jacobian correctness -----------------------------------------------------
 
 test_that("funCpp Jacobian matches analytical derivatives", {

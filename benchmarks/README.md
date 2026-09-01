@@ -2,7 +2,7 @@
 
 A reproducible comparison of cppDE's own solvers against **SUNDIALS
 CVODE(S)**, on published systems-biology models and on the classical
-stiff IVP test problems — without sensitivities and with first-order
+stiff IVP test problems, without sensitivities and with first-order
 forward sensitivities.
 
 Nothing here is part of the R package: `benchmarks/` is listed in
@@ -49,11 +49,11 @@ the problems are not picked by size but by **trait coverage**:
 |---|---|
 | `stiff-extreme` | rate constants spanning many decades |
 | `stiff-moderate` | stiff without extreme scale separation |
-| `oscillatory` | limit cycle — error shows up as phase drift |
+| `oscillatory` | limit cycle: error shows up as phase drift |
 | `relaxation` | stiffness switches on and off along the trajectory |
-| `sparse` | sparse/banded Jacobian — the KLU path |
+| `sparse` | sparse/banded Jacobian: the KLU path |
 | `large` | ≥ 100 states |
-| `events` | timed discontinuities — stop, jump, restart |
+| `events` | timed discontinuities: stop, jump, restart |
 | `many-sens` / `few-sens` | wide versus narrow AD |
 | `rational` | Michaelis–Menten / Hill (division by states) |
 | `transcendental` | `exp` / `log` / trigonometric terms |
@@ -62,8 +62,8 @@ the problems are not picked by size but by **trait coverage**:
 
 Traits are inferred automatically for PEtab models (size, events,
 sensitivity count, Jacobian density, division by states, transcendental
-calls); the regime traits that cannot be read off the equations —
-stiffness, oscillation — are declared on the classical problems.
+calls); the regime traits that cannot be read off the equations
+(stiffness, oscillation) are declared on the classical problems.
 
 Tier membership is an **explicit list**, not a computed cover, so that
 numbers stay comparable across runs as problems are added. What *is*
@@ -92,17 +92,17 @@ measurement isolates the integrator and nothing else:
 * the **same analytic Jacobian** (never a finite-difference one);
 * the **same output grid, tolerances and initial conditions**;
 * sensitivities from **forward AD** (cppDE) versus **CVODES forward
-  sensitivity analysis** — in both cases the analytic route, never
+  sensitivity analysis**, in both cases the analytic route, never
   finite differences;
 * no R callback on either side.
 
 | solver | what it is |
 |---|---|
 | `cppDE_ndf` | cppDE's multistep solver, NDF formula (the default) |
-| `CVODE_bdf` | SUNDIALS CVODE / CVODES, BDF — the reference implementation |
+| `CVODE_bdf` | SUNDIALS CVODE / CVODES, BDF: the reference implementation |
 | `cppDE_bdf` | cppDE with `useNDF = FALSE`, i.e. CVODE's own BDF formula, so a difference isolates the NDF change (`--extra-solvers`) |
 | `cppDE_rb4` | Rosenbrock4, a one-step alternative (`--extra-solvers`) |
-| `cppDE_dense` / `cppDE_sparse` / `CVODE_dense` / `CVODE_sparse` | the same two backends with the linear solver **pinned** instead of auto-detected — the sparse sweep, see below |
+| `cppDE_dense` / `cppDE_sparse` / `CVODE_dense` / `CVODE_sparse` | the same two backends with the linear solver **pinned** instead of auto-detected, the sparse sweep, see below |
 
 ### The sparse sweep is part of the run
 
@@ -116,7 +116,7 @@ dense and pinned sparse, on both backends.
 This used to be `--sparse-sweep`, a *separate* run that replaced the
 head-to-head and filtered the problem list down to the sparse models.
 Two runs meant two result folders that could not be read against each
-other — the pinned times came from a different process, a different
+other, the pinned times came from a different process, a different
 build, and often a different machine than the auto-detected ones. Now
 both live in one `results.csv`, distinguished by the **`pinned`** column
 (`auto` / `dense` / `sparse`), and every pinned cell shares its worker
@@ -131,7 +131,7 @@ and its neighbourhood with the auto cell it has to be compared to.
 The default cutoff sits below the codegen's 0.4, so the sweep measures
 *what sparsity buys where it is used*. Raising `--max-density` past 0.4
 is what turns it into a test of *whether 0.4 is the right place to
-switch* — the two questions want different runs.
+switch*, the two questions want different runs.
 
 The `pinned` column keeps the two apart in every summary: the headline
 speed-up reads `auto` rows only, so the sweep can never make a model
@@ -153,7 +153,7 @@ requires a finite compile-time AD width, which the harness sets to
 exactly the number of active sensitivity parameters.
 
 **Accuracy** is measured against a CVODE reference at `atol = 1e-14`,
-`rtol = 1e-12` — deliberately produced by the *other* implementation, so
+`rtol = 1e-12`, deliberately produced by the *other* implementation, so
 cppDE is never scored against itself. The reference must also stay
 strictly tighter than every benchmarked tolerance: if it matched the
 tightest swept cell, CVODE would be scored against itself there, record
@@ -171,7 +171,7 @@ as one at `1e5`.
 
 Hass et al. (2019), *Benchmark problems for dynamic modeling of
 intracellular processes*, **Bioinformatics** 35(17):3073–3082,
-<https://doi.org/10.1093/bioinformatics/btz020> — maintained at
+<https://doi.org/10.1093/bioinformatics/btz020>, maintained at
 <https://github.com/Benchmarking-Initiative/Benchmark-Models-PEtab>.
 
 `fetch-models.R` clones it into `benchmarks/cache/` (git-ignored; the
@@ -179,9 +179,9 @@ models keep their own licence and are never vendored into this repo).
 
 The models are read **directly from their SBML**, not transcribed by
 hand: `R/sbml.R` is a small SBML reader covering exactly what the
-collection uses — compartments, species, parameters, `initialAssignment`,
+collection uses (compartments, species, parameters, `initialAssignment`,
 `assignmentRule`, `rateRule`, `functionDefinition`, reaction kinetic
-laws and MathML `piecewise` — and emits the R-syntax strings cppDE
+laws and MathML `piecewise`) and emits the R-syntax strings cppDE
 consumes. `R/petab.R` then supplies nominal parameter values, the
 condition-specific overrides, and the measurement time grid.
 
@@ -193,7 +193,7 @@ with realistic parameter values.
 ### 2. Classical stiff test problems
 
 From Hairer & Wanner, *Solving Ordinary Differential Equations II*, and
-the associated IVP test set — the failure modes the biological models do
+the associated IVP test set, the failure modes the biological models do
 not exercise:
 
 Robertson, HIRES, OREGO (Oregonator), E5, Van der Pol at μ = 1000,
@@ -208,7 +208,7 @@ FitzHugh–Nagumo chain, both with banded Jacobians for the sparse path.
 These are the points where a PEtab problem does not map one-to-one onto
 "integrate this ODE". Each is applied identically to both backends, so
 the comparison stays fair, and each is recorded in the problem's `notes`
-and printed by the runner — nothing is silently simplified.
+and printed by the runner, nothing is silently simplified.
 
 **Time switches become events.** Several models gate a parameter on
 time via MathML `piecewise` (a dose at `t₀`, a lockdown window, a
@@ -232,7 +232,7 @@ therefore not in the model. Reporting no gradient is better than
 reporting a wrong one.
 
 **Sensitivity parameters.** The set is PEtab's `estimate == 1`
-parameters, intersected with those that actually appear in the ODE —
+parameters, intersected with those that actually appear in the ODE,
 so observable and noise parameters (`sd_*`, `offset_*`, `scaling_*`)
 drop out on their own. Species initials are held fixed unless the model
 estimates them. `--max-sens` caps the count (default 32); the cap is
@@ -248,7 +248,7 @@ integrate the same one.
 each model, which is the realistic unit of work for a fitting run: one
 optimiser step solves them all. The default is one condition per model
 (the one with the richest finite time grid). The right-hand side is
-compiled once and reused across conditions — except where condition
+compiled once and reused across conditions, except where condition
 values change how a `piecewise` folds, which is detected and handled.
 
 **Excluded.** `Smith_BMCSystBiol2013` alone switches a `piecewise` on a
@@ -266,7 +266,7 @@ values change how a `piecewise` folds, which is detected and handled.
 | `04-scaling` | how does cost grow with the number of states? |
 | `05-sens-overhead` | what does one solve-with-gradient cost, in units of plain solves? The grey line is the *M+1* cost of finite differences |
 | `06-summary` | one geometric-mean number per mode, over every matched cell |
-| `07-sens2-cost` | what a full Hessian costs versus M — cppDE only, a cost curve rather than a comparison |
+| `07-sens2-cost` | what a full Hessian costs versus M: cppDE only, a cost curve rather than a comparison |
 
 Ratios are always combined with a **geometric mean**, which is the
 correct average for relative measures. Cells are matched on
@@ -285,15 +285,15 @@ Rscript benchmarks/run-benchmarks.R --tol wp --nrep 7
 A full sweep is long and wants an idle machine, so there are two
 submitters. Both parse the problems **here** and ship them inside the
 transferred workspace, so the remote side needs neither this repository
-nor the PEtab collection — only cppDE with the CVODE backend, a C++
+nor the PEtab collection, only cppDE with the CVODE backend, a C++
 compiler, and R. Both split the work with the same cost-balanced
 sharding (`R/shards.R`), so their results are comparable with each other
 and with a local run.
 
 | script | via | placement |
 |---|---|---|
-| `run-on-cluster.R` | `dMod::distributedComputing()` | a SLURM array; the scheduler reserves cores and memory |
-| `run-with-runbg.R` | `dMod::runbg()` | plain ssh; one background `R CMD BATCH` per shard, placed by you |
+| `run-on-cluster.R` | `dMod2::distributedComputing()` | a SLURM array; the scheduler reserves cores and memory |
+| `run-with-runbg.R` | `dMod2::runbg()` | plain ssh; one background `R CMD BATCH` per shard, placed by you |
 
 ```sh
 Rscript benchmarks/run-with-runbg.R --dry-run --tier full --shards 4
@@ -306,8 +306,8 @@ Rscript benchmarks/run-with-runbg.R --purge   --jobname cppde_bg
 
 `--collect` replays the submission's options from
 `results/.jobs/<jobname>.runbg.rds`, so it needs nothing but the job
-name. It merges the shards into a normal results folder — CSV, README
-and figures — tagged `_runbg_`.
+name. It merges the shards into a normal results folder (CSV, README
+and figures) tagged `_runbg_`.
 
 Without a scheduler, **placement is entirely yours**. `--machines` is a
 pool of hosts and `--shards n` deals *n* jobs round-robin over it, so one
@@ -315,8 +315,8 @@ host named once with `--shards 4` gets four concurrent R processes;
 `--submit` prints the resulting `jobs × workers` per host. Keep that
 product inside the machine, remembering that a worker can peak in the
 gigabytes while it compiles. Nothing reserves the host either, so
-co-tenants land in the timings: ratios stay valid — both solvers of a
-matched cell run in the same process — while absolute milliseconds are
+co-tenants land in the timings: ratios stay valid, both solvers of a
+matched cell run in the same process, while absolute milliseconds are
 only comparable within one host. Every row carries `node` and `cpu`.
 
 `--submit` first probes each host over ssh for R, cppDE, the CVODE
@@ -325,7 +325,7 @@ missing. runbg starts `R CMD BATCH --vanilla` through a *non-login* ssh
 shell, so whatever a module system or `~/.profile` sets up has to be
 reachable from `~/.bashrc`. Authentication must be non-interactive:
 unlike `distributedComputing()`, `runbg()` has no `ssh_passwd`, so a key
-or an agent is required — including for `--machines localhost`.
+or an agent is required, including for `--machines localhost`.
 
 ---
 
@@ -335,7 +335,7 @@ The peak of a benchmark run is the *build*, not the solve: a large model
 with sensitivities is a very large translation unit and g++ answers it in
 gigabytes. With one worker per problem those compilers run concurrently,
 and on a host without a scheduler nothing bounds their sum. Enough of
-them at once does not merely swap — the kernel goes into reclaim and
+them at once does not merely swap, the kernel goes into reclaim and
 stops answering, and the job dies with the machine.
 
 Three guards bound that, each covering what the others cannot. They apply
@@ -355,7 +355,7 @@ no single process can see. `0` disables it.
 `--max-compile-gb` is a `ulimit -v` applied through a generated
 `R_MAKEVARS_USER` that wraps the toolchain R reports. A model that needs
 more than the cap fails to build, is logged as a skipped model, and the
-run continues — instead of the host going down with it. Together the two
+run continues, instead of the host going down with it. Together the two
 put a host's build footprint at about `compile-slots × max-compile-gb`,
 which `--submit` prints before it sends anything.
 
@@ -367,7 +367,7 @@ For the ssh route the preflight reads each host's cores, total and
 available RAM and load, and **refuses to submit** unless three things
 hold on every host:
 
-* not more workers than cores — `jobs × --bench-cores ≤ nproc`
+* not more workers than cores, `jobs × --bench-cores ≤ nproc`
 * at least `--mem-per-worker` (6 GB) of available RAM per worker
 * a build ceiling of `min(--compile-slots, workers) × --max-compile-gb`
   that stays under `--mem-budget` (0.5) of what is free
@@ -376,7 +376,7 @@ The third is the one that makes "it will not take the machine down" a
 checked property rather than an assumption: it compares the guards' own
 maximum against the machine they are about to run on, and refuses a run
 with no `--max-compile-gb` at all. Planning for only half of free memory
-is deliberate — `MemAvailable` is a snapshot of a box nothing reserves,
+is deliberate, `MemAvailable` is a snapshot of a box nothing reserves,
 and the co-tenant who logs in next has to fit somewhere too. `--force`
 turns any of these refusals into a warning.
 
@@ -400,8 +400,8 @@ its reservation.
 benchmarks/
   fetch-models.R        download / update the PEtab collection
   run-benchmarks.R      the driver -- start here
-  run-on-cluster.R      submit to SLURM     (dMod::distributedComputing)
-  run-with-runbg.R      submit over ssh     (dMod::runbg)
+  run-on-cluster.R      submit to SLURM     (dMod2::distributedComputing)
+  run-with-runbg.R      submit over ssh     (dMod2::runbg)
   validate-models.R     check the SBML translation against the
                         simulated data shipped with the collection
   R/
@@ -424,7 +424,7 @@ automatically.
 
 ## Requirements
 
-* cppDE installed with the **CVODE backend enabled** — the run aborts
+* cppDE installed with the **CVODE backend enabled**, the run aborts
   early with instructions otherwise. `cppDE::install_libs("sundials")`
   builds SUNDIALS into a per-user cache without root.
 * R packages `ggplot2`, `scales`, `xml2`, `yaml`.
@@ -441,7 +441,7 @@ such batches is reported, which removes clock granularity but not a
 competing compile job. Anything else running on the box will show up in
 the numbers.
 
-### `--cores` — what parallelism is safe here
+### `--cores`: what parallelism is safe here
 
 `--cores n` runs *n problems* concurrently. The granularity is
 deliberate: one worker executes **all** of a problem's solvers, modes and
@@ -450,12 +450,12 @@ same machine load.
 
 That matters because a benchmark under load is not simply "the same
 numbers, later". Cores on a socket share last-level cache and memory
-bandwidth, SMT siblings share execution units, and — usually the largest
-effect — CPUs clock down as more cores go busy, so a core that runs at
+bandwidth, SMT siblings share execution units, and, usually the largest
+effect, CPUs clock down as more cores go busy, so a core that runs at
 its turbo ceiling alone runs measurably slower with twenty neighbours.
 
 Those effects are largely *uniform*, so a **ratio** between two solvers
-on the same cell cancels much of them — which is why cells are never
+on the same cell cancels much of them, which is why cells are never
 split across workers. But "much of" is not "all of", and the suite was
 measured to find out how much. Running the `tiny` tier at 1 and at 8
 workers on the same machine:
@@ -477,7 +477,7 @@ Practical rule:
 
 * **`--cores 1`** for any number you intend to quote, and for judging a
   change smaller than ~10 %;
-* **`--cores > 1`** for a fast "did I break something" pass — treat
+* **`--cores > 1`** for a fast "did I break something" pass, treat
   differences below ~10 % as noise;
 * **absolute milliseconds** are inflated either way at `--cores > 1`;
   never compare them across runs made with different `--cores` values.
@@ -487,7 +487,7 @@ The value is written to the `cores` column of `results.csv` and to
 fact. Workers get `OMP_NUM_THREADS=1` so a threaded BLAS cannot
 oversubscribe on top of the fan-out.
 
-Translating the SBML models is parallelised too, unconditionally — it
+Translating the SBML models is parallelised too, unconditionally, it
 happens before anything is timed.
 
 ---
@@ -509,7 +509,7 @@ package-level bugs, not benchmark-level ones:
 2. **A CSE temporary holding a constant subexpression is typed as the AD
    scalar.** An expression like `log(2)/tau` makes CSE emit
    `const AD _cse_t2 = cppde::log(2.0);`, and there is no
-   `cppde::log(double)` overload — so the model compiles with
+   `cppde::log(double)` overload, so the model compiles with
    `deriv = FALSE` and fails only with `deriv = TRUE`. *Workaround:*
    `fold_constants()` evaluates every symbol-free subexpression before
    codegen.
@@ -520,19 +520,19 @@ Cross-checking the two backends on the identical right-hand side at
 `atol = 1e-10`, `rtol = 1e-8` puts nearly every model at a relative
 agreement of `1e-8` or better. Three do not, and they are worth a look:
 
-* `Crauste_CellSystems2017` — backends differ by `4e-3` in the states.
+* `Crauste_CellSystems2017`, backends differ by `4e-3` in the states.
   The same model is also the one that misses the `simulatedData` check
   by `1.5e-3`, so the difficulty is in the integration, not the
   translation.
-* `Isensee_JCB2018` — differs by O(1) *without* sensitivities while
+* `Isensee_JCB2018`, differs by O(1) *without* sensitivities while
   agreeing to `6e-10` *with* them. That direction is expected, not
   paradoxical: with sensitivities the error test also covers the
   sensitivity variables, so at the same tolerance the controller is
   forced onto smaller steps and both backends land much closer to the
-  true trajectory. The finding is therefore about the plain run — at
+  true trajectory. The finding is therefore about the plain run, at
   `rtol = 1e-8` the requested tolerance is not enough to pin this model
   down, and the two step-size controllers diverge.
-* `Elowitz_Nature2000` — states agree to `5e-7`, sensitivities do not.
+* `Elowitz_Nature2000`, states agree to `5e-7`, sensitivities do not.
   The model estimates a Hill exponent `n_Hill`, and `d(x^n)/dn` involves
   `log(x)` while some states approach zero, so the sensitivity is
   genuinely ill-posed there rather than wrongly computed.

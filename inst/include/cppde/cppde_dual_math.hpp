@@ -29,15 +29,10 @@ namespace cppde {
 // =============================================================================
 // Scalar (arithmetic-type) overloads.
 //
-// Codegen rewrites every math call as `cppde::<fn>` so the same emitted
-// expression compiles for T = double, dual and dual2nd. Every overload below
-// this point is SFINAE-constrained to a dual / dual2nd / expression-template
-// operand, so a call whose arguments are all plain numbers had no viable
-// candidate. That happens whenever the symbolic derivative folds a constant --
-// d/dx 10^x = 10^x * log(10) emits `cppde::log(10.0)` into the Jacobian.
-//
-// These forward to <cmath>. They never compete with the AD overloads:
-// is_arithmetic and the dual / ET constraints are mutually exclusive.
+// The codegen writes every math call as cppde::<fn>, so one emitted expression
+// compiles for double, dual and dual2nd. The AD overloads are constrained to AD
+// operands, which leaves an all-numeric call, such as a folded derivative
+// constant, without a candidate. These forward to <cmath>.
 // =============================================================================
 namespace detail {
 template<class... Ts>
@@ -101,13 +96,9 @@ inline std::common_type_t<A, B> max(A a, B b) {
 }
 
 // =============================================================================
-// Eager-vs-ET routing helper. The expression-template overlay
-// (cppde_dual_expr.hpp) covers all (non-AD T) duals: both the heap path
-// (N == 0, arena-backed) and the static-N stack path (N > 0, inline tan_).
-// Eager remains active only when T is itself an AD type (nested dual2nd:
-// outer layer needs eager; inner layer falls through to ET).
-//
-// Triggered as:    template<class T, unsigned N, EAGER_GATE(T, N)> ...
+// Eager against ET routing. The expression overlay covers every dual over a
+// non-AD scalar, heap and static-N alike. Eager stays only where T is itself an
+// AD type, that is the outer layer of a nested dual2nd.
 // =============================================================================
 namespace detail {
 template<class T, unsigned /*N*/>
@@ -626,11 +617,9 @@ template<class T, unsigned N, class U,
 inline bool operator>=(const U& a, const dual<T, N>& b) { return static_cast<T>(a) >= b.x(); }
 
 // =============================================================================
-// max_abs_all_levels(v): recursive |.| sweep over a value plus all of its
-// tangent slots. For a plain double this is just |v|; for cppde::dual<T,N>
-// it walks into .x() and .d(j); for nested dual<dual<...>,N> the recursion
-// happens via the inner dual<T,N> overload, so the sweep covers value +
-// 1st-order tangents + 2nd-order tangents.
+// max_abs_all_levels(v): recursive absolute-value sweep over a value and all of
+// its tangent slots, so a nested dual is covered down to the second-order
+// tangents.
 // =============================================================================
 
 template<class T>

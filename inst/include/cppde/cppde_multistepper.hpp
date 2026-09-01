@@ -65,8 +65,8 @@
  license.  See inst/COPYRIGHTS for the full license text.
  */
 
-#ifndef CPPDE_MULTISTEPPER_HPP_INCLUDED
-#define CPPDE_MULTISTEPPER_HPP_INCLUDED
+#ifndef CPPDE_MULTISTEPPER_HPP
+#define CPPDE_MULTISTEPPER_HPP
 
 #include <cstddef>
 #include <cstring>
@@ -111,14 +111,12 @@ static constexpr double CORTES  = 0.1;      // Newton convergence rate threshold
 static constexpr double CRDOWN  = 0.3;      // crate damping: crate = max(CRDOWN*crate, del/delp)
 static constexpr double RDIV    = 2.0;      // divergence ratio: fail Newton if del > RDIV*delp (m>=2)
 static constexpr double DGMAX   = 0.3;      // |gamrat-1| threshold for forcing LU refactorization
-static constexpr double THRESH  = 1.5;      // min eta to bother changing h (eta < THRESH → eta=1)
+static constexpr double THRESH  = 1.5;      // min eta to bother changing h (eta < THRESH keeps eta = 1)
 static constexpr double ADDON   = 1e-6;     // small constant in eta denominator to avoid division by zero
-// --- Step-size safety factors (classical CVODE BIAS style) ---
-// Formula: eta = 1 / ((BIAS * d)^(1/L) + ADDON)
-// The exponent makes the effective safety order-dependent:
-//   effective_safety = BIAS^(1/L), which is large at low orders
-//   (where error grows fast with h) and approaches 1 at high orders
-//   (where error is already well-controlled).
+  // --- Step-size safety factors (classical CVODE BIAS style) ---
+  // eta = 1 / ((BIAS * d)^(1/L) + ADDON). The exponent makes the effective
+  // safety BIAS^(1/L): large at low order, where the error grows fast with h,
+  // and close to one at high order.
 static constexpr double BIAS1   = 6.0;      // safety factor in etaqm1 (order decrease candidate)
 static constexpr double BIAS2   = 6.0;      // safety factor in etaq   (current order candidate)
 static constexpr double BIAS3   = 10.0;     // safety factor in etaqp1 (order increase candidate)
@@ -139,15 +137,10 @@ static constexpr int    SMALL_NEF = 2;      // error test failures before clampi
 static constexpr int    MXNCF   = 10;       // max Newton convergence failures before giving up
 static constexpr int    LONG_WAIT = 10;     // qwait after order-1 restart (hold order that many steps)
 
-// --- Klopfenstein-Shampine NDF coefficients (Table 1, SR97) ---
-// Indexed by order q in 1..5.  kappa[0] is a dummy (unused).
-// Source: Shampine & Reichelt, "The MATLAB ODE Suite",
-//         SIAM J. Sci. Comput. 18(1), 1997, Table 1.
-//
-// These values balance accuracy (smaller leading truncation error
-// coefficient than classical BDF) against A(alpha)-stability.  For
-// q=5, kappa is set to 0 because BDF5's 51-degree stability angle
-// leaves no headroom for further reduction.
+  // --- Klopfenstein-Shampine NDF coefficients (Table 1, SR97) ---
+  // Shampine and Reichelt, The MATLAB ODE Suite, SIAM J. Sci. Comput. 18(1),
+  // 1997, Table 1. Indexed by order q in 1..5, kappa[0] unused. They trade
+  // truncation error against A(alpha)-stability; at q = 5 there is no headroom.
 static constexpr double NDF_KAPPA[6] = {
   0.0,       // q = 0 (unused)
   -0.1850,    // q = 1
@@ -165,20 +158,13 @@ static constexpr int max_order_adams = 12;
 
 } // namespace adams_constants
 
-// ============================================================================
-//  Adams coefficient routines  (cvSetAdams port from Sundials/cvode.c)
-//
-//  Computes the Nordsieck correction coefficients l[0..q] and the
-//  error-test constants tq[1..5] for variable-step Adams-Moulton of
-//  order q.  Literal translation of cvSetAdams / cvAdamsStart /
-//  cvAdamsFinish / cvAltSum: variable names kept identical to the C
-//  source for line-by-line review.
-//
-//  VALIDATED at constant step size against the classical fixed-step
-//  Adams-Moulton coefficients (Hairer/Wanner Vol I Table III.1.1) for
-//  q = 1..6, and at variable step for q = 1..12 against a reference
-//  implementation.  Bit-for-bit equivalent to CVODE at q == 1.
-// ============================================================================
+  // ============================================================================
+  //  Adams coefficient routines (cvSetAdams port from Sundials/cvode.c)
+  //
+  //  Nordsieck correction coefficients l[0..q] and error-test constants tq[1..5]
+  //  for variable-step Adams-Moulton of order q. A literal translation, variable
+  //  names kept identical to the C source.
+  // ============================================================================
 
 namespace adams_detail {
 
@@ -201,26 +187,15 @@ inline double alt_sum(int iend, const std::array<T, N>& a, int k)
 
 } // namespace adams_detail
 
-// adams_set_coefficients <- cvSetAdams
-//
-// Inputs:
-//   q      : current order, 1 <= q <= 12.
-//   qwait  : order-change wait counter; tq[1] and tq[3] are only
-//             computed when qwait == 1, exactly as in CVODE.
-//   h      : current step size.
-//   tau    : past step sizes; tau[1] is the most recent (= last
-//             accepted h), tau[2] the one before, etc.  Uses indices
-//             1..q-1.
-//
-// Outputs (by reference):
-//   l      : l[0..q] written, higher zeroed.  l[0] = 1 by construction.
-//   tq     : tq[1..5] written.
-//
-// Polynomial Lambda(x) of degree q:
-//   Lambda(-1) = 0,  Lambda(0) = 1,
-//   (d/dx) Lambda(x) = c * PRODUCT_{i=1..q-1} (1 + x/xi_i),
-// with xi_i = (t_n - t_{n-i})/h and c chosen so Lambda(0) = 1.  The
-// l[i] are the coefficients of Lambda(x).
+  // adams_set_coefficients <- cvSetAdams
+  //
+  //   q, qwait, h, tau : order, order-change wait counter, current step, and the
+  //                      past steps with tau[1] the most recent (indices 1..q-1)
+  //   l, tq            : written out, l[0..q] with l[0] = 1, and tq[1..5]
+  //
+  // l holds the coefficients of the degree-q polynomial Lambda with
+  // Lambda(-1) = 0, Lambda(0) = 1 and Lambda'(x) = c * prod_{i=1..q-1}
+  // (1 + x/xi_i), where xi_i = (t_n - t_{n-i})/h.
 template<class TimeType, std::size_t L_PLUS_1, std::size_t TAU_LEN>
 void adams_set_coefficients(
     int q,
@@ -250,11 +225,9 @@ void adams_set_coefficients(
 
   // --- q >= 2 path ---
   //
-  // Step 1 (cvAdamsStart): build product polynomial m[] of degree q-1:
-  //     m(x) = PRODUCT_{i=1..q-1} (1 + x / xi_i)
-  // by repeated multiplication, where xi_i = (t_n - t_{n-i})/h.  Also
-  // sets tq[1] inside the loop when qwait == 1 and j == q-1.
-  // Post-loop hsum = h + tau[1] + ... + tau[q-1].
+  // cvAdamsStart builds the product polynomial m(x) = prod_{i=1..q-1}
+  // (1 + x/xi_i) by repeated multiplication, sets tq[1] when qwait == 1, and
+  // leaves hsum = h + tau[1] + ... + tau[q-1].
 
   std::array<TimeType, 13> m;
   m.fill(TimeType(0));
@@ -289,7 +262,7 @@ void adams_set_coefficients(
   // --- cvAdamsFinish: normalize m[] into l[] and compute tq[2..5] ---
   //
   // cvAdamsFinish modifies m[] in-place when computing tq[3]
-  // (multiplies by one more (1 + xi_inv*x) factor → degree q).
+  // (multiplies by one more (1 + xi_inv*x) factor to degree q).
   // We replicate that.
 
   const double M0_inv = 1.0 / M0;
@@ -328,27 +301,18 @@ void adams_set_coefficients(
   // because alpha0 can be negative in the FLC formulation.
 }
 
-// ============================================================================
-//  Adams-Moulton PECE corrector  (sibling of ndf_newton_solve)
-//
-//  Performs one PECE (Predict-Evaluate-Correct-Evaluate) Adams-Moulton
-//  step.  Same calling convention as newton_solve, but no LU, no
-//  Jacobian, no linear solve: cost per accepted step is 2 f-evals.
-//
-//  PECE layout:
-//    P : y_pred = Pascal predictor on Nordsieck array  (caller's job)
-//    E : f_pred = f(t_n, y_pred)
-//    C : delta  = l[1] * (h * f_pred - z_pred[1])
-//        y_n    = y_pred + delta
-//    E : f_new  = f(t_n, y_n)   (stored for next step)
-//
-//  Stiffness indicator: when the fixed-point iteration diverges,
-//  |h * lambda * l[1]| > 1 for the dominant eigenvalue.  Exposed via
-//  the `diverged` flag so the stepper can switch to NDF immediately.
-//
-//  AD handling: corrector is pure arithmetic on f and the Nordsieck
-//  slots, so dual types propagate sensitivities transparently.
-// ============================================================================
+  // ============================================================================
+  //  Adams-Moulton PECE corrector (sibling of ndf_newton_solve)
+  //
+  //    P : y_pred from the Pascal predictor, the caller's job
+  //    E : f_pred = f(t_n, y_pred)
+  //    C : y_n = y_pred + l[1] * (h * f_pred - z_pred[1])
+  //    E : f_new = f(t_n, y_n), kept for the next step
+  //
+  //  Two f evaluations per accepted step, no Jacobian and no solve. A diverging
+  //  fixed point means |h * lambda * l[1]| > 1, which the `diverged` flag hands
+  //  on as a stiffness signal. Dual types pass through the arithmetic.
+  // ============================================================================
 
 struct pece_result {
   bool   converged;     // Did the PECE fixed-point iteration converge?
@@ -357,45 +321,24 @@ struct pece_result {
   int    n_fevals;      // Number of f-evaluations used (2 for converged step).
   int    n_iters;       // Number of corrector iterations performed.
 
-  // Maximum convergence rate observed across the corrector iterations,
-  // following LSODA correction(): rm = del/delp, rate = max(rate, rm).
-  // Used by the stiffness detector to estimate the dominant Lipschitz
-  // constant on the Adams side where no Jacobian is available.
-  // Zero if the corrector did not run at least 2 iterations (the ideal
-  // non-stiff case: no rate signal available).
+  // Maximum convergence rate over the corrector iterations, rm = del/delp as in
+  // LSODA correction(). The stiffness detector estimates the dominant Lipschitz
+  // constant from it, the Adams path having no Jacobian. Zero below two runs.
   double rate_max;
 };
 
-// adams_pece_solve: one PECE Adams-Moulton corrector solve.
-//
-// Inputs:
-//   deriv_func  : user RHS, called as deriv_func(y, ydot, t).
-//   zn0         : Nordsieck slot 0 BEFORE predict: previous accepted
-//                  state (used only for atol/rtol weighting).
-//   zn0_pred    : Nordsieck slot 0 AFTER predict: the predictor for y_n.
-//   zn1_pred    : Nordsieck slot 1 AFTER predict: h * y' at y_pred.
-//   h           : current step size.
-//   l1          : l[1] from adams_set_coefficients (leading correction
-//                  weight).
-//   t_new       : time at the new step, t_n + h.
-//   tq4         : Newton-style convergence threshold inherited from
-//                  the controller (CORTES / tq[2]).
-//   atol, rtol  : error weights for the WRMS norm.
-//   max_iter    : maximum corrector iterations (typical: 3-4).
-//
-// Outputs (by reference):
-//   acor        : accumulated correction y_n - y_pred.
-//   y           : final corrected y_n.
-//   tempv, ftemp: caller-owned scratch space (no allocation).
-//   crate       : Nash-style damped convergence rate, persisted across
-//                  steps (diagnostic only on the Adams path).
-//
-// Returns: pece_result.
-//   converged=false, diverged=true  → PECE blew up; switch to NDF.
-//   converged=false, diverged=false → soft failure; controller retries
-//                                     with smaller h (or, for switching
-//                                     instantiations, also treated as a
-//                                     stiffness signal: see controller).
+  // adams_pece_solve: one PECE Adams-Moulton corrector solve.
+  //
+  //   zn0, zn0_pred, zn1_pred : Nordsieck slot 0 before the predict (weighting
+  //                             only), and slots 0 and 1 after it
+  //   h, l1, t_new            : step, leading correction weight, new time
+  //   tq4, atol, rtol         : convergence threshold and the error weights
+  //   acor, y, tempv, ftemp   : correction, result, and caller-owned scratch
+  //   crate                   : damped convergence rate, diagnostic only
+  //
+  // A result with diverged set means the corrector blew up and the stepper
+  // should switch to NDF; converged and diverged both false is a soft failure
+  // the controller retries with a smaller step.
 template<class DerivFunc, class Value, class TimeType>
 pece_result adams_pece_solve(
     DerivFunc& deriv_func,
@@ -462,13 +405,11 @@ pece_result adams_pece_solve(
   int m;
   for (m = 0; m < max_iter; ++m) {
 
-    // CVODE cvNlsFunctional:
-    //   tempv = rl1 * (h*f(y_prev) - zn[1])        -- full new correction
-    //   del   = ||tempv - acor||                    -- increment vs previous
-    //   acor  = tempv                                -- overwrite
-    // rl1 = 1/l[1], NOT l[1].  Using l[1] here caused the corrector to
-    // converge to the wrong fixed point (approximately y_n*(1+h)/(1+2h)
-    // instead of AM2) so every step looked like huge local error.
+  // CVODE cvNlsFunctional:
+  //   tempv = rl1 * (h*f(y_prev) - zn[1])   the full new correction
+  //   del   = ||tempv - acor||              the increment over the previous one
+  // rl1 is 1/l[1], not l[1]: with l[1] the corrector settles on a different
+  // fixed point and every step then looks like a large local error.
     { auto _t = prof.timer(prof_cat::newton_overhead);
       // tempv = rl1 * (h*f - zn1_pred) - acor, the increment; acor takes
       // it up and equals the full correction afterwards.
@@ -525,7 +466,7 @@ pece_result adams_pece_solve(
                acnrm, n_fevals, m + 1, rate_max };
     }
 
-    // Hard divergence: update growing rapidly → fixed point cannot
+    // Hard divergence: update growing rapidly, the fixed point cannot
     // exist for the current h.  PECE can legitimately wobble so we
     // use 2*delp rather than Newton's RDIV = 2.
     if (m >= 1 && delp > 0.0 && del > 2.0 * delp) {
@@ -547,18 +488,13 @@ pece_result adams_pece_solve(
 }
 
 
-// ============================================================================
-//  multistep_method: compile-time method selector
-//
-//  Selects which Nordsieck multistep family the stepper instantiates.
-//  Both variants share the same Nordsieck history array, the same
-//  step-size controller, and the same resize / dense-output / AD
-//  machinery.  They differ in:
-//
-//    - which xxxSet() coefficient routine is called
-//    - whether the corrector is Newton (BDF/NDF) or PECE (Adams)
-//    - the maximum order
-// ============================================================================
+  // ============================================================================
+  //  multistep_method: compile-time method selector
+  //
+  //  Both families share the Nordsieck history, the controller, and the resize,
+  //  dense-output and AD machinery. They differ in the coefficient routine, in
+  //  Newton against PECE for the corrector, and in the maximum order.
+  // ============================================================================
 
 enum class multistep_method {
   bdf,      // pure BDF/NDF (default)
@@ -661,12 +597,9 @@ public:
     m_tau.fill(time_type(0));
   }
 
-  // The slab members embed pointers to their own storage_.data() into the
-  // dual elements of the slab-bound vectors (m_zn[j].m_v, m_acor.m_v, …).
-  // Copying would build a separate buffer with the same address-bound
-  // duals: UB. Moves are safe: std::vector::move preserves data() for
-  // both the slab storage and the dual-element vectors, so embedded tan_
-  // pointers keep pointing at valid memory in the moved-to instance.
+  // The slabs embed pointers into their own storage_ inside the duals of the
+  // slab-bound vectors, so a copy would leave two objects sharing one set of
+  // addresses. Moving is safe, a vector move preserves data().
   multistepper(const multistepper&)            = delete;
   multistepper& operator=(const multistepper&) = delete;
   multistepper(multistepper&&)                 = default;
@@ -675,12 +608,9 @@ public:
   // ====================================================================
   //  Sensitivity slab priming
   //
-  //  Stores n_sens and primes every internal state-vector slab. Idempotent
-  //  and cheap; called from the codegen glue before integrate_times() and
-  //  re-called from resize_impl() / prepare_dense_output() whenever any
-  //  internal vector may have been reallocated.
-  //
-  //  No-op for non-dynamic-dual value_type (the slab classes are stubs).
+  //  Stores n_sens and primes every internal slab. Idempotent and cheap, called
+  //  before integrate_times() and again whenever a resize may have reallocated
+  //  an internal vector. No-op when the value type is not a slab-backed dual.
   // ====================================================================
 
   void prepare_sensitivities(unsigned n_sens)
@@ -756,12 +686,11 @@ public:
   bool use_ndf_kappa() const { return m_use_ndf_kappa; }
 
   // ====================================================================
-  //  convfail enum: mirrors convfail parameter to lsetup
+  //  convfail enum: mirrors the convfail parameter of lsetup
   //
-  //  CV_NO_FAILURES:  no Newton failures (first call or error-test retry)
-  //                   → lsetup may reuse cached Jacobian if gamma is close
-  //  CV_FAIL_BAD_J:   Newton failed with stale Jacobian → must recompute J
-  //  CV_FAIL_OTHER:   Newton failed after fresh J or other failure
+  //    CV_NO_FAILURES: no Newton failure, lsetup may reuse a cached Jacobian
+  //    CV_FAIL_BAD_J:  Newton failed on a stale Jacobian, recompute it
+  //    CV_FAIL_OTHER:  Newton failed after a fresh Jacobian, or otherwise
   // ====================================================================
 
   enum class convfail_t {
@@ -874,15 +803,12 @@ public:
       }
     }
 
-    // ================================================================
-    //  1b. Compute error weight vector from ACCEPTED solution
-    //      (before prediction modifies zn[0]).  Matches CVODE:
-    //      ewt[k] = 1/(atol + rtol*|component_k|), fixed for the step.
-    //
-    //      Layout: interleaved, matching WRMS norm iteration order.
-    //      For each state i: [value_weight, deriv_0_weight, ..., deriv_nd-1_weight].
-    //      For non-AD (double): just n value weights.
-    // ================================================================
+  // ================================================================
+  //  1b. Error weights from the accepted solution, before the prediction
+  //      overwrites zn[0]: ewt[k] = 1/(atol + rtol*|x_k|), fixed for the step.
+  //      Interleaved in WRMS iteration order, one value weight per state
+  //      followed by its derivative weights; for double just n weights.
+  // ================================================================
     {
       using ndf_detail::scalar_value;
       m_ewt.clear();
@@ -912,12 +838,10 @@ public:
     // ================================================================
     ndfSet();
 
-    // --- NDF kappa modification of the iteration matrix ---
-    // Classical BDF uses gamma = h / m_l[1].  NDF replaces this by
-    //   gamma_NDF = h / ((1 - kappa_q) * m_l[1])
-    // so that W = I - gamma_NDF * J matches Shampine's NDF formulation.
-    // The factor is absorbed into rl1 = 1 / ((1 - kappa_q) * m_l[1]).
-    // When m_use_ndf_kappa = false, kappa_q = 0 and we recover classical BDF.
+  // --- NDF kappa modification of the iteration matrix ---
+  // Classical BDF uses gamma = h / m_l[1], NDF uses h / ((1 - kappa_q) * m_l[1])
+  // so that W = I - gamma*J matches Shampine's formulation. The factor is
+  // absorbed into rl1; with m_use_ndf_kappa false, kappa_q = 0 gives back BDF.
     const double kappa_q = m_use_ndf_kappa ? ndf_constants::NDF_KAPPA[m_q] : 0.0;
     time_type rl1 = time_type(1.0) / (m_l[1] * time_type(1.0 - kappa_q));
     m_gamma = m_h * rl1;
@@ -947,12 +871,9 @@ public:
           else if (std::abs(m_gamrat - 1.0) > ndf_constants::DGMAX) ++m_n_setup_dgmax;
         }
 
-// Trace is emitted at the end of step_bdf_family (see trace_step) so we
-// get a single uniform line per step (post-outcome).  Stash setup info
-// so the trailing trace line can render the reason.  Note that m_gamrat
-// is reset to 1.0 inside the setup block below (line 1159) so we stash
-// the pre-setup gamrat here for the trace; otherwise every DGMAX-triggered
-// setup would show gamrat=1 in the CSV.
+  // The trace line is emitted at the end of step_bdf_family, so the setup reason
+  // is stashed here to be rendered there. m_gamrat is reset to 1 in the setup
+  // block below, hence the pre-setup value is the one worth recording.
 #ifdef CPPDE_STEP_TRACE
 m_trace_setup_fired  = callSetup;
 m_trace_gamrat_pre   = static_cast<double>(m_gamrat);
@@ -1010,11 +931,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     m_crate = 1.0;
     m_nstlp = m_nst;
   }
-  // No else: when callSetup is false, the stepper reuses the stale W
-  // factorized at gammap.  The Newton residual uses the CURRENT
-  // gamma, so convergence is unaffected as long as gamrat is
-  // within DGMAX (which triggers callSetup above).  This avoids
-  // expensive refactorizations on every step.
+  // No else: with callSetup false the stale W factorised at gammap is reused.
+  // The Newton residual uses the current gamma, so convergence holds as long as
+  // gamrat stays within DGMAX, which is what triggers callSetup above.
 
   // Newton iteration: pass ewt for CVODE-style pre-prediction weights
   auto result = ndf_newton_solve(
@@ -1095,12 +1014,11 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   }
 
   // ====================================================================
-  //  step_adams: perform one Adams-Moulton PECE step
+  //  step_adams: one Adams-Moulton PECE step
   //
-  //  Mirrors the structure of step_bdf_family but uses
-  //  adams_set_coefficients() instead of ndfSet() and adams_pece_solve()
-  //  instead of ndf_newton_solve().  No LU, no Jacobian, no setup
-  //  triggers: pure non-stiff path.
+  //  The structure of step_bdf_family with adams_set_coefficients() and
+  //  adams_pece_solve() in place of ndfSet() and ndf_newton_solve(). No LU, no
+  //  Jacobian, no setup triggers.
   // ====================================================================
 
   template<class System, class TimeArg>
@@ -1447,12 +1365,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
           }
         }
 
-        // Tangent layer: single dger across the whole [n*slab_cols × (q+1)]
-        // block when the slabs are primed and the inner type is double
-        // (BLAS only applies to plain doubles; nested-dual deriv2 falls
-        // back to per-slot vec_axpy_with_slab).  For static-N AD the
-        // slab columns equal N (≥ m_n_sens); the inactive trailing
-        // columns are zero so the dger zero-propagates correctly.
+  // Tangent layer: one dger over the whole block when the slabs are primed and
+  // the inner type is double; a nested dual falls back to per-slot axpy. For a
+  // static-N dual the trailing inactive columns are zero and propagate as such.
         if constexpr (std::is_same_v<inner_t, double>) {
           if (m_zn_block.primed() && m_acor_slab.primed() && m_n_sens > 0
               && m_zn_block.slot_stride() == m_acor_slab.tangent_size())
@@ -1632,18 +1547,13 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       for (size_t i = 0; i < n; ++i) dst[i] = src[i];
     }
 
-    // Tangent layer: when both blocks are primed and the active block
-    // shape matches, a single std::memcpy of the (q+1) leading slots'
-    // tangent storage replaces the (q+1) per-slot vec_copy_with_slab
-    // calls. Slots [q+1, max_order] hold stale tangents but they're
-    // never read: eval_dense_into() only touches slots [0, m_q_dense].
-    //
-    // For dual2nd: the val_layer per-element loop ABOVE already covered
-    // the inline outer.val_ scalar PLUS the inline gradient slots (via
-    // dual<S,N>::operator= recursion); val_tan and hess sub-blocks are
-    // independently flat S arrays that we can memcpy. We must NOT memcpy
-    // the outer block (would clobber the tan_ pointers that bind each
-    // dual<S,N> to m_zn_dense_block's own hess storage).
+  // Tangent layer: with both blocks primed and matching in shape, one memcpy of
+  // the leading (q+1) slots replaces the per-slot copies. The slots beyond q+1
+  // keep stale tangents, which eval_dense_into never reads.
+  //
+  // For dual2nd the loop above has already covered the inline value and gradient
+  // slots. The val_tan and hess sub-blocks are flat arrays and can be copied,
+  // but the outer block must not be: that would clobber the binding pointers.
     if constexpr (detail::is_dual2nd<value_type>::value) {
       // dual2nd: memcpy hess sub-block (flat doubles). Outer block (with
       // its inline gradient .val_ slots) was already copied per-element
@@ -1732,8 +1642,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     }
 
     std::fprintf(stderr, "\n=== Order change statistics ===\n");
-    std::fprintf(stderr, "  Order increases (q→q+1):  %d\n", m_n_order_up);
-    std::fprintf(stderr, "  Order decreases (q→q-1):  %d\n", m_n_order_down);
+    std::fprintf(stderr, "  Order increases (q to q+1):  %d\n", m_n_order_up);
+    std::fprintf(stderr, "  Order decreases (q to q-1):  %d\n", m_n_order_down);
     std::fprintf(stderr, "  Steps per order:\n");
     for (int q = 1; q <= max_order; ++q) {
       if (m_steps_at_order[q] > 0)
@@ -1743,22 +1653,14 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   }
 
   // ====================================================================
-  //  trace_step: unified per-step trace row
+  //  trace_step: one row per invocation of step_*, accepted or not.
   //
-  //  One entry per invocation of step_* (regardless of whether the step
-  //  is ultimately accepted by the controller).  When CPPDE_STEP_TRACE
-  //  is not defined this is a no-op: the compiler eliminates the body.
+  //  A no-op unless CPPDE_STEP_TRACE is defined. Rows go into the TraceBuffer
+  //  of cppde_step_trace.hpp, which the generated entry point marshals into an
+  //  R list; nothing is written to a file here.
   //
-  //  The row is appended to the process-wide TraceBuffer declared in
-  //  cppde_step_trace.hpp.  The generated entry point marshals the
-  //  buffer into an R list after integration and clears it.  No file
-  //  I/O happens here: `solveODE()` on the R side decides what to do
-  //  with the trace.
-  //
-  //  dsm ~ acnrm * tq[2] is the post-step error norm the controller's
-  //  error test will use.  Stored pre-error-test, so "dsm > 1" rows
-  //  correspond to steps that the controller will reject.  `t` is the
-  //  time at the end of the attempted step (t_old + h).
+  //  dsm is the post-step error norm the controller will test, stored before
+  //  the test, so a row with dsm > 1 is a step the controller then rejects.
   // ====================================================================
   void trace_step(bool is_adams_step, double t_end) const {
 #ifdef CPPDE_STEP_TRACE
@@ -1768,11 +1670,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     const double tq2_d    = m_tq[2];
     const double dsm_est  = m_acnrm * (tq2_d != 0.0 ? tq2_d : 1.0);
 
-    // acnrm_state: WRMS computed from the state (value) slots only,
-    // directly comparable to CVODE's reconstructed `acnrm` (which the
-    // CVODES public API exposes only over the state block).  At
-    // sens=FALSE this equals m_acnrm; at sens=TRUE it is the non-sens
-    // slice of it.
+  // acnrm_state: the WRMS over the value slots only, which is what the CVODES
+  // public API exposes as acnrm. Equal to m_acnrm without sensitivities, and
+  // its non-sensitivity slice with them.
     double acnrm_state_sq = 0.0;
     const size_t n_state = m_acor.m_v.size();
     for (size_t i = 0; i < n_state; ++i) {
@@ -1848,7 +1748,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     return static_cast<double>(ndf_detail::scalar_value(m_lu.last_factorized_dt()));
   }
 
-  // Save acor → zn[qmax]
+  // Save acor to zn[qmax]
   void save_acor_to_zn_qmax()
   {
     const size_t n = m_zn[0].m_v.size();
@@ -1880,25 +1780,12 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // ====================================================================
   //  eval_dense_into
   //
-  //  Slab-aware Horner evaluation of the Nordsieck dense-output polynomial:
-  //
   //      x(t) = sum_{j=0}^{q_dense} zn_dense[j] * s^j,   s = (t - t_n) / h
   //
-  //  evaluated bottom-up:
-  //      x = zn[q]
-  //      for j = q-1 .. 0:  x = x * s + zn[j]
-  //
-  //  For dual<S, 0> with primed slabs (the heap-AD path), the Horner runs
-  //  on a slab-bound scratch buffer so the tangent half is a single tight
-  //  loop over the contiguous [n × n_sens] block instead of n separate
-  //  per-element ET materialisations whose MulOp.tangent path computes
-  //  the symmetric `bv*at + av*bt` even when the scalar side has zero
-  //  tangent. The scratch is then copied into the caller-supplied
-  //  StateOut& x in one pass.
-  //
-  //  For non-dual / static-N value types (no slab) the routine collapses
-  //  to the same per-element Horner the previous calc_state had: no
-  //  scratch copy, no overhead.
+  //  by Horner from the top slot down. With primed slabs and a plain inner type
+  //  the Horner runs on a slab-bound scratch, so the tangent half is one tight
+  //  loop over the contiguous block instead of n element-wise materialisations.
+  //  Without a slab it collapses to the same per-element Horner.
   // ====================================================================
 
   template<class TimeArg, class StateOut>
@@ -1995,18 +1882,11 @@ private:
   // ====================================================================
   //  ndfPredict / ndfRestore / ndfSet / ndfRescale
   //
-  //  ndfPredict applies the Nordsieck Pascal shift. As a matrix op the
-  //  loop `for k ∈ [1, q]: for j ∈ [q, k]: zn[j-1] += zn[j]` is
-  //  Z := Z @ P where P is the (q+1) × (q+1) lower-triangular unit-Pascal
-  //  matrix P[i, j] = C(i, j) for i >= j (viewing Z as a
-  //  states×slots matrix with slot j as column j). ndfRestore is the
-  //  inverse, P_inv[i, j] = (-1)^(i-j) * C(i, j).
-  //
-  //  When the tangent block is primed and the inner type is plain
-  //  double, the (n*M) × (q+1) tangent matrix is updated in one dtrmm
-  //  call. Value layer stays per-element (the .x() fields aren't
-  //  contiguous across slots: they live inside the dual struct).
-  //  Nested-dual deriv2 falls back to the legacy per-slot loop.
+  //  ndfPredict is the Nordsieck Pascal shift, Z := Z * P with P the unit-Pascal
+  //  lower triangle P[i,j] = C(i,j); ndfRestore is its inverse, with the signs
+  //  alternating. With a primed tangent block and a plain inner type the whole
+  //  tangent matrix goes through one dtrmm, while the value layer stays
+  //  per-element because the .x() fields are not contiguous across slots.
   // ====================================================================
 
 private:
@@ -2176,29 +2056,14 @@ public:
   // ====================================================================
   //  ndfSet
   //
-  //  Builds the Nordsieck correction coefficients m_l[0..q] for the
-  //  current order q and step size m_h, given the past step history
-  //  m_tau[1..q-1].  At constant h this reduces to the classical BDF_q
-  //  coefficients with m_l[1] = gamma_k (= sum_{j=1}^k 1/j).
+  //  Builds the Nordsieck correction coefficients m_l[0..q] for order q and step
+  //  m_h from the history m_tau[1..q-1]. At constant h these are the classical
+  //  BDF_q coefficients with m_l[1] = gamma_k.
   //
-  //  NDF modification (uses_ndf_kappa = true):
-  //  --------------------------------------
-  //  IMPORTANT: m_l[0..q] is NOT modified here.  The Nordsieck update
-  //  rule in complete_step uses m_l[j] to map the correction acor
-  //  (= h^{k+1}/(k+1)! * nabla^{k+1} y) back to the history array:
-  //
-  //      zn[j] += m_l[j] * acor     for j = 0..q.
-  //
-  //  Scaling m_l[1] here would corrupt zn[1] (the h*y' Nordsieck slot)
-  //  and destroy the history for subsequent steps.
-  //
-  //  Instead, the NDF kappa factor is applied in do_step, where
-  //  gamma = h / m_l[1] is converted to the NDF gamma
-  //
-  //      gamma_NDF = h / ((1 - kappa) * m_l[1]).
-  //
-  //  ndfSetTq below does rescale m_tq[2] (the error-test constant),
-  //  which is a stateless per-step quantity and safe to modify.
+  //  m_l is not touched by the NDF kappa. complete_step maps the correction back
+  //  into the history as zn[j] += m_l[j] * acor, so scaling m_l[1] here would
+  //  corrupt the h*y' slot. The kappa enters in do_step through gamma, and
+  //  ndfSetTq rescales the per-step error constant.
   // ====================================================================
 
   void ndfSet()
@@ -2237,18 +2102,10 @@ public:
   // ====================================================================
   //  ndfSetTq
   //
-  //  Builds the error-test constants m_tq[1..5] used by the controller.
-  //
-  //  NDF modification (kappa != 0):
-  //  ------------------------------
-  //  For classical BDF_k the leading truncation error is
-  //      LTE_BDF = (1 / (k+1)) * h^{k+1} y^{(k+1)}.
-  //  For the Klopfenstein-Shampine NDF_k it becomes
-  //      LTE_NDF = (kappa * gamma_k + 1/(k+1)) * h^{k+1} y^{(k+1)}
-  //              = (1 + kappa * gamma_k * (k+1)) * LTE_BDF.
-  //  We rescale m_tq[2] (current-order error constant) by this factor
-  //  so that the error test dsm = acnrm * tq[2] remains calibrated.
-  //  gamma_k = -alpha0 in the variable-step Nordsieck formulation.
+  //  The error-test constants m_tq[1..5]. Classical BDF_k has
+  //  LTE = h^{k+1} y^{(k+1)} / (k+1); the Klopfenstein-Shampine NDF_k has the
+  //  extra factor (1 + kappa * gamma_k * (k+1)), by which m_tq[2] is rescaled so
+  //  that dsm = acnrm * tq[2] stays calibrated. gamma_k = -alpha0 here.
   // ====================================================================
 
   void ndfSetTq(time_type hsum, double alpha0, double alpha0_hat,
@@ -2260,12 +2117,10 @@ public:
     m_tq[2] = std::abs(A1 / (alpha0 * A2));
     m_tq[5] = std::abs(A2 * xistar_inv / (static_cast<double>(m_l[m_q]) * xi_inv));
 
-    // Newton convergence tolerance: based on the BDF error constant
-    // (before NDF scaling) so that the Newton residual stays small
-    // relative to the BDF truncation error.  Using the NDF-scaled
-    // tq[2] here would loosen the tolerance by 1/|ndf_factor| (up to
-    // 1.76× at q=4), causing Newton residual drift in the Nordsieck
-    // array that prevents step-size growth on long integrations.
+  // Newton convergence tolerance from the BDF error constant, before the NDF
+  // scaling, so the residual stays small against the truncation error. The
+  // scaled tq[2] would loosen it by up to 1.76 at q = 4 and let residual drift
+  // in the Nordsieck array block step-size growth.
     m_tq[4] = ndf_constants::CORTES / m_tq[2];
 
     // NDF: scale current-order error constant by (1 + kappa * gamma_k * (k+1))
@@ -2356,18 +2211,13 @@ public:
   }
 
   // ====================================================================
-  //  adamsIncreaseOrder / adamsDecreaseOrder  (cvAdjustAdams port)
+  //  adamsIncreaseOrder / adamsDecreaseOrder (cvAdjustAdams port)
   //
-  //  CVODE uses a different Nordsieck history adjustment for Adams
-  //  than for BDF.  On an order increase the new high-order slot
-  //  zn[L] (old L = new q) is simply set to zero: Adams does not
-  //  consume a saved derivative estimate the way BDF does through
-  //  zn[qmax].  On an order decrease each zn[j] is adjusted by a
-  //  multiple of zn[q] derived from the polynomial
-  //      q * ∫_0^x u*(u+xi_1)*...*(u+xi_{q-2}) du
-  //  (see cvAdjustAdams in cvode.c).  Using the BDF routine instead
-  //  corrupts the history array and causes the corrector to compute
-  //  huge errors immediately after any order change.
+  //  Adams adjusts the Nordsieck history differently from BDF. On an increase
+  //  the new high slot is zeroed, Adams having no saved derivative estimate to
+  //  consume. On a decrease each zn[j] is corrected by a multiple of zn[q] taken
+  //  from q * int_0^x u*(u+xi_1)*...*(u+xi_{q-2}) du. The BDF routine in its
+  //  place corrupts the history and the corrector fails on the next step.
   // ====================================================================
 
   void adamsIncreaseOrder()
@@ -2456,14 +2306,10 @@ public:
   wrapped_state_type m_dense_x_scratch;
   std::vector<double> m_ewt;  // CVODE-style error weights from pre-prediction zn[0]
 
-  // SoA tangent storage for the dynamic-dual heap path (empty stubs
-  // otherwise). The Nordsieck history (m_zn) and dense-output snapshots
-  // (m_zn_dense) each live in one contiguous [(K) × n_states × n_sens]
-  // block via nordsieck_block, so BLAS-3 (dtrmm for Pascal shifts, dger
-  // for the rank-1 complete_step update) can operate across all K slots
-  // in one call. Per-slot ops (vec_axpy_with_slab, vec_copy_with_slab,
-  // …) keep working unchanged via the slab views exposed by .slab(j).
-  // Sized once per solve via prepare_sensitivities(); never grown.
+  // SoA tangent storage for the heap-dual path, empty stubs otherwise. The
+  // Nordsieck history and the dense-output snapshots each live in one contiguous
+  // [K x n_states x n_sens] block, so dtrmm and dger reach all K slots in one
+  // call while the per-slot views keep working. Sized once per solve.
   detail::nordsieck_block<value_type, max_order + 2> m_zn_block;
   detail::nordsieck_block<value_type, max_order + 1> m_zn_dense_block;
   detail::tangent_slab<value_type> m_acor_slab, m_y_slab, m_tempv_slab, m_ftemp_slab;
@@ -2532,4 +2378,4 @@ using adams_stepper_t = multistepper<multistep_method::adams, Value, JacobianPat
 
 } // namespace cppde
 
-#endif // CPPDE_MULTISTEPPER_HPP_INCLUDED
+#endif // CPPDE_MULTISTEPPER_HPP

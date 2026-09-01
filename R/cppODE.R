@@ -41,11 +41,9 @@
 #'   integration times.
 #' @param useDenseOutput Logical. Use Hermite dense output for
 #'   user-requested time points. Applies to `method = "rb4"` and
-#'   `"tsit5"`, whose cubic Hermite interpolant is of lower order than
-#'   the method; `FALSE` makes the solver land on each requested time
-#'   exactly instead. Ignored with a warning for `"bdf"` and `"adams"`, which
-#'   always interpolate through the Nordsieck polynomial of the
-#'   method's own order.
+#'   `"tsit5"`, whose interpolant is of lower order than the method;
+#'   `FALSE` makes the solver land on each requested time exactly.
+#'   Ignored with a warning for `"bdf"` and `"adams"`.
 #' @param sparse Logical or `NULL`. `NULL` auto-selects sparse vs.
 #'   dense LU from the Jacobian sparsity; `TRUE` forces sparse, `FALSE`
 #'   forces dense. Sparse LU requires KLU at install time.
@@ -187,11 +185,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   n_total_sens <- n_sens_initials + n_sens_params
 
   # --- Resolve nStack (compile-time AD slab width) ---
-  # Inf (default): heap-allocated AD (dual<double, 0> / dual2nd<double, 0>);
-  #                width determined at runtime from ncol(sens1ini).
-  # NULL:          stack-allocated with width = n_total_sens.
-  # K (positive integer): stack with width K. The runtime per-call active
-  #                sens dimension M = ncol(sens1ini) must satisfy M <= K.
+  # Inf keeps the AD on the heap and takes the width from ncol(sens1ini) at
+  # run time, NULL puts it on the stack at n_total_sens, and a positive K fixes
+  # the width, which every call's active dimension then has to fit into.
   if (!deriv && is.numeric(nStack) && length(nStack) == 1L && is.infinite(nStack)) {
     nStack <- NULL  # heap AD is meaningful only with deriv = TRUE
   }
@@ -334,18 +330,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   )
 
   # --- Using declarations ---
-  # AD width N is bound to nStack_width: equals n_total_sens in the default
-  # case, an explicit positive integer when nStack = K, or 0 (heap spec) when
-  # nStack = Inf. The runtime per-call active sens dimension M may be smaller
-  # than N (with a stack of N empty slots ignored).
-  # AD type: cppde::dual<double, N> (custom forward AD, arena-allocated
-  # for N=0); deriv2 uses cppde::dual2nd<double, N>, a distinct class
-  # publicly inheriting from cppde::dual<cppde::dual<double, N>, N>.
-  # Inheritance preserves the nested storage layout and standard accessor
-  # surface (.x, .d(j), .size, .diff, []) so the LU IFT recursion works
-  # unchanged; the dual2nd-specific math primitives in
-  # cppde_dual2nd_math.hpp dispatch via strict template-argument deduction
-  # and exploit Hessian symmetry (lower-triangle compute, mirror to upper).
+  # N is nStack_width, so the AD type is cppde::dual<double, N>, arena-allocated
+  # at N = 0. deriv2 uses cppde::dual2nd<double, N>, which inherits from the
+  # nested dual and keeps its storage layout and accessors.
   if (deriv2) {
     usings <- c(
       "using namespace cppde;",
@@ -546,14 +533,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
   # --- Slab-bind state and parameter tangents -------------------------------
-  # For the heap-AD path (cppde::dual<S, 0>) we route every state and
-  # parameter dual's tan_ pointer into one contiguous [n_rows × n_sens] slab
-  # block per vector. Subsequent .diff(idx, n_sens) calls and codegen-emitted
-  # dxdt[i] = expr materialisations then write into the slab: SoA-friendly,
-  # zero per-RHS arena traffic, and the W-matrix factorise reads neighbouring
-  # tangents from one cache line. For non-dynamic-dual num types (e.g.
-  # nested dual<dual<...>, N>, plain double) the slab is the empty stub
-  # so the prime() calls compile to no-ops.
+  # On the heap-AD path every state and parameter tangent points into one
+  # contiguous slab block per vector, so seeding and the emitted assignments
+  # write into it. For every other value type the slab is an empty stub.
   if (deriv) {
     externC <- c(
       externC,
@@ -787,15 +769,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # Note: rootfunc_code is inserted later, after sys is defined
 
   # --- Integration setup ---
-  # Stepper types: dense or sparse LU, Rosenbrock4 or one of the multistep
-  # methods (bdf / adams).  Both multistep methods are instantiations
-  # of cppde::multistepper<Method, V, J, R>:
-  #
-  #   method == "bdf"    -> multistepper<multistep_method::bdf,    V, J, R>
-  #   method == "adams"  -> multistepper<multistep_method::adams,  V, J, R>
-  #
-  # NDF vs BDF is controlled at runtime via set_use_ndf_kappa().
-  # Rosenbrock4 (method == "rosenbrock4") follows a separate code path.
+  # Dense or sparse LU, Rosenbrock4 or one of the two multistep methods, which
+  # are instantiations of the same cppde::multistepper with the method as a
+  # template argument. NDF against BDF is a runtime flag.
   resizer_tag   <- "cppde::initially_resizer"
 
   # Generate the C++ stepper type for value type V and LU pattern J.
@@ -887,13 +863,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     is_equilibrate <- identical(tolower(rootfunc), "equilibrate")
     termination_arg <- if (is_equilibrate) ", cppde::detail::no_dt_estimator{}, ss_termination" else ""
 
-    # Slab priming for the single-step path (any AD level: heap dual<T,0>
-    # or static-N dual<T,N>). Mirrors the multistep branch: the call lands
-    # on controlledStepper BEFORE the std::move into denseStepper so the
-    # slabs reachable via denseStepper are primed for the whole solve.
-    # The stepper's prepare_sensitivities is `if constexpr`-gated on
-    # is_dynamic_dual<value_type>, so this is a no-op for non-AD and
-    # nested-AD types.
+    # Slab priming for the single-step path, as in the multistep branch: the
+    # call lands on the controller before the move into the dense wrapper, so
+    # the slabs reachable through it are primed for the whole solve. The
+    # stepper gates it on the value type, so it is a no-op where it does not
+    # apply.
     onestep_prep_line <- if (deriv) {
       "  controlledStepper.prepare_sensitivities(static_cast<unsigned>(n_sens));"
     } else {
@@ -938,14 +912,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
   # --- Initial step size estimation ---
-  #
-  # Multistep methods (bdf/adams) use cppde_hin, a faithful port of
-  # CVODES's cvHin algorithm.  Single-step methods (rb4, tsit5) use the
-  # unified estimate_initial_dt with a method-specific ydd closure: analytic
-  # (J*f + dfdt) for rb4, FD for tsit5.  order=1 is the right regime for
-  # all of these -- BDF/NDF/Adams start at q=1 by design, and for
-  # single-step methods the HNW formula with higher p would overestimate h
-  # on stiff problems.
+  # The multistep methods use the cvHin port, the single-step ones
+  # estimate_initial_dt with an analytic second derivative for rb4 and a finite
+  # difference for tsit5. order = 1 suits all of them, see cppde_utils.hpp.
   method_order <- 1L
 
   if (is_multistep(method)) {
@@ -1012,13 +981,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
   # --- Multistep methods: dt re-estimator lambda for event restarts ---
-  #
-  # The lambda is passed to integrate_times{,_dense} as the DtEstimator and
-  # invoked by EventEngine::init_stepper_after_event whenever a multistep
-  # stepper discards its Nordsieck history at an event.  We re-estimate h0
-  # from scratch via cppde_hin, passing times.back() as the upper-bound
-  # hint so the geometric-mean seed isn't collapsed to zero on the
-  # remaining integration window.
+  # Handed to integrate_times as the DtEstimator and called on every restart.
+  # times.back() goes in as the upper-bound hint, so the geometric-mean seed
+  # keeps the remaining window in view.
   dt_est_block <- character(0)
   if (is_multistep(method)) {
     dt_est_block <- c(
@@ -1150,14 +1115,10 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # --- extern "C" entry points: single condition, and the OpenMP batch ---
   dflag  <- if (deriv)  "true" else "false"
   d2flag <- if (deriv2) "true" else "false"
-  ## Whether `times` alone fixes the output grid, i.e. whether prealloc_batch
-  ## can size the results before the solve and let the workers write straight
-  ## into them. A time event fires at a requested output time and emits exactly
-  ## one row there, so it leaves the grid alone; an event time that is NOT on
-  ## the grid adds its own row, and a short solve produces fewer -- pre_acquire
-  ## compares n_out and rejects, which costs the staging copy but stays correct.
-  ## A root event or a rootfunc is dynamic by nature (a before/after pair per
-  ## firing, or early termination), so those never take the sink.
+  ## Whether `times` alone fixes the output grid, so the batch can size its
+  ## results up front. A time event on the grid emits one row there and leaves
+  ## it alone; an event time off the grid adds a row, which pre_acquire detects
+  ## and declines. A root event or a rootfunc is dynamic and never qualifies.
   has_root_events <- !is.null(events) && "root" %in% names(events) &&
     any(!is.na(events$root))
   fixed_grid <- !has_root_events && rootfunc_code == ""

@@ -115,7 +115,7 @@ plot_work_precision <- function(df, mode = "nosens", max_panels = 12L) {
     scale_solver() + log_x + log_y +
     labs(title = "Work-precision diagram",
          subtitle = paste0(label_mode(mode),
-                           " — lower and further left is better"),
+                           ", lower and further left is better"),
          x = "achieved error (scaled max-norm vs reference solution)",
          y = "wall-clock time per solve [ms]",
          caption = paste("Each point is one (absolute, relative) tolerance pair.",

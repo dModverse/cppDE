@@ -22,8 +22,8 @@
  Copyright (C) 2026 Simon Beyer
  */
 
-#ifndef CPPDE_MULTISTEPPER_DENSE_OUTPUT_HPP_INCLUDED
-#define CPPDE_MULTISTEPPER_DENSE_OUTPUT_HPP_INCLUDED
+#ifndef CPPDE_MULTISTEPPER_DENSE_OUTPUT_HPP
+#define CPPDE_MULTISTEPPER_DENSE_OUTPUT_HPP
 
 #include <utility>
 #include <cassert>
@@ -101,11 +101,9 @@ public:
   // ====================================================================
   //  do_step
   //
-  //  Retries with adaptive step-size control until a step is accepted.
-  //  Returns (t_old, t_new): the interval where calc_state is valid.
-  //
-  //  The NDF stepper's history serves directly as interpolation data,
-  //  so no separate prepare_dense_output phase is needed.
+  //  Retries under step-size control until a step is accepted, and returns the
+  //  interval on which calc_state is valid. The Nordsieck history is itself the
+  //  interpolation data, so there is no separate preparation phase.
   // ====================================================================
 
   template<class System>
@@ -121,7 +119,7 @@ public:
         system,
         get_current_state(),   // input state
         m_t,                   // time (advanced on success)
-        get_old_state(),       // output → receives new state
+        get_old_state(),       // output, receives new state
         m_dt);                 // step size (adapted)
 
       fail_checker();
@@ -139,13 +137,9 @@ public:
     return std::make_pair(m_t_old, m_t);
   }
   // ====================================================================
-  //  calc_state: interpolate at arbitrary time
-  //
-  //  Nordsieck polynomial evaluation through the history points.
-  //  Valid for t in [previous_time(), current_time()].
-  //
-  //  For AD types, derivatives propagate automatically because
-  //  Lagrange interpolation is purely arithmetic.
+  //  calc_state: Nordsieck polynomial evaluation, valid on
+  //  [previous_time(), current_time()]. Pure arithmetic, so an AD type carries
+  //  its derivatives through it.
   // ====================================================================
 
   template<class StateOut>
@@ -263,4 +257,4 @@ private:
 };
 } // namespace cppde
 
-#endif // CPPDE_MULTISTEPPER_DENSE_OUTPUT_HPP_INCLUDED
+#endif // CPPDE_MULTISTEPPER_DENSE_OUTPUT_HPP

@@ -150,11 +150,9 @@ public:
     , m_n_accepted(0), m_n_rejected(0)
   {}
 
-  // Same move-only semantics as the multistep family: copying the slab
-  // members would build a fresh tangent block while the dual elements
-  // still point at the original: UB. Moves are safe because std::vector::
-  // move preserves data() for both the slab storage and the dual-element
-  // vectors, so embedded tan_ pointers stay valid.
+  // Move-only, as in the multistep family: copying the slab members would build
+  // a fresh tangent block while the duals still point at the original. A vector
+  // move preserves data(), so the embedded pointers stay valid.
   onestep_controller(const onestep_controller&)            = delete;
   onestep_controller& operator=(const onestep_controller&) = delete;
   onestep_controller(onestep_controller&&)                 = default;
@@ -182,12 +180,9 @@ public:
   }
 
   // ====================================================================
-  //  Error norm: AD-aware WRMS norm
-  //
-  //  Returns max(state_wrms, max_j sens_wrms[j]): every sensitivity
-  //  vector is judged on its own per-vector WRMS and the controller
-  //  sees the worst.  Matches CVODES `cvSensUpdateNorm` (CV_STAGGERED).
-  //  For non-AD types the derivative loop compiles out → pure state WRMS.
+  //  Error norm: AD-aware WRMS, the maximum over the state and each sensitivity
+  //  vector, the CVODES cvSensUpdateNorm convention. For a non-AD type the
+  //  derivative loop compiles out.
   // ====================================================================
 
   double error(const state_type& x, const state_type& xold, const state_type& xerr)
@@ -283,11 +278,9 @@ public:
 
 #ifdef CPPDE_STEP_TRACE
     {
-      // Append a row with the same schema as the multistepper trace
-      // (cppde_multistepper.hpp::trace_step) so both step kinds land
-      // in one buffer that `solveODE()` can marshal uniformly.  Fields
-      // that do not apply to a single-step method are filled with
-      // neutral defaults (tq2=1 => dsm == err, Newton-related fields 0).
+  // The row uses the schema of the multistepper trace, so both step kinds land
+  // in one buffer. Fields that do not apply to a single-step method get neutral
+  // defaults, tq2 = 1 so that dsm equals err.
       ::cppde::ndf_detail::TraceBuffer* _tbp = ::cppde::ndf_detail::trace_sink();
       if (_tbp) {
       auto& tb = *_tbp;
@@ -349,15 +342,10 @@ public:
   stepper_type&       stepper()       { return m_stepper; }
   const stepper_type& stepper() const { return m_stepper; }
 
-  // Slab-prime forwarder. Both rosenbrock4 and tsit5 expose
-  // prepare_sensitivities(): a no-op when the value_type isn't a
-  // dynamic dual. Must run before the std::move into
-  // onestep_dense_output downstream so the dense wrapper inherits a
-  // primed slab.
-  //
-  // Also primes the controller's own m_xerr / m_xnew slabs. They may still
-  // be size 0 here (lazy resize via resize_m_xerr/m_xnew); the resize_*
-  // helpers below call prime again once the buffers grow.
+  // Slab-prime forwarder. It has to run before the move into the dense-output
+  // wrapper, so that the wrapper inherits a primed slab. The controller's own
+  // buffers may still be empty here; the resize helpers prime again once they
+  // grow.
   void prepare_sensitivities(unsigned n_sens)
   {
     m_n_sens = n_sens;

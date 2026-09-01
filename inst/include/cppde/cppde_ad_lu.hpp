@@ -137,28 +137,15 @@ private:
   std::vector<int>    m_ipiv;      // pivot indices
 };
 
-// ============================================================================
-//  dense_lu_solver<AD_T>: Recursive AD case (IFT peeling)
-//
-//  Given W·x = b (all entries dual<Inner,N>):
-//    Value:   W_val · x_val = b_val       (solved recursively)
-//    Deriv j: W_val · dx_j  = db_j - dW_j · x_val  (reuses factorization)
-//
-//  Optimizations:
-//    1. Persistent m_W_val: scalar matrix extracted ONCE, only Ax values
-//       updated on subsequent factorize calls.
-//    2. Persistent m_W_stored: full AD matrix stored for IFT, only data
-//       array overwritten after the first call.
-//    3. Mutable solve buffers: m_b_val, m_rhs_all, m_col_buf allocated
-//       once and reused across all solve() calls.
-//    4. Compile-time n_derivs: when N > 0, the number of active
-//       derivative directions is the compile-time width, subject to a
-//       short-circuiting check that any input is seeded at all.
-//    5. BLAS-2 IFT matvec (dgemv): when Inner = double, the fused
-//       derivative matvec is replaced by a single dgemv call on a
-//       pre-extracted (n*n_derivs) × n derivative block.
-//    6. BLAS-3 batched solve: dgetrs with nrhs = n_derivs (unchanged).
-// ============================================================================
+    // ============================================================================
+    //  dense_lu_solver<AD_T>: recursive AD case (IFT peeling)
+    //
+    //    value:       W_val * x_val = b_val
+    //    direction j: W_val * dx_j  = db_j - dW_j * x_val, reusing the factors
+    //
+    //  The scalar matrix, the stored AD matrix and the solve buffers persist
+    //  across calls, and the derivative layer goes out as one batched solve.
+    // ============================================================================
 
 // Generic AD specialization for cppde::dual<Inner,N>.
 // The body uses only the standard accessor surface (.x(), .d(j),
@@ -193,24 +180,15 @@ public:
     }
 
     if constexpr (!is_ad<Inner>::value) {
-      // ============================================================
-      //  Inner = double: pre-extract dW_block for BLAS-2 IFT
-      //
-      //  The IFT matvec needs the derivative components of W as a
-      //  (n*n_derivs) × n column-major double block.  W doesn't
-      //  change between factorize() and solve(), so we extract ONCE
-      //  here instead of on every solve() call.
-      //
-      //  m_W_stored is NOT needed: all derivative information lives
-      //  in m_dW_block.  This saves an n×n dual<double,N> deep copy.
-      // ============================================================
+    // ============================================================
+    //  Inner = double: the IFT matvec needs the derivative part of W as a
+    //  column-major block. W does not change between factorize() and solve(),
+    //  so it is extracted once here and m_W_stored is not needed at all.
+    // ============================================================
 
-      // Determine n_derivs
-      // The cached width must reflect actual dependence, not just the
-      // compile-time width: the error-weight vector built in
-      // cppde_multistepper.hpp is sized from the seeded directions of the
-      // state, and the WRMS norm in cppde_newton.hpp indexes it per active
-      // direction. any_deriv() returns on the first seeded entry.
+    // Determine n_derivs. The cached width has to reflect actual dependence,
+    // not the compile-time width: the error-weight vector is sized from the
+    // seeded directions and indexed per active direction.
       unsigned nd;
       if constexpr (N > 0) {
         nd = any_deriv(W) ? N : 0u;
@@ -223,7 +201,7 @@ public:
         int m = n * static_cast<int>(nd);
         m_dW_block.resize(static_cast<size_t>(m) * n);
 
-        // AoS→SoA deinterleave: extract all derivative components
+        // AoS to SoA deinterleave: extract all derivative components
         for (int col = 0; col < n; ++col) {
           double* col_dst = m_dW_block.data() + static_cast<size_t>(col) * m;
           for (int row = 0; row < n; ++row) {
@@ -267,11 +245,9 @@ public:
     }
     m_inner.solve(m_b_val);
 
-    // 2. Determine derivative directions
-    // Static width N > 0 gives the batched solve its unrolled N-wide shape.
-    // It is claimed only when some input is seeded: injecting results
-    // activates tangents on b, and the number of active directions must
-    // match the error-weight vector the stepper built for this state.
+    // 2. Determine derivative directions. A static width N is claimed only when
+    // some input is seeded: injecting results activates tangents on b, and the
+    // active directions must match the error-weight vector of this state.
     unsigned n_derivs;
     if constexpr (!is_ad<Inner>::value) {
       // Inner = double: n_derivs was determined at factorize time.
@@ -316,13 +292,9 @@ public:
     bulk_inject_results(b, m_b_val, m_rhs_all, n, n_derivs);
   }
 
-  // Batched solve for nrhs RHS vectors stored column-major. Fully BLAS-3
-  // batched at the recursion level: extracts all nrhs value parts at once,
-  // calls m_inner.solve_batch(., nrhs) once for the value layer, runs the
-  // IFT correction as a single dgemm (Inner = double) or fused element-wise
-  // pass (Inner = nested AD), then m_inner.solve_batch(., n_derivs * nrhs)
-  // once for the derivative layer. Saves nrhs - 1 inner-LU dispatches and
-  // amortises buffer-allocation overhead across the batch.
+    // Batched solve over nrhs column-major right-hand sides: one value-layer
+    // solve, one IFT correction as a dgemm or a fused pass, one derivative-layer
+    // solve. Saves nrhs - 1 inner dispatches and amortises the buffers.
   void solve_batch(std::vector<F>& B_flat, int nrhs) const
   {
     if (nrhs <= 0) return;
@@ -441,32 +413,23 @@ public:
 
 private:
 
-  // ================================================================
-  //  IFT matvec: rhs_all -= dW · b_val
-  //
-  //  Inner = double:
-  //    m_dW_block was pre-extracted in factorize().  Only the dgemv
-  //    call remains: no per-solve extraction overhead.
-  //
-  //  Inner = dual<...> (nested AD):
-  //    Single pass over m_W_stored (element-wise loop).
-  // ================================================================
+    // ================================================================
+    //  IFT matvec: rhs_all -= dW * b_val. For Inner = double this is the dgemv
+    //  on the block extracted in factorize(); for a nested inner type it is one
+    //  element-wise pass over m_W_stored.
+    // ================================================================
 
   void ift_matvec(int n, unsigned n_derivs) const
   {
     if constexpr (!is_ad<Inner>::value) {
-      // =============================================================
-      //  BLAS-2 path: dgemv only (extraction done in factorize)
-      //
-      //  m_dW_block is (m × n) column-major, m = n * n_derivs_cached.
-      //  If n_derivs > n_derivs_cached (RHS has more derivs than W),
-      //  the extra derivative directions have dW = 0, so no correction
-      //  is needed for them: dgemv covers [0, n_derivs_cached) and
-      //  the remaining rhs_all entries stay untouched.
-      // =============================================================
+    // =============================================================
+    //  BLAS-2 path: m_dW_block is (n * n_derivs_cached) x n, column-major. A
+    //  right-hand side carrying more directions than W has dW = 0 for those, so
+    //  dgemv covers the cached range and the rest stays untouched.
+    // =============================================================
 
       unsigned nd_W = m_n_derivs_cached;
-      if (nd_W == 0) return;  // W has no derivatives → no IFT correction
+      if (nd_W == 0) return;  // W has no derivatives, no IFT correction
 
       int m = n * static_cast<int>(nd_W);
       double alpha = -1.0, beta = 1.0;
@@ -499,13 +462,9 @@ private:
     }
   }
 
-  // Batched IFT matvec for solve_batch:
-  //   rhs_all_batch[col, j, row] -= sum_k dW[row, k, j] * b_val_batch[col, k]
-  //
-  // For Inner = double: a single dgemm of (m × n) * (n × nrhs) where
-  //   m = n * n_derivs_cached, leveraging the pre-extracted m_dW_block.
-  // For Inner = nested AD: outer loop over batch columns, inner element-
-  //   wise pass over W_stored matching the single-RHS path.
+    // Batched IFT matvec: rhs_all[col, j, row] -= sum_k dW[row, k, j] *
+    // b_val[col, k]. One dgemm for Inner = double, otherwise an outer loop over
+    // the batch columns with the single-RHS pass inside.
   void ift_matvec_batch(int n, unsigned n_derivs, int nrhs) const
   {
     if constexpr (!is_ad<Inner>::value) {

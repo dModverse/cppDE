@@ -37,34 +37,19 @@
 
 namespace cppde {
 
-// Forward declaration of the ET CRTP base (cppde_dual_expr.hpp). dual<T, 0>
-// declares a templated assignment / copy-ctor from any ET node so
-// `dxdt[i] = a*b + c*d;` materialises the whole tree directly into dxdt[i]
-// without intermediate arena allocations. Out-of-line definitions live in
-// cppde_dual_expr.hpp.
-namespace expr {
+// Forward declaration of the ET CRTP base (cppde_dual_expr.hpp). A templated
+// assignment from any ET node lets `dxdt[i] = a*b + c*d` materialise the whole
+// tree into dxdt[i] without intermediate arena allocations.
+namespace dual_expr {
   template<class Derived> struct Expr;
 }
 
 // -----------------------------------------------------------------------------
-// Internal helper: allocate T[n] from the TLS arena, dispatching trivial vs
-// non-trivial destructibility AND trivial vs non-trivial default-construction.
+// Internal helper: allocate T[n] from the TLS arena.
 //
-// Three regimes:
-//   1. Trivially destructible AND trivially default-constructible
-//      (e.g. double, int): bump-alloc only, caller writes: caller MUST
-//      write before reading (no zero-init of returned memory).
-//   2. Trivially destructible BUT non-trivially default-constructible
-//      (e.g. dual<double, N>: user-provided ctor zeroes tan_ pointer):
-//      bump-alloc + per-element placement-new of default ctor. No dtor
-//      tracking. Critical for nested AD: the outer layer of
-//      dual<dual<double, N>, N> alloc-bumps an array of N inner duals;
-//      each must have tan_ = nullptr after construction so that
-//      subsequent set_depend_size() correctly detects "not yet bound" and
-//      allocates a fresh tangent buffer.
-//   3. Non-trivially destructible (e.g. boost::multiprecision::cpp_dec_float
-//     : with a real dtor): full alloc + ctor + dtor-tracking path.
-// -----------------------------------------------------------------------------
+// A trivially destructible and trivially default-constructible type gets a bare
+// bump. A non-trivial default ctor still has to run, or a nested dual would find
+// a stale tan_ and skip its own allocation. A real dtor adds dtor tracking.
 namespace detail {
 
 template<class T>
@@ -84,15 +69,11 @@ inline T* arena_alloc_t(std::size_t n) {
 } // namespace detail
 
 // =============================================================================
-// Primary template: static N (compile-time tangent width). N must be > 0;
-// N == 0 uses the partial specialization below.
+// Primary template: static N, the compile-time tangent width (N == 0 below).
 //
-// Storage: T* tan_ pointing at either an externally-owned tangent_slab row
-// (after rebind_storage), or a buffer allocated from cppde::dual_arena for
-// temporaries. The compile-time N is the loop bound (constexpr-foldable),
-// not a struct-inline storage size: that's what unifies this spec with the
-// dynamic spec. std::vector<dual<T, N>> is then SoA at the tangent level,
-// matching the dual<T, 0> heap path.
+// tan_ points either into a tangent_slab row after rebind_storage, or into an
+// arena buffer for temporaries. N is the loop bound, not inline storage, which
+// is what lets this specialisation share the dynamic one's SoA layout.
 // =============================================================================
 template<class T = double, unsigned N = 0>
 class dual {
@@ -129,11 +110,9 @@ public:
       depend_ = true;
       for (unsigned i = 0; i < N; ++i) tan_[i] = o.tan_[i];
     } else {
-      // Non-depend source: zero any existing tangents (preserves slab- or
-      // arena-binding so subsequent .diff() / set_depend_size() / ET assigns
-      // can reuse the buffer). depend_ goes to false: same semantics as
-      // operator=(const U&): a non-depend assignment yields a non-depend
-      // dual, even if tan_ stays allocated.
+      // Non-depend source: zero the tangents but keep the binding, so a later
+      // .diff() or ET assignment reuses the buffer. depend_ goes to false, as in
+      // operator=(const U&).
       if (tan_ != nullptr) {
         for (unsigned i = 0; i < N; ++i) tan_[i] = T();
       }
@@ -146,12 +125,9 @@ public:
            std::enable_if_t<std::is_convertible_v<U, T>, int> = 0>
   dual& operator=(const U& v) {
     val_ = static_cast<T>(v);
-    // Preserve any existing tan_ buffer (slab- or arena-bound) and zero the
-    // tangent values: same semantics as dual<T,0>::operator=(const U&)
-    // (cppde_dual.hpp dynamic-spec). Without this, slab-bound duals would
-    // lose their binding on every `dual = scalar` assignment (e.g. codegen
-    // state re-seeding `x[i] = paramsSEXP[i]` after the slab has been
-    // primed).
+    // Keep the tan_ buffer and zero its values, as dual<T,0> does. Without it a
+    // slab-bound dual would lose its binding on every `dual = scalar`, which is
+    // what the codegen does when it re-seeds the state.
     if (tan_ != nullptr) {
       for (unsigned i = 0; i < N; ++i) tan_[i] = T();
     }
@@ -159,11 +135,9 @@ public:
     return *this;
   }
 
-  // Move ctor / move assignment: STEAL the tan_ pointer instead of allocating
-  // a fresh buffer + copying. Critical for `dxdt[i] = a + b + c;` style
-  // expressions where the rvalue chain on the rhs already owns a buffer.
-  // (Implicit move ctor is suppressed because we declared a copy assignment
-  // operator; declare both moves explicitly.)
+  // Move steals tan_ instead of allocating and copying, which is what makes
+  // `dxdt[i] = a + b + c` cheap. Both moves are declared explicitly because the
+  // copy assignment operator suppresses the implicit ones.
   dual(dual&& o) noexcept
     : val_(std::move(o.val_)), tan_(o.tan_), depend_(o.depend_)
   {
@@ -274,14 +248,9 @@ public:
     set_depend();
   }
 
-  // Non-allocating bind: point tan_ at an externally-owned buffer of length N
-  // (typically a row of cppde::detail::tangent_slab). The dual does not own
-  // the buffer (it never frees tan_), so rebinding is safe as long as the
-  // external owner keeps the buffer alive for the dual's remaining lifetime.
-  // Sets depend_ = true: a slab-bound dual is always considered active, so
-  // subsequent eager ops take the depending branch. Pre-prime fill of the
-  // slab block is the slab owner's responsibility (tangent_slab::prime
-  // zero-fills the storage on size).
+  // Non-allocating bind onto an externally owned buffer, typically a row of
+  // tangent_slab. The dual never frees tan_, so the owner has to outlive it.
+  // depend_ goes to true: a slab-bound dual is always active.
   void rebind_storage(T* p, unsigned n) noexcept {
     assert(n == N && "dual<T,N>::rebind_storage: n must equal compile-time N");
     (void)n;
@@ -319,25 +288,23 @@ public:
   }
 
   // -- expression-template assignment / construction --------------------------
-  // Materialises any CRTP Expr<D> tree directly into our tan_ slots:
-  //   1) val_ = root.val();
-  //   2) set_depend_size();                    (alloc once if not yet bound)
-  //   3) for (i) tan_[i] = root.tan(i);        (constant N → unrolled / vec'd)
-  // Definitions live in cppde_dual_expr.hpp (after Expr<D> is complete).
+  // Materialises an Expr<D> tree straight into tan_: value first, then one
+  // allocation if not yet bound, then the tangent loop over the constant N.
+  // Definitions live in cppde_dual_expr.hpp, once Expr<D> is complete.
   template<class D>
-  dual& operator=(const expr::Expr<D>& e);
+  dual& operator=(const dual_expr::Expr<D>& e);
 
   template<class D>
-  dual(const expr::Expr<D>& e);
+  dual(const dual_expr::Expr<D>& e);
 
   template<class D>
-  dual& operator+=(const expr::Expr<D>& e);
+  dual& operator+=(const dual_expr::Expr<D>& e);
   template<class D>
-  dual& operator-=(const expr::Expr<D>& e);
+  dual& operator-=(const dual_expr::Expr<D>& e);
   template<class D>
-  dual& operator*=(const expr::Expr<D>& e);
+  dual& operator*=(const dual_expr::Expr<D>& e);
   template<class D>
-  dual& operator/=(const expr::Expr<D>& e);
+  dual& operator/=(const dual_expr::Expr<D>& e);
 };
 
 // =============================================================================
@@ -388,26 +355,18 @@ public:
            std::enable_if_t<std::is_convertible_v<U, T>, int> = 0>
   dual& operator=(const U& v) {
     val_ = static_cast<T>(v);
-    // Preserve any existing tan_ buffer (slab-bound or arena-bound) and just
-    // zero the tangent values. Without this, slab-bound duals would lose
-    // their binding on every `dual = scalar` assignment (e.g. codegen state
-    // re-seeding `x[i] = paramsSEXP[i]` after the slab has been primed).
-    // The semantic difference vs. setting size_=0 is negligible: a fully-
-    // zero tangent vector contributes 0 to downstream chain rules, same as
-    // a non-depend dual; subsequent ops do redundant zero-multiplies, but
-    // the slab-bound code paths take the BLAS / fused-loop fast path anyway.
+    // Keep the buffer and zero the tangent values. Dropping to size_ = 0 would
+    // be equivalent downstream, but a slab-bound dual would lose its binding on
+    // every `dual = scalar`, and the bound paths take the BLAS route anyway.
     if (size_ > 0) {
       for (unsigned i = 0; i < size_; ++i) tan_[i] = T();
     }
     return *this;
   }
 
-  // Move ctor / move assignment: STEAL the arena pointer instead of allocating
-  // a fresh buffer + copying. Critical for `dxdt[i] = a + b + c;` style
-  // expressions, where the rvalue chain on the rhs already owns an arena
-  // buffer. Saves one allocation per top-level expression.
-  // (Implicit move ctor is suppressed because we declared a copy assignment
-  // operator; declare both moves explicitly.)
+  // Move steals the arena pointer instead of allocating and copying, one
+  // allocation per top-level expression. Both moves are declared explicitly
+  // because the copy assignment operator suppresses the implicit ones.
   dual(dual&& o) noexcept : tan_(o.tan_), size_(o.size_), val_(std::move(o.val_)) {
     o.tan_ = nullptr;
     o.size_ = 0;
@@ -437,31 +396,26 @@ public:
   }
 
   // -- expression-template assignment / construction --------------------------
-  // Materialises any CRTP Expr<D> tree directly into this dual:
-  //   1) val_ = root.val();                    (one scalar pass through tree)
-  //   2) set_depend_size(root.tan_size());     (one arena alloc, or in-place reuse)
-  //   3) for (i) tan_[i] = root.tan(i);        (one fused chain-rule loop)
-  // Definitions live in cppde_dual_expr.hpp (after Expr<D> is complete).
+  // Materialises an Expr<D> tree straight into this dual: one scalar pass for
+  // the value, one arena allocation or in-place reuse, one fused tangent loop.
+  // Definitions live in cppde_dual_expr.hpp, once Expr<D> is complete.
   template<class D>
-  dual& operator=(const expr::Expr<D>& e);
+  dual& operator=(const dual_expr::Expr<D>& e);
 
   template<class D>
-  dual(const expr::Expr<D>& e);
+  dual(const dual_expr::Expr<D>& e);
 
-  // In-place compound assignment from any Expr<D>. Without these the
-  // compiler picks operator+=(const dual&) etc. and synthesises a
-  // BinExpr→dual temporary via the Expr ctor above: that temp allocates
-  // a fresh tan_ buffer from the arena per element, which is the dominant
-  // per-step leak in `vec_axpy(y, alpha, x)` style kernels (y[i] += alpha*x[i]).
-  // These overloads update val_ and tan_ in place; no temp dual, no alloc.
+  // In-place compound assignment from an Expr<D>. Without these overloads the
+  // compiler routes through operator+=(const dual&) and synthesises a temporary
+  // that allocates a tangent buffer per element, the dominant cost in axpy.
   template<class D>
-  dual& operator+=(const expr::Expr<D>& e);
+  dual& operator+=(const dual_expr::Expr<D>& e);
   template<class D>
-  dual& operator-=(const expr::Expr<D>& e);
+  dual& operator-=(const dual_expr::Expr<D>& e);
   template<class D>
-  dual& operator*=(const expr::Expr<D>& e);
+  dual& operator*=(const dual_expr::Expr<D>& e);
   template<class D>
-  dual& operator/=(const expr::Expr<D>& e);
+  dual& operator/=(const dual_expr::Expr<D>& e);
 
   // -- accessors --------------------------------------------------------------
   const T& x()   const { return val_; }
@@ -520,11 +474,9 @@ public:
     }
   }
 
-  // Non-allocating bind: point tan_ at an externally-owned buffer of length n
-  // (typically a row of cppde::detail::tangent_slab). The dual does not own
-  // the buffer (just like the arena-backed case: it never frees tan_), so
-  // rebinding is safe as long as the external owner keeps the buffer alive
-  // for the dual's remaining lifetime.
+  // Non-allocating bind onto an externally owned buffer, typically a row of
+  // tangent_slab. As in the arena-backed case the dual never frees tan_, so the
+  // owner has to keep it alive.
   void rebind_storage(T* p, unsigned n) noexcept {
     tan_  = p;
     size_ = n;

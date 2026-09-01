@@ -3,12 +3,12 @@
 
 #' Disambiguate a model name against currently loaded shared libraries.
 #'
-#' Re-using a model name whose DLL is already loaded is unreliable across
-#' platforms: `dyn.unload()` may leave file handles open (notably on
-#' Windows), and R's `.Call` symbol cache can retain stale pointers. To
-#' avoid this, the constructors call `unique_modelname()` right after
-#' fixing `modelname`. If a DLL of that base name is already loaded, a
-#' numeric suffix (`_2`, `_3`, ...) is appended and a warning is issued.
+#' Overwriting a shared object that is already loaded is unreliable across
+#' platforms: `dyn.unload()` may leave file handles open, notably on Windows,
+#' and R keeps serving the old code until the file is replaced. To avoid this,
+#' the constructors call `unique_modelname()` right after fixing `modelname`.
+#' If a DLL of that base name is already loaded, a numeric suffix (`_2`, `_3`,
+#' ...) is appended and a warning is issued.
 #'
 #' @param modelname Character scalar: the desired base name.
 #' @return The original name if free, otherwise `modelname_<i>` for the
@@ -32,33 +32,42 @@ unique_modelname <- function(modelname) {
 }
 
 # --- Native symbol resolution ---
-## Resolving a generated entry point by name scans the DLL table on every call.
-## Cache the address instead; a miss is cached as NA, replacing is.loaded().
-## The cache is package-level, so a reload needs clearNativeSymbols().
-.symCache <- new.env(parent = emptyenv())
+## Dispatch is by (symbol name, DLL name), never by a resolved address:
+## dyn.unload() nulls every address handed out so far, in place, and nothing
+## resolves them again. Only the name pairing is remembered, which nothing
+## but a recompile can invalidate.
+.symDLL <- new.env(parent = emptyenv())
 
-## Address of `name`, or NULL if no loaded DLL exports it.
+## Entry point `name` and the DLL exporting it, or NULL when nothing does.
 .nativeSym <- function(name) {
-  a <- get0(name, envir = .symCache, inherits = FALSE)
-  if (is.null(a)) {
-    a <- tryCatch(getNativeSymbolInfo(name)$address, error = function(e) NA)
-    assign(name, a, envir = .symCache)
-  }
-  if (identical(a, NA)) NULL else a
+  dll <- get0(name, envir = .symDLL, inherits = FALSE)
+  if (!is.null(dll)) return(list(name = name, dll = dll))
+  if (!is.loaded(name)) return(NULL)
+  dll <- tryCatch(getNativeSymbolInfo(name)$dll[["name"]], error = function(e) NULL)
+  if (is.null(dll)) return(NULL)
+  assign(name, dll, envir = .symDLL)
+  list(name = name, dll = dll)
 }
 
-#' Drop cached native symbol addresses
+## Drop-in for .Call() / .C(). Naming the DLL keeps the lookup from scanning
+## every loaded shared object and from reaching another model's entry point.
+.callSym <- function(sym, ...) .Call(sym$name, ..., PACKAGE = sym$dll)
+.cSym    <- function(sym, ...) .C(sym$name, ..., PACKAGE = sym$dll)
+
+#' Forget which shared object exports which entry point
 #'
-#' [funCpp] instances and [solveODE] resolve their compiled entry points by
-#' address and cache the result, failed lookups included. Call this after
-#' loading a shared object into a session that has already used -- or missed --
-#' one of its symbols, so the next call resolves again. [compile] does it for
-#' you.
+#' [funCpp] instances and [solveODE] remember the DLL that exports each
+#' generated entry point, so that a call does not have to search every loaded
+#' shared object. Recompiling a model into a differently named shared object
+#' makes that pairing stale. Call this to drop it; [compile] does it for you.
+#'
+#' Addresses are never cached, so this is not needed after loading or unloading
+#' a shared object.
 #'
 #' @return `NULL`, invisibly.
 #' @export
 clearNativeSymbols <- function() {
-  rm(list = ls(.symCache, all.names = TRUE), envir = .symCache)
+  rm(list = ls(.symDLL, all.names = TRUE), envir = .symDLL)
   invisible(NULL)
 }
 
@@ -153,6 +162,12 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   klu_libs   <- ""
   klu_cflags <- ""
 
+  ## The constructors record the flags their model was generated for, so that a
+  ## consumer building the shared object itself gets them. Adding a group that
+  ## is already there would only repeat it on the command line.
+  unlessPresent <- function(flags, present)
+    if (nzchar(flags) && grepl(flags, present, fixed = TRUE)) "" else flags
+
   if (uses_sparse) {
     if (!isTRUE(cvodeConfig$klu_available)) {
       stop(
@@ -174,14 +189,16 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
         "  Then: R CMD INSTALL <path/to/cppDE>",
         call. = FALSE)
     }
-    klu_cflags <- paste("-DKLU", cvodeConfig$klu_cflags)
-    klu_libs   <- cvodeConfig$klu_libs
+    klu_cflags <- paste("-DKLU", unlessPresent(cvodeConfig$klu_cflags, all_args))
+    klu_libs   <- unlessPresent(cvodeConfig$klu_libs, extra_libs)
   }
 
   ## OpenMP, when configure could actually link it.  Absent, the generated
   ## batch entry compiles to a serial loop via #ifdef _OPENMP.
-  omp_cxxflags <- if (isTRUE(cvodeConfig$openmp_available)) cvodeConfig$openmp_cxxflags else ""
-  omp_libs     <- if (isTRUE(cvodeConfig$openmp_available)) cvodeConfig$openmp_libs else ""
+  omp_cxxflags <- if (isTRUE(cvodeConfig$openmp_available))
+    unlessPresent(cvodeConfig$openmp_cxxflags, all_args) else ""
+  omp_libs     <- if (isTRUE(cvodeConfig$openmp_available))
+    unlessPresent(cvodeConfig$openmp_libs, extra_libs) else ""
 
   cxxflagsString <- paste(base, klu_cflags, omp_cxxflags)
   if (nzchar(all_args)) cxxflagsString <- paste(cxxflagsString, all_args)
@@ -191,11 +208,13 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
     cxxflagsString <- paste(cxxflagsString, extra_cxxflags)
   ## Linker counterpart: a sanitizer has to reach the link line too.
   extra_ldflags <- Sys.getenv("CPPDE_EXTRA_LIBS")
+  ## Empty groups leave runs of blanks behind, which reach the toolchain report.
+  squeeze <- function(x) gsub("[[:space:]]+", " ", trimws(x))
   Sys.setenv(
-    PKG_CXXFLAGS = cxxflagsString,
+    PKG_CXXFLAGS = squeeze(cxxflagsString),
     PKG_CPPFLAGS = paste0("-I", system.file("include", package = "cppDE")),
-    PKG_LIBS = paste(klu_libs, lapack_libs, blas_libs, omp_libs, extra_libs,
-                     extra_ldflags)
+    PKG_LIBS = squeeze(paste(klu_libs, lapack_libs, blas_libs, omp_libs,
+                             extra_libs, extra_ldflags))
   )
 
   # --- toolchain report ---

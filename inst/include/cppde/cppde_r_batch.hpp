@@ -101,14 +101,13 @@ struct solve_result {
 
 };
 
-// ---------------------------------------------------------------------------
-//  Fork guard
-//
-//  libgomp's thread pool does not survive fork(): a child that reuses it with
-//  more than one thread deadlocks.  dMod forks (mclapply in mstrust), so mark
-//  the child at fork time and run serially there.  The handler is installed at
-//  DSO load, before any fork in the session.
-// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  //  Fork guard
+  //
+  //  libgomp's thread pool does not survive fork(): a child reusing it with more
+  //  than one thread deadlocks. dMod forks in mstrust, so the child is marked at
+  //  fork time and runs serially. The handler is installed at DSO load.
+  // ---------------------------------------------------------------------------
 namespace detail {
 
 inline bool& child_of_fork() {
@@ -127,13 +126,9 @@ inline const bool fork_guard_installed = install_fork_guard();
 
 }  // namespace detail
 
-// Resolve the thread count actually used for a batch of K conditions.
-//
-// Returns 1 in two cases that must not open a parallel region:
-//   - inside a forked child (see the fork guard above)
-//   - already inside an OpenMP region.  A caller parallelising over the wider
-//     axis (subjects in an nlme/EM fit) owns the threads; a second level would
-//     oversubscribe, and the outer axis is the wide one anyway.
+  // The thread count actually used for a batch of K conditions. It is 1 inside a
+  // forked child, and 1 inside an existing OpenMP region: a caller parallelising
+  // over the wider axis owns the threads, and a second level oversubscribes.
 inline int batch_threads(int K, int requested) {
 #ifdef _OPENMP
   if (detail::child_of_fork()) return 1;
@@ -148,14 +143,13 @@ inline int batch_threads(int K, int requested) {
 #endif
 }
 
-// libgomp is not instrumented, so ThreadSanitizer cannot see the implicit
-// barrier at the end of a parallel region: every value written inside it and
-// read afterwards is reported as a race.  These annotations hand TSan the
-// happens-before edge the barrier already provides.  They compile to nothing
-// unless -fsanitize=thread is on.
-// GCC before 14 does not define __has_feature, and #if does not short-circuit
-// at token level: the unexpanded call reaches the parser as `0 (...)`, which
-// is a syntax error.  Route it through a macro that is always defined.
+  // libgomp is not instrumented, so ThreadSanitizer does not see the implicit
+  // barrier at the end of a parallel region and reports every value written
+  // inside and read after it as a race. These annotations supply the
+  // happens-before edge the barrier already provides and compile to nothing
+  // without -fsanitize=thread.
+  // GCC before 14 does not define __has_feature, and #if does not short-circuit
+  // at token level, so the call is routed through a macro that always exists.
 #if defined(__has_feature)
 #  define CPPDE_HAS_FEATURE(x) __has_feature(x)
 #else
@@ -404,18 +398,16 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
   return ans;
 }
 
-// ---------------------------------------------------------------------------
-//  Single-condition path
-//
-//  On the R thread there is no reason to stage the result in std::vector and
-//  copy it over afterwards: n_out and n_sens are known before the flatten
-//  runs, so allocate the R objects at that moment and let solve_impl gather
-//  straight into them.  That is what the pre-batch code did, and it keeps the
-//  single-solve path free of the extra copy the batch path has to pay.
-// ---------------------------------------------------------------------------
-// Attach dimnames while the array is still unaliased.  Doing this in R on
-// the returned list instead costs a full duplicate of every array: the
-// element is referenced by both the result list and the replacement call.
+  // ---------------------------------------------------------------------------
+  //  Single-condition path
+  //
+  //  n_out and n_sens are known before the flatten runs, so the R objects are
+  //  allocated there and solve_impl gathers straight into them, which keeps the
+  //  single solve free of the staging copy the batch path pays.
+  // ---------------------------------------------------------------------------
+  // Dimnames are attached while the array is still unaliased. Doing it in R on
+  // the returned list would duplicate every array, the element being referenced
+  // by both the list and the replacement call.
 inline void set_dimnames(SEXP x, SEXP var_nm, SEXP sens_nm, int n_sens_dims) {
   if (Rf_isNull(var_nm)) return;
   const int nd = 2 + n_sens_dims;
@@ -561,17 +553,15 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
   return ans;
 }
 
-// ---------------------------------------------------------------------------
-//  Pre-allocated batch output
-//
-//  When the output grid is fixed by `times` -- no events, no root finding --
-//  n_out is known before the solve, so the R objects can be allocated on the
-//  main thread up front and the workers can gather straight into them.
-//  Allocation stays single-threaded (R's allocator is not thread-safe);
-//  only the writes are parallel.  That removes the staging copy AND moves the
-//  first-touch page faults for the result into the parallel region, which is
-//  where most of phase C's time actually goes.
-// ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  //  Pre-allocated batch output
+  //
+  //  With the output grid fixed by `times`, n_out is known before the solve, so
+  //  the R objects are allocated on the main thread and the workers gather into
+  //  them. Allocation stays single-threaded, R's allocator is not thread-safe;
+  //  only the writes are parallel, which also moves the first-touch page faults
+  //  into the parallel region.
+  // ---------------------------------------------------------------------------
 struct pre_ctx {
   int n_out = 0, n_sens = 0;
   double *t = nullptr, *v = nullptr, *s1 = nullptr, *s2 = nullptr;
@@ -613,14 +603,11 @@ inline int sens_width(const solve_args& a, int n_sens_total) {
   return n_sens_total - nf;
 }
 
-// Builds each condition's result skeleton into `out` (itself already
-// protected by the caller, which keeps the children alive) and returns the
-// buffers the workers should write into.
-// `dn` is R_NilValue, or list(variables, sens_names).  Setting the dimnames
-// here rather than in R matters: these arrays are freshly allocated and
-// unaliased, whereas `dimnames(x$sens1) <- ...` on the returned list sees a
-// refcount above one and duplicates the whole array.
-// `ev_times` is either empty or one vector of fixed-event times per condition.
+  // Builds each condition's result skeleton into `out`, already protected by the
+  // caller, and returns the buffers the workers write into. `dn` is R_NilValue
+  // or list(variables, sens_names); setting the dimnames here rather than in R
+  // avoids duplicating every array, which a refcount above one would force.
+  // `ev_times` is empty or one vector of fixed-event times per condition.
 inline std::vector<pre_ctx> prealloc_batch(SEXP out, const std::vector<solve_args>& A,
                                            int n_variables, int n_sens_total,
                                            bool deriv, bool deriv2, bool include_zero,

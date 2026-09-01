@@ -2,7 +2,7 @@
 % Please edit documentation in R/tools.R
 \name{clearNativeSymbols}
 \alias{clearNativeSymbols}
-\title{Drop cached native symbol addresses}
+\title{Forget which shared object exports which entry point}
 \usage{
 clearNativeSymbols()
 }
@@ -10,9 +10,12 @@ clearNativeSymbols()
 \code{NULL}, invisibly.
 }
 \description{
-\link{funCpp} instances and \link{solveODE} resolve their compiled entry points by
-address and cache the result, failed lookups included. Call this after
-loading a shared object into a session that has already used -- or missed --
-one of its symbols, so the next call resolves again. \link{compile} does it for
-you.
+\link{funCpp} instances and \link{solveODE} remember the DLL that exports each
+generated entry point, so that a call does not have to search every loaded
+shared object. Recompiling a model into a differently named shared object
+makes that pairing stale. Call this to drop it; \link{compile} does it for you.
+}
+\details{
+Addresses are never cached, so this is not needed after loading or unloading
+a shared object.
 }

@@ -374,10 +374,10 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   symc <- .nativeSym(paste0(st$modelname, "_eval_c"))
   sym <- if (is.null(symc)) .nativeSym(paste0(st$modelname, "_eval")) else NULL
   if (!is.null(symc)) {
-    res <- .Call(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
+    res <- .callSym(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
     dimnames(res) <- list(NULL, st$outnames)
   } else if (!is.null(sym)) {
-    out <- .C(sym, x = as.double(M), y = double(length(st$outnames) * n_obs), p = as.double(p), n = as.integer(n_obs), k = as.integer(length(st$innames)), l = as.integer(length(st$outnames)))
+    out <- .cSym(sym, x = as.double(M), y = double(length(st$outnames) * n_obs), p = as.double(p), n = as.integer(n_obs), k = as.integer(length(st$innames)), l = as.integer(length(st$outnames)))
     res <- matrix(out$y, n_obs, length(st$outnames), dimnames = list(NULL, st$outnames))
   } else {
     res <- matrix(NA_real_, n_obs, length(st$outnames), dimnames = list(NULL, st$outnames))
@@ -395,7 +395,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   funsym <- paste0(st$modelname, "_eval_ad"); n_out <- length(st$outnames); n_theta <- length(theta)
   symc <- .nativeSym(paste0(funsym, "_c"))
   if (!is.null(symc)) {
-    r <- .Call(symc, .asdbl(M), .asdbl(p), .asdbl(dX_seed), .asdbl(dP_seed),
+    r <- .callSym(symc, .asdbl(M), .asdbl(p), .asdbl(dX_seed), .asdbl(dP_seed),
                as.integer(n_obs), as.integer(n_theta))
     y <- r[[1L]]; dimnames(y) <- list(NULL, st$outnames)
     dy <- if (n_theta > 0) {
@@ -405,7 +405,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   }
   sym <- .nativeSym(funsym)
   if (is.null(sym)) stop("AD entry '", funsym, "' is not loaded.")
-  out <- .C(sym,
+  out <- .cSym(sym,
             x        = as.double(M),
             p        = as.double(p),
             dX       = dX_seed,
@@ -430,7 +430,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   funsym <- paste0(st$modelname, "_eval_ad2"); n_out <- length(st$outnames); n_theta <- length(theta)
   symc <- .nativeSym(paste0(funsym, "_c"))
   if (!is.null(symc)) {
-    r <- .Call(symc, .asdbl(M), .asdbl(p), .asdbl(aligned$dX), .asdbl(aligned$dP),
+    r <- .callSym(symc, .asdbl(M), .asdbl(p), .asdbl(aligned$dX), .asdbl(aligned$dP),
                if (aligned$has_dX2 != 0L) .asdbl(aligned$dX2) else NULL,
                if (aligned$has_dP2 != 0L) .asdbl(aligned$dP2) else NULL,
                as.integer(n_obs), as.integer(n_theta))
@@ -446,7 +446,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   }
   sym <- .nativeSym(funsym)
   if (is.null(sym)) stop("AD entry '", funsym, "' is not loaded.")
-  out <- .C(sym,
+  out <- .cSym(sym,
             x        = as.double(M),
             p        = as.double(p),
             dX       = as.double(aligned$dX),
@@ -483,10 +483,10 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   symc <- .nativeSym(paste0(st$modelname, "_jacobian_c"))
   sym <- if (is.null(symc)) .nativeSym(paste0(st$modelname, "_jacobian")) else NULL
   if (!is.null(symc)) {
-    arr <- .Call(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
+    arr <- .callSym(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
     dimnames(arr) <- list(NULL, st$outnames, st$diff_syms)
   } else if (!is.null(sym)) {
-    out <- .C(sym, x = as.double(M), jac = double(n_obs * n_out * n_diff),
+    out <- .cSym(sym, x = as.double(M), jac = double(n_obs * n_out * n_diff),
               p = as.double(p), n = as.integer(n_obs),
               k = as.integer(length(st$innames)), l = as.integer(n_out))
     arr <- array(out$jac, c(n_obs, n_out, n_diff), list(NULL, st$outnames, st$diff_syms))
@@ -509,10 +509,10 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   symc <- .nativeSym(paste0(st$modelname, "_hessian_c"))
   sym <- if (is.null(symc)) .nativeSym(paste0(st$modelname, "_hessian")) else NULL
   if (!is.null(symc)) {
-    arr <- .Call(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
+    arr <- .callSym(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
     dimnames(arr) <- list(NULL, st$outnames, st$diff_syms, st$diff_syms)
   } else if (!is.null(sym)) {
-    out <- .C(sym, x = as.double(M), hess = double(n_obs * n_out * n_diff^2),
+    out <- .cSym(sym, x = as.double(M), hess = double(n_obs * n_out * n_diff^2),
               p = as.double(p), n = as.integer(n_obs),
               k = as.integer(length(st$innames)), l = as.integer(n_out))
     arr <- array(out$hess, c(n_obs, n_out, n_diff, n_diff), list(NULL, st$outnames, st$diff_syms, st$diff_syms))
@@ -540,7 +540,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   sym <- .nativeSym(paste0(st$modelname, "_chain_jac"))
   theta <- dimnames(S)[[3]]
   if (!is.null(sym)) {
-    out <- .C(sym,
+    out <- .cSym(sym,
               J        = as.double(J_raw),
               S        = as.double(S),
               J_theta  = double(n_obs * n_out * n_theta),
@@ -563,7 +563,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   has_S2 <- !is.null(S2)
   S2_flat <- if (has_S2) as.double(S2) else double(0)
   if (!is.null(sym)) {
-    out <- .C(sym,
+    out <- .cSym(sym,
               H        = as.double(H_raw),
               J        = as.double(J_raw),
               S        = as.double(S),
@@ -748,7 +748,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
                  as.integer(length(q$theta))))
   })
 
-  raw <- .Call(sym, call_sets, as.integer(cores))
+  raw <- .callSym(sym, call_sets, as.integer(cores))
 
   lapply(seq_along(prep), function(i) {
     q <- prep[[i]]; nt <- length(q$theta)
@@ -818,7 +818,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     y <- {
       sym <- .nativeSym(paste0(st$modelname, "_eval"))
       if (!is.null(sym)) {
-        out <- .C(sym, x = as.double(M), y = double(n_out * n_obs), p = as.double(p),
+        out <- .cSym(sym, x = as.double(M), y = double(n_out * n_obs), p = as.double(p),
                   n = as.integer(n_obs), k = as.integer(length(st$innames)),
                   l = as.integer(n_out))
         matrix(out$y, n_obs, n_out, dimnames = list(NULL, st$outnames))

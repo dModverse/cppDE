@@ -54,8 +54,8 @@ Table \ref{tab:entry-points} summarises their scope.
 \midrule
 Problem class              & ODE                              & ODE                           & algebraic $y = g(x, p)$       \\
 Methods                    & \texttt{bdf, adams, rb4, tsit5}  & \texttt{bdf, adams}           &                             \\
-First-order sensitivities  & in-tree dual-number AD           & SUNDIALS analytic RHS         & in-tree dual-number AD        \\
-Second-order sensitivities & yes (nested duals)               & no                            & yes (symbolic)                \\
+First-order sensitivities  & in-tree dual-number AD           & SUNDIALS analytic RHS         & dual AD or symbolic           \\
+Second-order sensitivities & yes (nested duals)               & no                            & yes (nested duals or symbolic)\\
 External dependencies      & LAPACK; KLU optional             & SUNDIALS $\ge 6.0$; KLU opt.  & none                          \\
 Codegen                    & SymPy + \texttt{R CMD SHLIB}     & SymPy + \texttt{R CMD SHLIB}  & SymPy + \texttt{R CMD SHLIB}  \\
 \bottomrule
@@ -408,13 +408,10 @@ and the local error estimate used for step-size control is
 \[
   e_{n+1} = h_n \sum_{i=1}^{7} (\hat{b}_i - b_i)\, k_i.
 \]
-Continuous output is produced by a cubic Hermite interpolant on
-$[t_n, t_{n+1}]$, using the accepted-step endpoints
-$(x_n, x_{n+1})$ and their derivatives $(f_n, f_{n+1}) = (k_1, k_7)$,
-both already in cache. No additional right-hand-side evaluations
-are required for output points; the interpolation order
-($p = 4$ globally, $p = 3$ locally on the interval) is one less
-than the order of the underlying step.
+Continuous output uses the accepted-step endpoints and their
+derivatives $(f_n, f_{n+1}) = (k_1, k_7)$, both already in cache from
+the FSAL property, so an output point costs no further right-hand-side
+evaluation.
 
 Tsitouras has no Jacobian and no linear solve and performs the largest
 amount of integration per right-hand-side call of the four methods
@@ -466,6 +463,38 @@ underlying signal. The case $\beta > 0$ is the proportional-integral
 this form to damp the high-frequency oscillations in $h_n$ that a
 pure I-controller can otherwise produce on stiff or
 near-singular problems.
+
+### The first step
+
+The controller needs a step to correct, and the first one has no
+error norm behind it. cppDE estimates it from the initial state in
+the manner of @hairer2008solving, Algorithm II.4.4: a rough
+$h_0 \sim \|x_0\| / \|f_0\|$ fixes a scale, a second derivative
+$\ddot x$ along the trajectory fixes the curvature, and
+\begin{equation}
+  h_1 = \left(
+    \frac{0.01}{\max\bigl(\|f_0\|, \|\ddot x\|\bigr)}
+  \right)^{\!1/(p+1)}
+  \label{eq:hnw-h1}
+\end{equation}
+turns the two into a step for a method of order $p$. The implicit
+methods obtain $\ddot x = \partial f/\partial t + J f$ from the
+generated Jacobian, the explicit one from a finite difference of
+$f$. All norms are the weighted norms of \eqref{eq:wrms}, so for an
+AD value type the derivative components enter as well and the
+sensitivity dynamics influence the first step.
+
+Two bounds follow, in the form CVODE uses. An upper bound keeps a
+single Euler step from changing any component by more than a
+fraction of its own scale, and is capped by the remaining interval;
+a lower bound keeps $h_0$ above the rounding of the time variable
+itself. The multistep methods reach the same estimate through a
+port of the CVODES routine \texttt{cvHin}, which refines
+$\sqrt{h_{\mathrm{lb}} h_{\mathrm{ub}}}$ by a finite-difference
+curvature until two successive estimates agree within a factor of
+two, so that the first step cppDE takes is the one CVODES would take
+on the same problem. The same estimator runs again after every
+event, on the post-event state.
 
 ## Dense output
 
@@ -703,6 +732,14 @@ events and is the reason Rosenbrock4 is the recommended stiff
 method when discontinuities are common, even though BDF/NDF is the
 default elsewhere.
 
+The reset also moves the state onto a different trajectory, so the
+step size that suited the regime before the event is not a starting
+point for the one after it. cppDE re-estimates it for every method
+from the post-event state, with the same initial-step estimator the
+solve begins with and the remaining interval as its upper bound. For
+a single-step method that estimate is the whole restart; for a
+multistep method it comes on top of the order-1 restart above.
+
 ### Sensitivity transport across a discontinuity
 
 The reset map $g$ acts on the trajectory $x(t, \theta)$ at the firing
@@ -862,19 +899,30 @@ Heun transport as in the time-triggered case.
 
 #### Localisation
 
-The integrator detects a root by tracking the sign of $g_e$ at
-successive accepted steps: when the sign of $g_e(x_n, t_n)$ and
-$g_e(x_{n+1}, t_{n+1})$ disagree, a sign change must have occurred
-on $[t_n, t_{n+1}]$. The crossing is then refined by bisection
-using the dense output of the accepted step, which means no extra
-right-hand-side evaluations are spent on the localisation itself.
-The bisection terminates when the bracket width falls below a
-user-supplied root tolerance or below an integrator-determined
-floor; the midpoint of the final bracket is returned as
-$t_*^{(0)} := \mathrm{scalar}(t^{*})$. The dual residual
-$\delta t^{*} = t^{*} - t_*^{(0)}$ must now be reconstructed from
-\eqref{eq:root-condition}, since bisection on the scalar trajectory
-provides no information about how $t^{*}$ depends on $\theta$.
+The integrator reads $g_e$ at the end of every accepted step and at
+every requested output time. A crossing is accepted on
+$[t_n, t_{n+1}]$ when the two readings have opposite signs, and also
+when $g_e(x_{n+1}, t_{n+1})$ is exactly zero, which is what a root
+falling on a sampled time looks like. A zero at the lower end is not
+a new crossing: it was reported when that sample was taken. That
+convention is also what keeps an event from firing a second time on
+the surface it has just been applied on, where $g_e$ is zero up to
+round-off.
+
+The crossing is then refined on the dense output of the accepted
+step, so no extra right-hand-side evaluations are spent on the
+localisation itself. The iteration is a false-position step whose
+interpolation factor is clamped to $[0.1, 0.9]$, which bounds the
+stagnation of the classical rule while keeping its speed on a nearly
+linear $g_e$. It stops when the bracket is narrower than the
+user-supplied root tolerance, after at most fifty iterations, or as
+soon as an iterate returns $g_e = 0$ exactly. What is returned as
+$t_*^{(0)} := \mathrm{scalar}(t^{*})$ is the end of the final bracket
+that still carries the sign $g_e$ had before the crossing. The dual
+residual $\delta t^{*} = t^{*} - t_*^{(0)}$ must now be reconstructed
+from \eqref{eq:root-condition}, since a localisation on the scalar
+trajectory provides no information about how $t^{*}$ depends on
+$\theta$.
 
 #### The dual residual via the implicit function theorem
 
@@ -987,6 +1035,28 @@ cppDE detects this case by the smallness of $|\dot g_e|$ and
 falls back to applying the reset as a plain map without the
 saltation transport, which is mathematically correct in this limit
 because the two saltation contributions $f^{\pm}\,(\partial t^{*}/\partial \theta)$ both vanish.
+
+#### Conditions switched on by a jump
+
+A reset is a jump, not a crossing of the continuous solution. A root
+condition that a reset makes true is therefore invisible to the
+sign-change search above, and cppDE reads every condition on both
+sides of a jump instead. A condition whose sign changes across the
+jump fires there, one per sweep so that a reset can switch on the
+next condition, and one that already held before the jump does not
+fire again.
+
+The switched resets are applied on the surface of the jump, between
+the forward and the backward shift of the event that caused it,
+rather than after the transport has returned to the grid time. The
+composition of the two reset maps is then carried across the
+discontinuity by a single sandwich, and its sensitivities are those
+of the same reset written as a time-triggered event at that time, to
+both orders.
+
+Terminal conditions are excluded from this path. They stop the
+integration rather than reset a state, which the reset step has no
+way to report.
 
 ### Connection to the saltation matrix
 
@@ -1117,26 +1187,6 @@ $S_\theta = S_p\,\partial p / \partial \theta$ of equation
 case. \texttt{solveODE()} accepts the same \texttt{sens1ini} matrix
 shapes (legacy, full, and partial) and the same row-name conventions;
 only second-order $S_\theta$ is unavailable.
-
-## When to choose which backend
-
-\texttt{cvode()} is appropriate when bit-for-bit reproducibility
-against the SUNDIALS reference implementation is required, when the
-deployment environment can satisfy the SUNDIALS dependency, or when
-the SUNDIALS KLU path is preferred over the in-tree sparse solver
-on large sparse problems. \texttt{cppODE()} is appropriate when the
-package must be self-contained, when second-order sensitivities are
-required, or when the single-step methods are required (Tsit5 for
-non-stiff problems with expensive right-hand sides; Rosenbrock4 for
-stiff problems with frequent events).
-
-Where the decision rests on runtime, it is settled by the shape of the
-problem. Section \ref{sec:bench} finds \texttt{cppODE()} faster on
-$38$ of $42$ benchmark problems without sensitivities, and with them
-by a margin that grows with the number of differentiated parameters.
-The ordering reverses in one regime, a large state dimension arising
-from a spatial discretisation combined with few differentiated
-parameters.
 
 # \texttt{funCpp()} \label{sec:funcpp}
 
@@ -1308,13 +1358,17 @@ Right-hand side, analytic Jacobian, events, linear-solver selection,
 and tolerances are shared, so a head-to-head measurement isolates the
 numerical core rather than the model formulation.
 
-\textbf{Setup.} The suite comprises $42$ problems: $32$ published
+\textbf{Setup.} The suite comprises $41$ problems: $31$ published
 systems-biology models from a PEtab benchmark collection and $10$
 classical test problems (van der Pol at $\mu = 1000$, Robertson,
 OREGO, HIRES, E5, Pollution, and method-of-lines semidiscretisations
 of the one-dimensional Brusselator and FitzHugh--Nagumo systems at
 $N = 24$ and $N = 64$). The state dimension ranges from $n_x = 2$ to
-$124$, the number of differentiated parameters from $M = 1$ to $64$.
+$128$, the number of differentiated parameters from $M = 1$ to $64$.
+One further model of the collection, Lang\_PLOSComputBiol2024 at
+$n_x = 124$, is left out: its solves alone take longer than the rest
+of the suite together, and it belongs to none of the regimes the
+comparison turns on.
 Both backends run their BDF/NDF method with the automatically selected
 linear solver at
 $(\mathrm{rtol}, \mathrm{atol}) \in \{(10^{-4}, 10^{-6}),
@@ -1339,10 +1393,10 @@ shows that the $M$ dependence belongs to the sensitivity mode alone.}
 \end{figure}
 
 \textbf{Without sensitivities} the in-tree backend is faster on $38$
-of the $42$ problems, by a geometric mean of $1.19$, and the ratio is
+of the $41$ problems, by a geometric mean of $1.20$, and the ratio is
 flat in $M$. The two backends take the same steps: the geometric means
-of the accepted-step and right-hand-side evaluation ratios are $1.02$
-and $1.06$, which rules out a margin bought by integrating more
+of the accepted-step and right-hand-side evaluation ratios are $1.01$
+and $1.05$, which rules out a margin bought by integrating more
 loosely. This is expected, since the controller, the order selection,
 and the error constants of the in-tree multistepper are those of
 CVODE, and the margin is therefore a cost-per-step effect. It
@@ -1357,9 +1411,9 @@ of the margin belongs to the code generator rather than to the
 integrator: common-subexpression elimination is applied to the in-tree
 right-hand side and Jacobian but not to the CVODES glue layer.
 
-\textbf{With sensitivities} the geometric mean rises to $1.82$, and
+\textbf{With sensitivities} the geometric mean rises to $1.84$, and
 Figure \ref{fig:bench} shows that it does so as a function of $M$:
-from $1.20$ over the nine problems with $M \le 3$ to $3.28$ over the
+from $1.17$ over the nine problems with $M \le 3$ to $3.26$ over the
 nine with $13 \le M \le 24$. CVODES is driven in staggered mode with
 an analytic sensitivity right-hand side that is invoked once per
 differentiated parameter, each invocation forming one column of
@@ -1384,39 +1438,40 @@ $n_x$ is, since $a$ is paid per component and amortised only over $M$.
 Every problem that falls below the parity line of
 Figure \ref{fig:bench} with sensitivities is of this shape, and all of
 them lie at $M \le 6$: SalazarCavazos\_MBoC2020 ($n_x = 75$, $M = 6$)
-and the Brusselator at $N = 24$ and $N = 64$ ($M = 3$). Four problems
-fall below it without sensitivities, three of them by less than
-$10\,\%$.
+at $0.64$ and the Brusselator at $N = 64$ and $N = 24$ ($M = 3$) at
+$0.67$ and $0.81$. Three problems fall below it without sensitivities,
+two of them by less than $10\,\%$.
 
-\textbf{Linear algebra and reproducibility.} Sixteen of the models
-were additionally solved with the linear solver pinned to dense and to
+\textbf{Linear algebra and accuracy.} Fifteen of the models were
+additionally solved with the linear solver pinned to dense and to
 sparse. The gain of the sparse path grows with the state dimension in
-the same way for both backends, from about $1.1$ at $n_x = 8$ to
-$3.9$ at $n_x = 128$, and the auto-detection selected the faster path
-in every swept case, so Figure \ref{fig:bench} is a comparison at
-matched linear algebra. Every solve was additionally scored against a
+the same way for both backends, from $1.08$ at $n_x = 8$ to $2.78$ at
+$n_x = 128$, and the auto-detection selected the faster path in every
+swept case, so Figure \ref{fig:bench} is a comparison at matched
+linear algebra. Every solve was additionally scored against a
 reference trajectory at $\mathrm{atol} = 10^{-14}$,
-$\mathrm{rtol} = 10^{-12}$, on which the deviation of the in-tree
-backend is $0.93$ to $1.02$ times that of CVODE. The two are not on
+$\mathrm{rtol} = 10^{-12}$. Per problem, the deviation of the in-tree
+backend is a median $1.06$ times that of CVODE, with the central
+$90\,\%$ of the problems between $0.51$ and $1.35$. The two are not on
 equal footing there: the reference is itself a CVODE solution, so
 CVODE is measured against a tighter run of the same method through the
 same code, whose truncation error is structurally its own, while the
 in-tree backend is measured across implementations. The bias runs in
-CVODE's favour, which makes the quoted ratio an upper bound. Eight of
-the $888$ cells failed and are
-excluded from the aggregates: CVODES on Lang\_PLOSComputBiol2024 with
-sensitivities at the two looser tolerances, and the in-tree backend on
-Oliveira\_NatCommun2021 and Weber\_BMC2015 at
-$\mathrm{rtol} = 10^{-10}$. Repeating the suite on eight workers of a
-single compute node, which inflates the absolute times through shared
-cache and reduced clocks but leaves the ratios intact, reproduces the
-two aggregates as $1.24$ and $1.65$ and the per-problem values with a
-correlation of $0.96$ in $\log r$ with sensitivities. Without
-sensitivities the correlation is $0.71$, since a substantial fraction
-of the plain solves complete in well under a millisecond. The one
-problem on which the two runs disagree beyond that scatter is
-Brusselator1D at $N = 64$ without sensitivities, at $0.77$ against
-$1.13$.
+CVODE's favour, which makes the quoted ratio an upper bound. Four of
+the $852$ cells failed and are excluded from the aggregates, all of
+them the in-tree backend with sensitivities at
+$\mathrm{rtol} = 10^{-10}$: Oliveira\_NatCommun2021 on each of its
+three linear-solver settings, and Weber\_BMC2015. Repeating the suite on eight
+workers of the same machine, which inflates the absolute times through
+shared cache and reduced clocks but leaves the ratios intact,
+reproduces the two aggregates as $1.22$ and $1.91$, and the
+per-problem values with a correlation of $0.96$ in $\log r$ with
+sensitivities. Without sensitivities the correlation drops to $0.52$,
+since a substantial fraction of the plain solves complete in well
+under a millisecond and the measurement is then dominated by the
+contention the extra workers create. The problems that disagree
+beyond that scatter are all of that kind, HIRES at $1.42$ against
+$0.77$ the widest among them.
 
 \clearpage
 
@@ -1729,10 +1784,5 @@ pair.}
 
 The seven values sum to numerical zero, as required for the
 consistency of the embedded pair, and the row $a_{7,j}$ of the
-$A$ matrix coincides with $b_j$ for $j = 1, \dots, 6$ (the FSAL
-property). Continuous output on $[t_n, t_{n+1}]$ is delivered by
-the cubic Hermite interpolant on the accepted-step endpoints
-$(x_n, x_{n+1})$ and their derivatives
-$(f_n, f_{n+1}) = (k_1, k_7)$. Both endpoint derivatives are
-already in cache from the FSAL property, so no additional
-right-hand-side evaluations are required for output points.
+$A$ matrix coincides with $b_j$ for $j = 1, \dots, 6$, which is the
+FSAL property.

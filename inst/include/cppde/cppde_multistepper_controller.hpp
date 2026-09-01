@@ -35,8 +35,8 @@
  inst/COPYRIGHTS for the full license text.
  */
 
-#ifndef CPPDE_MULTISTEPPER_CONTROLLER_HPP_INCLUDED
-#define CPPDE_MULTISTEPPER_CONTROLLER_HPP_INCLUDED
+#ifndef CPPDE_MULTISTEPPER_CONTROLLER_HPP
+#define CPPDE_MULTISTEPPER_CONTROLLER_HPP
 
 #include <cmath>
 #include <algorithm>
@@ -89,11 +89,9 @@ public:
     , m_n_rejected(0)
   {}
 
-  // Slab-bound dual.tan_ pointers reference our own buffer storage. Copying
-  // would build a separate buffer with the same address-bound duals: UB.
-  // Moves are safe: std::vector::move preserves data() for both the slab
-  // storage and the dual-element vectors, so embedded tan_ pointers keep
-  // pointing at valid memory in the moved-to instance.
+  // The slab-bound tangent pointers reference our own storage, so a copy would
+  // leave two objects sharing one set of addresses. Moving is safe, a vector
+  // move preserves data().
   multistepper_controller(const multistepper_controller&)            = delete;
   multistepper_controller& operator=(const multistepper_controller&) = delete;
   multistepper_controller(multistepper_controller&&)                 = default;
@@ -144,18 +142,12 @@ public:
     return result;
   }
   // ====================================================================
-  //  try_step: separate input/output: step acceptance/rejection pipeline
+  //  try_step: the step acceptance and rejection pipeline
   //
-  //  Contains an internal retry loop matching cvStep:
-  //  - Newton convergence failures: retry with fresh Jacobian (ncf)
-  //  - Error test failures: retry with reduced h (nef), with
-  //    order reduction after MXNEF1 failures, and full restart
-  //    at order 1 if needed.
-  //
-  //  Returns `success` when a step is accepted, `fail` only for
-  //  truly unrecoverable failures (max ncf/nef exceeded).
-  //  In normal operation, this function always returns `success`
-  //  because it retries internally.
+  //  Retries internally, as cvStep does: a Newton convergence failure with a
+  //  fresh Jacobian, an error-test failure with a reduced step, then an order
+  //  reduction and finally a restart at order one. It returns fail only when
+  //  the retry budget is exhausted.
   // ====================================================================
 
   template<class System>
@@ -196,8 +188,8 @@ public:
     int nef = 0;   // Error test failure count (this step attempt)
 
     // nflag: controls whether we force a Jacobian setup
-    // FIRST_CALL or PREV_ERR_FAIL → normal setup decision (convfail = CV_NO_FAILURES)
-    // PREV_CONV_FAIL → force setup (convfail = CV_FAIL_OTHER)
+    // FIRST_CALL or PREV_ERR_FAIL: normal setup decision (convfail = CV_NO_FAILURES)
+    // PREV_CONV_FAIL: force setup (convfail = CV_FAIL_OTHER)
     enum class NFlag { first_call, prev_err_fail, prev_conv_fail };
     NFlag nflag = NFlag::first_call;
 
@@ -206,22 +198,12 @@ public:
 
     for (;;) {
 
-      // --- HMIN guard ------------------------------------------------
-      // Abort if the step size has collapsed relative to the current
-      // time: i.e., `t + h == t` in double precision, so the step
-      // cannot make any representable progress.  Without this, a
-      // pathological mix of WRMS weights and roundoff-dominated error
-      // estimates (e.g. E5 at atol=1e-10 with tiny QSS components) can
-      // trap the retry loop in an infinite stall: the controller keeps
-      // "accepting" steps that make no real progress.  Matches
-      // CV_TOO_MUCH_ACC in CVODE / "step size too small" in radau5/lsoda.
-      //
-      // The test must use `tn_abs` (not max(tn_abs, 1)) so that very
-      // stiff AD-extended systems with huge ||f|| can still take the
-      // initial sub-eps-scale step near t=0 (see issue #2).  At t=0
-      // the floor is 0 (any h>0 advances representably), so no guard
-      // fires.  Once t grows, the floor grows with it, and h collapse
-      // is correctly detected.
+  // --- HMIN guard ------------------------------------------------
+  // Abort once t + h == t in double, where no step can make representable
+  // progress: without it a roundoff-dominated error estimate can trap the retry
+  // loop in an endless stall. The test uses tn_abs rather than max(tn_abs, 1),
+  // so that a stiff AD-extended system can still take a sub-eps step near t = 0
+  // while the floor grows with t afterwards.
       {
         using ndf_detail::scalar_value;
         const double tn_abs = std::abs(static_cast<double>(scalar_value(t)));
@@ -233,13 +215,12 @@ public:
         }
       }
 
-      // --- : callSetup and convfail decision (cvNlsNewton) ---
-      //
-      // callSetup: triggered on prev_conv_fail, prev_err_fail,
-      // first call, MSBP interval, or gamrat drift beyond DGMAX.
-      // convfail = no_failures on first call / after error-test
-      // failure (lsetup may reuse cached J if gamma is close);
-      // convfail = fail_other on prev Newton failure (fresh J).
+  // --- callSetup and convfail decision (cvNlsNewton) ---
+  //
+  // callSetup fires on a previous convergence or error failure, on the first
+  // call, on the MSBP interval, or on gamrat drifting past DGMAX. convfail is
+  // no_failures then, and fail_other after a Newton failure, which forces a
+  // fresh Jacobian.
       bool force_setup = (nflag == NFlag::prev_conv_fail)
       || (nflag == NFlag::prev_err_fail);
 
@@ -257,7 +238,7 @@ public:
         ++ncf;
         m_stepper.set_etamax(1.0);   // prevent h increase after recovery
 
-        // Max convergence failures → unrecoverable
+        // Max convergence failures: unrecoverable
         if (ncf >= ndf_constants::MXNCF) {
           ++m_n_rejected;
           return fail;
@@ -325,7 +306,7 @@ public:
       nflag = NFlag::prev_err_fail;
       m_stepper.restore();
 
-      // Max error test failures → unrecoverable
+      // Max error test failures: unrecoverable
       if (nef >= ndf_constants::MXNEF) {
         ++m_n_rejected;
         return fail;
@@ -363,15 +344,12 @@ public:
         continue;   // retry
       }
 
-      // --- At order 1: full restart with fresh initial-dt estimation ---
-      //
-      // Instead of blindly applying ETAMIN (which may still leave h
-      // far from a workable value), re-estimate from scratch using
-      // cppde_hin (the CVODES cvHin port).  Finite-difference ÿ is
-      // built in, so no Jacobian is needed on this rare-fallback path.
-      //
-      // The re-estimated h is clamped to not exceed the current h
-      // (which just failed), and to stay above a minimum floor.
+  // --- At order 1: full restart with a fresh initial step estimate ---
+  //
+  // Rather than applying ETAMIN blindly, the step is re-estimated with the
+  // cvHin port, whose finite-difference curvature needs no Jacobian on this
+  // rare path. The result is clamped below the step that just failed and above
+  // the floor.
       {
         using odeint_utils::scalar_value;
 
@@ -496,10 +474,9 @@ public:
   // ====================================================================
   //  Dense-output demand
   //
-  //  The driver announces the next time it will interpolate at; steps
-  //  short of it are not snapshotted.  `always` disables that and is the
-  //  default: root finding and a termination predicate interpolate
-  //  anywhere.
+  //  The driver announces the next time it will interpolate at, and steps short
+  //  of it are not snapshotted. `always` disables that and is the default: root
+  //  finding and a termination predicate interpolate anywhere.
   // ====================================================================
 
   void set_dense_demand(time_type next_eval, bool always, bool forward)
@@ -649,4 +626,4 @@ private:
 
 } // namespace cppde
 
-#endif // CPPDE_MULTISTEPPER_CONTROLLER_HPP_INCLUDED
+#endif // CPPDE_MULTISTEPPER_CONTROLLER_HPP

@@ -29,14 +29,9 @@
   n_phi_rows <- n_states + n_params
 
   ## --- Detect sens1ini shape per call ---
-  ## Three accepted shapes:
-  ## - Legacy [n_states, n_active]: implicit identity on parameter rows.
-  ##   Detected by nrow == n_states and rownames absent or all in `variables`.
-  ## - Full Phi' [n_phi_rows, M]: parameter rows supplied explicitly.
-  ## - Partial Phi' [k, M], k < n_phi_rows: rownames identify which rows are
-  ##   supplied; missing rows are padded with zeros (= implicit fixed).
-  ## NULL means identity seeding on the whole non-fixed sens basis.
-  ## Vector form is treated as legacy/full as today (M = n_active, no partial).
+  ## Legacy [n_states, n_active] means an implicit identity on the parameter
+  ## rows, full Phi' [n_phi_rows, M] supplies them, and a partial Phi' names the
+  ## rows it supplies and has the rest zero-padded. NULL seeds the identity.
   if (!is.null(sens1ini) && !deriv)
     stop("'sens1ini' supplied but model has deriv = FALSE")
   if (!is.null(sens2ini) && !deriv2)
@@ -212,13 +207,11 @@
 
   if (!is.null(sens2ini)) {
     if (!is.numeric(sens2ini)) stop("'sens2ini' must be numeric")
-    ## Legacy [n_states, M, M] is accepted only when sens1ini is legacy / NULL
-    ## (then Phi'' = 0 on the param block, correct for affine Phi). Full
-    ## [n_phi_rows, M, M] is the unified shape; partial [k, M, M] is allowed
-    ## with dim-1 names identifying a subset of c(variables, parameters)
-    ## (missing rows = zero, i.e. implicit fixed). Partial coexists with
-    ## partial sens1ini and with full sens1ini -- the row interpretation is
-    ## independent because the C++ side receives the padded full tensor.
+    ## Legacy [n_states, M, M] is accepted only alongside a legacy or absent
+    ## sens1ini, where Phi'' vanishes on the parameter block. Full is the
+    ## unified shape, and partial names the subset of rows it supplies, the
+    ## rest being zero. It composes with any sens1ini shape, the C++ side
+    ## receiving the padded tensor either way.
     legacy_d2_ok <- !sens1ini_is_full && n_phi_rows != n_states
     expected_rows <- c(variables, parameters)
 
@@ -615,7 +608,7 @@ solveODE <- function(model, times, parms,
   ## arrays are unaliased; setting them here would duplicate every array.
   dn <- list(prep$variables, prep$sens_col_names)
   result <- tryCatch(
-    do.call(.Call, c(list(SYM), prep$call_args, list(dn))),
+    do.call(.callSym, c(list(SYM), prep$call_args, list(dn))),
     error = function(e) stop("ODE solver error: ", e$message, call. = FALSE))
 
   .odeFinish(result, model, prep, onFailure, traceFile)
@@ -770,10 +763,10 @@ solveODEBatch <- function(model, conditions,
     single <- .nativeSym(paste0("solve_", as.character(model)))
     if (is.null(single)) stop("Model not loaded. Run compile() first.", call. = FALSE)
     lapply(preps, function(p)
-      do.call(.Call, c(list(single), p$call_args,
+      do.call(.callSym, c(list(single), p$call_args,
                        list(list(p$variables, p$sens_col_names)))))
   } else {
-    tryCatch(.Call(SYM, lapply(preps, `[[`, "call_args"), as.integer(nt), dn),
+    tryCatch(.callSym(SYM, lapply(preps, `[[`, "call_args"), as.integer(nt), dn),
              error = function(e) stop("ODE solver error: ", e$message, call. = FALSE))
   }
 

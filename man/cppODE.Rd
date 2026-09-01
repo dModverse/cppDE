@@ -66,11 +66,9 @@ integration times.}
 
 \item{useDenseOutput}{Logical. Use Hermite dense output for
 user-requested time points. Applies to \code{method = "rb4"} and
-\code{"tsit5"}, whose cubic Hermite interpolant is of lower order than
-the method; \code{FALSE} makes the solver land on each requested time
-exactly instead. Ignored with a warning for \code{"bdf"} and \code{"adams"}, which
-always interpolate through the Nordsieck polynomial of the
-method's own order.}
+\code{"tsit5"}, whose interpolant is of lower order than the method;
+\code{FALSE} makes the solver land on each requested time exactly.
+Ignored with a warning for \code{"bdf"} and \code{"adams"}.}
 
 \item{sparse}{Logical or \code{NULL}. \code{NULL} auto-selects sparse vs.
 dense LU from the Jacobian sparsity; \code{TRUE} forces sparse, \code{FALSE}

@@ -100,16 +100,9 @@ test_that("an explicit method stays dense however sparse the system looks", {
 # --------------------------------------------------------------------------
 # Sparse + first-order sensitivities
 #
-# A solve keeps BLAS single-threaded for its duration (cppde_blas_threads.hpp):
-# the generated model runs on libgomp, and a threaded MKL brings libiomp5 along,
-# which corrupts the AD tangent blocks.  That pin used to hang off the dense LU
-# factorization, so a sparse model -- which never factorizes a dense Jacobian --
-# ran its sensitivity kernels unpinned and the step controller gave up at t = 0
-# unless some dense solve had happened earlier in the session.
-#
-# Solving sparse first here is the point of the test: it is the order that used
-# to fail.
-# --------------------------------------------------------------------------
+# A solve keeps BLAS single-threaded throughout, because a threaded MKL brings
+# libiomp5 alongside libgomp and corrupts the AD tangent blocks. The pin has to
+# be independent of the dense LU, which a sparse model never reaches.
 
 test_that("sparse Jacobian and dense Jacobian agree on first-order sensitivities", {
   # Chain of 8 states: Jacobian is bidiagonal, so auto-detection picks sparse.

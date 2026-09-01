@@ -178,12 +178,8 @@ public:
   // ====================================================================
   //  prepare_sensitivities
   //
-  //  Stores n_sens and primes the SoA tangent slabs for the heap-AD
-  //  path (dual<S, 0>). No-op for non-dynamic-dual value_type.
-  //
-  //  Only the rosenbrock4-owned vectors are primed here; the external
-  //  xerr passed to do_step (the controller's m_xerr) is handled
-  //  separately by the controller.
+  //  Stores n_sens and primes the slabs this stepper owns. The controller primes
+  //  its own xerr. No-op unless the value type is a heap-backed dual.
   // ====================================================================
 
   void prepare_sensitivities(unsigned n_sens)
@@ -404,12 +400,9 @@ public:
     { auto _tp = m_prof.timer(prof_cat::f_eval);
       deriv_func(m_xtmp.m_v, xerr, value_type(t_s + dt_s)); }
     ++m_n_fevals;
-    // The error vector xerr is the controller-owned `m_xerr` and is NOT
-    // slab-bound. To keep the AXPY hot path free of arena allocations, we
-    // pass scalar (double) alphas: `ad_lu::scalar_value` extracts the
-    // value component of m_coef.cXX (constants have zero tangents anyway)
-    // so vec_axpy reduces to `y[i] += S * x[i]` over plain doubles inside
-    // the dual ET path.
+  // xerr belongs to the controller and is not slab-bound. The alphas go in as
+  // plain doubles, the coefficients having no tangents anyway, which keeps the
+  // axpy free of arena allocations.
     vec_axpy(xerr, ad_lu::scalar_value(m_coef.c61) / dt_s, m_g1.m_v);
     vec_axpy(xerr, ad_lu::scalar_value(m_coef.c62) / dt_s, m_g2.m_v);
     vec_axpy(xerr, ad_lu::scalar_value(m_coef.c63) / dt_s, m_g3.m_v);
@@ -568,16 +561,10 @@ private:
   detail::tangent_slab<value_type> m_cont3_slab, m_cont4_slab;
   detail::tangent_slab<value_type> m_xtmp_slab;
   detail::tangent_slab<value_type> m_x_err_slab;
-  // Placeholder slabs handed to vec_*_with_slab when the matching state
-  // vector lives outside this stepper (controller's xerr, lu_W's m_dfdt,
-  // the input x). Always unprimed → helpers fall through to their
-  // per-element ET path. Mutable so we can hand out non-const refs to
-  // satisfy the helper signature without lying about constness.
-  // xerr is not slab-bound here (caller owns it): we route the 5 xerr
-  // axpys through plain vec_axpy below. m_dfdt and the input x are
-  // similarly external; m_dfdt_unslabbed / m_x_in_unslabbed are
-  // permanently-empty stubs that vec_*_with_slab sees as `primed=false`
-  // so it falls through to its per-element loop.
+  // Placeholder slabs for the vectors living outside this stepper: the
+  // controller's xerr, lu_W's m_dfdt and the input x. Permanently unprimed, so
+  // the slab-aware helpers fall through to their per-element path. Mutable only
+  // to satisfy the helper signatures.
   mutable detail::tangent_slab<value_type> m_dfdt_unslabbed;
   mutable detail::tangent_slab<value_type> m_x_in_unslabbed;
   unsigned m_n_sens = 0;

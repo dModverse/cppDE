@@ -164,9 +164,9 @@ def generate_cvode_cpp(
 
     # --- rootfunc parsing ---
     # Three cases:
-    #   (a) rootfunc is None                     → no root handling
-    #   (b) rootfunc == "equilibrate"            → post-step threshold check
-    #   (c) rootfunc is a list of expressions    → CVodeRootInit + CV_ROOT_RETURN
+    #   (a) rootfunc is None: no root handling
+    #   (b) rootfunc == "equilibrate": post-step threshold check
+    #   (c) rootfunc is a list of expressions: CVodeRootInit + CV_ROOT_RETURN
     rootfunc_mode = "none"
     rootfunc_exprs_cpp = []
     if rootfunc is not None:
@@ -625,7 +625,7 @@ def _render_source(
         # Exhausted event roots emit a constant +1 so no further sign change is
         # ever seen by CVode's rootfinder.  Between the change-over step and
         # the CVodeReInit that follows event application the root history is
-        # reset, so no phantom crossing is registered from the -ε → +1 jump.
+        # reset, so no phantom crossing is registered from the -ε to +1 jump.
         for j, e in enumerate(root_events):
             root_gout_lines.append(
                 f"  gout[{n_user_rootfunc + j}] = "
@@ -767,7 +767,7 @@ struct RootEvent {{
   std::function<double(const double* x, double t, int i)> dg_dx_fn;
   std::function<double(const double* x, double t, int k)> dg_dp_fn;
   std::function<double(const double* x, double t)> dg_dt_fn;
-  // Root condition r(x, t, p) and its partials (for IFT → dt_root/dp)
+  // Root condition r(x, t, p) and its partials (for the IFT of dt_root/dp)
   std::function<double(const double* x, double t, int i)> dr_dx_fn;
   std::function<double(const double* x, double t, int k)> dr_dp_fn;
   std::function<double(const double* x, double t)> dr_dt_fn;

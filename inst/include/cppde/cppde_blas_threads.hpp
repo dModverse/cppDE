@@ -77,13 +77,11 @@ inline void ensure_single_thread_blas() {
   if (api.oblas_set) api.oblas_set(1);
 }
 
-// RAII: pin BLAS to one thread, restore the caller's setting on scope exit.
-//
-// A no-op inside an OpenMP parallel region, for the reason above; the serial
-// phase of the batch entry point installs one scope around the whole region
-// instead, so workers are already covered.  When the region is not ours --
-// a caller parallelising over subjects, say -- there is no serial phase to
-// hook, so fall back to setting without restoring: correctness first.
+  // RAII: pin BLAS to one thread and restore the caller's setting on exit.
+  //
+  // A no-op inside an OpenMP region: the batch entry installs one scope around
+  // the whole region instead. In a region that is not ours there is no serial
+  // phase to hook, so the setting is applied without being restored.
 class single_thread_blas_scope {
 public:
   single_thread_blas_scope() {

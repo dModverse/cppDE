@@ -63,19 +63,13 @@ struct newton_result {
   int    n_fevals;    // Number of f-evaluations used
 };
 
-// ============================================================================
-//  WRMS norm helpers
-//
-//  Three variants:
-//
-//  1. wrms_norm_scalar: double vectors (for scalar Newton convergence)
-//
-//  2. wrms_norm_correction: SCALAR ONLY from AD vectors
-//     Measures only the value components.  Used for Newton convergence.
-//
-//  3. wrms_norm: AD-AWARE (for error control / order selection)
-//     Includes all derivative components.
-// ============================================================================
+  // ============================================================================
+  //  WRMS norm helpers
+  //
+  //    wrms_norm_scalar     : double vectors, for scalar Newton convergence
+  //    wrms_norm_correction : value components only, for Newton convergence
+  //    wrms_norm            : all derivative components, for error control
+  // ============================================================================
 
 namespace newton_detail {
 
@@ -112,14 +106,10 @@ double wrms_norm_correction(const std::vector<T>& b,
   return (n > 0) ? std::sqrt(sumsq / n) : 0.0;
 }
 
-// WRMS norm of vector v, weighted against reference y0: AD-AWARE.
-// Returns max(state_wrms, max_j sens_wrms[j]) over the state and
-// each sensitivity-parameter slice.  This matches CVODES's
-// `cvSensUpdateNorm` (CV_STAGGERED) convention: every sensitivity
-// vector is held individually below tolerance, rather than letting
-// large per-parameter errors hide inside an averaged WRMS.
-// For non-AD types the sens loop compiles to nothing → returns the
-// pure state WRMS.
+  // AD-aware WRMS of v against the reference y0: the maximum over the state and
+  // each sensitivity slice, the CVODES cvSensUpdateNorm convention, so a large
+  // per-parameter error cannot hide inside an average. Non-AD types compile the
+  // sensitivity loop away.
 template<class T>
 double wrms_norm(const std::vector<T>& v,
                  const std::vector<T>& y0,
@@ -162,14 +152,9 @@ double wrms_norm(const std::vector<T>& v,
   return max_norm;
 }
 
-// Max-norm over (state_wrms, each sens-vector wrms) using pre-computed
-// weights.  ewt is interleaved: [val_0, d0_0, ..., d(nd-1)_0, val_1, ...],
-// stride 1 + nd per state.
-//
-// Two paths, same result:
-//   - primed slab (dual<S, N>, any N): the tangents of v are one contiguous
-//     [n x nd] block, read through slab.tangent_data().
-//   - otherwise: per-element v[i].d(j).
+  // Max-norm over the state and each sensitivity vector from precomputed
+  // weights. ewt is interleaved per state as [val, d0, ..., d(nd-1)]. With a
+  // primed slab the tangents are one contiguous block, otherwise per element.
 template<class T>
 double wrms_max_ewt(const std::vector<T>& v,
                     const detail::tangent_slab<T>& slab,
@@ -369,14 +354,9 @@ newton_result ndf_newton_solve(
     double dcon = del * std::min(1.0, crate) / tq4;
 
     if (dcon <= 1.0) {
-      // AD-aware acnrm for error control: max over (state_wrms,
-      // each sens-vector_wrms).  The step-size controller therefore
-      // limits the worst-case local truncation error across the
-      // augmented system, including each sensitivity parameter
-      // individually: matching CVODES `cvSensUpdateNorm`
-      // (CV_STAGGERED).  A flat WRMS over all components averages
-      // per-parameter errors and can hide one bad sensitivity behind
-      // many small ones; the max-norm prevents that.
+  // AD-aware acnrm for error control: the maximum over the state and each
+  // sensitivity vector, so the controller limits the worst case across the
+  // augmented system instead of an average that can hide one bad sensitivity.
       double acnrm;
       { auto _t = prof.timer(prof_cat::error_norm);
         if (use_ewt) {

@@ -53,23 +53,16 @@ struct detail_null_sparse_lu {
 };
 } // namespace ad_lu
 
-// ============================================================================
-//  lu_W<Value, is_sparse>
-//
-//  Self-contained iteration matrix solver.  Steppers hold this as a member
-//  and call its methods directly: no CRTP inheritance needed.
-//
-//  Interface summary:
-//    call_jacobian(jac_func, x, t)     : evaluate Jacobian
-//    factorize_W(n, inv_gamma_dt)      : build W = 1/(γh)·I − J, factorize
-//    refactorize_W_gamma_only(n, val)  : O(n) diagonal update (sparse only)
-//    refactorize_W_from_cache(n, val)  : restore cached J, re-factorize
-//    cache_jacobian(n)                 : snapshot J for later reuse
-//    solve(b)                          : W⁻¹ b  (full AD / IFT)
-//    solve_scalar(b)                   : W_val⁻¹ b  (doubles only, no IFT)
-//    invalidate() / has_valid_jacobian() / has_valid_lu(): state tracking
-//    resize(x)                         : allocate / reallocate buffers
-// ============================================================================
+  //  Self-contained iteration-matrix solver, held by a stepper as a member.
+  //
+  //    call_jacobian(jac_func, x, t)     evaluate the Jacobian
+  //    factorize_W(n, inv_gamma_dt)      build W = 1/(gamma*h)*I - J, factorise
+  //    refactorize_W_gamma_only(n, val)  O(n) diagonal update, sparse only
+  //    refactorize_W_from_cache(n, val)  restore the cached J, factorise again
+  //    cache_jacobian(n)                 snapshot J for later reuse
+  //    solve(b) / solve_scalar(b)        W^-1 b, with or without the IFT
+  //    invalidate() / has_valid_*()      state tracking
+  //    resize(x)                         allocate or reallocate the buffers
 
 template<class Value, bool is_sparse>
 class lu_W
@@ -87,12 +80,9 @@ public:
   typedef state_wrapper<matrix_type>       wrapped_matrix_type;
 
   // ====================================================================
-  //  Jacobian evaluation: writes to internal storage
-  //
-  //  Dense:  codegen writes −J directly into m_W_temp (pre-negated),
-  //          clearing only previously-written entries (not set_zero).
-  //          This eliminates the O(n²) memset + O(n²) negate-copy.
-  //  Sparse: codegen writes −J into m_W_sparse.Ax (unchanged).
+  //  Jacobian evaluation into internal storage. The dense codegen writes -J
+  //  straight into m_W_temp, pre-negated, clearing only the entries it wrote
+  //  before; the sparse one writes -J into m_W_sparse.Ax.
   // ====================================================================
 
   template<class JacFunc>
@@ -280,16 +270,11 @@ public:
 private:
 
   // ====================================================================
-  //  Dense factorize_W implementation
+  //  Dense factorize_W
   //
-  //  m_W_temp holds −J (from call_jacobian or cache restore).
-  //  Add diagonal, then factorize_move (O(1) swap into LU solver).
-  //  After the swap m_W_temp holds stale LU data: that's fine
-  //  because it will be rebuilt before next use (either by a fresh
-  //  call_jacobian or by refactorize_W_from_cache_dense).
-  //
-  //  cache_jacobian is always called BEFORE factorize_W in the BDF,
-  //  so the cache already holds the clean −J.
+  //  m_W_temp holds -J. Add the diagonal, then swap into the LU solver, after
+  //  which m_W_temp holds stale data and is rebuilt before its next use. The
+  //  BDF path caches the clean -J before calling this.
   // ====================================================================
 
   void factorize_W_dense(size_t n, value_type inv_gamma_dt)
@@ -323,13 +308,9 @@ private:
   }
 
   // ====================================================================
-  //  Dense refactorize from cache: W = inv_gamma_dt · I + (cached −J)
-  //
-  //  Copies cached −J into m_W_temp, then factorize_W_dense does
-  //  diagonal-add + factorize_move.
-  //  Cost: O(n²) copy + O(n) diag + dgetrf.  No memset, no negate.
-  //  Old code: O(n²) negate-copy + O(n) diag + dgetrf + move.
-  //  Savings: eliminated the negation (plain memcpy vs negate loop).
+  //  Dense refactorize from cache: W = inv_gamma_dt * I + (cached -J).
+  //  The cached matrix is copied into m_W_temp, then the dense factorise adds
+  //  the diagonal and moves: one copy, one diagonal pass, one dgetrf.
   // ====================================================================
 
   void refactorize_W_from_cache_dense(size_t n, value_type inv_gamma_dt)
@@ -409,11 +390,9 @@ private:
   //  Storage
   // ====================================================================
 
-  // Dense path
-  //   m_W_temp holds −J (written by codegen, persisted between calls).
-  //   m_jac_cache holds cached −J for lagged reuse.
-  //   m_jac (the old separate Jacobian buffer) is eliminated :
-  //   codegen writes directly into m_W_temp.
+  // Dense path: m_W_temp holds -J, written by the codegen and kept between
+  // calls, and m_jac_cache the copy for lagged reuse. There is no separate
+  // Jacobian buffer.
   ad_lu::dense_lu_solver<value_type> m_dense_lu;
   matrix_type          m_W_temp;                         // persistent: holds −J
   bool                 m_jac_fresh = false;               // set by call_jacobian
@@ -444,7 +423,7 @@ private:
 };
 
 // ============================================================================
-//  Tag → bool conversion (for backward compatibility with stepper templates
+//  Tag to bool conversion (for backward compatibility with stepper templates
 //  that use dense_lu_tag / sparse_lu_tag)
 // ============================================================================
 

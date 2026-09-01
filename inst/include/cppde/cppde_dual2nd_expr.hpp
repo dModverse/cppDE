@@ -50,7 +50,7 @@
 #include <utility>
 
 namespace cppde {
-namespace expr2 {
+namespace dual2nd_expr {
 
 #if defined(__GNUC__) || defined(__clang__)
   #define CPPDE_ET2_INLINE __attribute__((always_inline)) inline
@@ -560,15 +560,12 @@ struct et2_pair_enabled
       && !std::is_void<typename et2_pair_target<A, B>::type>::value
     > {};
 
-// ===========================================================================
-// Binary operator overloads. Each binary op has 8 overloads covering all
-// combinations of {dual2nd, Expr2nd, scalar} on each side. We use explicit
-// concrete-type signatures (dual2nd<T,N> and Expr2nd<D>) rather than fully
-// generic templates so partial ordering picks these over the eager nested
-// dual<dual<T,N>,N> operators in cppde_dual_math.hpp (which would otherwise
-// match dual2nd via base-class deduction since dual2nd inherits from
-// dual<dual<T,N>,N>).
-// ===========================================================================
+  // ===========================================================================
+  // Binary operator overloads, eight per operator over {dual2nd, Expr2nd,
+  // scalar}. The signatures are concrete rather than generic, so partial
+  // ordering prefers them to the eager nested-dual operators, which would
+  // otherwise match dual2nd through its base class.
+  // ===========================================================================
 #define CPPDE_DEFINE_ET2_BINOP(SYM, OPTAG)                                   \
   /* dual2nd op dual2nd */                                                    \
   template<class T, unsigned N>                                               \
@@ -726,43 +723,42 @@ CPPDE_ET2_INLINE auto pow(U a, const Expr2nd<D>& b) {
   return PowExpr2SD<D>(static_cast<T>(a), b.self());
 }
 
-} // namespace expr2
+} // namespace dual2nd_expr
 
 // Hoist operators and math functions into namespace cppde for ADL pickup.
-using expr2::operator+;
-using expr2::operator-;
-using expr2::operator*;
-using expr2::operator/;
-using expr2::exp;
-using expr2::log;
-using expr2::sqrt;
-using expr2::sin;
-using expr2::cos;
-using expr2::tan;
-using expr2::asin;
-using expr2::acos;
-using expr2::atan;
-using expr2::sinh;
-using expr2::cosh;
-using expr2::tanh;
-using expr2::asinh;
-using expr2::acosh;
-using expr2::atanh;
-using expr2::abs;
-using expr2::pow;
+using dual2nd_expr::operator+;
+using dual2nd_expr::operator-;
+using dual2nd_expr::operator*;
+using dual2nd_expr::operator/;
+using dual2nd_expr::exp;
+using dual2nd_expr::log;
+using dual2nd_expr::sqrt;
+using dual2nd_expr::sin;
+using dual2nd_expr::cos;
+using dual2nd_expr::tan;
+using dual2nd_expr::asin;
+using dual2nd_expr::acos;
+using dual2nd_expr::atan;
+using dual2nd_expr::sinh;
+using dual2nd_expr::cosh;
+using dual2nd_expr::tanh;
+using dual2nd_expr::asinh;
+using dual2nd_expr::acosh;
+using dual2nd_expr::atanh;
+using dual2nd_expr::abs;
+using dual2nd_expr::pow;
 
-// ===========================================================================
-// Materialise an Expr2nd<D> tree into a dual2nd<T, N> at assignment.
-//
-// Aliasing-safe order:
-//   1. scalar layer
-//   2. lower-triangle Hessian (reads source d1 + d2; writes inner tan slots)
-//   3. gradient (writes outer.tan_[i].x()) — d1 sources read at index i
-//      before being overwritten at index i; cross-iteration safe
-//   4. mirror upper triangle from lower
-//   5. sync redundant gradient (outer.val_.tan_[i] <- d1)
-// ===========================================================================
-namespace expr2 {
+  // ===========================================================================
+  // Materialise an Expr2nd<D> tree into a dual2nd<T, N> at assignment.
+  //
+  // Aliasing-safe order:
+  //   1. scalar layer
+  //   2. lower-triangle Hessian, reading d1 and d2, writing the inner slots
+  //   3. gradient, whose d1 source at index i is read before it is written
+  //   4. mirror the upper triangle from the lower
+  //   5. sync the redundant gradient copy
+  // ===========================================================================
+namespace dual2nd_expr {
 
 template<class T, unsigned N, class E,
          std::enable_if_t<is_expr2nd_v<E>, int> = 0>
@@ -771,11 +767,8 @@ CPPDE_ET2_INLINE void materialise(dual2nd<T, N>& lhs, const E& e) {
   lhs.scalar() = e.eval_value();
 
   if (!e.any_depend()) {
-    // No tangents: leave lhs's tangent buffers untouched if previously armed
-    // (the caller may want them zero; the eager primitive convention is to
-    // leave them alone). For consistency with the eager dual2nd constructors
-    // we also zero out d1 if lhs was already armed; but the eager copy ctor
-    // does not so we follow base semantics.
+  // No tangents in the source: the tangent buffers of lhs are left as they are,
+  // following the eager primitives, which do not clear them either.
     return;
   }
 
@@ -802,11 +795,11 @@ CPPDE_ET2_INLINE void materialise(dual2nd<T, N>& lhs, const E& e) {
   // first_order_view. val_tan_block is no longer maintained in sync.)
 }
 
-} // namespace expr2
+} // namespace dual2nd_expr
 
 // ===========================================================================
 // Out-of-line definitions for dual2nd's ET assignment / ctor (declared in
-// cppde_dual2nd.hpp). The argument type `expr2::Expr2nd<D>&` only matches
+// cppde_dual2nd.hpp). The argument type `dual2nd_expr::Expr2nd<D>&` only matches
 // CRTP derivations of Expr2nd; dual2nd-from-dual2nd or scalar assignments
 // take the inherited base class operators via overload resolution.
 // ===========================================================================
@@ -815,16 +808,16 @@ template<class T, unsigned N>
 template<class D>
 CPPDE_ET2_INLINE
 dual2nd<T, N>&
-dual2nd<T, N>::operator=(const expr2::Expr2nd<D>& e) {
-  expr2::materialise(*this, e.self());
+dual2nd<T, N>::operator=(const dual2nd_expr::Expr2nd<D>& e) {
+  dual2nd_expr::materialise(*this, e.self());
   return *this;
 }
 
 template<class T, unsigned N>
 template<class D>
 CPPDE_ET2_INLINE
-dual2nd<T, N>::dual2nd(const expr2::Expr2nd<D>& e) : base() {
-  expr2::materialise(*this, e.self());
+dual2nd<T, N>::dual2nd(const dual2nd_expr::Expr2nd<D>& e) : base() {
+  dual2nd_expr::materialise(*this, e.self());
 }
 
 // Compound assignment helpers: build (*this op other) as a BinExpr2 and
@@ -832,28 +825,28 @@ dual2nd<T, N>::dual2nd(const expr2::Expr2nd<D>& e) : base() {
 template<class T, unsigned N>
 template<class D>
 CPPDE_ET2_INLINE dual2nd<T, N>&
-dual2nd<T, N>::operator+=(const expr2::Expr2nd<D>& e) {
+dual2nd<T, N>::operator+=(const dual2nd_expr::Expr2nd<D>& e) {
   *this = *this + e;
   return *this;
 }
 template<class T, unsigned N>
 template<class D>
 CPPDE_ET2_INLINE dual2nd<T, N>&
-dual2nd<T, N>::operator-=(const expr2::Expr2nd<D>& e) {
+dual2nd<T, N>::operator-=(const dual2nd_expr::Expr2nd<D>& e) {
   *this = *this - e;
   return *this;
 }
 template<class T, unsigned N>
 template<class D>
 CPPDE_ET2_INLINE dual2nd<T, N>&
-dual2nd<T, N>::operator*=(const expr2::Expr2nd<D>& e) {
+dual2nd<T, N>::operator*=(const dual2nd_expr::Expr2nd<D>& e) {
   *this = *this * e;
   return *this;
 }
 template<class T, unsigned N>
 template<class D>
 CPPDE_ET2_INLINE dual2nd<T, N>&
-dual2nd<T, N>::operator/=(const expr2::Expr2nd<D>& e) {
+dual2nd<T, N>::operator/=(const dual2nd_expr::Expr2nd<D>& e) {
   *this = *this / e;
   return *this;
 }

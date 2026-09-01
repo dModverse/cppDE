@@ -891,4 +891,17 @@ openmp_cxxflags: $openmp_cxxflags
 openmp_libs: $openmp_libs
 EOF
 
+# ---------------------------------------------------------------------------
+# Vignette: carry it into an install that did not go through a full build.
+#
+# Only R CMD build moves the PDF into inst/doc, so a source tree and the
+# tarball install_github makes would both install without the vignette. The
+# guard is the PDF itself: a CRAN tarball has only the .asis left here.
+# Revisit this block for a CRAN submission.
+# ---------------------------------------------------------------------------
+if [ -f vignettes/Methods.pdf ]; then
+  mkdir -p inst/doc
+  cp -f vignettes/Methods.pdf vignettes/Methods.pdf.asis inst/doc/
+fi
+
 log "Summary:  CVODE=$([ $sundials_available = 1 ] && echo ON || echo off), KLU=$([ $klu_available = 1 ] && echo ON || echo off), CVODE_LAPACK=$([ $cvode_lapack_available = 1 ] && echo ON || echo off), OPENMP=$([ $openmp_available = 1 ] && echo ON || echo off)"

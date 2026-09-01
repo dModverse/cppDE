@@ -1,3 +1,38 @@
+# cppDE 0.9.2
+
+* A root event whose crossing falls exactly on an evaluated time now fires.
+  Detection and bisection both tested the sign product strictly, so an exact
+  zero counted as no crossing and the event was lost or localised past the root.
+* A root event no longer fires again on the crossing it just handled. The
+  restart sits on the event surface, where the round-off residue of the root
+  function carried a sign that read as a second crossing.
+* A fixed event that makes a root condition true now fires it. The conditions
+  are read on both sides of the jump and the resets ride on its surface, so
+  they transport the sensitivities like a fixed event at that time. Terminal
+  conditions are excluded.
+* The step size is re-estimated after every event, not only for the multistep
+  methods.
+* `funCpp()` substitutes all symbols in one pass. A parameter carrying the name
+  of a generated array, `p` for instance, rewrote the slots already emitted for
+  the others, so the result depended on the order the parameters were listed in.
+* `compile()` no longer repeats the OpenMP and KLU flags that the constructors
+  already recorded on the model.
+* `inst/examples/example_saltation.R` checks the sensitivity transport against a
+  SymPy solution of the same model, to first and second order, over five models
+  covering both event kinds, repeated firings, an explicitly time-dependent
+  right-hand side and an oscillator between two elastic walls.
+* Generated entry points are dispatched by name and shared object instead of by
+  a cached address. `dyn.unload()` nulls an address in place and nothing
+  resolves it again, so a reload left every caller that had already resolved a
+  symbol pointing at nothing. Loading and unloading are now without
+  consequence, and a model whose library is gone names the entry point and the
+  library it is missing instead of dying on a null address.
+* Scoping the lookup to one shared object also stops two models that export the
+  same entry point name from reaching into each other.
+* `clearNativeSymbols()` drops the remembered name pairings, which only a
+  recompile into a differently named shared object can make stale. It is no
+  longer needed after loading or unloading.
+
 # cppDE 0.9.1
 
 * Test suite over solvers, sensitivities, events, reparametrisation and the

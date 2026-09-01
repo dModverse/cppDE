@@ -49,12 +49,10 @@ template<class T>           struct is_dual2nd : std::false_type {};
 template<class T, unsigned N>     struct is_dual2nd<cppde::dual2nd<T, N>> : std::true_type {};
 
 // ============================================================================
-//  inner_type<T>: strip ONE layer of AD wrapping
+//  inner_type<T>: strip one layer of AD wrapping.
 //
-//  For dual2nd the inner type is dual<T,N>: dual2nd represents a function with
-//  a value, gradient, and Hessian; peeling one layer yields a first-order dual
-//  carrying value + gradient. The LU IFT recursion goes
-//  dual2nd<T,N> -> dual<T,N> -> T.
+//  dual2nd peels to dual<T,N>, which carries value and gradient; the LU IFT
+//  recursion runs dual2nd<T,N> -> dual<T,N> -> T.
 // ============================================================================
 
 template<class T>           struct inner_type                    { using type = T; };
@@ -176,12 +174,9 @@ inline unsigned max_deriv_size(const dense_matrix<AD>& M)
   return mx;
 }
 
-// Whether any element carries active derivative directions. Returns on the
-// first hit, unlike max_deriv_size(), which scans the whole container.
-//
-// Static-width (N > 0) code paths know the width at compile time and need
-// only the distinction between "seeded" and "un-seeded"; a reparametrisation
-// with zero sensitivity columns leaves every element un-seeded.
+// Whether any element carries active derivative directions, returning on the
+// first hit unlike max_deriv_size(). A static width needs only that
+// distinction: a reparametrisation without sensitivity columns seeds nothing.
 template<class AD,
          std::enable_if_t<is_ad<AD>::value, int> = 0>
 inline bool any_deriv(const std::vector<AD>& v)
@@ -200,20 +195,10 @@ inline bool any_deriv(const dense_matrix<AD>& M)
   return false;
 }
 
-// ----------------------------------------------------------------------------
-//  AoS -> SoA bulk extraction
-//
-//  bulk_extract_derivs:
-//    Single pass over vector<AD>, writing into a column-major
-//    n x n_derivs scratch buffer of inner-type entries. Replaces n_derivs
-//    separate calls to extract_derivs(v, j).
-//
-//  bulk_inject_results:
-//    Single pass over vector<AD>, reading values from b_val and derivative
-//    columns from dx_all (column-major n x n_derivs). Activates dependence
-//    via diff(0[,n_derivs]) on AD instances that are not yet "depending",
-//    then overwrites all tangent slots via operator[].
-// ----------------------------------------------------------------------------
+//    bulk_extract_derivs: one pass over the vector into a column-major
+//      n by n_derivs scratch, in place of n_derivs separate extractions.
+//    bulk_inject_results: one pass back, activating dependence where it is not
+//      yet set and overwriting every tangent slot.
 
 template<class AD,
          std::enable_if_t<is_ad<AD>::value, int> = 0>
@@ -270,6 +255,14 @@ inline void bulk_inject_results(
 }
 
 } // namespace ad_traits
+
+namespace detail {
+
+// The names the rest of the library reaches for.
+using ad_traits::scalar_value;
+template<class T> using is_ad_type = ad_traits::is_ad<T>;
+
+} // namespace detail
 } // namespace cppde
 
 #endif // CPPDE_AD_TRAITS_HPP

@@ -76,14 +76,9 @@ inline double weighted_sup_norm(
 }
 
 // =========================================================================================
-//  Weighted RMS 2-norm: used by cppde_hin to match CVODES's N_VWrmsNorm.
-//
-//  Formula:  ||v||_WRMS = sqrt( (1/N) * sum_i (v_i * ewt_i)^2 )
-//  with     ewt_i = 1 / (atol + rtol * |x0_i|).
-//
-//  AD-aware: derivative components are folded in as additional entries, each with
-//  their own ewt based on the corresponding derivative value: same convention
-//  as weighted_sup_norm above.  N counts all contributing entries (state + sens).
+//  Weighted RMS 2-norm, matching the CVODES N_VWrmsNorm:
+//  sqrt(mean((v_i*ewt_i)^2)) with ewt_i = 1/(atol + rtol*|x0_i|). Derivative
+//  components of an AD value count as further entries with their own weights.
 // =========================================================================================
 
 inline double weighted_rms_norm(
@@ -184,25 +179,11 @@ inline double cvhub_max_ratio(
 }
 
 // =========================================================================================
-//  estimate_initial_dt: unified initial step-size estimator for all cppDE solvers.
+//  estimate_initial_dt: the first step, for every cppDE solver.
 //
-//  Workflow:
-//    1. f0 = f(t0, x0)
-//    2. phase-1 rough h0 from ||y0||/||f0||                          (HNW, Alg. 4.4)
-//    3. ÿ via caller-supplied compute_ydd(x0, t0, f0, h0, ydd):
-//         - implicit/rb4/NDF/Adams: analytic  ÿ = dfdt + J·f   (uses codegen'd Jacobian)
-//         - explicit (tsit5):       FD          ÿ ≈ [f(x0+h0·f0) - f0] / h0
-//    4. h1 = (0.01 / max(||f0||, ||ÿ||))^(1/(p+1))                  (HNW, Alg. 4.4)
-//    5. CVODE-style upper bound hub = 1/max(|f_i|/(HUB·|y_i| + 1/ewt_i))
-//       plus a tdist bound HUB·|t_final - t0|
-//    6. CVODE-style lower bound hlb = HLB·eps·max(|t0|,|t_final|)
-//    7. return  clamp( min(100·h0, h1, hub), hlb, ∞ )
-//
-//  All norms are weighted sup-norms with weight 1/(atol + rtol·|y0|).
-//  For AD value types the norm also sweeps the derivative components, so sensitivity
-//  dynamics influence the initial step.
-//
-//  Constants match CVODE cvHin (HUB=0.1, HLB=100).
+//  A rough scale from ||y0||/||f0||, a curvature from the caller's second
+//  derivative, the HNW h1 formula, then an Euler-change cap above and the
+//  rounding of the time variable below. See vignette("Methods"), "The first step".
 // =========================================================================================
 
 constexpr double HLB_FACTOR = 100.0;
@@ -245,14 +226,9 @@ inline double estimate_initial_dt(
 
   // --- 4. HNW phase-2 h1 formula ---
   //
-  // The formula err ~ h^(p+1)·y^(p+1) needs ||y^(p+1)||.  We only have
-  // ||ÿ||, so the natural proxy makes this exact for p=1.  For higher-order
-  // methods the formula would overestimate h on stiff problems (where
-  // ||y^(k)|| ~ ||J||^(k-1)·||f||), so callers normally pass order=1
-  // regardless of the method's nominal order: BDF/NDF/Adams always
-  // start the integration at q=1 anyway, and for single-step methods
-  // (rb4, tsit5) a conservative initial h is cheap: the controller ramps
-  // up within a few steps.
+  // ||y''|| stands in for ||y^(p+1)||, which is exact only at p = 1, so callers
+  // pass order = 1 whatever the method. The multistep methods start at q = 1
+  // anyway, and a single-step method ramps up within a few steps.
   double h1;
   double max_d = std::max(d1, d2);
   if (max_d <= 1e-15) {
@@ -261,28 +237,11 @@ inline double estimate_initial_dt(
     h1 = std::pow(0.01 / max_d, 1.0 / (order + 1));
   }
 
-  // --- 5. Hub cap: an Euler step must not change any component relatively
-  //        by more than HUB_FACTOR.
+  // --- 5. Hub cap on the relative Euler change ---
   //
-  // Classical form:
-  //    denom = HUB · |y_i|  +  atol + rtol·|y_i|
-  //    hub_inv = max_i  |f_i| / denom
-  //
-  // Problem: zero-initialized states with non-zero rate (common in reaction
-  // networks: e.g. product species starting at zero) make denom collapse
-  // to `atol`, and `|f_i|/atol` blows up.  That gives a pathologically
-  // small hub: not because the integrator cannot handle the step, but
-  // because the cap's denominator is ill-scaled.
-  //
-  // Fix: replace `|y_i|` inside the HUB term by its Euler-step scale
-  //      y_tilde_i = max(|y_i|, |f_i|·h0)
-  // where h0 is the phase-1 rough step.  For non-zero y_i this reduces to
-  // the original expression (h0·f_i < y_i is the whole point of HUB·y_i);
-  // for y_i = 0 it replaces the collapsed zero by the magnitude y_i *would*
-  // attain after one Euler step of h0: the relevant reference scale.
-  // No AD component is consulted here; the cap is a plain state-only
-  // Euler-change bound.  We already have analytic ÿ (= d2), so no
-  // FD-Newton refinement is needed: d2 drives h1 directly above.
+  // That scale is max(|y_i|, |f_i|*h0), not |y_i|: a component starting at zero
+  // with a non-zero rate would otherwise collapse the denominator onto atol and
+  // cap h far below what the integrator can take. State only, no AD components.
   double hub_inv = 0.0;
   for (std::size_t i = 0; i < n; ++i) {
     double yi = std::abs(scalar_value(x0[i]));
@@ -305,19 +264,9 @@ inline double estimate_initial_dt(
 
   // --- 6. hlb floor ---
   //
-  // We deliberately do NOT clamp h up to HLB_FACTOR·eps·max(|t0|,|t_final|).
-  // CVODES's cvHin uses that quantity only as a seed for its iterative
-  // Hin refinement; the final h returned by cvHin can be far smaller (and
-  // on very stiff AD-extended systems, must be: the forward-mode derivative
-  // components of f can be many orders of magnitude larger than the state
-  // components, which pushes the HNW h1 estimate well below any
-  // t_final-proportional floor).  Clamping h up to hlb here caused
-  // issue #2 in debugFiles/repro_return_code.R: the BDF error test was
-  // structurally impossible to pass at h ≈ hlb, the controller reduced h
-  // to the HMIN guard, and every subsequent try_step returned fail.
-  //
-  // We only enforce that the returned h is positive and representable
-  // relative to |t0| (`t0 + h > t0` in double).
+  // h is not clamped up to the CVODES seed HLB*eps*max(|t0|,|t_final|). That
+  // quantity only seeds cvHin's refinement, whose result can be far smaller,
+  // and on an AD-extended system it has to be. Only t0 + h > t0 is enforced.
 
   // --- 7. Combine ---
   double h = std::min({100.0 * h0, h1, hub});
@@ -364,34 +313,11 @@ template<class System>
 inline fd_ydd<System> make_fd_ydd(System sys) { return fd_ydd<System>(sys); }
 
 // =========================================================================================
-//  cppde_hin: faithful port of CVODES cvHin (sundials/src/cvodes/cvodes.c).
+//  cppde_hin: port of CVODES cvHin (sundials/src/cvodes/cvodes.c).
 //
-//  Used by multistep methods (bdf / adams). The port mirrors the
-//  sundials code path so the first integration step cppDE takes matches the
-//  one CVODES would take on the same problem.
-//
-//  Algorithm:
-//    1. tdiff = t_final - t0, sign = sgn(tdiff), tdist = |tdiff|,
-//       tround = eps * max(|t0|, |t_final|).
-//       If tdist < 2*tround → degenerate; return a minimal signed tick.
-//    2. hlb = HLB_FACTOR * tround                                    (HLB = 100)
-//       f0  = f(t0, y0)
-//       hub = min( HUB_FACTOR*tdist,  1 / cvhub_max_ratio(f0, y0) )  (HUB = 0.1)
-//    3. If hub < hlb → return sign*hub (very short interval / huge rate).
-//    4. hg = sqrt(hlb * hub)  (geometric-mean seed)
-//    5. Iterative refinement (up to MAX_ITERS = 4):
-//         hgs     = hg*sign
-//         ydd_fd  = ( f(t0+hgs, y0+hgs*f0) - f0 ) / hgs
-//         yddnrm  = ||ydd_fd||_WRMS  (2-norm, ewt = 1/(atol+rtol*|y|))
-//         hnew    = sqrt(2/yddnrm) if yddnrm*hub^2 > 2 else sqrt(hg*hub)
-//         If hnew/hg in (0.5, 2.0)  → break
-//         If iter>=2 and hnew > hg  → hnew = hg, break
-//         Else hg = hnew, continue
-//    6. h0 = H_BIAS * hnew  (H_BIAS = 0.5), clamp into [hlb, hub], apply sign.
-//
-//  AD values: the WRMS norm sweeps derivative slices as if they were
-//  additional states (same convention as weighted_sup_norm above); this matches
-//  CVODES's behaviour when sensitivities share the state error test.
+//  Used by the multistep methods so that the first step cppDE takes is the one
+//  CVODES would take on the same problem. The refinement and its two bounds are
+//  in vignette("Methods"), "The first step". The WRMS norm sweeps AD components.
 // =========================================================================================
 
 template<class Value, class System>

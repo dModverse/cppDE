@@ -25,7 +25,7 @@ namespace cppde {
 namespace ad_lu {
 
 // ============================================================================
-//  extract_csc_values: csc_matrix<dual<Inner>> → csc_matrix<Inner>
+//  extract_csc_values: csc_matrix<dual<Inner>> to csc_matrix<Inner>
 //
 //  Copies the CSC structure (Ap, Ai) and extracts value part of Ax.
 // ============================================================================
@@ -55,8 +55,8 @@ extract_csc_values(const csc_matrix<AD>& W)
 // ============================================================================
 //  sparse_lu_solver<T>: Base case: T is a non-AD scalar
 //
-//  KLU → klu_lu_solver (preferred)
-//  otherwise      → compile error (KLU is now required for sparse)
+//  KLU: klu_lu_solver (preferred)
+//  otherwise: compile error (KLU is now required for sparse)
 // ============================================================================
 
 template<class T, class Enable = void>
@@ -119,22 +119,13 @@ private:
 #endif
 };
 
-// ============================================================================
-//  sparse_lu_solver<AD_T>: Recursive AD case (IFT peeling)
-//
-//  Same approach as dense: extract value part, factorize, propagate
-//  derivatives via IFT.  CSC structure is shared between levels.
-//
-//  Optimizations vs. naive implementation:
-//    1. Persistent m_W_val: CSC structure (Ap, Ai) is copied ONCE,
-//       subsequent factorize calls only update Ax values.
-//    2. Persistent m_W_stored: full AD matrix copied once, then only
-//       the Ax array is overwritten (Ap/Ai never change).
-//    3. Mutable solve buffers: m_b_val, m_rhs_all, m_col_buf are
-//       allocated once and reused across all solve() calls.
-//    4. Compile-time n_derivs: when N > 0, skip the O(nnz) scan
-//       over W_stored to determine the number of active derivatives.
-// ============================================================================
+  // ============================================================================
+  //  sparse_lu_solver<AD_T>: recursive AD case (IFT peeling)
+  //
+  //  As in the dense case: extract the value part, factorise, propagate the
+  //  derivatives through the IFT. The CSC structure is shared between levels and
+  //  copied once, and the solve buffers persist across calls.
+  // ============================================================================
 
 // Generic AD specialization for cppde::dual<Inner,N>.
 template<class AD_T>
@@ -179,17 +170,11 @@ public:
     adopt_structure(W);
 
     if constexpr (!is_ad<Inner>::value) {
-      // ============================================================
-      //  Inner = double: fused value extraction + dW pre-extraction
-      //
-      //  Extract scalar values and derivative components in a single
-      //  pass over W.Ax.  The derivative block m_dW_ax is laid out as
-      //  nnz × n_derivs (row-major per entry) so that the IFT matvec
-      //  can iterate over CSC entries with contiguous derivative
-      //  access per entry.
-      //
-      //  m_W_stored is NOT needed: eliminates nnz F-object copies.
-      // ============================================================
+  // ============================================================
+  //  Inner = double: values and derivative components come out of W.Ax in one
+  //  pass. The derivative block m_dW_ax is nnz by n_derivs, so the IFT matvec
+  //  reads each CSC entry's derivatives contiguously. m_W_stored is not needed.
+  // ============================================================
 
       // Determine n_derivs
       // Static width is claimed only when some entry of W is seeded; see
@@ -439,24 +424,17 @@ public:
 
 private:
 
-  // ================================================================
-  //  IFT sparse matvec: rhs_all -= dW · b_val
-  //
-  //  Inner = double:
-  //    Derivative components were pre-extracted into m_dW_ax in
-  //    factorize().  No dual<> objects touched: pure double arithmetic.
-  //    Layout: m_dW_ax[p * nd + j] = d(j) of the p-th CSC entry.
-  //
-  //  Inner = dual<...> (nested AD):
-  //    Single pass over m_W_stored (element-wise loop).
-  // ================================================================
+    // ================================================================
+    //  IFT sparse matvec: rhs_all -= dW * b_val.
+    //
+    //  For Inner = double the derivatives were pre-extracted in factorize(),
+    //  laid out as m_dW_ax[p * nd + j] for the p-th CSC entry, so this is plain
+    //  double arithmetic. A nested inner type takes one element-wise pass.
+    // ================================================================
 
-  // Batched IFT sparse matvec: per-column outer loop reusing the per-RHS
-  // sparse iteration. For the pre-extracted Inner=double path each batch
-  // column reads its own slice of m_b_val_batch and writes its slice of
-  // m_rhs_all_batch; the inner CSC pass is identical to the single-RHS
-  // version. Could be promoted to a sparse-csc * dense-rhs kernel later;
-  // for now the batched outer loop avoids the per-column buffer churn.
+    // Batched IFT sparse matvec: an outer loop over the batch columns, each
+    // reading its own slice of the batch buffers, with the same inner CSC pass
+    // as the single right-hand side.
   void ift_sparse_matvec_batch(int n, unsigned n_derivs, int nrhs) const
   {
     const std::size_t per_col = static_cast<std::size_t>(n) * n_derivs;

@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 ## =====================================================================
 ##  run-with-runbg.R -- run the benchmark on plain ssh hosts through
-##  dMod's runbg(), the scheduler-less sibling of run-on-cluster.R.
+##  dMod2's runbg(), the scheduler-less sibling of run-on-cluster.R.
 ##
 ##      Rscript benchmarks/run-with-runbg.R --dry-run
 ##      Rscript benchmarks/run-with-runbg.R --machines you@box --submit
@@ -46,7 +46,7 @@
 ##      `ssh_passwd` -- so key-based auth or a running agent is required,
 ##      including for `--machines localhost`.
 ##
-##  runbg's own `walltime` argument is not exposed here: in dMod 1.2.0 it
+##  runbg's own `walltime` argument is not exposed here: in dMod2 it
 ##  splices a second statement into the try() call and the generated
 ##  remote script no longer parses.  Bound the run with the tier and
 ##  --max-states instead.
@@ -54,8 +54,8 @@
 
 suppressPackageStartupMessages({
   library(cppDE)
-  if (!requireNamespace("dMod", quietly = TRUE))
-    stop("dMod is required for runbg submission")
+  if (!requireNamespace("dMod2", quietly = TRUE))
+    stop("dMod2 is required for runbg submission")
 })
 
 ROOT <- local({
@@ -128,7 +128,7 @@ while (i <= length(args)) {
 tf <- function(x) isTRUE(as.logical(x))
 
 if (tf(OPT$help)) {
-  cat("\nRun the cppDE benchmark on ssh-reachable hosts via dMod::runbg().\n\n")
+  cat("\nRun the cppDE benchmark on ssh-reachable hosts via dMod2::runbg().\n\n")
   cat(sprintf("  --%-14s [%s]\n", names(OPT), unlist(OPT)), sep = "")
   cat("\n  --dry-run    build and balance the shards locally, send nothing",
       "\n  --submit     probe the hosts, transfer and start the jobs",
@@ -423,7 +423,7 @@ preflight <- function(hosts) {
 }
 
 ## The control handles of an earlier submission, without re-sending it.
-runbg_handle <- function() dMod::runbg({ NULL }, machine = placement,
+runbg_handle <- function() dMod2::runbg({ NULL }, machine = placement,
                                        filename = OPT$jobname, recover = TRUE)
 
 
@@ -627,7 +627,7 @@ dir.create(JOBDIR, showWarnings = FALSE, recursive = TRUE)
 saveRDS(OPT[setdiff(names(OPT), FLAGS)], REC)
 
 setwd(STAGE)
-invisible(dMod::runbg(
+invisible(dMod2::runbg(
   {
     ## Runs on a host.  `.node` is this job's shard index, set by runbg
     ## after the workspace is loaded; `shards` and the benchmark

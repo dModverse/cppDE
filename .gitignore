@@ -55,3 +55,6 @@ dev/methods/*.synctex.gz
 
 # ---- Claude ----
 CLAUDE.md
+
+# Vignette copy made by configure for source-directory installs
+inst/doc/

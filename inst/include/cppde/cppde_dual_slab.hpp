@@ -40,15 +40,9 @@ namespace detail {
 // =============================================================================
 //  is_dynamic_dual<T>
 //
-//  True when T is cppde::dual<S, N> (any N >= 0) with S a non-AD scalar
-//  (i.e. the slab-eligible dual specs: both heap dual<S, 0> and static-N
-//  dual<S, N>). Nested duals (dual<dual<...>,...>) are intentionally
-//  excluded: deriv2 inner-tangent slabs would need per-outer-tangent
-//  buffers, which the current slab layout doesn't model.
-//
-//  Name is historical (originally only the dynamic-N path needed slabbing);
-//  after the static-N migration to pointer storage the predicate covers all
-//  non-nested dual specs uniformly.
+//  True for cppde::dual<S, N> with a non-AD scalar S, that is every dual the
+//  slab can back. A nested dual is excluded: its inner tangents would need one
+//  buffer per outer tangent, which this layout does not model.
 // =============================================================================
 
 template<class T>
@@ -59,13 +53,9 @@ struct is_dynamic_dual<cppde::dual<S, N>>
   : std::bool_constant<!std::is_class_v<S> || std::is_arithmetic_v<S>>
 {};
 
-// dual2nd<S, N>: enabled via a two-level slab specialisation below. The
-// nordsieck_block<dual2nd, K> specialisation owns three concatenated
-// blocks (outer dual<S,N> values + flat gradient / Hessian scalars) and
-// hands each slot's slab three pointers via the 6-arg prime_external
-// overload. The slab itself owns nothing in external mode; in own-storage
-// mode (used by stand-alone state vectors outside Nordsieck) the slab
-// allocates its own three buffers via prime().
+// dual2nd<S, N> is slab-backed through the two-level specialisation below. In
+// external mode nordsieck_block owns the storage and hands each slot its
+// pointers; in own-storage mode the slab allocates its blocks itself.
 template<class S, unsigned N>
 struct is_dynamic_dual<cppde::dual2nd<S, N>>
   : std::bool_constant<!std::is_class_v<S> || std::is_arithmetic_v<S>>
@@ -113,15 +103,9 @@ public:
     return static_cast<std::size_t>(n_rows_) * n_cols_;
   }
 
-  // Size the slab and rebind every v[i].tan_ into row i. Idempotent: if the
-  // (n_rows, n_cols) shape already matches, only the rebind step runs.
-  //
-  // For static-N duals (T::static_size > 0): pin n_cols to N. Stepper-side
-  // calls pass the *active* sensitivity width (n_sens, which under reparam
-  // or runtime-fixed can be < N), but each dual must always span N tangent
-  // slots: eager / ET loops bound on loop_size() = N, and reading past
-  // the slab row otherwise lands on the next row's tangents (UB). Inactive
-  // slots remain zero, contribute nothing to chain rules.
+  // Size the slab and rebind every v[i].tan_ into row i, idempotent when the
+  // shape already matches. A static-N dual pins n_cols to N even for a smaller
+  // active width: the loops run to N and a shorter row would read the next one.
   void prime(std::vector<T>& v, unsigned n_rows, unsigned n_cols) {
     assert(static_cast<unsigned>(v.size()) == n_rows
            && "tangent_slab::prime: vector size mismatch");
@@ -139,12 +123,9 @@ public:
     rebind_only(v);
   }
 
-  // External-storage prime: bind v[i].tan_ into [base, base + n_rows*n_cols)
-  // without allocating own storage. The caller is responsible for keeping
-  // the buffer alive for the slab's remaining lifetime. Used by
-  // nordsieck_block to give all K Nordsieck slots slices of one contiguous
-  // [(K, n, n_cols)] tangent buffer so that BLAS-3 (dtrmm, dger) can
-  // operate across the whole block.
+  // Bind v[i].tan_ into a caller-owned buffer instead of allocating; the owner
+  // keeps it alive. nordsieck_block uses this to give all K slots slices of one
+  // contiguous block, so BLAS-3 can work across the whole of it.
   void prime_external(std::vector<T>& v, inner_type* base,
                       unsigned n_rows, unsigned n_cols) {
     assert(static_cast<unsigned>(v.size()) == n_rows
@@ -200,21 +181,13 @@ public:
 };
 
 // =============================================================================
-//  tangent_slab specialisation for cppde::dual2nd<S, N>: two-block slab
+//  tangent_slab specialisation for cppde::dual2nd<S, N>: two blocks
 //
-//  dual2nd has nested storage. After the LU dual2nd dispatch (which reads
-//  gradient via first_order_view from the inline outer.tan_[k].x() slot),
-//  the redundant outer.val_.tan_ gradient copy is no longer needed. The
-//  slab now owns just two blocks:
+//     outer_storage_:  n_rows * N        dual<S, N>   (outer.tan_)
+//     hess_storage_:   n_rows * N * N    S            (Hessian rows)
 //
-//     outer_storage_:  n_rows * N            dual<S, N>     (outer.tan_)
-//     hess_storage_:   n_rows * N * N        S              (Hessian rows)
-//
-//  Per state i:
-//     v[i].base.tan_    -> outer_storage_ + i*N        (N dual<S,N>)
-//     outer_storage_[i*N + k].tan_ -> hess_storage_ + i*N*N + k*N
-//                                                      (N S, k-th Hessian row)
-// =============================================================================
+//  Per state i, v[i].base.tan_ points at outer_storage_ + i*N, and
+//  outer_storage_[i*N + k].tan_ at hess_storage_ + i*N*N + k*N.
 template<class S, unsigned N>
 class tangent_slab<cppde::dual2nd<S, N>, true> {
 public:
@@ -354,17 +327,9 @@ private:
 // =============================================================================
 //  Slab-aware AXPY / SCAL on std::vector<dual<S, 0>>.
 //
-//  When the slab is primed, the per-dual tangent buffers are slices of one
-//  contiguous [n_rows × n_cols] block. That lets the tangent half of the
-//  operation collapse into one BLAS call (daxpy / dscal) instead of n
-//  per-element ET evaluations whose MulOp.tangent path computes the
-//  symmetric `bv*at + av*bt` even when the scalar side has zero tangent.
-//
-//  For non-dynamic-dual T (double, static-N dual<T,N!=0>) these helpers
-//  forward to plain vec_axpy / vec_scale: the empty-stub slab is ignored.
-//  Callers can therefore pass `m_zn[j].m_v` + `m_zn_slab[j]` uniformly,
-//  regardless of whether the stepper was instantiated over double, dual,
-//  or nested dual.
+//  With the slab primed the tangent buffers are slices of one contiguous block,
+//  so the tangent half collapses into a single BLAS call instead of n
+//  expression evaluations. Without a slab these forward to vec_axpy / vec_scale.
 // =============================================================================
 
 // `with_hess = false` leaves the dual2nd Hessian layer untouched, for a
@@ -378,11 +343,9 @@ inline void vec_axpy_with_slab(
     bool with_hess = true)
 {
   if constexpr (detail::is_dual2nd<T>::value) {
-    // BLAS-3 hybrid: per-element scalar + inline d1 update, BLAS daxpy on
-    // hess block. arm_full ensures the dual2nd's outer storage depend_
-    // flags are restored after a possible base::operator=(scalar) reset.
-    // sync_d1_redundant call is dropped: the LU now reads gradient from
-    // inline_d1 via first_order_view, no val_tan_block sync required.
+    // BLAS-3 hybrid: scalar and inline d1 per element, one daxpy over the
+    // Hessian block. arm_full restores the outer depend_ flags, which a
+    // base::operator=(scalar) may have reset.
     using S_inner = typename detail::tangent_slab<T>::inner_type;
     const std::size_t n = y.size();
     if (y_slab.primed() && x_slab.primed()) {
@@ -455,14 +418,9 @@ inline void vec_axpy_with_slab(
   }
 }
 
-// Slab-aware vector zero:
-//   y.values = 0;  y.tangents (slab block) = 0
-// Crucially this does NOT call `y[i] = T(0)` on the dual elements: that
-// would invoke dual<T,0>::operator=(const U&), which sets tan_ = nullptr
-// and size_ = 0, undoing the slab binding. Using vec_zero on a slab-bound
-// vector therefore breaks the next vec_axpy_with_slab call. The
-// fallback path (slab unprimed) still uses dual<T,0>::operator*=(0)
-// to preserve any pre-allocated tangent buffers.
+// Slab-aware vector zero. It must not assign T(0) to the elements: that runs
+// dual<T,0>::operator=(const U&), which drops tan_ and the slab binding with
+// it. Without a slab it multiplies by zero, keeping any allocated buffer.
 template<class T>
 inline void vec_zero_with_slab(
     std::vector<T>& y, detail::tangent_slab<T>& y_slab)

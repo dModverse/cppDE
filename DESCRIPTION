@@ -1,6 +1,6 @@
 Package: cppDE
 Title: Automated 'C++' Code Generation for ODE Integration with Sensitivity Analysis
-Version: 0.9.1
+Version: 0.9.2
 Authors@R: c(
     person("Simon", "Beyer", , "simon.beyer@fdm.uni-freiburg.de", role = c("aut", "cre")),
     person("Lawrence Livermore National Security", role = "cph",
@@ -21,7 +21,7 @@ Description: Generates, compiles, and runs 'C++' solvers for systems of ordinary
     in-tree dual numbers. Supports time-based and root-triggered events,
     symbolic Jacobian generation, and sparse matrix factorization for large
     systems.
-Language: en-US
+Language: en-GB
 License: MIT + file LICENSE
 SystemRequirements: C++17; Python (>= 3.8) with SymPy. Two further
     features are gated on external libraries that ./configure detects at

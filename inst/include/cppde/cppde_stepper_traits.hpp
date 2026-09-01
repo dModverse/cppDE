@@ -23,8 +23,8 @@
  Distributed under the Boost Software License, Version 1.0.
  */
 
-#ifndef CPPDE_STEPPER_TRAITS_HPP_INCLUDED
-#define CPPDE_STEPPER_TRAITS_HPP_INCLUDED
+#ifndef CPPDE_STEPPER_TRAITS_HPP
+#define CPPDE_STEPPER_TRAITS_HPP
 
 #include <type_traits>
 
@@ -62,10 +62,8 @@ stepper_traits<Stepper>::needs_restart_after_event;
 // ============================================================================
 //  Multistepper detection via tag
 //
-//  The cppde::multistepper class declares a nested tag typedef
-//    typedef void is_multistepper_tag;
-//  which we detect by SFINAE.  Covers all multistepper instantiations
-//  (bdf, adams).
+//  cppde::multistepper declares a nested is_multistepper_tag typedef, detected
+//  here by SFINAE, which covers both bdf and adams.
 // ============================================================================
 
 // SFINAE detector for the multistepper tag
@@ -89,15 +87,9 @@ struct stepper_traits<Stepper,
 // ============================================================================
 //  Trait propagation through wrapper layers
 //
-//  Controllers and dense-output wrappers typically store the inner stepper
-//  as a member.  We propagate traits upward so that EventEngine can query
-//  traits on the outermost wrapper without knowing the nesting depth.
-//
-//  Convention: any wrapper that exposes a `stepper_type` typedef referring
-//  to its inner stepper inherits that stepper's traits, UNLESS it
-//  explicitly specialises stepper_traits itself.
-//
-//  We detect the `stepper_type` typedef via SFINAE and forward traits.
+//  A wrapper exposing a stepper_type typedef inherits that stepper's traits
+//  unless it specialises stepper_traits itself, so a caller can query the
+//  outermost wrapper without knowing the nesting depth.
 // ============================================================================
 
 // SFINAE detector for nested stepper_type
@@ -120,12 +112,9 @@ struct inner_has_multistepper_tag<T,
                            !std::is_same<T, typename T::stepper_type>::value>>  // guard against self-referential stepper_type
                            : has_multistepper_tag<typename T::stepper_type> {};
 
-// Recursive version: chase through multiple wrapper layers
-// (e.g. dense_output → controller → stepper)
-//
-// Guard: stop recursion when T::stepper_type is the same type as T
-// (some Boost steppers like rosenbrock4 define a self-referential
-// stepper_type typedef, which would cause infinite template recursion).
+// Recursive version, chasing through several wrapper layers. The recursion
+// stops when T::stepper_type is T itself, which some Boost steppers declare and
+// which would otherwise not terminate.
 template<class T, class = void>
 struct deep_has_multistepper_tag : has_multistepper_tag<T> {};
 
@@ -153,4 +142,4 @@ struct stepper_traits<Wrapper,
 
 } // namespace cppde
 
-#endif // CPPDE_STEPPER_TRAITS_HPP_INCLUDED
+#endif // CPPDE_STEPPER_TRAITS_HPP

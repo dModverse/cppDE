@@ -110,7 +110,7 @@ write_run_readme <- function(df, outdir, info = list()) {
                                 FUN = stats::median), pl, by = "problem")
     if (!nrow(m)) return(NULL)
     m <- m[order(-m$time_ms / m$plain), ]
-    c("", "**Second order** — cppDE only, CVODES has no second-order",
+    c("", "**Second order**: cppDE only, CVODES has no second-order",
       "sensitivities, so this is a cost, not a comparison:", "",
       "| problem | M | plain [ms] | Hessian [ms] | factor |",
       "|---|---:|---:|---:|---:|",
@@ -145,7 +145,7 @@ write_run_readme <- function(df, outdir, info = list()) {
   cores <- g("cores", unique(df$cores)[1L])
 
   md <- c(
-    sprintf("# Benchmark run — `%s`", g("tag", basename(outdir))), "",
+    sprintf("# Benchmark run `%s`", g("tag", basename(outdir))), "",
     sprintf("cppDE against SUNDIALS CVODE(S). %d rows, %d failed cells.",
             nrow(df), sum(!df$ok)),
     if (!is.null(cores) && !is.na(cores) && cores > 1L)
@@ -168,7 +168,7 @@ write_run_readme <- function(df, outdir, info = list()) {
     "", "## Problems", "", prob_tbl,
     cov_tbl,
     "", "## Skipped", "",
-    if (length(skipped)) sprintf("- `%s` — %s", names(skipped), unlist(skipped))
+    if (length(skipped)) sprintf("- `%s`: %s", names(skipped), unlist(skipped))
     else "_none_",
     "", "## Figures", "", "| file | shows |", "|---|---|",
     sprintf("| %s |", c(if (any(pinned_col(df) == "auto")) FIGURE_LEGEND,
