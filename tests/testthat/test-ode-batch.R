@@ -1,7 +1,6 @@
-# solveODEBatch(): results must match the serial path exactly, not merely
-# closely -- each condition runs the same steps on thread-local state.
-# cores is pinned to 2 throughout: testthat runs files in parallel processes,
-# so letting each grab detectCores() would oversubscribe badly.
+# solveODEBatch(): results match the serial path exactly, not merely closely.
+# cores is pinned to 2 throughout, because testthat runs files in parallel
+# processes and detectCores() per file would oversubscribe.
 
 skip_on_cran()
 
@@ -321,10 +320,9 @@ test_that("a batch with events matches the serial path", {
 
 
 test_that("a time event takes the preallocated path when it is on the grid", {
-  # A time event does not change n_out as long as its time is a requested
-  # output time, so the batch can size the results up front. When it is not,
-  # the extra row makes the prediction wrong and the sink must decline rather
-  # than write out of bounds -- both paths have to match the serial solve.
+  # A time event on a requested output time leaves n_out alone, so the batch can
+  # size its results up front. Off the grid the extra row makes that prediction
+  # wrong and the sink declines; both paths have to match the serial solve.
   eqns <- c(A = "-k1 * A")
   evt  <- data.frame(var = "A", time = "t_e", value = "dose", method = "add",
                      root = NA, stringsAsFactors = FALSE)
@@ -394,10 +392,9 @@ test_that("the reported thread count is the one actually used", {
 
 test_that("both backends put an event time into the output", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
-  # An event fires whether or not its time was requested, and the time it fires
-  # at becomes an output row carrying the post-event state. The native and the
-  # CVODE backend have to agree on that grid, otherwise the same model returns
-  # different rows depending on `backend`.
+  # An event fires whether or not its time was requested, and that time becomes
+  # an output row carrying the post-event state. Both backends have to agree on
+  # the grid, or the same model returns different rows per `backend`.
   eqns <- c(A = "-k1 * A")
   evt  <- data.frame(var = "A", time = "t_e", value = "dose", method = "add",
                      root = NA, stringsAsFactors = FALSE)

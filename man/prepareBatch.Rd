@@ -98,8 +98,8 @@ Default \code{1e-6}.}
 An object of class \code{"cppDEbatch"} for \code{\link[=solveBatch]{solveBatch()}}.
 }
 \description{
-Validates and marshals a set of conditions once, so that repeated solves --
-an optimiser evaluating the same model at new parameters -- only pay for the
+Validates and marshals a set of conditions once, so that repeated solves
+(an optimiser evaluating the same model at new parameters) only pay for the
 numbers that actually changed. \code{\link[=solveODEBatch]{solveODEBatch()}} redoes the full argument
 marshalling on every call, which caps how well the batch scales.
 }

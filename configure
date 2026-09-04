@@ -45,7 +45,7 @@ log() { echo "configure: $*"; }
 # Catching the signal and exiting non-zero turns an abort into an
 # ordinary configure failure, which R then handles itself: it removes
 # the staged installation and the lock. Nothing here touches the lock
-# directory -- it is R's workspace, and deleting it breaks the very
+# directory, it is R's workspace, and deleting it breaks the very
 # cleanup that has to run.
 # ---------------------------------------------------------------------
 # Signal set and behaviour follow the autoconf boilerplate
@@ -567,7 +567,7 @@ fi
 # Verify by *running* the probe, not only by linking it: which
 # libsundials the loader ends up picking is not visible to a link check.
 #
-# 126/127 -- noexec temp directory, sandboxed build, cross-compile --
+# 126/127, noexec temp directory, sandboxed build, cross-compile,
 # counts as "could not check" and is passed over.  A probe that runs and
 # fails is reported but leaves the backend enabled.
 # ---------------------------------------------------------------------
@@ -839,8 +839,8 @@ fi
 
 # ---------------------------------------------------------------------
 # OpenMP.  Optional: without it solveODEBatch() still works, just serially.
-# The flag being non-empty is not enough -- macOS ships -Xclang -fopenmp
-# but often no libomp -- so link a real binary.
+# The flag being non-empty is not enough, macOS ships -Xclang -fopenmp
+# but often no libomp, so link a real binary.
 # ---------------------------------------------------------------------
 openmp_available=0
 openmp_cxxflags=""

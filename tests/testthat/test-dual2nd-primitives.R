@@ -1,21 +1,14 @@
-# Unit tests for cppde::dual2nd math primitives.
-#
-# Strategy: build a tiny funCpp model exercising one primitive at a time, run
-# in derivMode = "dual" (uses dual2nd) and "symbolic" (uses SymPy-derived
-# closed-form expressions) and assert exact agreement on value, gradient and
-# Hessian. The two modes are independent code paths, so any disagreement
-# would be a bug in one of them; the symbolic path is the trusted oracle.
-#
-# Each test compiles fresh C++; gated like the rest of the suite.
+# Unit tests for cppde::dual2nd math primitives. One primitive per model,
+# asserted equal between derivMode "dual" and "symbolic": independent code
+# paths, with the symbolic one as the trusted oracle.
 
 skip_on_cran()
 
 library(cppDE)
 
-# Helper: turn an expression into a model name. Operators are spelled out
-# first -- stripping them to "_" would map a + b, a - b, a * b, a / b and a^b
-# onto the same name, and unique_modelname() would then warn its way through
-# a_b_2, a_b_3, ... rather than compiling distinct models.
+# Helper: turn an expression into a model name. Operators are spelled out, so
+# a + b, a - b, a * b, a / b and a^b do not collapse onto one name and make
+# unique_modelname() warn its way through a_b_2, a_b_3.
 name_of <- function(expr) {
   s <- paste(expr, collapse = "_")
   ops <- c("+" = "_add_", "-" = "_sub_", "*" = "_mul_",

@@ -30,21 +30,11 @@ library(scales)
 
 # ============================================================================
 # Benchmark: Dense vs Sparse for LOW-sparsity systems
-#
-# Two models with tunable Jacobian density:
-#
-# 1) CT-RNN (Continuous-Time Recurrent Neural Network)
-#    dx_i/dt = -alpha_i * x_i + sum_j W_ij * tanh(x_j) + b_i
-#    N states, Jacobian density = density of W
-#    Stiffness via alpha spread
-#
-# 2) Coupled Lorenz oscillators
-#    dx_i/dt = sigma*(y_i - x_i) + c * sum_j G_ij * (x_j - x_i)
-#    dy_i/dt = x_i*(rho - z_i) - y_i
-#    dz_i/dt = x_i*y_i - beta*z_i
-#    3*N states, Jacobian density controlled by coupling graph G
-#    Internally nichtlinear (bilinear terms x*z, x*y)
 # ============================================================================
+
+# Two models with tunable Jacobian density: a continuous-time recurrent neural
+# network, where the density of W sets the Jacobian density and the alpha
+# spread sets stiffness, and coupled Lorenz oscillators with bilinear terms.
 
 # --- Parallelization ---
 n_cores <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = "1"))
@@ -60,11 +50,10 @@ cat(sprintf("Microbenchmark repetitions: %d\n", N_REPS))
 # ==========================================================================
 
 # --- CT-RNN ---
-# N states, density p in [0,1] controls fraction of nonzero W_ij
-# Each W_ij != 0 creates a Jacobian entry: dfi/dxj = W_ij * sech^2(x_j)
-# Sparsity = 1 - (N + nnz(W)) / N^2   (diagonal always present)
-# Parameters: alpha_i, b_i (per neuron), plus W_ij entries as parameters
-# For simplicity: W_ij are hardcoded constants, only alpha_i, b_i are parameters
+
+# N states, density p sets the fraction of nonzero W_ij, each of which is one
+# Jacobian entry; the diagonal is always present. W_ij are hardcoded constants,
+# only alpha_i and b_i are parameters.
 
 build_ctrnn <- function(N, density) {
   x_names <- paste0("x", seq_len(N))
@@ -274,7 +263,7 @@ lorenz_N_values <- if (n_cores > 1) {
   c(2, 5, 10, 20, 50, 100, 200)
 }
 
-# Density values -- the key parameter for LOW sparsity
+# Density values, the key parameter for LOW sparsity
 density_values <- c(0.1, 0.3, 0.5, 0.7, 0.9)
 
 # Stiffness
@@ -523,7 +512,7 @@ cat("Results saved to benchmark_dense_results.csv\n")
 
 
 # ==========================================================================
-#  Visualization -- pseudolog scale to avoid NaN warnings
+#  Visualization, pseudolog scale to avoid NaN warnings
 # ==========================================================================
 
 # Pseudolog: handles values near zero and negative without NaN
@@ -569,7 +558,7 @@ df_wide <- df_ok %>%
 
 
 # -------------------------------------------------------------------------
-#  Plot 1: Heatmap -- ratio by n_states x density (not sparsity!)
+#  Plot 1: Heatmap, ratio by n_states x density (not sparsity!)
 # -------------------------------------------------------------------------
 
 heat_data <- df_wide %>%

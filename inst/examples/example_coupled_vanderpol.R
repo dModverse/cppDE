@@ -12,22 +12,14 @@ library(tidyr)
 library(patchwork)
 
 # ============================================================================
-# Coupled Van der Pol Oscillators -- configurable coupling reach
-#
-#   dx_i/dt = v_i
-#   dv_i/dt = mu_i*(1 - x_i^2)*v_i - omega_i^2*x_i
-#             + kappa * sum_{j in neighbors(i)} (x_j - x_i)
-#
-#   - "neighbors" controlled by `reach` parameter:
-#       reach = 1  => nearest-neighbor coupling only
-#       reach = k  => couple to k neighbors on each side
-#       reach = N  => all-to-all coupling (dense Jacobian)
-#
-#   Each oscillator has its own mu_i, omega_i.
-#   => N oscillators, 2*N states, 2*N + 1 parameters (mu_i, omega_i, kappa)
-#
-# Comparison: cOde + lsoda (with sensitivitiesSymb) vs cppDE sparse (deriv)
+# Coupled Van der Pol Oscillators, configurable coupling reach
 # ============================================================================
+
+# `reach` sets how many neighbours on each side an oscillator couples to, from
+# nearest-neighbour to all-to-all, which is what moves the Jacobian from banded
+# to dense. N oscillators give 2N states and 2N + 1 parameters.
+
+# Comparison: cOde + lsoda (with sensitivitiesSymb) against cppDE sparse.
 
 
 # ===== CONFIGURATION =====
@@ -145,7 +137,7 @@ t_compile_code_sens <- system.time({
 })
 cat(sprintf("  cOde compile (with sens): %.1f s\n", t_compile_code_sens["elapsed"]))
 
-# cppDE: NO sensitivities -- baselines
+# cppDE: NO sensitivities, baselines
 cat("  Compiling cppDE sparse model (deriv = FALSE)...\n")
 t_compile_nosens_sparse <- system.time({
   funcpp_nosens_sparse <- cppODE(rhs, outdir = getwd(), method = "bdf",
@@ -222,7 +214,7 @@ times <- seq(0, 10, length.out = 300)
 
 
 # ============================================================================
-# Benchmark 0: No sensitivities -- pure ODE solve (baseline)
+# Benchmark 0: No sensitivities, pure ODE solve (baseline)
 # ============================================================================
 
 cat("\n\n========== BASELINE (no sensitivities) ==========\n\n")
@@ -368,7 +360,7 @@ if (length(df_plots) > 0) {
   all_x1 <- bind_rows(df_plots)
   p1 <- ggplot(all_x1, aes(x = time, y = x1, color = solver, linetype = solver)) +
     geom_line(alpha = 0.8, linewidth = 0.6) +
-    labs(title = "x1(t) -- state trajectory", y = "x1", x = "time") +
+    labs(title = "x1(t), state trajectory", y = "x1", x = "time") +
     theme_minimal(base_size = 11) +
     theme(legend.position = "bottom", legend.title = element_blank())
 } else {

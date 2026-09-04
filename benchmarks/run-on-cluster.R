@@ -1,37 +1,23 @@
 #!/usr/bin/env Rscript
+
 ## =====================================================================
-##  run-on-cluster.R -- submit the benchmark to a SLURM cluster (helix)
-##  through dMod2's distributedComputing().
-##
-##      Rscript benchmarks/run-on-cluster.R --dry-run          # check locally
+##  run-on-cluster.R: submit the benchmark to a SLURM cluster via dMod2.
+## =====================================================================
+
+##      Rscript benchmarks/run-on-cluster.R --dry-run
 ##      Rscript benchmarks/run-on-cluster.R --machine you@helix --submit
 ##      Rscript benchmarks/run-on-cluster.R --collect --jobname cppde_full
-##
-##  How the work is split
-##  ---------------------
-##  The problems are parsed *locally* and travel to the cluster inside
-##  the transferred workspace, so the compute nodes need neither the
-##  PEtab collection nor this repository -- only cppDE (with SUNDIALS
-##  and KLU) installed for the R that `module load math/R` provides, and
-##  a C++ compiler.  Each SLURM array task gets one shard of the problem
-##  list and returns its rows; the shards are merged here.
-##
-##  What this does NOT fix
-##  ----------------------
-##  A benchmark measures wall-clock time, and array tasks land on
-##  whatever nodes SLURM has free.  Consequently:
-##
-##    * ratios (cppDE vs CVODE) stay valid -- both solvers of a cell run
-##      in the same task on the same node;
-##    * absolute milliseconds are comparable *within* a shard only,
-##      unless the partition is hardware-homogeneous and tasks got whole
-##      nodes.  Every returned row therefore carries the node name and
-##      CPU model so this can be checked afterwards rather than assumed.
-##
-##  Request whole nodes (`--cores` = the node's core count) if the
-##  absolute numbers matter; otherwise a co-tenant job will show up in
-##  them.
-## =====================================================================
+
+##  The problems are parsed locally and travel inside the transferred workspace,
+##  so a compute node needs only cppDE and a C++ compiler. Each array task takes
+##  one shard of the problem list and returns its rows, merged here.
+
+##  Array tasks land on whatever nodes SLURM has free, so ratios stay valid,
+##  both solvers of a cell running in one task, while absolute milliseconds are
+##  comparable within a shard only. Every row carries the node name and CPU.
+
+##  Request whole nodes (`--cores` = the core count) if the absolute numbers
+##  matter; otherwise a co-tenant job shows up in them.
 
 suppressPackageStartupMessages({
   library(cppDE)
@@ -72,11 +58,9 @@ OPT <- list(
   `sparse-sweep` = "TRUE",
   `max-density` = "0.25",
   `min-sweep-states` = "8",
-  ## Memory guards (R/harness.R).  SLURM already reserves the node's
-  ## memory, so these are a second line rather than the only one: what
-  ## they buy here is that a model too large for the allocation fails to
-  ## build and is skipped, instead of the whole task being cancelled for
-  ## exceeding it.
+  ## Memory guards (R/harness.R) as a second line: SLURM already reserves the
+  ## node's memory, so what these buy is that a model too large for the allocation
+  ## fails to build and is skipped rather than the whole task cancelled.
   `compile-slots` = "",           # "" = min(bench-cores, 4); 0 disables
   `max-compile-gb` = "8",
   `max-worker-gb` = "",           # needs the `unix` package on the nodes
@@ -118,14 +102,12 @@ n_shards <- as.integer(OPT$shards)
 cores    <- as.integer(OPT$cores)          # SLURM allocation
 bench_cores <- as.integer(OPT$`bench-cores`)
 
-## Requesting the whole node but running fewer workers is deliberate.
-## Booking all 64 cores keeps co-tenants off the node, which is what
-## makes a wall-clock measurement mean anything; running only a dozen
-## workers keeps the job inside the node's memory, because generating
-## and compiling a large model peaks in the gigabytes -- a 124-state
-## model drove the local R process to 7.4 GB.  A full node at 2 GB per
-## core holds ~128 GB, so a dozen workers is the right order and 64
-## would not be.
+## Requesting the whole node but running fewer workers is deliberate: booking
+## every core keeps co-tenants off, which is what makes a wall-clock number mean
+## anything, while a dozen workers keep the job inside the node's memory.
+
+## Generating and compiling a large model peaks in the gigabytes, so a full node
+## at 2 GB per core holds about a dozen of them, not sixty-four.
 if (bench_cores > cores) stop("--bench-cores cannot exceed --cores")
 mem_per_worker <- cores * as.numeric(OPT$`mem-per-core`) / bench_cores
 if (mem_per_worker < 6)
@@ -216,10 +198,9 @@ if (tf(OPT$collect)) {
 TIER <- BENCH_TIERS[[OPT$tier]]
 if (is.null(TIER)) stop("unknown --tier '", OPT$tier, "'")
 
-## Same rule as run-benchmarks.R: an explicit --tol wins, otherwise the
-## tier decides.  Without this the cluster run would sweep a different
-## tolerance set than the identical local command, and the two would not
-## be comparable.
+## Same rule as run-benchmarks.R: an explicit --tol wins, otherwise the tier
+## decides. Without it the cluster run would sweep a different tolerance set
+## than the identical local command and the two would not be comparable.
 tol_name <- if ("tol" %in% SET) OPT$tol else TIER$tol
 tolerances <- BENCH_TOLSETS[[tol_name]]
 if (is.null(tolerances)) stop("unknown --tol '", tol_name, "'")
@@ -259,11 +240,11 @@ cat(sprintf("equivalent local run:\n  Rscript benchmarks/run-benchmarks.R --tier
             OPT$tier, OPT$modes, bench_cores))
 
 if (!tf(OPT$submit)) {
-  cat("\nDry run -- nothing submitted.\n")
+  cat("\nDry run, nothing submitted.\n")
   cat("Before submitting, verify on the cluster:\n",
       " 1. cppDE installs and loads for `module load math/R`\n",
       " 2. cppDE:::cvodeConfig$available is TRUE there (CVODE backend)\n",
-      " 3. a C++ compiler is on PATH on the compute nodes -- the benchmark\n",
+      " 3. a C++ compiler is on PATH on the compute nodes, the benchmark\n",
       "    generates and compiles C++ at run time\n",
       " 4. $TMPDIR is node-local and writable; that is where models are built\n\n",
       "Then re-run with --machine user@host --submit\n", sep = "")
@@ -289,23 +270,20 @@ cat(sprintf("\nsubmitting '%s' to %s\n  partition %s, %d cores allocated, %d wor
 
 job <- dMod2::distributedComputing(
   {
-    ## Runs on a compute node.  `var_1` is this task's shard index; the
-    ## benchmark functions and `shards` arrive in the workspace.
-    ##
-    ## The workspace carries function *objects*, not attached packages,
-    ## so cppDE has to be loaded here -- without this every model fails
-    ## with "could not find function cppDE" and the shard returns
-    ## nothing.
+    ## Runs on a compute node. `var_1` is this task's shard index; the benchmark
+    ## functions and `shards` arrive in the workspace.
+
+    ## The workspace carries function objects, not attached packages, so cppDE has
+    ## to be loaded here or every model fails and the shard returns nothing.
     library(cppDE)
     stopifnot(isTRUE(cppDE:::cvodeConfig$available))
     Sys.setenv(OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1")
     builddir <- file.path(tempdir(), paste0("cppde_bench_", var_1))
     dir.create(builddir, showWarnings = FALSE, recursive = TRUE)
 
-    ## Memory guards, before the fork so the workers inherit them.  The
-    ## Makevars goes under builddir, which is $TMPDIR and node-local --
-    ## on a cluster with a shared home that is the difference between one
-    ## file per task and every task fighting over the same one.
+    ## Memory guards, before the fork so the workers inherit them. The Makevars goes
+    ## under builddir, which is $TMPDIR and node-local: on a cluster with a shared
+    ## home that is one file per task rather than every task fighting over one.
     bench_limit_compiler(max_compile_gb, dir = builddir)
     if (max_worker_gb > 0 && !isTRUE(bench_limit_process(max_worker_gb)))
       message("note: could not set a per-worker memory limit on ",

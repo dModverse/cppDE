@@ -1,11 +1,10 @@
 #!/usr/bin/env Rscript
-# Local R CMD check that mimics the GitHub Actions r-lib/actions/check-r-package
-# step (build_args + --as-cran). Aborts on warnings, not just on errors.
-#
-# Requirements:
-#   * vignettes/Methods.pdf exists (otherwise run dev/render-methods.R first)
-#   * ghostscript optional: without it --compact-vignettes=gs+qpdf simply
-#     skips compaction instead of failing.
+
+# Local R CMD check mimicking the GitHub Actions check-r-package step
+# (build_args + --as-cran). Aborts on warnings, not just on errors.
+
+# Needs vignettes/Methods.pdf (else run dev/render-methods.R first). Without
+# ghostscript, --compact-vignettes=gs+qpdf skips compaction instead of failing.
 
 # On Windows without pandoc on PATH: try the usual RStudio bundle locations.
 if (!nzchar(Sys.which("pandoc")) && !nzchar(Sys.getenv("RSTUDIO_PANDOC"))) {
@@ -21,11 +20,9 @@ if (!nzchar(Sys.which("pandoc")) && !nzchar(Sys.getenv("RSTUDIO_PANDOC"))) {
   }
 }
 
-# Tests run in parallel (Config/testthat/parallel in DESCRIPTION). testthat
-# uses min(TESTTHAT_CPUS, number of test files) workers, so this is an upper
-# bound, not a request: with 6 test files at most 6 processes ever run. Each
-# worker shells out to a C++ compiler per model, so the ceiling is really the
-# slowest single test file.
+# Tests run in parallel (Config/testthat/parallel in DESCRIPTION). testthat uses
+# min(TESTTHAT_CPUS, number of test files) workers, so this is an upper bound.
+# Each worker shells out to a compiler, so the ceiling is the slowest file.
 if (!nzchar(Sys.getenv("TESTTHAT_CPUS"))) {
   Sys.setenv(TESTTHAT_CPUS = max(1L, parallel::detectCores() - 2L))
 }

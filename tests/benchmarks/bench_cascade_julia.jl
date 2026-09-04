@@ -9,7 +9,7 @@
 # ForwardDiff.jacobian over solve. Uses ForwardDiff's default chunk
 # size (= 12 for 42 inputs, i.e. 4 passes with Dual{Float64,12});
 # larger chunks segfault on Julia 1.12. This is forward AD over the
-# solver itself -- conceptually the same scheme as cppDE's "dual"
+# solver itself, conceptually the same scheme as cppDE's "dual"
 # backend, just split across multiple sweeps instead of one.
 #
 # Per-solver timing stats are written to CSV so the R driver can fold
@@ -85,7 +85,7 @@ const param_names = ["L","kon","koff","kint","ksyn_R",
                      "ktx_i","kdeg_mRNA_i","ktl_i","kdeg_P_i"]
 
 # Sensitivity variable names: theta = [u0_init...; params...] (matches cOde
-# sensitivitiesSymb convention -- initial-state sens named by state, param sens
+# sensitivitiesSymb convention, initial-state sens named by state, param sens
 # named by parameter).
 const sens_var_names = vcat(state_names, param_names)
 
@@ -115,7 +115,7 @@ prob_base = ODEProblem(cascade!, u0, tspan, p_)
 # partial, recursively unwrapping nested Duals. The default
 # ODE_DEFAULT_NORM uses only the primal of each Dual, so the step
 # controller would ignore tangent error. Earlier versions of this
-# script used an unscaled inf-norm -- effective at making sens
+# script used an unscaled inf-norm, effective at making sens
 # components controlled, but not tolerance-conformant: a large sens
 # magnitude would force much tighter steps than the user asked for.
 #
@@ -131,7 +131,7 @@ prob_base = ODEProblem(cascade!, u0, tspan, p_)
 #
 # Recursion is required because implicit solvers (Rodas4, QNDF) wrap
 # the outer Dual{Tag_out, Float64, N} in their own Dual{Tag_in, ...}
-# during Newton iteration -- so we have to descend through ALL layers
+# during Newton iteration, so we have to descend through ALL layers
 # to get a real scalar back. Returning a non-Float64 (e.g. an outer
 # Dual) breaks dt assignment.
 #
@@ -237,7 +237,7 @@ open(out_sol, "w") do io2
     cols = String["time"]
     append!(cols, state_names)
     if calcSens
-        # cOde convention: outer(state_names, sens_var_names, sep = ".") -- state
+        # cOde convention: outer(state_names, sens_var_names, sep = "."), state
         # varies fastest within each sens-var block. Match that here.
         for k in 1:N_THETA
             for j in 1:N_STATES

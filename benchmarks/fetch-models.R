@@ -1,15 +1,14 @@
 #!/usr/bin/env Rscript
+
 ## =====================================================================
-##  fetch-models.R -- download (or update) the PEtab benchmark collection.
-##
-##  Hass et al. (2019), "Benchmark problems for dynamic modeling of
-##  intracellular processes", Bioinformatics 35(17):3073-3082.
+##  fetch-models.R: download (or update) the PEtab benchmark collection.
+## =====================================================================
+
+##  Hass et al. (2019), Bioinformatics 35(17):3073-3082.
 ##  https://doi.org/10.1093/bioinformatics/btz020
-##
-##  The collection is fetched into benchmarks/cache/petab, which is not
-##  tracked by git -- the models stay under their own licence and are
-##  never vendored into this repository.
-## =====================================================================
+
+##  Fetched into benchmarks/cache/petab, which git does not track: the models
+##  stay under their own licence and are never vendored into this repository.
 
 ROOT <- local({
   a <- commandArgs(trailingOnly = FALSE)

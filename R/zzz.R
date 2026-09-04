@@ -54,11 +54,9 @@ cvodeConfig <- new.env(parent = emptyenv())
     }
   }
 
-  # On Windows, the SUNDIALS / SuiteSparse DLLs picked up from the
-  # Rtools ucrt64 sysroot live outside R's default DLL search path.
-  # Prepend the recorded bin/ directory to PATH so dyn.load() of the
-  # compiled solver can resolve libsundials_*.dll / libklu.dll etc.
-  # No-op on non-Windows or when configure.win didn't populate it.
+  # The SUNDIALS / SuiteSparse DLLs from the Rtools ucrt64 sysroot live outside
+  # R's default DLL search path, so the recorded bin/ goes on PATH for dyn.load().
+  # A no-op off Windows, or when configure.win populated nothing.
   if (.Platform$OS.type == "windows" && nzchar(cvodeConfig$runtime_dll_path)) {
     dll_path  <- gsub("/", "\\\\", cvodeConfig$runtime_dll_path)
     cur_path  <- Sys.getenv("PATH")

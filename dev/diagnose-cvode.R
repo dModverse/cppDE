@@ -1,17 +1,12 @@
 ## =====================================================================
-##  diagnose-cvode.R -- why does the CVODE backend fail on *this* host?
-##
-##  Run it on the machine in question, over ssh and with the same R that
-##  a runbg job would get:
-##
-##      ssh <host> 'R --vanilla --no-echo' < dev/diagnose-cvode.R
-##
-##  It prints everything static first and attempts a solve last, because
-##  some failures (an MPI abort, a segfault in a linked library) kill the
-##  process rather than raise an R condition: if the output stops before
-##  the last section, the solve took the process down with it, and that
-##  is itself the answer.
+##  diagnose-cvode.R: why does the CVODE backend fail on *this* host?
 ## =====================================================================
+
+##      ssh <host> 'R --vanilla --no-echo' < dev/diagnose-cvode.R
+
+##  Everything static prints first and the solve is attempted last, because an
+##  MPI abort or a segfault in a linked library kills the process rather than
+##  raising a condition: output stopping short is itself the answer.
 
 hr <- function(s) cat("\n== ", s, " ", strrep("=", max(0, 60 - nchar(s))), "\n", sep = "")
 kv <- function(k, v) cat(sprintf("  %-22s %s\n", k, paste(v, collapse = " ")))
@@ -63,10 +58,9 @@ ld <- suppressWarnings(system2("ldd", shQuote(so), stdout = TRUE, stderr = TRUE)
 for (l in grep("mpi|lapack|blas|sundials|klu", ld, ignore.case = TRUE, value = TRUE))
   cat("   ", trimws(l), "\n")
 
-## The decisive evidence: what is mapped into this process now that the
-## model is loaded.  A library that arrives indirectly -- pulled in by
-## BLAS, by R itself, by an LD_PRELOAD -- shows up here and nowhere in
-## the ldd output above.
+## The decisive evidence: what is mapped into this process now that the model
+## is loaded. A library that arrives indirectly, pulled in by BLAS, by R itself
+## or by an LD_PRELOAD, shows up here and nowhere in the ldd output above.
 hr("MPI mapped into the process?")
 maps <- tryCatch(readLines("/proc/self/maps", warn = FALSE), error = function(e) character(0))
 ## Match the library, not the string: R's tempdir is named RtmpXXXXXX and
@@ -77,13 +71,13 @@ if (length(mpi)) for (p in mpi) cat("    ", p, "\n") else cat("    none\n")
 kv("LD_PRELOAD", Sys.getenv("LD_PRELOAD", "<unset>"))
 kv("LD_LIBRARY_PATH", Sys.getenv("LD_LIBRARY_PATH", "<unset>"))
 
-hr("solving -- serial")
+hr("solving, serial")
 print(solveODE(m, seq(0, 5, 1), c(A = 1, k = 0.5))$variable)
 
 ## Only reached if the serial solve survived.  The benchmark runs its
 ## problems under mclapply, so a failure that appears only after a fork
 ## has to be told apart from one that was there all along.
-hr("solving -- forked (mclapply, 2 workers)")
+hr("solving, forked (mclapply, 2 workers)")
 if (.Platform$OS.type == "unix") {
   r <- parallel::mclapply(1:2, function(i)
     tryCatch(solveODE(m, seq(0, 5, 1), c(A = 1, k = 0.5))$variable[2L, ],
@@ -91,4 +85,4 @@ if (.Platform$OS.type == "unix") {
   print(r)
 } else cat("    not unix\n")
 
-hr("done -- CVODE works on this host")
+hr("done, CVODE works on this host")

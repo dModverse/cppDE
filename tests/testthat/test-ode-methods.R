@@ -307,10 +307,9 @@ test_that("fixed parameters are excluded from sensitivities", {
 
 # -- Constant-only math calls in the generated Jacobian ------------------------
 
-# A 10^x term makes the symbolic derivative produce d/dx 10^x = 10^x * log(10),
-# i.e. a math call whose arguments are all literals. Codegen emits every math
-# call as cppde::<fn>, so this only compiles because cppde_dual_math.hpp also
-# carries arithmetic-type overloads next to the AD ones.
+# A 10^x term differentiates to a math call whose arguments are all literals.
+# Codegen emits every math call as cppde::<fn>, so this compiles only because
+# cppde_dual_math.hpp carries arithmetic-type overloads next to the AD ones.
 test_that("a 10^x term compiles and differentiates correctly", {
   t10  <- seq(0, 1, length.out = 25)
   p10  <- c(x = 0.3, k = 0.7)
@@ -329,4 +328,34 @@ test_that("a 10^x term compiles and differentiates correctly", {
   expect_equal(as.numeric(res$sens1[, "x", "k"]), -t10 / u, tolerance = 1e-6)
   expect_equal(as.numeric(res$sens2[, "x", "k", "k"]),
                ln10 * t10^2 / u^2, tolerance = 1e-6)
+})
+
+# The generated right-hand side indexes x[] and params[] and calls std::pow, so
+# a state or parameter carrying one of those names has to be substituted before
+# it can be read as part of the surrounding code.
+test_that("state and parameter names that are C++ tokens compile and solve", {
+  tt <- seq(0, 2, 0.5)
+
+  mod <- cppODE(c(default = "-std * default + operator",
+                  int     = "std * default - int * 10^0.5"),
+                modelname = "cxx_tokens_ode")
+  ref <- cppODE(c(a = "-k * a + b0",
+                  b = "k * a - b * 10^0.5"),
+                modelname = "cxx_tokens_ref")
+
+  res <- solveODE(mod, tt, c(default = 1, int = 0, std = 0.7, operator = 0.2))
+  exp <- solveODE(ref, tt, c(a = 1, b = 0, k = 0.7, b0 = 0.2))
+
+  expect_equal(unname(res$variable), unname(exp$variable), tolerance = 1e-10)
+  expect_equal(unname(res$sens1), unname(exp$sens1), tolerance = 1e-10)
+})
+
+test_that("a Python keyword as a symbol name is rejected", {
+  expect_error(cppODE(c(y = "-class * y"), modelname = "py_kw_ode"),
+               "Python keyword used as a symbol name: 'class'")
+  expect_error(cppODE(c(lambda = "-k * lambda"), modelname = "py_kw_state"),
+               "'lambda'")
+  expect_error(cppODE(c(y = "-k * y"), forcings = "global",
+                      modelname = "py_kw_forcing"),
+               "'global'")
 })

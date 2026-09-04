@@ -1,24 +1,18 @@
 #!/usr/bin/env Rscript
-# Re-render dev/methods/Methods.Rmd -> vignettes/Methods.pdf
-#
-# Methods.pdf is shipped as a *static* (pre-rendered) vignette via
-# R.rsp::asis, because building it requires lualatex + CMU/New Computer
-# Modern fonts that are not available on standard CI runners. The source
-# Bundle (Rmd + bibliography + CSL) lives under dev/methods/: this whole
-# directory is .Rbuildignore'd, so the package tarball contains only the
-# rendered PDF and the .asis stub. CRAN/CI never sees a LaTeX dependency.
-#
-# Workflow: edit dev/methods/Methods.Rmd, run this script locally, commit
-# the regenerated vignettes/Methods.pdf alongside the source change.
-#
-# Do not run devtools::build_vignettes(). tools::pkgVignettes() reports
-# Methods.pdf as the *output* of Methods.pdf.asis, and copy_vignettes() moves
-# every output into doc/ and deletes it from vignettes/. For an .Rmd vignette
-# that is right, the output being regenerable; here it deletes the only copy of
-# the content. R CMD build and R CMD check leave the file alone.
-#
-# Requirements (only on the maintainer's machine, not on CI):
-#   lualatex, fontspec, unicode-math, CMU Serif, NewCMMath.
+
+# Re-render dev/methods/Methods.Rmd into vignettes/Methods.pdf, then commit the
+# regenerated PDF alongside the source change.
+
+# Methods.pdf ships as a static vignette via R.rsp::asis, because building it
+# needs lualatex and CMU/New Computer Modern fonts that CI runners lack. The
+# source bundle under dev/methods/ is .Rbuildignore'd, so CRAN sees no LaTeX.
+
+# Do not run devtools::build_vignettes(): copy_vignettes() moves the reported
+# output into doc/ and deletes it from vignettes/, which here is the only copy
+# of the content. R CMD build and R CMD check leave the file alone.
+
+# Requirements, on the maintainer's machine only: lualatex, fontspec,
+# unicode-math, CMU Serif, NewCMMath.
 
 src <- "dev/methods/Methods.Rmd"
 out <- "vignettes/Methods.pdf"

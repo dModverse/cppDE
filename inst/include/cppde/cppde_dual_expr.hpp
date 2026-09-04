@@ -507,7 +507,7 @@ CPPDE_ET_INLINE auto operator-(const A& a) {
 }
 
 // =============================================================================
-// Math functions: same shape as the binary operators -- wrap the operand via
+// Math functions: same shape as the binary operators, wrap the operand via
 // make_leaf and return a UnaryExpr templated on the matching Op tag.
 // =============================================================================
 #define CPPDE_DEFINE_ET_MATH_FN(NAME, OPTAG)                                 \
@@ -570,6 +570,77 @@ CPPDE_ET_INLINE auto pow(const S& s, const B& b) {
   return PowExprSD<nested_node_t<TT, B>>(static_cast<TT>(s), make_leaf<TT>(b));
 }
 
+
+// =============================================================================
+// Comparisons. A relation has no derivative, so it reads the value only.
+// Taking the CRTP base Expr<A> keeps these clear of the dual-only overloads in
+// cppde_dual_math.hpp, which stay the only match where no node is involved.
+// =============================================================================
+#define CPPDE_DEFINE_ET_CMP(SYM)                                              \
+  template<class A, class B>                                                   \
+  CPPDE_ET_INLINE bool operator SYM(const Expr<A>& a, const Expr<B>& b) {      \
+    return a.self().val() SYM b.self().val();                                  \
+  }                                                                            \
+  template<class A, class T, unsigned N>                                       \
+  CPPDE_ET_INLINE bool operator SYM(const Expr<A>& a, const dual<T, N>& b) {   \
+    return a.self().val() SYM b.x();                                           \
+  }                                                                            \
+  template<class T, unsigned N, class B>                                       \
+  CPPDE_ET_INLINE bool operator SYM(const dual<T, N>& a, const Expr<B>& b) {   \
+    return a.x() SYM b.self().val();                                           \
+  }                                                                            \
+  template<class A, class S,                                                   \
+           std::enable_if_t<std::is_arithmetic<S>::value, int> = 0>            \
+  CPPDE_ET_INLINE bool operator SYM(const Expr<A>& a, const S& b) {            \
+    return a.self().val() SYM static_cast<typename A::value_type>(b);          \
+  }                                                                            \
+  template<class S, class B,                                                   \
+           std::enable_if_t<std::is_arithmetic<S>::value, int> = 0>            \
+  CPPDE_ET_INLINE bool operator SYM(const S& a, const Expr<B>& b) {            \
+    return static_cast<typename B::value_type>(a) SYM b.self().val();          \
+  }
+
+CPPDE_DEFINE_ET_CMP(<)
+CPPDE_DEFINE_ET_CMP(<=)
+CPPDE_DEFINE_ET_CMP(>)
+CPPDE_DEFINE_ET_CMP(>=)
+CPPDE_DEFINE_ET_CMP(==)
+CPPDE_DEFINE_ET_CMP(!=)
+
+#undef CPPDE_DEFINE_ET_CMP
+
+// =============================================================================
+// select(cond, a, b): the conditional operator as a node. The branch is fixed
+// at construction, so value and tangents are the taken branch's own. Both
+// operands are built either way, a guarded branch must be safe to evaluate.
+// =============================================================================
+template<class L, class R>
+struct SelectExpr : Expr<SelectExpr<L, R>> {
+  using value_type = typename L::value_type;
+
+  L    l_;
+  R    r_;
+  bool c_;
+
+  CPPDE_ET_INLINE SelectExpr(bool c, L l, R r)
+    : l_(std::move(l)), r_(std::move(r)), c_(c) {}
+
+  CPPDE_ET_INLINE value_type val()      const { return c_ ? l_.val() : r_.val(); }
+  CPPDE_ET_INLINE unsigned   tan_size() const { return c_ ? l_.tan_size() : r_.tan_size(); }
+  CPPDE_ET_INLINE bool       depends()  const { return c_ ? l_.depends() : r_.depends(); }
+  CPPDE_ET_INLINE value_type tan(unsigned i) const {
+    return c_ ? l_.tan(i) : r_.tan(i);
+  }
+};
+
+template<class A, class B,
+         std::enable_if_t<et_pair_enabled<A, B>::value, int> = 0>
+CPPDE_ET_INLINE auto select(bool cond, const A& a, const B& b) {
+  using TT = typename et_pair_target<A, B>::type;
+  return SelectExpr<nested_node_t<TT, A>, nested_node_t<TT, B>>(
+           cond, make_leaf<TT>(a), make_leaf<TT>(b));
+}
+
 } // namespace dual_expr
 } // namespace cppde
 
@@ -604,6 +675,20 @@ using dual_expr::acosh;
 using dual_expr::atanh;
 using dual_expr::abs;
 using dual_expr::pow;
+
+// Comparisons and select: same reason, codegen writes them infix or as
+// cppde::select(...).
+using dual_expr::operator<;
+using dual_expr::operator<=;
+using dual_expr::operator>;
+using dual_expr::operator>=;
+using dual_expr::operator==;
+using dual_expr::operator!=;
+using dual_expr::select;
+
+// value_of on a node: the tree's value, one spelling across the AD orders.
+template<class D>
+inline auto value_of(const dual_expr::Expr<D>& e) { return value_of(e.self().val()); }
 } // namespace cppde
 
   // =============================================================================

@@ -1,12 +1,10 @@
 ## =====================================================================
-##  report.R -- naming and per-run documentation of a results folder.
-##
-##  A results tree is browsed far more often than it is opened, so the
-##  directory name carries what the run *was* -- depth, parallelism,
-##  modes -- not only when it happened.  The README inside carries what
-##  it found.  Both are generated from the same code here so that a
-##  fresh run and a retro-fitted old one describe themselves alike.
+##  report.R: naming and per-run documentation of a results folder.
 ## =====================================================================
+
+##  A results tree is browsed far more often than it is opened, so the directory
+##  name carries what the run was, not only when. Both it and the README inside
+##  are generated here, so a fresh run and a retro-fitted one describe alike.
 
 ## <timestamp>_<tier>[_<suite>]_c<cores>_<modes>[_<models>][_allcond]
 run_tag <- function(stamp, tier, cores, modes, suite = "all",
@@ -62,11 +60,10 @@ write_run_readme <- function(df, outdir, info = list()) {
   })
 
   ## -- sparse sweep: dense against sparse, per backend ------------------
-  ## Empty unless the run pinned the linear solver both ways.
-  ## Aggregated over tolerances -- per-cell would be several hundred rows
-  ## on the full tier, and the per-cell numbers are in results.csv.
-  ## `chose` is what auto-detection actually did on that model, so the
-  ## table can be read as a verdict on the choice and not only as a cost.
+
+  ## Empty unless the run pinned the linear solver both ways, and aggregated over
+  ## tolerances because per-cell would run to hundreds of rows on the full tier.
+  ## `chose` is what auto-detection did, so the table reads as a verdict on it.
   sparse_tbl <- local({
     sg <- tryCatch(sparse_gain_table(df), error = function(e) NULL)
     if (is.null(sg) || !nrow(sg)) return(NULL)

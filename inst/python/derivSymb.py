@@ -12,6 +12,7 @@ Author: Simon Beyer
 import re
 import keyword
 import sympy as sp
+from cppsympy import TokenError, normalise_logic, parse_error
 
 def _sbml_piecewise(*args):
     """SBML's flat `piecewise(v1, c1, v2, c2, ..., otherwise)` as sp.Piecewise.
@@ -106,6 +107,7 @@ def _get_safe_parse_dict_cached():
         
         # Special functions
         'Heaviside': sp.Heaviside, 'DiracDelta': sp.DiracDelta,
+        'And': sp.And, 'Or': sp.Or, 'Not': sp.Not,
         
         # Piecewise
         'Piecewise': sp.Piecewise, 'piecewise': _sbml_piecewise,
@@ -119,7 +121,7 @@ def _safe_sympify(expr_str, local_symbols=None):
     """
     Safely parse a string expression to SymPy, avoiding singleton conflicts.
     """
-    expr_str = str(expr_str).strip()
+    expr_str = normalise_logic(str(expr_str).strip())
     if expr_str == "0":
         return sp.Integer(0)
     
@@ -130,20 +132,22 @@ def _safe_sympify(expr_str, local_symbols=None):
     if local_symbols:
         safe_local.update(local_symbols)
 
-    # Pre-declare any bare identifier as a Symbol so it shadows SymPy globals
-    # like sp.beta / sp.gamma / sp.zeta (FunctionClass) that would otherwise
-    # leak in via parse_expr's default global_dict=sympy.__dict__ and break
-    # parsing of expressions such as "10^beta".
+    # Pre-declare any bare identifier as a Symbol so it shadows a SymPy global
+    # like sp.beta or sp.gamma, which parse_expr would otherwise pull in through
+    # its default global_dict and break an expression such as "10^beta".
     for name in _IDENT_RE.findall(expr_str):
         if name not in safe_local and name not in _PY_RESERVED:
             safe_local[name] = sp.Symbol(name, real=True)
 
-    return parse_expr(
-        expr_str,
-        local_dict=safe_local,
-        transformations=_TRANSFORMATIONS,
-        evaluate=True,
-    )
+    try:
+        return parse_expr(
+            expr_str,
+            local_dict=safe_local,
+            transformations=_TRANSFORMATIONS,
+            evaluate=True,
+        )
+    except (SyntaxError, TokenError) as e:
+        raise parse_error(expr_str, e) from None
 # -----------------------------------------------------------------------------
 # Helper: Enforce real-valued simplification (optimized)
 # -----------------------------------------------------------------------------

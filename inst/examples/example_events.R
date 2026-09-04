@@ -1,19 +1,17 @@
 ## =================================================================
 ## Events: time-triggered and root-triggered
-##
-## Shows both event styles on scalar ODEs, both with first- and
-## second-order parameter sensitivities enabled.
 ## =================================================================
+
+## Both event styles on scalar ODEs, with first- and second-order parameter
+## sensitivities enabled.
 rm(list = ls(all.names = TRUE))
 setwd(tempdir())
 
 library(cppDE)
 
 ## -----------------------------------------------------------------
-## 1. Time-triggered event: replace x with v at t = te
+## 1. Time-triggered event: replace x with the parameter v at t = te
 ## -----------------------------------------------------------------
-## dx/dt = -k * x
-## at t = te, x is replaced by the parameter value v.
 eqns_time <- c(x = "-k*x")
 evt_time  <- data.frame(
   var    = "x",
@@ -35,7 +33,7 @@ model_time <- cppODE(
 pars_time <- c(x = 1, k = 1, v = 0.75, te = 3)
 res_time  <- solveODE(model_time, seq(0, 10, length.out = 300), pars_time)
 
-cat("Time event -- state at t just before/after te = 3:\n")
+cat("Time event, state at t just before/after te = 3:\n")
 i_before <- max(which(res_time$time <  3))
 i_after  <- min(which(res_time$time >= 3))
 print(data.frame(
@@ -44,10 +42,8 @@ print(data.frame(
 ))
 
 ## -----------------------------------------------------------------
-## 2. Root-triggered event: add v each time x drops to xc
+## 2. Root-triggered event: add v each time x drops to xc, up to maxroot times
 ## -----------------------------------------------------------------
-## dx/dt = -k * x^2 * time
-## when xc - x crosses zero, v is added to x. Up to maxroot firings.
 eqns_root <- c(x = "-k*x^2*time")
 evt_root  <- data.frame(
   var    = "x",
@@ -69,15 +65,16 @@ model_root <- cppODE(
 pars_root <- c(x = 1, k = 1, v = 1, xc = 0.25)
 res_root  <- solveODE(model_root, seq(0, 10, length.out = 300), pars_root, maxroot = 3)
 
-cat("\nRoot event -- sensitivity of x to v is piecewise but continuous\n")
+cat("\nRoot event, sensitivity of x to v is piecewise but continuous\n")
 cat("through each event (saltation-matrix correction applied):\n")
 print(summary(res_root$sens1[, "x", "v"]))
 
 ## -----------------------------------------------------------------
 ## 3. Layout of the sensitivity arrays
 ## -----------------------------------------------------------------
+
 ##   res$variable : [n_times, n_states]
-##   res$sens1    : [n_times, n_states, n_sens]    (d y / d p)
-##   res$sens2    : [n_times, n_states, n_sens, n_sens]  (d^2 y / d p d q)
+##   res$sens1    : [n_times, n_states, n_sens]
+##   res$sens2    : [n_times, n_states, n_sens, n_sens]
 cat("\nsens1 dims:", paste(dim(res_time$sens1), collapse = " x "), "\n")
 cat("sens2 dims:", paste(dim(res_time$sens2), collapse = " x "), "\n")

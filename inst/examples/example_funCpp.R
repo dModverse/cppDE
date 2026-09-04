@@ -1,12 +1,10 @@
 ## =================================================================
 ## funCpp: compile a multivariate function with analytic Jacobian
-## (and optional Hessian) from symbolic expressions.
-##
-## Shows two common use cases:
-##   1. Observables -- map internal states to observed quantities
-##   2. Parameter transformations -- re-express parameters on a
-##      log/linear scale (derivatives propagate through via chain rule)
 ## =================================================================
+
+## Two use cases: observables mapping internal states to observed quantities,
+## and parameter transformations re-expressing parameters on a log or linear
+## scale, with derivatives propagating through the chain rule.
 rm(list = ls(all.names = TRUE))
 setwd(tempdir())
 
@@ -42,11 +40,11 @@ cat("\nHessian of obs1:\n");                   print(do.call(f_obs$hess, args_ob
 cat("\nSymbolic Jacobian:\n");                 print(attr(f_obs, "jacobian.symb"))
 
 ## -----------------------------------------------------------------
-## 2. Parameter transformation -- log10 trafo
+## 2. Parameter transformation, log10 trafo
 ## -----------------------------------------------------------------
-## Express parameters on a log10 scale so optimisers see a free
-## unconstrained variable. The Jacobian (attached) chains analytically
-## into any downstream sensitivity.
+
+## An optimiser then sees a free unconstrained variable, and the attached
+## Jacobian chains analytically into any downstream sensitivity.
 trafo <- c(TCA_cell = "10^TCA_CELL")
 
 f_trafo <- funCpp(

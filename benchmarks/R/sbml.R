@@ -1,21 +1,14 @@
 ## =====================================================================
-##  sbml.R -- a small SBML reader that turns a reaction network into the
-##  character-vector ODE representation cppODE() and cvode() consume.
-##
-##  Scope is deliberately limited to what the Benchmark-Models-PEtab
-##  collection actually uses (verified by scanning all 35 models):
-##
-##    compartments, species, parameters, initialAssignment,
-##    assignmentRule, functionDefinition, reaction/kineticLaw,
-##    and MathML piecewise (always a pure switch in `time`).
-##
-##  Not supported -- these do not occur in the collection and raise an
-##  explicit error rather than being silently ignored: algebraicRule,
-##  rateRule, stoichiometryMath, delay, and events.
-##
-##  Everything is produced as R-syntax strings, which is the interchange
-##  format cppDE uses end to end.
+##  sbml.R: an SBML reader for the character-vector ODE form cppODE() consumes.
 ## =====================================================================
+
+##  Scope is limited to what the Benchmark-Models-PEtab collection uses:
+##  compartments, species, parameters, initialAssignment, assignmentRule,
+##  functionDefinition, reaction/kineticLaw, and MathML piecewise.
+
+##  algebraicRule, rateRule, stoichiometryMath, delay and events do not occur
+##  in the collection and raise an explicit error. Everything is produced as
+##  R-syntax strings, the interchange format cppDE uses end to end.
 
 if (!requireNamespace("xml2", quietly = TRUE))
   stop("package 'xml2' is required to read SBML models")
@@ -36,41 +29,22 @@ num_str <- function(x) {
   sprintf("%.17g", x)
 }
 
-## SBML ids are far more permissive than R names -- the collection
-## contains ids such as `_Nuc__FOXM1_DBD_Thr600p_`.  Every id and every
-## <ci> goes through here so that the same SBML symbol always maps to
-## the same R symbol.  Python keywords are folded too, because cppDE's
-## sanitizeExprs() would otherwise rewrite them one warning at a time.
+## SBML ids are far more permissive than R names: the collection contains ids
+## such as `_Nuc__FOXM1_DBD_Thr600p_`. Every id and every <ci> goes through
+## here so that the same SBML symbol always maps to the same R symbol.
 .py_keywords <- c(
   "False","None","True","and","as","assert","async","await","break","class",
   "continue","def","del","elif","else","except","finally","for","from","global",
   "if","import","in","is","lambda","nonlocal","not","or","pass","raise","return",
   "try","while","with","yield")
 
-## C++ keywords matter as well.  SymPy's C++ printer silently appends an
-## underscore to a reserved word, while cppDE declares the parameter
-## under its original name -- the generated file then fails to compile
-## with "'default_' was not declared".  The SBML default compartment is
-## literally called `default`, so this hits a large part of the
-## collection; renaming on ingest is the robust fix.
-.cxx_keywords <- c(
-  "alignas","alignof","and","and_eq","asm","auto","bitand","bitor","bool",
-  "break","case","catch","char","char8_t","char16_t","char32_t","class",
-  "compl","concept","const","consteval","constexpr","constinit","const_cast",
-  "continue","co_await","co_return","co_yield","decltype","default","delete",
-  "do","double","dynamic_cast","else","enum","explicit","export","extern",
-  "false","float","for","friend","goto","if","inline","int","long","mutable",
-  "namespace","new","noexcept","not","not_eq","nullptr","operator","or","or_eq",
-  "private","protected","public","register","reinterpret_cast","requires",
-  "return","short","signed","sizeof","static","static_assert","static_cast",
-  "struct","switch","template","this","thread_local","throw","true","try",
-  "typedef","typeid","typename","union","unsigned","using","virtual","void",
-  "volatile","wchar_t","while","xor","xor_eq")
-
 san_id <- function(x) {
   if (!length(x)) return(x)
   y <- make.names(x)
-  bad <- y %in% .py_keywords | y %in% .cxx_keywords
+  ## cppDE rejects a Python keyword as a symbol name, SymPy parsing through
+  ## Python's own parser. C++ keywords need no folding: the generator
+  ## substitutes a slot, so `default` never reaches the source as a name.
+  bad <- y %in% .py_keywords
   y[bad] <- paste0(y[bad], "X")
   y[x == "time"] <- "timeX"          # `time` is reserved by cppDE
   y
@@ -95,10 +69,9 @@ subst_lang <- function(e, map) {
   e
 }
 
-## Symbol names occurring in a language object, minus call heads.  The
-## large models carry expressions with tens of thousands of nodes, so
-## these walk the tree directly -- deparsing and re-parsing per node
-## turns the whole pipeline quadratic.
+## Symbol names occurring in a language object, minus call heads. The large
+## models carry expressions with tens of thousands of nodes, so these walk the
+## tree directly: deparsing and re-parsing per node is quadratic.
 lang_symbols <- function(e) {
   out <- character(0)
   walk <- function(x) {
@@ -131,11 +104,9 @@ expr_symbols <- function(txt) {
   unique(unlist(lapply(txt, function(s) lang_symbols(str2lang(s)))))
 }
 
-## Evaluate every symbol-free subexpression up front.  Besides shrinking
-## the generated C++, this avoids a codegen corner: CSE hoists a constant
-## such as log(2) into a temporary typed as the AD scalar, and there is
-## no cppde::log(double) overload to build it, so the model fails to
-## compile only when sensitivities are switched on.
+## Evaluate every symbol-free subexpression up front. Besides shrinking the
+## generated C++ this avoids a codegen corner: CSE types a hoisted constant as
+## the AD scalar, which has no cppde::log(double) to build it from.
 fold_constants <- function(txt) {
   fold <- function(e) {
     if (!is.call(e)) return(e)
@@ -171,7 +142,7 @@ subst_str <- function(txt, map, max_iter = 50L) {
     if (!any(hit)) { converged <- TRUE; break }
     langs[hit] <- lapply(langs[hit], subst_lang, map = lang_map)
   }
-  if (!converged) stop("assignment rules did not converge -- circular reference?")
+  if (!converged) stop("assignment rules did not converge, circular reference?")
   out <- vapply(langs, deparse_expr, "")
   names(out) <- names(txt)
   out
@@ -182,10 +153,9 @@ subst_str <- function(txt, map, max_iter = 50L) {
 ##  MathML -> R
 ## ---------------------------------------------------------------------
 
-## A piecewise is emitted as a call to the placeholder `.pw`:
-##     .pw(value1, cond1, value2, cond2, ..., otherwise)
-## It stays in the tree until resolve_piecewise() folds it against a
-## concrete simulation interval (see petab.R).
+## A piecewise is emitted as a call to the placeholder `.pw`, taking the value
+## and condition pairs and an otherwise branch. It stays in the tree until
+## resolve_piecewise() folds it against a concrete interval (see petab.R).
 mathml_to_r <- function(node, funcs = list()) {
   nm <- xml2::xml_name(node)
 
@@ -417,7 +387,7 @@ sbml_read <- function(path) {
     assign_rules[[v]] <- mathml_to_r(xml2::xml_find_first(ar, ".//math"), funcs)
   }
 
-  ## -- rate rules -- dx/dt given directly rather than via reactions -----
+  ## -- rate rules, dx/dt given directly rather than via reactions -----
   rate_rules <- list()
   for (rr in find(".//rateRule")) {
     v <- san_id(xml2::xml_attr(rr, "variable"))
@@ -468,11 +438,9 @@ num_str_vec <- function(x) vapply(x, num_str, "")
 ##  SBML -> ODE system
 ## ---------------------------------------------------------------------
 
-## Returns:
-##   rhs        named character  -- dx/dt, names are the state symbols
-##   init       named character  -- initial-value *expressions* per state
-##   par_values named numeric    -- default value of every free parameter
-##   assign     named character  -- resolved assignment rules (for observables)
+## Returns rhs (dx/dt, named by state symbol), init (initial-value expressions
+## per state), par_values (default value of every free parameter) and assign
+## (resolved assignment rules, for observables).
 sbml_to_ode <- function(sbml) {
   species      <- sbml$species
   compartments <- sbml$compartments
@@ -557,22 +525,16 @@ sbml_to_ode <- function(sbml) {
 ##  Piecewise resolution
 ## ---------------------------------------------------------------------
 
-## Every `piecewise` in the collection switches on `time` alone.  Over a
-## concrete simulation window such a switch is one of three things:
-##
-##   * constant           -- fold it away;
-##   * a jump at t*       -- turn it into a timed event, which is the
-##                           numerically correct treatment: the solver
-##                           stops at t*, applies the jump and restarts,
-##                           instead of stepping across a discontinuity;
-##   * state-dependent    -- report it; the caller excludes the problem.
-##
-## Events act on state variables, so each switch gets an auxiliary state
-## with dx/dt = 0 that carries the switched value.  Where a branch is
-## itself a function of time, indicator states (0/1) select between the
-## branch expressions instead.  Identical piecewise expressions share one
-## auxiliary state, which matters for models such as Chen_MSB2009 that
-## repeat the same switch a hundred times.
+## Every `piecewise` in the collection switches on `time` alone, so over a
+## concrete window it folds to a constant, becomes a timed event at the jump,
+## or is state-dependent and the caller excludes the problem.
+
+## A timed event is the numerically correct treatment: the solver stops at t*,
+## applies the jump and restarts instead of stepping across a discontinuity.
+
+## Events act on state variables, so each switch gets an auxiliary state with
+## dx/dt = 0 carrying the switched value, or indicator states where a branch is
+## itself a function of time. Identical switches share one auxiliary state.
 resolve_piecewise <- function(exprs, env, tspan, ngrid = 4001L,
                               make_events = TRUE, prefix = "pw") {
   switches <- numeric(0); state_switch <- FALSE
@@ -638,7 +600,7 @@ resolve_piecewise <- function(exprs, env, tspan, ngrid = 4001L,
       chg <- which(diff(b) != 0L)
       if (!length(chg)) return(vals[[b[1L]]])           # constant: fold
 
-      ## -- segment boundaries and the branch active on each segment --
+      ## -- segment boundaries and the branch active on each segment,
       tsw <- vapply(chg, function(i) refine(conds, tgrid[i], tgrid[i + 1L]), 0)
       seg_branch <- c(b[1L], b[chg + 1L])
       switches <<- c(switches, tsw)

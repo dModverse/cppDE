@@ -227,6 +227,11 @@ inline cppde::dual<S, N> first_order_view(const cppde::dual2nd<S, N>& v) {
   return r;
 }
 
+// value_of on a dual2nd: the innermost scalar, matching the first-order
+// overload so an emitter has one spelling for both orders.
+template<class T, unsigned N>
+inline auto value_of(const dual2nd<T, N>& d) { return value_of(d.scalar()); }
+
 } // namespace cppde
 
 #endif // CPPDE_DUAL2ND_HPP

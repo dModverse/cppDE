@@ -2,7 +2,7 @@
  Thread-local scratch storage.
 
  A thread_local with a non-trivial destructor registers __cxa_thread_atexit,
- which makes glibc refuse to unmap the shared object -- dyn.unload() becomes a
+ which makes glibc refuse to unmap the shared object, dyn.unload() becomes a
  no-op and every model rebuild leaks its .so.  A thread_local pointer registers
  nothing; the buffer behind it is leaked on purpose (one per thread per slot).
 

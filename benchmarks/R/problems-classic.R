@@ -1,20 +1,17 @@
 ## =====================================================================
-##  problems-classic.R -- the standard stiff IVP test problems.
-##
-##  The PEtab collection covers systems-biology models: moderately
-##  stiff, many parameters, short horizons.  These add the failure modes
-##  it does not exercise -- extreme stiffness, scale separation over
-##  eleven decades, limit cycles, and a sparse Jacobian that grows with
-##  the discretisation.
-##
-##  Sources: Hairer & Wanner, *Solving Ordinary Differential Equations
-##  II*, 2nd ed. (1996), and the accompanying Bari/CWI IVP test set.
+##  problems-classic.R: the standard stiff IVP test problems.
 ## =====================================================================
 
-## `atol` pins the absolute tolerance for problems where the swept value
-## would be meaningless -- see E5, whose solution components decay to
-## ~1e-30, so any atol from the sweep sits far above the solution itself
-## and the step size underflows.
+##  The PEtab collection covers moderately stiff systems-biology models. These
+##  add the failure modes it does not exercise: extreme stiffness, scale
+##  separation over eleven decades, limit cycles, and a growing sparse Jacobian.
+
+##  Sources: Hairer & Wanner, *Solving Ordinary Differential Equations II*,
+##  2nd ed. (1996), and the accompanying Bari/CWI IVP test set.
+
+## `atol` pins the absolute tolerance where the swept value would be
+## meaningless, as for a problem whose components decay far below any atol the
+## sweep offers and whose step size then underflows.
 bench_problem <- function(id, name, rhs, parms, times, sens,
                           source = "classic", notes = character(0),
                           traits = character(0), atol = NULL) {
@@ -91,10 +88,9 @@ classic_problems <- function(which = NULL) {
     c(0, 10^seq(-5, 11, length.out = 200)),
     sens = c("A", "B", "C"),
     traits = c("stiff-extreme", "mass-action"),
-    ## The IVP test set runs E5 at atol = 1.7e-24: y2..y4 decay to about
-    ## 1e-30, so a swept atol of 1e-6..1e-12 exceeds the solution by
-    ## eighteen orders of magnitude and both solvers stall on step-size
-    ## underflow long before t = 1e11.
+    ## The IVP test set runs E5 at atol = 1.7e-24: y2..y4 decay to about 1e-30, so
+    ## a swept atol exceeds the solution by eighteen orders of magnitude and both
+    ## solvers stall on step-size underflow long before t = 1e11.
     atol = 1.7e-24,
     notes = "absolute tolerance pinned to 1.7e-24 (IVP test set convention)")
 
@@ -144,11 +140,9 @@ classic_problems <- function(which = NULL) {
                   traits = c("stiff-moderate", "mass-action"))
   })
 
-  ## -- Brusselator, 1D method of lines.  The one problem here whose
-  ##    size is a free knob: N grid points give 2N states with a banded
-  ##    Jacobian, which is what the sparse path is for.
-  ##    The small variants exist so that the `tiny` tier still covers the
-  ##    sparse path without paying for 128 states.
+  ## -- Brusselator, 1D method of lines. The one problem here whose size is a
+  ##    free knob: N grid points give 2N states with a banded Jacobian. The small
+  ##    variants let the `tiny` tier cover the sparse path without 128 states.
   p$brusselator_small <- build_brusselator(24L)
   p$brusselator       <- build_brusselator(64L)
 

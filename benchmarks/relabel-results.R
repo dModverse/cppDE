@@ -1,18 +1,17 @@
 #!/usr/bin/env Rscript
+
 ## =====================================================================
-##  relabel-results.R -- retro-fit older result folders.
-##
-##  Folders written before the naming change carry a bare timestamp and
-##  a plain-text run-info.txt.  This reads what each run actually was
-##  out of that file, renames the folder to the descriptive scheme, and
-##  writes the same README.md a fresh run produces.
-##
+##  relabel-results.R: retro-fit older result folders.
+## =====================================================================
+
 ##      Rscript benchmarks/relabel-results.R            # show the plan
 ##      Rscript benchmarks/relabel-results.R --apply    # do it
-##
-##  Nothing is deleted: only directory names change, and README.md is
-##  added.  run-info.txt is left in place.
-## =====================================================================
+
+##  Folders written before the naming change carry a bare timestamp and a
+##  plain-text run-info.txt. This reads what each run was, renames the folder to
+##  the descriptive scheme and writes the README.md a fresh run produces.
+
+##  Nothing is deleted: only directory names change, and README.md is added.
 
 suppressPackageStartupMessages(library(cppDE))
 

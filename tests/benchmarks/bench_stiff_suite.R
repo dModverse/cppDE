@@ -1,20 +1,13 @@
 ## =================================================================
 ## Stiff solver benchmark suite
-##
-## Compares cppDE (bdf, ndf, rb4) against CVODE (BDF) -- both with
-## compiled C++ RHS + analytic Jacobian, so the comparison is
-## apples-to-apples (no R callback overhead either side).
-##
-## Each (problem, solver, tol) triple reports:
-##   - accepted steps
-##   - rejected steps
-##   - rhs evaluations
-##   - wallclock (median over nrep)
-##   - error vs high-accuracy reference (CVODE at atol=1e-14, rtol=1e-12)
-##
-## At the end: geometric-mean fevals & wallclock ratio vs CVODE_bdf,
-## aggregated across problems and tolerances.
 ## =================================================================
+
+## cppDE (bdf, ndf, rb4) against CVODE (BDF), both with a compiled C++ RHS and
+## analytic Jacobian, so neither side pays R callback overhead.
+
+## Each (problem, solver, tol) triple reports accepted and rejected steps, rhs
+## evaluations, median wallclock and the error against a high-accuracy
+## reference. The summary is a geometric-mean ratio against CVODE_bdf.
 rm(list = ls(all.names = TRUE))
 
 .workingDir <- file.path(tempdir(), "cppDE_bench_stiff_suite")
@@ -82,7 +75,7 @@ run_problem <- function(prob) {
                                 modelname = paste0(prob$id, "_rb4"), compile = TRUE)
   }
 
-  # Compile CVODE (BDF) -- the external reference implementation.
+  # Compile CVODE (BDF), the external reference implementation.
   cat("  compiling CVODE model...\n")
   cvode_models <- list()
   cvode_models$bdf <- safe(
@@ -91,18 +84,18 @@ run_problem <- function(prob) {
           modelname = paste0(prob$id, "_cvode_bdf"), compile = TRUE),
     "CVODE_bdf compile")
 
-  # Reference solution -- CVODE at very tight tolerance (no deSolve).
+  # Reference solution, CVODE at very tight tolerance (no deSolve).
   cat("  computing reference solution (CVODE BDF, atol=1e-14, rtol=1e-12)...\n")
   ref_model <- safe(
     cvode(prob$rhs, deriv = FALSE, outdir = getwd(),
           method = "bdf", sparse = prob$sparse,
           modelname = paste0(prob$id, "_cvode_ref"), compile = TRUE),
     "reference compile")
-  if (is.null(ref_model)) { cat("  !!! reference compile failed -- skipping\n"); return() }
+  if (is.null(ref_model)) { cat("  !!! reference compile failed, skipping\n"); return() }
   ref_res <- safe(
     solveODE(ref_model, prob$times, prob$parms, abstol = 1e-14, reltol = 1e-12),
     "reference solve")
-  if (is.null(ref_res)) { cat("  !!! reference solve failed -- skipping\n"); return() }
+  if (is.null(ref_res)) { cat("  !!! reference solve failed, skipping\n"); return() }
   ref_mat <- t(ref_res$variable[names(prob$y0), , drop = FALSE])
 
   err_of <- function(mat) {
@@ -272,7 +265,7 @@ problems$e5 <- list(
   sparse = FALSE, include_rb4 = TRUE
 )
 
-# --- Pollution (20 states) -- DETEST stiff chemistry --------------------
+# --- Pollution (20 states), DETEST stiff chemistry --------------------
 # Hairer & Wanner IVPtestset, 25 reactions of atmospheric chemistry
 problems$pollution <- local({
   # Rate constants (selected from Verwer 1994 formulation)
@@ -356,7 +349,7 @@ problems$pollution <- local({
 })
 
 # =====================================================================
-# Brusselator 2D MOL -- parameterized by grid size
+# Brusselator 2D MOL, parameterized by grid size
 # =====================================================================
 build_bruss2d <- function(N, id, name, include_rb4 = TRUE) {
   Nx <- Ny <- as.integer(N)
@@ -428,21 +421,11 @@ problems$bruss_med <- build_bruss2d(20L, "bruss20", "Brusselator2D_20x20")
 
 # =====================================================================
 # HVAC-like thermal RC network (~8000 states)
-#
-# Grid of N_zones zones arranged linearly ("hotel corridor").
-# Each zone has:
-#   - air temperature T_air (1 state)
-#   - wall temperatures to neighbors: N_layers per wall (multi-layer wall)
-# With N_zones = 200, N_layers = 20: 200 + 200*19 = 4000 states
-# Scale up: N_zones = 400, N_layers = 20 -> ~8000 states
-#
-# Dynamics:
-#   C_air * dT_air_i/dt  = U_in * (T_wall_i_first_layer - T_air_i)
-#                        + h_i * (T_set_i - T_air_i)   (HVAC proportional)
-#                        + q_int_i  (internal gain)
-#   C_w * dT_wall_i,j/dt = k*(T_wall_i,j-1 - 2*T_wall_i,j + T_wall_i,j+1)
-#   boundary: T_wall_i,1 ~ T_air_i, T_wall_i,L ~ T_air_{i+1}
 # =====================================================================
+
+# N_zones zones in a line, each with an air temperature and a multi-layer wall
+# to its neighbour. The air node is driven by the wall, a proportional HVAC
+# term and an internal gain.
 build_hvac <- function(N_zones = 400L, N_layers = 20L) {
   N_zones <- as.integer(N_zones); N_layers <- as.integer(N_layers)
   stopifnot(N_zones >= 2L, N_layers >= 2L)
@@ -463,7 +446,7 @@ build_hvac <- function(N_zones = 400L, N_layers = 20L) {
   # Zone air equations
   for (i in seq_len(N_zones)) {
     Ti <- T_names[i]
-    # Left wall (between zone i-1 and i) -- use innermost layer adjacent to zone i
+    # Left wall (between zone i-1 and i), use innermost layer adjacent to zone i
     # For wall between i-1 and i (wall index i-1), layer N_layers (adjacent to zone i)
     left_term <- if (i > 1L) {
       wLN <- sprintf("W%04d_%02d", i - 1L, N_layers)
@@ -476,7 +459,7 @@ build_hvac <- function(N_zones = 400L, N_layers = 20L) {
     } else ""
     # HVAC proportional control toward setpoint
     hvac_term <- sprintf("h_ctrl * (T_set - %s)", Ti)
-    # Internal gain (piecewise could be a forcing -- here constant)
+    # Internal gain (piecewise could be a forcing, here constant)
     gain_term <- "q_int"
     # Ambient loss at endpoints (to outside)
     amb_term <- if (i == 1L || i == N_zones)
@@ -588,7 +571,7 @@ for (p in problems) {
 df <- do.call(rbind, results)
 if (!is.null(df)) {
   cat("\n\n======================================================\n")
-  cat("SUMMARY -- fevals & wallclock relative to CVODE_bdf (per tol)\n")
+  cat("SUMMARY, fevals & wallclock relative to CVODE_bdf (per tol)\n")
   cat("======================================================\n")
   for (tol_name in names(TOLS)) {
     sub <- df[df$tol == tol_name & is.finite(df$fevals), ]

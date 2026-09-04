@@ -723,6 +723,101 @@ CPPDE_ET2_INLINE auto pow(U a, const Expr2nd<D>& b) {
   return PowExpr2SD<D>(static_cast<T>(a), b.self());
 }
 
+
+// ===========================================================================
+// Comparisons. A relation has no derivative, so it reads the scalar layer
+// only. The dual2nd-only overloads in cppde_dual2nd_math.hpp keep covering two
+// dual2nds or a dual2nd and a scalar.
+// ===========================================================================
+#define CPPDE_DEFINE_ET2_CMP(SYM)                                            \
+  template<class L, class R>                                                  \
+  CPPDE_ET2_INLINE bool operator SYM(const Expr2nd<L>& a,                     \
+                                      const Expr2nd<R>& b) {                  \
+    return a.self().eval_value() SYM b.self().eval_value();                   \
+  }                                                                            \
+  template<class D, class T, unsigned N>                                      \
+  CPPDE_ET2_INLINE bool operator SYM(const Expr2nd<D>& a,                     \
+                                      const dual2nd<T, N>& b) {               \
+    return a.self().eval_value() SYM b.scalar();                              \
+  }                                                                            \
+  template<class T, unsigned N, class D>                                      \
+  CPPDE_ET2_INLINE bool operator SYM(const dual2nd<T, N>& a,                  \
+                                      const Expr2nd<D>& b) {                  \
+    return a.scalar() SYM b.self().eval_value();                              \
+  }                                                                            \
+  template<class D, class U,                                                  \
+           std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>           \
+  CPPDE_ET2_INLINE bool operator SYM(const Expr2nd<D>& a, U b) {              \
+    using T = typename D::value_type;                                         \
+    return a.self().eval_value() SYM static_cast<T>(b);                       \
+  }                                                                            \
+  template<class U, class D,                                                  \
+           std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>           \
+  CPPDE_ET2_INLINE bool operator SYM(U a, const Expr2nd<D>& b) {              \
+    using T = typename D::value_type;                                         \
+    return static_cast<T>(a) SYM b.self().eval_value();                       \
+  }
+
+CPPDE_DEFINE_ET2_CMP(<)
+CPPDE_DEFINE_ET2_CMP(<=)
+CPPDE_DEFINE_ET2_CMP(>)
+CPPDE_DEFINE_ET2_CMP(>=)
+CPPDE_DEFINE_ET2_CMP(==)
+CPPDE_DEFINE_ET2_CMP(!=)
+
+#undef CPPDE_DEFINE_ET2_CMP
+
+// ===========================================================================
+// select(cond, a, b): the conditional operator as a node. The branch is fixed
+// at construction, so scalar, gradient and Hessian are the taken branch's own.
+// Both operands are built either way, a guarded branch must be safe to evaluate.
+// ===========================================================================
+template<class L, class R>
+struct Select2 : Expr2nd<Select2<L, R>> {
+  using value_type = typename L::value_type;
+  static constexpr unsigned static_N =
+    (L::static_N > R::static_N) ? L::static_N : R::static_N;
+
+  L    l_;
+  R    r_;
+  bool c_;
+
+  CPPDE_ET2_INLINE Select2(bool c, L l, R r)
+    : l_(std::move(l)), r_(std::move(r)), c_(c) {}
+
+  CPPDE_ET2_INLINE value_type eval_value() const {
+    return c_ ? l_.eval_value() : r_.eval_value();
+  }
+  CPPDE_ET2_INLINE value_type eval_d1(unsigned i) const {
+    return c_ ? l_.eval_d1(i) : r_.eval_d1(i);
+  }
+  CPPDE_ET2_INLINE value_type eval_d2(unsigned i, unsigned j) const {
+    return c_ ? l_.eval_d2(i, j) : r_.eval_d2(i, j);
+  }
+  // Both branches count here, unlike the value and the tangents: materialise()
+  // leaves the target's tangent buffers alone when a tree does not depend, so a
+  // literal branch has to stay on the writing path and zero what was there.
+  CPPDE_ET2_INLINE bool any_depend() const {
+    return l_.any_depend() || r_.any_depend();
+  }
+  CPPDE_ET2_INLINE unsigned width() const {
+    return std::max(l_.width(), r_.width());
+  }
+};
+
+// Node type make_leaf2 produces for operand X at target scalar TT.
+template<class TT, class X>
+using nested2_node_t =
+  std::decay_t<decltype(make_leaf2<TT>(std::declval<const X&>()))>;
+
+template<class A, class B,
+         std::enable_if_t<et2_pair_enabled<A, B>::value, int> = 0>
+CPPDE_ET2_INLINE auto select(bool cond, const A& a, const B& b) {
+  using TT = typename et2_pair_target<A, B>::type;
+  return Select2<nested2_node_t<TT, A>, nested2_node_t<TT, B>>(
+           cond, make_leaf2<TT>(a), make_leaf2<TT>(b));
+}
+
 } // namespace dual2nd_expr
 
 // Hoist operators and math functions into namespace cppde for ADL pickup.
@@ -747,6 +842,19 @@ using dual2nd_expr::acosh;
 using dual2nd_expr::atanh;
 using dual2nd_expr::abs;
 using dual2nd_expr::pow;
+using dual2nd_expr::operator<;
+using dual2nd_expr::operator<=;
+using dual2nd_expr::operator>;
+using dual2nd_expr::operator>=;
+using dual2nd_expr::operator==;
+using dual2nd_expr::operator!=;
+using dual2nd_expr::select;
+
+// value_of on a node: the tree's scalar layer, same spelling as first order.
+template<class D>
+inline auto value_of(const dual2nd_expr::Expr2nd<D>& e) {
+  return value_of(e.self().eval_value());
+}
 
   // ===========================================================================
   // Materialise an Expr2nd<D> tree into a dual2nd<T, N> at assignment.

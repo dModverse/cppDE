@@ -263,7 +263,7 @@ if [ "$available" = "FALSE" ] || [ "$klu_available" = "FALSE" ]; then
   log "  Recommended install path on Windows (Rtools 4.4 / 4.5):"
   log ""
   log "    1. From any shell (PowerShell, cmd, Git Bash), call Rtools'"
-  log "       pacman by full path -- substitute your installed version"
+  log "       pacman by full path, substitute your installed version"
   log "       for <ver> (e.g. 44 or 45):"
   log ""
   log "         C:\\rtools<ver>\\usr\\bin\\pacman.exe -Sy --noconfirm \\"
@@ -274,7 +274,7 @@ if [ "$available" = "FALSE" ] || [ "$klu_available" = "FALSE" ]; then
     log "             mingw-w64-ucrt-x86_64-suitesparse"
   fi
   log ""
-  log "       (Don't just type 'pacman' in Git Bash -- that bash"
+  log "       (Don't just type 'pacman' in Git Bash, that bash"
   log "        doesn't see Rtools' /usr/bin and will say 'command not"
   log "        found'.  Calling pacman.exe by full path avoids the"
   log "        wrong-shell trap.)"

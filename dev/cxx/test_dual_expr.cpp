@@ -16,7 +16,7 @@
 #include <cppde/cppde.hpp>
 
 using cppde::dual;
-namespace ex = cppde::expr;
+namespace ex = cppde::dual_expr;
 
 static int g_failures = 0;
 
@@ -131,6 +131,46 @@ static void arithmetic_suite(const char* label, unsigned N) {
 }
 
 // =============================================================================
+// Comparisons and select, the shapes an SBML piecewise turns into: the relation
+// sits on an unmaterialised node, and one branch of the select is a literal.
+// =============================================================================
+
+template <class D>
+static void select_suite(const char* label, unsigned N) {
+  D a(2.5), b(1.5);
+  seed(a, 0, N); seed(b, 1 % N, N);
+
+  check((a * b) > 0.0,      "node > scalar");
+  check(0.0 < (a * b),      "scalar < node");
+  check((a + b) >= (a * b), "node >= node");
+  check((a * b) != a,       "node != leaf");
+  check(a <= (a * b),       "leaf <= node");
+  check(!((a - b) == 0.0),  "node == scalar");
+
+  // Each branch in turn, with the tangents that come with it.
+  D r;
+  r = select(a > b, a * b, 0.0);
+  emit((std::string(label) + " select true").c_str(), r, N);
+  close_to(r.x(), 3.75, "select takes the first branch");
+
+  r = select(a < b, a * b, 0.0);
+  emit((std::string(label) + " select false").c_str(), r, N);
+  close_to(r.x(), 0.0, "select takes the second branch");
+  for (unsigned i = 0; i < N; ++i)
+    close_to(r[i], 0.0, "a literal branch carries no tangent");
+
+  // Nested, the way a multi-branch piecewise is emitted.
+  r = select(a < b, 1.0, select(b > 0.0, a + b, a * b));
+  emit((std::string(label) + " select nested").c_str(), r, N);
+  close_to(r.x(), 4.0, "nested select");
+
+  // Composed into a larger tree, so the node has to behave like any other.
+  r = exp(select(a > 0.0, b, a)) * 2.0 + select(false, a, b);
+  emit((std::string(label) + " select composed").c_str(), r, N);
+  close_to(r.x(), std::exp(1.5) * 2.0 + 1.5, "select inside a tree");
+}
+
+// =============================================================================
 // Aliasing. Every pattern below is lifted from production code and runs for
 // several iterations, because the failure mode this guards against is
 // "first call correct, later calls drift".
@@ -175,7 +215,7 @@ static void aliasing_suite(const char* label, unsigned N) {
       tempv = ftemp - (rl1 * zn1 + acor) * inv_gamma;
       emit((std::string(label) + " newton tempv").c_str(), tempv, N); } }
 
-  // cppde_rosenbrock4.hpp:501 -- the deepest nest in the codebase
+  // cppde_rosenbrock4.hpp:501, the deepest nest in the codebase
   { D xo(1.0), xn(0.5), c3(0.25), c4(0.125), x(0.0);
     seed(xo, 0, N); seed(xn, 1 % N, N); seed(c3, 2 % N, N);
     const double s = 0.4, s1 = 0.6;
@@ -209,6 +249,9 @@ int main() {
   arithmetic_suite<dual<double, 0>>("dyn", 3);
   arithmetic_suite<dual<double, 3>>("st3", 3);
   arithmetic_suite<dual<double, 1>>("st1", 1);
+
+  select_suite<dual<double, 0>>("dyn", 3);
+  select_suite<dual<double, 3>>("st3", 3);
 
   aliasing_suite<dual<double, 0>>("dyn", 3);
   aliasing_suite<dual<double, 3>>("st3", 3);

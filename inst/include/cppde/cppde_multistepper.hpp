@@ -1934,7 +1934,7 @@ private:
     if (m_q < 1) return;
 
     if constexpr (detail::is_dual2nd<value_type>::value) {
-      // dual2nd: no separate value-layer loop here -- vec_axpy_with_slab
+      // dual2nd: no separate value-layer loop here, vec_axpy_with_slab
       // covers scalar and first-order layers per element.
       const double sign = restore ? -1.0 : 1.0;
 

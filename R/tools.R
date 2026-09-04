@@ -32,10 +32,10 @@ unique_modelname <- function(modelname) {
 }
 
 # --- Native symbol resolution ---
+
 ## Dispatch is by (symbol name, DLL name), never by a resolved address:
-## dyn.unload() nulls every address handed out so far, in place, and nothing
-## resolves them again. Only the name pairing is remembered, which nothing
-## but a recompile can invalidate.
+## dyn.unload() nulls every address handed out so far, in place. Only the name
+## pairing is remembered, which nothing but a recompile can invalidate.
 .symDLL <- new.env(parent = emptyenv())
 
 ## Entry point `name` and the DLL exporting it, or NULL when nothing does.
@@ -183,7 +183,7 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
         "    Arch          : sudo pacman -S suitesparse\n",
         "    macOS (brew)  : brew install suite-sparse\n",
         "    Windows       : from any shell (PowerShell / cmd / Git Bash)\n",
-        "                    call Rtools' pacman by full path -- substitute\n",
+        "                    call Rtools' pacman by full path, substitute\n",
         "                    your installed version for <ver> (e.g. 44 or 45):\n",
         "                      C:/rtools<ver>/usr/bin/pacman.exe -Sy --noconfirm mingw-w64-ucrt-x86_64-suitesparse\n",
         "  Then: R CMD INSTALL <path/to/cppDE>",
@@ -250,9 +250,10 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   }
 
   # --- compile ---
-  ## Keep the toolchain output: it is the only diagnostic when a build fails.
-  ## Capture it with system2(): Windows runs the command without a shell, so an
-  ## appended "2>&1" reaches R CMD SHLIB as an argument and clobbers PKG_LIBS.
+  
+  ## Keep the toolchain output, the only diagnostic when a build fails. Capture it
+  ## with system2(): Windows runs the command without a shell, so an appended
+  ## "2>&1" would reach R CMD SHLIB as an argument and clobber PKG_LIBS.
   run <- function(args) {
     if (verbose) {
       cat(paste(c(shQuote(Rbin), args), collapse = " "), "\n")

@@ -130,7 +130,7 @@ There is no option for selecting a BLAS: everything follows R. The
 \code{cppODE()} backend calls \code{dgetrf}/\code{dgetrs} through R's own BLAS and
 LAPACK, and SUNDIALS is built against the same libraries R reports, so a
 compiled model links one implementation rather than two. Whatever R uses
--- reference LAPACK, OpenBLAS, MKL via FlexiBLAS -- is what cppDE uses.
+(reference LAPACK, OpenBLAS, MKL via FlexiBLAS) is what cppDE uses.
 cppDE sets that library to a single thread, because its factorisations
 are small and frequent and thread startup costs more than it saves.
 

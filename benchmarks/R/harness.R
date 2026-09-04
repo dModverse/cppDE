@@ -1,11 +1,10 @@
 ## =====================================================================
-##  harness.R -- compile, solve, time and score benchmark problems.
-##
-##  The comparison is deliberately apples-to-apples: every solver gets
-##  the same C++ right-hand side, the same analytic Jacobian, the same
-##  output grid and the same tolerances.  Nothing is evaluated through
-##  an R callback on either side.
+##  harness.R: compile, solve, time and score benchmark problems.
 ## =====================================================================
+
+##  Every solver gets the same C++ right-hand side, the same analytic Jacobian,
+##  the same output grid and the same tolerances. Nothing runs through an R
+##  callback on either side.
 
 bench_source <- function(dir = "benchmarks/R") {
   for (f in c("sbml.R", "tiers.R", "petab.R", "problems-classic.R",
@@ -21,16 +20,13 @@ bench_source <- function(dir = "benchmarks/R") {
 ##  Timing
 ## ---------------------------------------------------------------------
 
-## Repeats the call until it has run for at least `min_time` seconds so
-## that sub-millisecond solves are not measured as clock noise, then
-## reports the median over `nrep` such batches.
-##
-## `min_time` has to grow when the run is parallel.  Measured on the tiny
-## tier, going from 1 to 8 workers left the aggregate sens1 ratio within
-## 2 % but moved the nosens ratio by 12 %, with individual cells off by
-## up to 96 % -- those solves take well under a millisecond, so at 50 ms
-## batches the scheduler jitter under load swamps the signal.  Averaging
-## over a longer window is what buys the ratio back.
+## Repeats the call until it has run for at least `min_time` seconds, so a
+## sub-millisecond solve is not measured as clock noise, then reports the
+## median over `nrep` such batches.
+
+## `min_time` has to grow with the worker count: at 50 ms batches the scheduler
+## jitter under load swamps a sub-millisecond solve, and only a longer window
+## brings the ratio back.
 bench_time <- function(fn, nrep = 5L, min_time = 0.05) {
   fn()                                              # warm-up / page-in
   inner <- 1L
@@ -55,46 +51,28 @@ bench_time <- function(fn, nrep = 5L, min_time = 0.05) {
 ##  Memory guards
 ## ---------------------------------------------------------------------
 
-## None of this makes a run faster.  It exists so that a run asking for
-## more memory than the machine has dies in one worker instead of taking
-## the machine with it.
-##
-## The peak is not the integration, it is the build: a sweep over a
-## 124-state model with sensitivities hands g++ a very large translation
-## unit, and with one worker per problem the compilers run concurrently.
-## Under a scheduler the allocation bounds their sum; on a plain ssh host
-## nothing does, and enough of them at once put the kernel into reclaim
-## until it stops answering -- which is how a 12-core box was lost to a
-## two-job, eight-worker sweep on 2026-08-01.
-##
-## Three guards, because none of them covers what the others do:
-##
-##   compile_sem_*()         how many compilers run at once, counted
-##                           across workers *and* across jobs on one host
-##   bench_limit_compiler()  how large one compiler may grow, so a single
-##                           pathological model fails to build instead of
-##                           pushing the host into swap
-##   bench_limit_process()   how large one worker may grow, covering the
-##                           R side of the peak (needs the `unix` package)
-##
-## Together they bound a host's benchmark footprint at roughly
-## `compile_slots * max_compile_gb` while building, which is the number
-## that has to fit next to whatever else the machine is doing.
+## None of this makes a run faster. It bounds the peak, which is the build and
+## not the integration: one worker per problem runs the compilers concurrently,
+## and enough at once put the kernel into reclaim until the host stops answering.
+
+## Three guards, none covering what the others do: compile_sem_*() how many
+## compilers run at once across workers and jobs, bench_limit_compiler() how
+## large one compiler may grow, bench_limit_process() how large one worker may.
+
+## Together they bound a host's footprint at roughly
+## `compile_slots * max_compile_gb` while building.
 
 BENCH_SEM <- new.env(parent = emptyenv())
 BENCH_SEM$dir   <- NULL
 BENCH_SEM$slots <- 0L
 
-## A slot is a directory.  dir.create() is the one portable filesystem
-## call that both creates and reports losing the race, so a successful
-## create *is* the acquisition and nothing has to be read back.
-##
-## The semaphore lives under TMPDIR because that is host-local, and that
-## is exactly the scope wanted: two jobs on one machine have to share the
-## count, jobs on different machines must not.  Putting it in the home
-## directory would do the opposite of the right thing on a cluster whose
-## /home is a shared mount -- one lock there would serialise every host
-## in the pool against every other.
+## A slot is a directory: dir.create() is the one portable call that both
+## creates and reports losing the race, so a successful create is the
+## acquisition and nothing has to be read back.
+
+## The semaphore lives under TMPDIR because that is host-local, which is the
+## scope wanted: two jobs on one machine share the count, jobs on different
+## machines must not. A shared /home would serialise the whole pool.
 compile_sem_init <- function(slots, id = "cppde-bench-compile") {
   slots <- suppressWarnings(as.integer(slots))
   if (is.na(slots) || slots < 1L) {
@@ -135,16 +113,12 @@ compile_sem_release <- function(slot) {
   invisible(NULL)
 }
 
-## A worker killed while holding a slot -- by the OOM killer, or by the
-## very limit these guards impose -- would leak it for good, and a leaked
-## slot is a permanently smaller semaphore.  The owner's pid is only
-## trusted when the recorded nodename matches, because the semaphore path
-## is the same string on every host and a pid from another machine says
-## nothing here.  The age fallback covers a host without /proc.
-##
-## Two reapers can in principle free the same slot and both take it; that
-## needs a crash first, and the cost is one slot of overshoot, so it is
-## left as a race rather than paid for with a second lock.
+## A worker killed while holding a slot would leak it for good, and a leaked
+## slot is a permanently smaller semaphore. The owner's pid is trusted only
+## when the nodename matches; the age fallback covers a host without /proc.
+
+## Two reapers can free the same slot and both take it. That needs a crash
+## first and costs one slot of overshoot, so it is left as a race.
 compile_sem_reap <- function(slot, stale = 3600) {
   if (!dir.exists(slot)) return(invisible(NULL))
   own <- tryCatch(readLines(file.path(slot, "owner"), warn = FALSE),
@@ -160,35 +134,26 @@ compile_sem_reap <- function(slot, stale = 3600) {
   invisible(NULL)
 }
 
-## Caps one compiler process.  cppDE builds a model through R CMD SHLIB
-## (R/tools.R), which takes its compiler from R's Makeconf with
-## R_MAKEVARS_USER layered on top -- so pointing the CXX* variables at a
-## wrapper that calls `ulimit -v` first bounds every build the run
-## starts, with no package, no privilege and no change to cppDE.
-##
-## The wrapper execs whatever `R CMD config` reports rather than a bare
-## `g++`, because that string is not the same everywhere: this R answers
-## CXX20 with the compiler alone and keeps the standard in CXX20STD,
-## while other builds carry it inline as "g++ -std=gnu++17".  Passing the
-## configured command through covers both; hard-coding a compiler name
-## would silently drop the standard on the second kind.
-##
-## `ulimit -v` is RLIMIT_AS, address space rather than resident set, so
-## it sits well above the true footprint; the point is a ceiling that
-## stops runaway growth, not an accurate accounting -- set it generously.
-## g++ reports hitting it as "virtual memory exhausted: Cannot allocate
-## memory" and exits nonzero, which cppDE turns into a failed compile
-## and run_all_problems() into one skipped model.
+## Caps one compiler process. R CMD SHLIB takes its compiler from Makeconf with
+## R_MAKEVARS_USER on top, so pointing CXX* at a wrapper that calls `ulimit -v`
+## bounds every build the run starts, with no privilege and no change to cppDE.
+
+## The wrapper execs what `R CMD config` reports, not a bare `g++`: some builds
+## answer CXX20 with the compiler alone and keep the standard in CXX20STD,
+## others carry it inline, and hard-coding would drop it on the latter.
+
+## `ulimit -v` is RLIMIT_AS, address space rather than resident set, so set it
+## generously: it is a ceiling against runaway growth, not an accounting. g++
+## exits nonzero on it, which becomes a failed compile and one skipped model.
 bench_limit_compiler <- function(gb, dir = tempdir()) {
   gb <- suppressWarnings(as.numeric(gb))
   if (!isTRUE(is.finite(gb)) || gb <= 0 || .Platform$OS.type != "unix")
     return(invisible(FALSE))
-  ## A limit too small to start a compiler is not a smaller limit, it is
-  ## a build that cannot succeed; measured here, a trivial translation
-  ## unit still needs somewhere between 20 and 128 MB before g++ even
-  ## reports an error.
+  ## A limit too small to start a compiler is not a smaller limit, it is a build
+  ## that cannot succeed: a trivial translation unit needs tens of MB before g++
+  ## even reports an error.
   if (gb < 0.5)
-    stop(sprintf("a %g GB compile cap cannot build anything -- no compiler starts in that", gb))
+    stop(sprintf("a %g GB compile cap cannot build anything, no compiler starts in that", gb))
   if (gb < 2)
     warning(sprintf("a %g GB compile cap is below what a mid-size model needs", gb),
             call. = FALSE, immediate. = TRUE)
@@ -196,14 +161,12 @@ bench_limit_compiler <- function(gb, dir = tempdir()) {
   rbin <- file.path(R.home("bin"), "R")
   dir.create(dir, showWarnings = FALSE, recursive = TRUE)
 
-  ## The toolchain has to be probed *unwrapped*.  `R CMD config` reads
-  ## R_MAKEVARS_USER as well, so probing while an earlier call's file is
-  ## still in place answers with the wrapper -- and a wrapper whose exec
-  ## target is itself is an infinite exec loop that hangs the build
-  ## instead of bounding it.  Unsetting first also makes repeat calls
-  ## idempotent, which is what a driver that limits twice relies on.
-  ## R CMD config still merges ~/.R/Makevars on its own, so a compiler the
-  ## user chose there is what gets wrapped.
+  ## The toolchain has to be probed unwrapped: `R CMD config` reads
+  ## R_MAKEVARS_USER too, and a wrapper whose exec target is itself is an infinite
+  ## exec loop. Unsetting first also makes a repeated limit call idempotent.
+
+  ## R CMD config still merges ~/.R/Makevars, so a compiler chosen there is the
+  ## one that gets wrapped.
   old <- Sys.getenv("R_MAKEVARS_USER", unset = NA)
   Sys.unsetenv("R_MAKEVARS_USER")
   probe <- function(v) suppressWarnings(tryCatch(
@@ -241,15 +204,13 @@ bench_limit_compiler <- function(gb, dir = tempdir()) {
   invisible(TRUE)
 }
 
-## Caps the R worker itself.  Base R has no setrlimit, so this one is
-## best-effort: it returns NA when the `unix` package is missing, and the
-## callers report that rather than failing, because the compiler cap
-## above is the guard that always applies.
-##
-## rlimits are inherited across fork(), so setting this before mclapply()
-## covers every worker and everything a worker starts.  The limit is
-## per process, not per tree: eight workers under an 8 GB limit can still
-## reach 64 GB between them, which is what the semaphore is for.
+## Caps the R worker itself, best-effort: base R has no setrlimit, so this
+## returns NA without the `unix` package and callers report that rather than
+## fail, the compiler cap above being the guard that always applies.
+
+## rlimits are inherited across fork(), so setting this before mclapply() covers
+## every worker. It is per process, not per tree: eight workers under 8 GB can
+## still reach 64 GB between them, which is what the semaphore is for.
 bench_limit_process <- function(gb) {
   gb <- suppressWarnings(as.numeric(gb))
   if (!isTRUE(is.finite(gb)) || gb <= 0) return(invisible(FALSE))
@@ -263,12 +224,12 @@ bench_limit_process <- function(gb) {
 ##  Model compilation, with caching
 ## ---------------------------------------------------------------------
 
-## Compiling dominates the wall time of a benchmark run, and the same
-## right-hand side is reused across tolerances and often across
-## conditions, so every distinct (rhs, backend, deriv, method, fixed)
-## tuple is built exactly once per session.
-## `tag` keeps generated file and symbol names distinct across parallel
-## workers, which otherwise race on the same .cpp in a shared build dir.
+## Compiling dominates a run's wall time and the same right-hand side is reused
+## across tolerances and conditions, so every distinct (rhs, backend, deriv,
+## method, fixed) tuple is built once per session.
+
+## `tag` keeps generated file and symbol names distinct across parallel workers,
+## which otherwise race on the same .cpp in a shared build dir.
 new_model_cache <- function(outdir, tag = "") {
   e <- new.env(parent = emptyenv())
   e$store <- list()
@@ -325,10 +286,9 @@ get_model <- function(cache, prob, backend, deriv, deriv2 = FALSE, method = "bdf
 }
 
 
-## R caps the number of simultaneously loaded DLLs (100 by default), and
-## a full sweep compiles several per problem.  Releasing a problem's
-## models before moving on keeps the run within that budget.  Names are
-## never reused, so nothing is ever re-loaded under an old name.
+## R caps the number of simultaneously loaded DLLs, and a full sweep compiles
+## several per problem, so a problem's models are released before the next.
+## Names are never reused, so nothing is re-loaded under an old name.
 release_cache <- function(cache) {
   for (m in cache$store) {
     so <- sub("\\.cpp$", .Platform$dynlib.ext, attr(m, "srcfile"))
@@ -358,7 +318,7 @@ align_rows <- function(res, times) {
 }
 
 ## Each state is normalised by its own trajectory magnitude, so a
-## species living at 1e-9 counts as much as one at 1e5 -- without that,
+## species living at 1e-9 counts as much as one at 1e5, without that,
 ## the error of a stiff biological model is decided by one large state.
 traj_error <- function(x, ref) {
   if (is.null(x) || is.null(ref)) return(NA_real_)
@@ -388,11 +348,9 @@ sens_error <- function(s, ref) {
 ##  Solver configurations under test
 ## ---------------------------------------------------------------------
 
-## The head-to-head the suite is built around: cppDE's own NDF/BDF
-## multistep solver against SUNDIALS CVODE(S), which is what the R
-## ecosystem otherwise reaches for.  `extra = TRUE` adds cppDE's plain
-## BDF (CVODE's own formula, so differences isolate the NDF change) and
-## the Rosenbrock4 one-step solver.
+## The head-to-head the suite is built around: cppDE's NDF/BDF multistep solver
+## against SUNDIALS CVODE(S). `extra = TRUE` adds cppDE's plain BDF, CVODE's own
+## formula, so a difference isolates the NDF change, and Rosenbrock4.
 solver_configs <- function(extra = FALSE) {
   cfg <- list(
     list(label = "cppDE_ndf", backend = "cppde", method = "bdf", useNDF = TRUE),
@@ -406,10 +364,9 @@ solver_configs <- function(extra = FALSE) {
 }
 
 
-## Every backend twice, with the linear solver pinned dense and sparse
-## instead of auto-detected.  These run *alongside* solver_configs() on
-## the models marked by mark_sparse_sweep(), so one run answers both "is
-## cppDE faster than CVODE" and "was auto-detection right".
+## Every backend twice, with the linear solver pinned dense and sparse instead
+## of auto-detected. These run alongside solver_configs() on the models marked
+## by mark_sparse_sweep(), so one run answers both questions.
 sparse_sweep_configs <- function() {
   list(
     list(label = "cppDE_dense",  backend = "cppde", method = "bdf",
@@ -424,29 +381,19 @@ sparse_sweep_configs <- function() {
 }
 
 
-## What a config asked of the linear solver, which is not the same as the
-## `lu` column: `lu` is what the model compiled to, `pinned` is what was
-## requested.  Separating them is what lets the dense/sparse comparison
-## key on the pinned pairs and leave the auto-detected rows -- the
-## head-to-head -- out of it.
+## What a config asked of the linear solver: `lu` is what the model compiled to,
+## `pinned` what was requested. Separating them lets the dense/sparse comparison
+## key on the pinned pairs and leave the auto-detected head-to-head rows out.
 pin_label <- function(sparse)
   if (is.null(sparse)) "auto" else if (isTRUE(sparse)) "sparse" else "dense"
 
 
-## Marks the cases whose linear solver is worth pinning both ways, and
-## reports the ones it leaves out.  Two gates, for two different reasons:
-##
-##   nstates >= min_states  below this the codegen never auto-selects
-##                          sparse (decide_sparse() in codegen_cppODE.py),
-##                          so both pinnings would measure a decision
-##                          that is not taken
-##   density  <= max_density  a structurally dense Jacobian has no sparse
-##                          path to measure; the proxy overestimates, so
-##                          a model kept here may still turn out dense
-##
-## Raising --max-density past the codegen's own 0.4 cutoff is what turns
-## the sweep from "does sparse pay where we use it" into "is 0.4 the
-## right place to switch".
+## Marks the cases whose linear solver is worth pinning both ways, and reports
+## the ones left out: below `min_states` the codegen never auto-selects sparse,
+## and above `max_density` there is no sparse path to measure.
+
+## Raising --max-density past the codegen's own 0.4 cutoff turns the sweep from
+## "does sparse pay where we use it" into "is 0.4 the right place to switch".
 mark_sparse_sweep <- function(problems, max_density = 0.25, min_states = 8L,
                               verbose = TRUE) {
   kept <- character(0)
@@ -476,20 +423,15 @@ mark_sparse_sweep <- function(problems, max_density = 0.25, min_states = 8L,
 ##  One problem, all solvers x modes x tolerances
 ## ---------------------------------------------------------------------
 
-## `ref_tol` must be strictly tighter than every benchmarked tolerance.
-## It is produced by CVODE, so that cppDE is never scored against
-## itself -- but that cuts both ways: if the reference used the same
-## setting as the tightest swept cell, CVODE would be compared against
-## itself there, score an error of exactly zero, and drop out of the
-## work-precision plot as if it could not reach that accuracy.  Hence
-## two decades of headroom below the tightest sweep (atol 1e-13).
-## `max_sens2` is separate from the first-order cap because the cost of
-## second-order forward AD grows with M^2: a width that is routine for
-## sens1 makes sens2 the whole run.
-##
-## `sweep_configs` are appended for a case that mark_sparse_sweep() kept,
-## so the dense/sparse comparison rides along in the same run and on the
-## same worker as the head-to-head it has to be read next to.
+## `ref_tol` must be strictly tighter than every benchmarked tolerance, two
+## decades below the tightest sweep: at equal settings CVODE would score exactly
+## zero error against itself and drop out of the work-precision plot.
+
+## `max_sens2` is separate from the first-order cap because second-order forward
+## AD grows with M^2, so a width that is routine for sens1 makes sens2 the run.
+
+## `sweep_configs` are appended for a case mark_sparse_sweep() kept, so the
+## dense/sparse comparison rides in the same run and worker as the head-to-head.
 run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
                         configs = solver_configs(), nrep = 5L,
                         ref_tol = c(atol = 1e-14, rtol = 1e-12),
@@ -508,8 +450,8 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
               else paste0(" [", prob$condition, "]"),
               prob$nstates, prob$npars, prob$nsens, length(prob$times)))
 
-  ## Second order is a cppDE-only capability -- CVODES does not provide
-  ## it -- so there is nothing to compare against and no reference is
+  ## Second order is a cppDE-only capability, CVODES does not provide
+  ## it, so there is nothing to compare against and no reference is
   ## computed: the sens2 rows report cost only.
   narrow_for_sens2 <- function(p) {
     if (length(p$sens) <= max_sens2) return(p)
@@ -623,34 +565,24 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
 ##  Running many problems, optionally in parallel
 ## ---------------------------------------------------------------------
 
-## Parallelism is applied at the granularity of a whole *problem*: one
-## worker runs every solver, mode and tolerance of that problem, in
-## sequence.  That is what keeps the results meaningful.
-##
-## Wall-clock measurements taken under load are inflated -- shared L3,
-## memory bandwidth, and above all turbo clocking, which drops the core
-## frequency once many cores are busy.  Those effects are largely
-## *uniform*, so the suite's headline number, a ratio between two solvers
-## on the same cell, survives them: both solvers of a matched cell ran in
-## the same worker under the same neighbourhood.  Splitting a problem's
-## cells across workers would break exactly that property.
-##
-## Absolute milliseconds from a run with cores > 1 are therefore not
-## comparable with those from a serial run.  The `cores` column in
-## results.csv records which it was, so the two are never mixed silently.
+## Parallelism is applied per problem: one worker runs every solver, mode and
+## tolerance of that problem in sequence, so both solvers of a matched cell run
+## in the same worker under the same neighbourhood.
+
+## Wall-clock under load is inflated by shared L3, memory bandwidth and turbo
+## clocking, but largely uniformly, so a ratio survives it and an absolute
+## millisecond does not. The `cores` column records which run it came from.
 run_all_problems <- function(problems, builddir, tolerances, modes, configs,
                              nrep, cores = 1L, max_sens2 = 10L,
                              max_sens = Inf, max_states = Inf, min_time = NULL,
                              compile_slots = 0L, sweep_configs = NULL,
                              on_skip = function(name, why) invisible()) {
-  ## Longer batches under load -- see the note on bench_time().
+  ## Longer batches under load, see the note on bench_time().
   if (is.null(min_time)) min_time <- if (cores > 1L) 0.25 else 0.05
 
-  ## Set up before the fork so the workers inherit the configuration, and
-  ## torn down after so a serial caller in the same session is not left
-  ## with a semaphore it never asked for.  The slots themselves outlive
-  ## the process by design -- that is what lets a second job on the same
-  ## host count against the same ceiling.
+  ## Set up before the fork so the workers inherit it, torn down after so a serial
+  ## caller in the same session keeps no semaphore it never asked for. The slots
+  ## outlive the process, which is what lets a second job share the ceiling.
   compile_sem_init(compile_slots)
   on.exit(compile_sem_init(0L), add = TRUE)
 
@@ -696,11 +628,9 @@ run_all_problems <- function(problems, builddir, tolerances, modes, configs,
                         "MKL_NUM_THREADS"), unset = NA)
     Sys.setenv(OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1",
                MKL_NUM_THREADS = "1")
-    ## Sys.setenv() takes named *arguments*, not a named vector, so the
-    ## restore has to go through do.call.  The bug hides on a machine
-    ## where these variables were unset to begin with -- only the
-    ## unsetenv branch runs there -- and surfaces on a cluster, where
-    ## the module system sets OMP_NUM_THREADS before R starts.
+    ## Sys.setenv() takes named arguments, not a named vector, so the restore goes
+    ## through do.call. Only the unsetenv branch runs where these variables were
+    ## unset to begin with, so a cluster module setting OMP_NUM_THREADS exposes it.
     on.exit({
       for (n in names(old)) {
         if (is.na(old[[n]])) Sys.unsetenv(n)
@@ -736,14 +666,13 @@ pinned_col <- function(df) {
 }
 
 
-## Speed-up of every solver against CVODE on the identical
-## (problem, condition, mode, tolerance) cell.  Ratios are combined with
-## a geometric mean, which is the correct average for relative measures.
-##
-## Restricted to the auto-detected rows.  The sweep's pinned rows are the
-## same two backends a second and third time, and letting them in would
-## count those models repeatedly in a mean that is supposed to weight
-## every model once.
+## Speed-up of every solver against CVODE on the identical (problem, condition,
+## mode, tolerance) cell, combined with a geometric mean, the correct average
+## for relative measures.
+
+## Restricted to the auto-detected rows: the sweep's pinned rows are the same
+## two backends again, and would count those models repeatedly in a mean meant
+## to weight every model once.
 speedup_table <- function(df, baseline = "CVODE_bdf") {
   df <- df[pinned_col(df) == "auto", , drop = FALSE]
   if (!nrow(df)) return(NULL)
@@ -760,11 +689,9 @@ speedup_table <- function(df, baseline = "CVODE_bdf") {
   m
 }
 
-## Dense/sparse time ratio per backend and cell.
-##
-## Keyed on `pinned`, not on `lu`: the auto-detected head-to-head rows
-## also carry an `lu`, and pairing one of those with a pinned row would
-## compare a model against itself.
+## Dense/sparse time ratio per backend and cell. Keyed on `pinned`, not on
+## `lu`: the auto-detected head-to-head rows also carry an `lu`, and pairing
+## one of those with a pinned row would compare a model against itself.
 sparse_gain_table <- function(df) {
   if (!nrow(df) || !"lu" %in% names(df)) return(NULL)
   df <- df[pinned_col(df) %in% c("dense", "sparse"), , drop = FALSE]

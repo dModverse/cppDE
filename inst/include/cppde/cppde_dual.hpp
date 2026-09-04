@@ -30,6 +30,7 @@
 #define CPPDE_DUAL_HPP
 
 #include <cppde/cppde_dual_arena.hpp>
+#include <cppde/cppde_scalar_ops.hpp>
 
 #include <cassert>
 #include <cstddef>
@@ -515,6 +516,13 @@ public:
     return *this;
   }
 };
+
+// =============================================================================
+// value_of for the first-order dual: peel to the innermost scalar. Nested T
+// recurses through the same overload set.
+// =============================================================================
+template<class T, unsigned N>
+inline auto value_of(const dual<T, N>& d) { return value_of(d.x()); }
 
 // dual2nd<T, N> is now a distinct class (cppde_dual2nd.hpp): a public-
 // inheritance refinement of dual<dual<T, N>, N> with hand-derived symmetric

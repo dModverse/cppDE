@@ -1,26 +1,19 @@
 ## =====================================================================
-##  plots.R -- ggplot2 figures for the benchmark results.
-##
-##  Five figures, each answering one question:
-##    1  work-precision   how much time does a given accuracy cost?
-##    2  speedup          how does cppDE compare to CVODE, per problem?
-##    3  scaling          how does cost grow with system size?
-##    4  sens overhead    what do first-order sensitivities cost?
-##    5  summary          one number per mode, geometric mean over all cells
-##
-##  Every figure is also written as the CSV it was built from, so the
-##  numbers can be read directly rather than measured off an axis.
+##  plots.R: ggplot2 figures for the benchmark results.
 ## =====================================================================
+
+##  Five figures: work-precision, speed-up against CVODE per problem, scaling
+##  with system size, first-order sensitivity overhead, and one summary number
+##  per mode. Each is written as the CSV it was built from as well.
 
 for (p in c("ggplot2", "scales")) if (!requireNamespace(p, quietly = TRUE))
   stop("package '", p, "' is required for the benchmark plots")
 
 library(ggplot2)
 
-## Categorical palette: slots 1-4 of the validated default order
-## (blue / orange / aqua / violet).  Verified for all-pairs colour-vision
-## separation, so the same colours work in scatter and bar alike.  Shape
-## is carried alongside colour throughout as a secondary encoding.
+## Categorical palette: slots 1-4 of the validated default order, verified for
+## all-pairs colour-vision separation, so the same colours work in scatter and
+## bar alike. Shape is carried alongside colour as a secondary encoding.
 BENCH_COLS <- c(
   cppDE_ndf = "#2a78d6",
   CVODE_bdf  = "#eb6834",
@@ -71,7 +64,7 @@ mode_factor <- function(x) {
 }
 
 ## Log ticks that stay readable when the range spans many decades.
-## Counts (states, parameters) get plain integer breaks -- a label such
+## Counts (states, parameters) get plain integer breaks, a label such
 ## as 10^0.48 on an axis titled "number of states" is unreadable.
 log_x <- scale_x_log10(labels = scales::label_log(digits = 2))
 log_y <- scale_y_log10(labels = scales::label_number(drop0trailing = TRUE))
@@ -235,11 +228,9 @@ plot_sens_overhead <- function(df) {
 ##  5b  Second-order sensitivities
 ## ---------------------------------------------------------------------
 
-## cppDE-only: CVODES provides no second-order sensitivities, so this is
-## a cost curve, not a comparison.  What it shows is how the price of a
-## full Hessian grows with the number of parameters -- forward-over-
-## forward AD carries M(M+1)/2 second-order directions, so the
-## expectation is quadratic.
+## cppDE-only: CVODES has no second-order sensitivities, so this is a cost
+## curve, not a comparison. Forward-over-forward AD carries M(M+1)/2 directions,
+## so the price of a full Hessian is expected to grow quadratically.
 plot_sens2_cost <- function(df) {
   d <- df[df$ok & is.finite(df$time_ms) & df$mode == "sens2", ]
   if (!nrow(d)) return(NULL)
@@ -259,7 +250,7 @@ plot_sens2_cost <- function(df) {
                   labels = scales::label_number(accuracy = 1),
                   expand = expansion(mult = c(0.08, 0.35))) + log_y +
     labs(title = "Cost of second-order sensitivities",
-         subtitle = "cppDE only -- CVODES has no second-order sensitivities",
+         subtitle = "cppDE only, CVODES has no second-order sensitivities",
          x = "number of sensitivity parameters M",
          y = "cost relative to a plain solve",
          caption = paste("Forward-over-forward AD carries M(M+1)/2 second-order",
@@ -407,7 +398,7 @@ save_plots <- function(df, outdir, device = "png", width = 11, height = 7,
   written <- character(0)
   for (nm in names(figs)) {
     f <- figs[[nm]]
-    if (is.null(f$p)) { message("  [skip] ", nm, " -- no data"); next }
+    if (is.null(f$p)) { message("  [skip] ", nm, ", no data"); next }
     path <- file.path(outdir, paste0(nm, ".", device))
     ggsave(path, f$p, width = width, height = f$h, dpi = dpi,
            device = device, bg = "white", limitsize = FALSE)

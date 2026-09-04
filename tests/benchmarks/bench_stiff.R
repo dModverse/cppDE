@@ -1,5 +1,5 @@
 ## =================================================================
-## Benchmark: stiff solvers -- cppDE (bdf, rb4) vs deSolve
+## Benchmark: stiff solvers, cppDE (bdf, rb4) vs deSolve
 ## =================================================================
 rm(list = ls(all.names = TRUE))
 
@@ -51,10 +51,6 @@ nrep <- 10L
 
 # =====================================================================
 #  Problem 1: Robertson chemical kinetics (3 states, stiff classic)
-#
-#  dy1/dt = -0.04*y1 + 1e4*y2*y3
-#  dy2/dt =  0.04*y1 - 1e4*y2*y3 - 3e7*y2^2
-#  dy3/dt =  3e7*y2^2
 # =====================================================================
 print_header("1. Robertson chemical kinetics (3 states)")
 
@@ -220,7 +216,7 @@ if (file.exists(cvode_bin)) {
                  min = NA, max = NA),
             cvode_diag, cvode_mass)
 } else {
-  cat(sprintf("  %-22s  (binary not found at %s -- skip)\n", "CVODE BDF (C++)", cvode_bin))
+  cat(sprintf("  %-22s  (binary not found at %s, skip)\n", "CVODE BDF (C++)", cvode_bin))
 }
 
 cat("\nDone.\n")

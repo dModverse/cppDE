@@ -1,25 +1,19 @@
 #!/usr/bin/env Rscript
+
 ## =====================================================================
-##  validate-models.R -- check the SBML translation against ground truth.
-##
-##  The PEtab collection ships a `simulatedData_*.tsv` for every model:
-##  the observables as produced by an independent, established
-##  implementation at the nominal parameter values.  Reproducing those
-##  numbers exercises the whole chain at once -- MathML parsing,
-##  stoichiometry, compartment scaling, assignment rules, initial
-##  assignments, condition overrides, code generation and the
-##  integrator.  Agreement between cppDE and CVODE cannot show this,
-##  because both are fed the same translated right-hand side.
-##
-##  Usage:
+##  validate-models.R: check the SBML translation against ground truth.
+## =====================================================================
+
 ##      Rscript benchmarks/validate-models.R
 ##      Rscript benchmarks/validate-models.R --models Boehm,Fujita
-##
-##  Models whose PEtab problem specifies a steady-state
-##  pre-equilibration are reported as NOT COMPARABLE rather than as
-##  failures: the benchmark starts from the SBML initials by design, so
-##  a mismatch there says nothing about the translation.
-## =====================================================================
+
+##  The collection ships a `simulatedData_*.tsv` per model, the observables
+##  from an independent implementation at the nominal values. Reproducing them
+##  exercises the whole translation chain, which cppDE against CVODE cannot.
+
+##  A model whose PEtab problem specifies steady-state pre-equilibration is
+##  reported NOT COMPARABLE rather than failed: the benchmark starts from the
+##  SBML initials by design, so a mismatch says nothing about the translation.
 
 suppressPackageStartupMessages(library(cppDE))
 
@@ -52,10 +46,9 @@ dir.create(builddir, showWarnings = FALSE, recursive = TRUE)
 ##  Observable formulas
 ## ---------------------------------------------------------------------
 
-## PEtab writes observable formulas in infix notation over the original
-## SBML ids, which may not be valid R names, so the same renaming the
-## model went through is applied here.  `observableParameterN_<id>`
-## placeholders are filled from the measurement table.
+## PEtab writes observable formulas in infix notation over the original SBML
+## ids, which may not be valid R names, so the same renaming the model went
+## through is applied here. Placeholders are filled from the measurement table.
 prepare_formula <- function(formula, ids, obs_params) {
   f <- gsub("**", "^", formula, fixed = TRUE)
   ren <- ids[san_id(ids) != ids]

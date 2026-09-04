@@ -59,7 +59,8 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
     convert_xor,
 )
-from sympy.printing.cxx import CXX17CodePrinter
+from cppsympy import (CppdePrinter, TokenError, is_boolean, normalise_logic,
+                      parse_error)
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
 import os
@@ -114,6 +115,7 @@ def _get_safe_parse_dict():
         "besselj": sp.besselj, "bessely": sp.bessely,
         "besseli": sp.besseli, "besselk": sp.besselk,
         "Heaviside": sp.Heaviside, "DiracDelta": sp.DiracDelta,
+        "And": sp.And, "Or": sp.Or, "Not": sp.Not,
         "Piecewise": sp.Piecewise, "piecewise": _sbml_piecewise,
         "pi": sp.pi, "E": sp.E, "oo": sp.oo,
     }
@@ -122,7 +124,7 @@ _PY_RESERVED = frozenset(keyword.kwlist) | {'True', 'False', 'None'}
 
 def _safe_sympify(expr_str, local_symbols=None):
     """Safely parse a string expression to SymPy."""
-    expr_str = str(expr_str).strip()
+    expr_str = normalise_logic(str(expr_str).strip())
     if expr_str == "0":
         return sp.Integer(0)
 
@@ -138,12 +140,15 @@ def _safe_sympify(expr_str, local_symbols=None):
             safe_local[name] = sp.Symbol(name, real=True)
 
     transformations = standard_transformations + (convert_xor,)
-    return parse_expr(
-        expr_str,
-        local_dict=safe_local,
-        transformations=transformations,
-        evaluate=True,
-    )
+    try:
+        return parse_expr(
+            expr_str,
+            local_dict=safe_local,
+            transformations=transformations,
+            evaluate=True,
+        )
+    except (SyntaxError, TokenError) as e:
+        raise parse_error(expr_str, e) from None
 def _ensure_double_literals(cpp_code):
     """Convert integer literals to double literals in C++ code."""
     sci_pattern = r'(\d+\.?\d*[eE][+-]?\d+)'
@@ -162,15 +167,24 @@ def _ensure_double_literals(cpp_code):
     
     return temp
 # =====================================================================
-# Cached single-pass symbol replacer for _to_cpp
+# Cached symbol-to-slot mapping for _to_cpp
 # =====================================================================
 
-class _SymbolReplacer:
+@lru_cache(maxsize=16)
+def _get_printer(symbols):
+    """Printer for one symbol-to-slot mapping, given as sorted name/slot pairs."""
+    return CppdePrinter(symbols=dict(symbols))
+
+
+class _ModelSymbols:
     """
-    Build a single compiled regex that replaces all state/param/forcing/time
-    symbols in one pass instead of O(n_states + n_params) separate re.sub calls.
+    The C++ slot every state, param, forcing and time symbol prints as.
+
+    The printer substitutes them, so no model symbol reaches the generated
+    source: rewriting the finished source instead turns std::pow into
+    params[3]::pow for a parameter named std.
     """
-    __slots__ = ('_pattern', '_map')
+    __slots__ = ('printer', '_map')
 
     def __init__(self, states, params, n_states, forcings, use_initial_states):
         mapping = {}
@@ -194,19 +208,15 @@ class _SymbolReplacer:
         mapping["time"] = "t"
 
         self._map = mapping
-        # Sort by length descending so longer names match first (e.g. x10 before x1)
-        names_sorted = sorted(mapping.keys(), key=len, reverse=True)
-        alt = "|".join(re.escape(n) for n in names_sorted)
-        self._pattern = re.compile(
-            r"(?<![a-zA-Z0-9_])(?:" + alt + r")(?![a-zA-Z0-9_\[])"
-        )
+        self.printer = _get_printer(tuple(sorted(mapping.items())))
 
-    def __call__(self, cpp_code):
-        return self._pattern.sub(lambda m: self._map[m.group(0)], cpp_code)
+    def slot(self, name):
+        """The C++ a bare symbol prints as; an unmapped name stays as it is."""
+        return self._map.get(name, name)
 @lru_cache(maxsize=8)
-def _get_replacer(states_tuple, params_tuple, n_states, forcings_tuple, use_initial_states):
-    """Cached factory: the replacer is rebuilt only when the signature changes."""
-    return _SymbolReplacer(
+def _get_symbols(states_tuple, params_tuple, n_states, forcings_tuple, use_initial_states):
+    """Cached factory: the mapping is rebuilt only when the signature changes."""
+    return _ModelSymbols(
         list(states_tuple), list(params_tuple), n_states,
         list(forcings_tuple), use_initial_states,
     )
@@ -325,23 +335,15 @@ def _negate_cpp_expr(expr_str):
             return rest
     return f'-({stripped})'
 
-# Cached CXX17CodePrinter instance: avoids repeated printer construction
-@lru_cache(maxsize=1)
-def _get_cxx_printer():
-    """Return a reusable CXX17CodePrinter instance."""
-    return CXX17CodePrinter()
 # =====================================================================
 # _to_cpp - Convert SymPy expression to C++ code
 # =====================================================================
 
 def _to_cpp(expr, states, params, n_states, num_type, forcings=None, use_initial_states=False):
     """Convert a SymPy expression to C++ code.
-    
-    Optimizations over the naive approach:
-    - Reusable CXX17CodePrinter instance (avoids per-call printer setup)
-    - Precompiled single-pass regex for std:: -> cppde:: math replacement
-    - Precompiled single-pass regex for math macro replacement
-    - Precompiled whitespace collapse pattern
+
+    The printer substitutes a slot for every model symbol, so the result holds
+    no user name. Printer and slot map are cached per symbol set.
     """
     if forcings is None:
         forcings = []
@@ -353,26 +355,22 @@ def _to_cpp(expr, states, params, n_states, num_type, forcings=None, use_initial
         return str(int(expr)) + ".0"
     if isinstance(expr, sp.Float):
         return repr(float(expr))
+
+    symbols = _get_symbols(
+        tuple(states), tuple(params), n_states,
+        tuple(forcings), use_initial_states,
+    )
+
     if isinstance(expr, sp.Symbol):
-        # Single symbol: only needs variable/param replacement
-        replacer = _get_replacer(
-            tuple(states), tuple(params), n_states,
-            tuple(forcings), use_initial_states,
-        )
-        return replacer(str(expr))
+        return symbols.slot(expr.name)
     # Negative symbol: -x  (sp.Mul(-1, x))
     if (isinstance(expr, sp.Mul) and len(expr.args) == 2
             and expr.args[0] is sp.S.NegativeOne
             and isinstance(expr.args[1], sp.Symbol)):
-        replacer = _get_replacer(
-            tuple(states), tuple(params), n_states,
-            tuple(forcings), use_initial_states,
-        )
-        return "-" + replacer(str(expr.args[1]))
+        return "-" + symbols.slot(expr.args[1].name)
 
-    # Full path: complex expressions via reusable printer
-    printer = _get_cxx_printer()
-    cpp_code = printer.doprint(expr).replace("\n", " ")
+    # Full path: complex expressions via the slot-substituting printer
+    cpp_code = symbols.printer.doprint(expr).replace("\n", " ")
     
     # Single-pass math macro replacement (precompiled regex)
     cpp_code = _MATH_MACRO_PATTERN.sub(lambda m: _MATH_MACRO_MAP[m.group(0)], cpp_code)
@@ -380,13 +378,6 @@ def _to_cpp(expr, states, params, n_states, num_type, forcings=None, use_initial
     # Single-pass std:: -> {prefix}:: replacement for AD types (precompiled regex)
     if num_type in ("AD", "AD2"):
         cpp_code = _AD_FN_PATTERN.sub(lambda m: f'{_AD_PREFIX}::{m.group(1)}', cpp_code)
-    
-    # Single-pass symbol replacement (cached regex)
-    replacer = _get_replacer(
-        tuple(states), tuple(params), n_states,
-        tuple(forcings), use_initial_states,
-    )
-    cpp_code = replacer(cpp_code)
     
     cpp_code = _WHITESPACE_PATTERN.sub("", cpp_code)
     cpp_code = _ensure_double_literals(cpp_code)
@@ -409,12 +400,7 @@ def generate_ode_cpp(
 ):
     """
     Generate C++ code for ODE system and Jacobian.
-    
-    Optimizations:
-    - Parallel Jacobian computation via ThreadPoolExecutor
-    - Reusable CXX17CodePrinter instance
-    - Single-pass regex replacements
-    
+
     Parameters:
     -----------
     rhs_dict : dict
@@ -483,26 +469,11 @@ def generate_ode_cpp(
 
     # =====================================================================
     # FAST PATH: Template-based structural deduplication
-    #
-    # For MOL-discretized PDEs and other systems with structurally repeated
-    # equations (e.g., 1024 identical Brusselator cells), most expressions
-    # share the same algebraic structure: only the variable indices differ.
-    #
-    # Instead of parsing + differentiating all n_states expressions individually,
-    # we:
-    #   1. Fingerprint each RHS string by replacing state names with positional
-    #      placeholders (_s0, _s1, ...) to canonical form
-    #   2. Group expressions with identical canonical form
-    #   3. Parse & differentiate only ONCE per unique template
-    #   4. Expand to all instances via fast string substitution
-    #
-    # This turns O(n_states · bandwidth) sp.diff calls into
-    # O(n_templates · bandwidth) calls, where n_templates ≪ n_states
-    # for MOL systems. E.g., Brusselator 32×32: 2048 states, 2 templates.
-    #
-    # Activated for systems with > 64 states where dedup yields ≥ 4× reduction.
-    # Falls back to the standard path if dedup doesn't help.
     # =====================================================================
+
+    # Structurally repeated equations (MOL-discretised PDEs) fingerprint to a
+    # canonical form, are parsed and differentiated once per distinct form, and
+    # expand per instance: O(n_templates) sp.diff calls instead of O(n_states).
     dedup_result = None
     if n_states > 64 and not forcings_list and not skip_jacobian:
         dedup_result = _try_template_dedup(
@@ -613,10 +584,9 @@ def generate_ode_cpp(
                         jac_nnz_exprs.append(str(e))
 
     # --- Generate the Jacobian functor ---
-    # Sparse path: raw CSC with direct Ax[] writes
-    # Dense path:  writes to matrix<T> via J(i,j) = expr (with zero_matrix init)
-    # Only ONE is generated: the one matching use_sparse.
-    # skip_jacobian: no-op stub already in jac_cpp_lines; skip generation.
+
+    # Exactly one form is emitted, matching use_sparse: raw CSC with direct Ax[]
+    # writes, or matrix<T> through J(i,j). With skip_jacobian the stub stands.
     if skip_jacobian:
         jac_code = "\n".join(jac_cpp_lines)
     elif use_sparse:
@@ -635,18 +605,12 @@ def generate_ode_cpp(
         total_nnz = jac_nnz_count + len(missing_diags)
 
         # =================================================================
-        # Sparse Jacobian via raw CSC (csc_matrix).
-        #
-        # All (row, col) entries are sorted into CSC order (by col, then
-        # row) and assigned a linear Ax index k = 0, 1, ..., nnz-1.
-        #
-        # First call (!W.pattern_built): build_pattern() allocates Ap/Ai
-        #   from static row/col arrays and sets pattern_built = true.
-        # All calls: W.Ax[k] = expr  (direct array write, O(1) per entry).
-        #
-        # When template dedup is available (MOL systems), a loop-based
-        # form uses a precomputed Ax offset table per template instance.
+        # Sparse Jacobian via raw CSC (csc_matrix)
         # =================================================================
+
+        # Entries are sorted into CSC order and given a linear Ax index. The first call
+        # builds Ap/Ai from the static row/col arrays, every call writes W.Ax[k]
+        # directly. Under template dedup a loop form uses a precomputed offset table.
 
         def _fmt_int_array(values, per_line=20):
             lines = []
@@ -687,13 +651,12 @@ def generate_ode_cpp(
         sparse_jac_lines.append(f"                  cppde::csc_matrix<{num}>& W,")
         sparse_jac_lines.append(f"                  const {num}& t,")
         sparse_jac_lines.append(f"                  std::vector<{num}>& dfdt) {{")
-        # No per-Jacobian arena scope: W entries (csc_matrix<T>) and dfdt
-        # are NOT slab-bound, so their tan_ pointers come from the arena.
-        # The LU solver consumes them after this call returns; rolling back
-        # the arena at scope exit would dangle those pointers.
-        # Gate constant-entry init on W (pattern-built) so that callers which pass
-        # a fresh csc_matrix (e.g. estimate_initial_dt allocating its own W) get
-        # constants applied; subsequent calls with the same W skip them.
+        # No per-Jacobian arena scope: W entries and dfdt are not slab-bound, so their
+        # tan_ pointers come from the arena, and the LU solver consumes them after this
+        # call returns.
+
+        # Gate constant-entry init on W being pattern-built, so a caller passing a fresh
+        # csc_matrix gets the constants and later calls with the same W skip them.
         sparse_jac_lines.append(f"    const bool _init_consts = !W.pattern_built;")
 
         # First-call: build CSC pattern from static arrays
@@ -713,28 +676,17 @@ def generate_ode_cpp(
 
         if use_loop:
             # =============================================================
-            # LOOP-BASED: one loop per template group.
-            # Each (row, dep[j]) to Ax offset is precomputed into a static
-            # table.  The loop body writes W.Ax[ax_offsets[c*n_jac+j]].
+            # LOOP-BASED: one loop per template group
             # =============================================================
+
+            # The (row, dep[j]) to Ax offset is precomputed into a static table; the loop
+            # body writes W.Ax[ax_offsets[c*n_jac+j]].
             groups = dedup_result['groups']
             tmpl_cpp = dedup_result['template_cpp']
             name_to_idx = dedup_result['name_to_state_idx']
 
-            param_map = {}
-            for i, p in enumerate(params_list):
-                param_map[p] = f'params[{n_states + i}]'
-            param_map['time'] = 't'
-            param_names_sorted = sorted(param_map.keys(), key=len, reverse=True)
-            param_alt = "|".join(re.escape(n) for n in param_names_sorted)
-            param_re = re.compile(
-                r"(?<![a-zA-Z0-9_])(?:" + param_alt + r")(?![a-zA-Z0-9_\[])"
-            ) if param_names_sorted else None
-
             def _tmpl_to_loop_cpp(tmpl_str):
                 result = _GENERIC_PATTERN.sub(lambda m: f'x[s[{m.group(1)}]]', tmpl_str)
-                if param_re is not None:
-                    result = param_re.sub(lambda m: param_map[m.group(0)], result)
                 result = _WHITESPACE_PATTERN.sub(" ", result).strip()
                 result = _ensure_double_literals(result)
                 result = _optimize_pow2(result)
@@ -771,13 +723,12 @@ def generate_ode_cpp(
                 sparse_jac_lines.append(_fmt_int_array(ax_offsets_data))
                 sparse_jac_lines.append(f"    }};")
 
-            # Hot path: loops with direct W.Ax[] writes
-            # Expressions are NEGATED for pre-negated Jacobian storage:
-            # W = (1/gamma*h)*I - J, so we store -J directly in W.Ax.
-            # This eliminates the O(nnz) negate-copy in factorize_W.
-            #
-            # Constant entries (not depending on x[]) are written once
-            # in a one-time init block, reducing per-call writes.
+            # Hot path: loops with direct W.Ax[] writes. Expressions are negated, because
+            # W = (1/gamma*h)*I - J holds -J directly and factorize_W then needs no
+            # O(nnz) negate-copy.
+
+            # Constant entries, those not depending on x[], are written once in an init
+            # block rather than on every call.
             for tmpl_idx, (key, members) in enumerate(groups.items()):
                 n_instances = len(members)
                 n_deps = len(members[0][1])
@@ -819,9 +770,7 @@ def generate_ode_cpp(
 
         else:
             # =============================================================
-            # PER-ENTRY: unrolled W.Ax[k] for small/irregular systems.
-            #
-            # Each sorted entry gets its Ax index directly in the code.
+            # PER-ENTRY: unrolled W.Ax[k] for small or irregular systems
             # =============================================================
 
             # Build (row, col) to expression mapping from the dense Jacobian code
@@ -861,10 +810,8 @@ def generate_ode_cpp(
             for line in other_lines:
                 sparse_jac_lines.append(line)
 
-            # Emit Ax writes in CSC order (NEGATED for pre-negated W storage)
-            # dense_jac_entries values are ALREADY negated (parsed from
-            # the dense Jacobian code which applies _negate_cpp_expr).
-            # Do NOT negate again: that would flip the sign back to +J.
+            # Ax writes in CSC order. dense_jac_entries are already negated by
+            # _negate_cpp_expr, so negating again would flip the sign back to +J.
             for ax_k, (r, c, expr) in enumerate(zip(sorted_rows, sorted_cols, sorted_exprs)):
                 if expr is not None:
                     # Real entry: look up the already-negated C++ expression
@@ -976,19 +923,11 @@ def _generate_noop_jacobian(n_states, num_type):
 
 # =====================================================================
 # Common subexpression elimination
-#
-# sp.cse identifies subexpressions that appear multiple times across a
-# group of expressions and lifts them to named temporaries. For typical
-# Michaelis–Menten / Hill-type ODE systems the same denominator (e.g.
-# Km + KKK) appears in numerator and denominator of multiple equations;
-# without CSE every occurrence drives a fresh dual ET tree. With CSE
-# the temp materialises once into a num_type local: the ET engine then
-# substitutes the temp by reference in subsequent expressions.
-#
-# Skipped when there's nothing to gain (few exprs, or no common subs):
-#   - len(exprs) < 4: too small to amortise the temp overhead
-#   - len(temps) == 0: sympy found no shared structure
 # =====================================================================
+
+# sp.cse lifts a repeated subexpression into a num_type local, so the dual ET
+# engine substitutes it by reference instead of rebuilding the tree at every
+# occurrence. Skipped below 4 expressions, or when sympy finds nothing shared.
 
 def _cse_temps(exprs, prefix='_cse_t'):
     """Apply sympy CSE; return (temps, simplified_exprs) or ([], exprs)."""
@@ -1010,7 +949,10 @@ def _emit_cse_temps(temps, states_list, params_list, n_states, num_type, forcing
     lines = []
     for sym, sub in temps:
         sub_cpp = _to_cpp(sub, states_list, params_list, n_states, num_type, forcings_list)
-        lines.append(f"    const {num_type} {sym.name} = {sub_cpp};")
+        # A piecewise condition can be lifted into its own temp, and that one
+        # holds a truth value, not a model quantity.
+        temp_type = "bool" if is_boolean(sub) else num_type
+        lines.append(f"    const {temp_type} {sym.name} = {sub_cpp};")
     return lines
 
 
@@ -1093,11 +1035,10 @@ def _generate_jac_code_plain(jac_matrix, time_derivs, exprs, forcing_syms, forci
         f"                  std::vector<{num_type}>& dfdt) {{",
         f"    J.set_zero();",
     ]
-    # No per-Jacobian arena scope: J entries (dense_matrix<T>) and dfdt are
-    # NOT slab-bound, so their tan_ pointers come from the arena. The LU
-    # solver consumes them after this call returns; rolling back the arena
-    # at scope exit would dangle those pointers. The outer solveODE-level
-    # scope (R/cppODE.R) catches the arena growth at solve end.
+    # No per-Jacobian arena scope: J entries and dfdt are not slab-bound, so their
+    # tan_ pointers come from the arena and the LU solver consumes them after this
+    # call returns. The solveODE-level scope catches the growth at solve end.
+
     # Collect non-zero (i,j) positions first for dirty-index clearing
     jac_entries_plain = []
     for i in range(n_states):
@@ -1236,7 +1177,12 @@ def _try_template_dedup(odes_list, states_list, params_list, n_states, num_type,
         }
 
     # --- Step 3: Convert templates to C++ strings ---
-    printer = _get_cxx_printer()
+    # Params, states and time print as their slots; only the _sN placeholders
+    # stay symbolic until the template is expanded per instance.
+    tmpl_map = {n: f'x[{i}]' for i, n in enumerate(states_list)}
+    tmpl_map.update({p: f'params[{n_states + i}]' for i, p in enumerate(params_list)})
+    tmpl_map['time'] = 't'
+    printer = _get_printer(tuple(sorted(tmpl_map.items())))
 
     def _template_to_cpp(sympy_expr):
         """Convert template expression to intermediate C++ (with _sN placeholders)."""
@@ -1257,28 +1203,13 @@ def _try_template_dedup(odes_list, states_list, params_list, n_states, num_type,
         td_cpp = _template_to_cpp(tdata['time_deriv'])
         template_cpp[key] = {'rhs': rhs_cpp, 'jac': jac_cpp, 'time_deriv': td_cpp}
 
-    # --- Step 4: Build symbol to C++ replacement map ---
+    # --- Step 4: Expand the templates to their instances ---
     name_to_state_idx = {n: i for i, n in enumerate(states_list)}
 
-    sym_to_cpp = {}
-    for i, n in enumerate(states_list):
-        sym_to_cpp[n] = f'x[{i}]'
-    for i, p in enumerate(params_list):
-        sym_to_cpp[p] = f'params[{n_states + i}]'
-    sym_to_cpp['time'] = 't'
-
-    # Single-pass regex for all concrete symbols
-    all_sym_names = sorted(sym_to_cpp.keys(), key=len, reverse=True)
-    sym_pattern = re.compile(
-        r'(?<![a-zA-Z0-9_])(' + '|'.join(re.escape(n) for n in all_sym_names) + r')(?![a-zA-Z0-9_\[])'
-    )
-
     def _expand_template(template_str, dep_names):
-        """Expand a template C++ string by substituting _sN by the concrete symbols."""
-        # Step 1: _sN -> actual state name
-        concrete = _GENERIC_PATTERN.sub(lambda m: dep_names[int(m.group(1))], template_str)
-        # Step 2: all symbols -> C++ (x[i], params[j], t)
-        cpp = sym_pattern.sub(lambda m: sym_to_cpp[m.group(0)], concrete)
+        """Expand a template C++ string by substituting _sN by the concrete states."""
+        cpp = _GENERIC_PATTERN.sub(
+            lambda m: f'x[{name_to_state_idx[dep_names[int(m.group(1))]]}]', template_str)
         cpp = _WHITESPACE_PATTERN.sub("", cpp)
         cpp = _ensure_double_literals(cpp)
         return cpp
@@ -1424,23 +1355,11 @@ def generate_forcing_init_code(n_forcings, num_type="AD"):
     ]
 # =====================================================================
 # Event code generation with analytical saltation gradients
-#
-# For each root event with root function g(x, t), SymPy computes the
-# partial derivatives dg/dx_i and dg/dt at model build time.  These
-# are emitted as C++ lambdas in the RootEvent struct, enabling the
-# runtime to compute the IFT-based saltation correction analytically
-# (no finite differences, no Euler/Heun trajectory shifts).
-#
-# The codegen steps per root event:
-#   1. Parse g(x, t) to SymPy expression
-#   2. sp.diff(g, x_i) for each state  -> dg_dx lambda
-#   3. sp.diff(g, t)                    -> dg_dt lambda
-#   4. Emit both as std::function members of the RootEvent struct
-#
-# For terminal events (no state modification) and steady-state events,
-# dg_dx / dg_dt are set to nullptr: the runtime skips saltation and
-# applies the event action directly.
 # =====================================================================
+
+# For a root event g(x, t), dg/dx_i and dg/dt are differentiated at build time
+# and emitted as lambdas, so the runtime gets the IFT saltation correction
+# analytically. Terminal and steady-state events pass nullptr and skip it.
 
 def _get_list_value(dict_or_df, key, index, n_events):
     """Extract a value from a dict-of-lists."""
@@ -1562,12 +1481,9 @@ def _generate_root_gradient_lambdas(root_expr, states_list, params_list,
     # --- dg/dt ---
     dg_dt_expr = sp.diff(root_expr, t)
 
-    # Check if any forcing symbols appear in g: if so, we cannot
-    # differentiate through the forcing interpolation symbolically.
-    # In that case the dg/dt from sp.diff is incomplete (misses dF/dt chain rule).
-    # For forcings that appear in g, we add the chain rule term:
-    #   dg/dt_total = dg/dt_explicit + sum_k (dg/dF_k) * dF_k/dt
-    # where dF_k/dt is F[k]->derivative(t) at runtime.
+    # sp.diff cannot differentiate through the forcing interpolation, so for a
+    # forcing appearing in g the chain rule term (dg/dF_k) * F[k]->derivative(t)
+    # is added to the explicit dg/dt.
     forcing_chain_terms = []
     for k, fname in enumerate(forcings_list):
         f_sym = local_symbols[fname]
@@ -1582,9 +1498,8 @@ def _generate_root_gradient_lambdas(root_expr, states_list, params_list,
                 )
 
     # --- Emit dg_dx lambda ---
-    #
-    # Writes all n_states partial derivatives into the output vector.
-    # Zero entries are written explicitly (required: out may be uninitialized).
+    # All n_states partials go into the output vector, zero entries explicitly:
+    # out may be uninitialised.
     dg_dx_lines = []
     dg_dx_lines.append(f"    // dg/dx for root event {event_idx} (analytical, codegen)")
     dg_dx_lines.append(f"    [full_params, &F](const {state_type}& x, const {num_type}& t, {state_type}& out) {{")
@@ -1616,14 +1531,9 @@ def _generate_root_gradient_lambdas(root_expr, states_list, params_list,
     dg_dt_lines.append(f"    }},  // dg_dt")
 
     # --- Compute and emit G_tt = d(g_dot)/dt along trajectory ---
-    #
-    # G_tt is a scalar (double) function. It is the total time derivative
-    # of g_dot = sum(dg/dx_i * f_i) + dg/dt evaluated along the ODE
-    # trajectory (substituting dx_i/dt = f_i).
-    #
-    # We compute this symbolically by defining g_dot as a SymPy expression
-    # in terms of x and t, then taking its total derivative:
-    #   d(g_dot)/dt = sum_j(dg_dot/dx_j * f_j) + dg_dot/dt_explicit
+
+    # G_tt is the total time derivative of g_dot = sum(dg/dx_i * f_i) + dg/dt along
+    # the trajectory, taken symbolically with dx_i/dt substituted by f_i.
     g_dot_dot_lines = []
     if rhs_exprs is not None and not forcings_list:
         # Build g_dot symbolically: sum(dg/dx_i * f_i) + dg/dt
@@ -1640,19 +1550,16 @@ def _generate_root_gradient_lambdas(root_expr, states_list, params_list,
 
         G_tt_sym = sp.powsimp(G_tt_sym)
 
-        # Emit as a double-returning lambda.
-        # Since x and full_params are AD types but G_tt only needs scalar values,
-        # we extract scalars into local doubles first, then compute the expression
-        # using pure double arithmetic.
+        # Emit as a double-returning lambda: x and full_params are AD types but G_tt
+        # needs scalar values only, so the scalars go into local doubles first.
         g_dot_dot_lines.append(f"    // G_tt = d(g_dot)/dt for root event {event_idx} (analytical, codegen)")
         g_dot_dot_lines.append(f"    [full_params, &F](const {state_type}& x, const {num_type}& t) -> double {{")
 
-        # Emit local double variables for states and params with _s suffix
-        # to avoid shadowing the lambda parameters (x, t, full_params).
-        # Use .val() to extract the scalar value from AD types (const-correct):
-        #   double: direct access (no .val())
-        #   F<double> (AD): .val() returns const double&
-        #   F<F<double>> (AD2): .val().val() returns const double&
+        # Locals are named by position: no model symbol reaches the source, and
+        # none can shadow the lambda parameters (x, t, full_params).
+
+        # .val() extracts the scalar from an AD type, const-correct: none for double,
+        # one level for dual, two for dual2nd.
         if num_type == "AD2":
             xtr = lambda expr: f"({expr}).val().val()"
         elif num_type == "AD":
@@ -1660,23 +1567,17 @@ def _generate_root_gradient_lambdas(root_expr, states_list, params_list,
         else:
             xtr = lambda expr: expr
 
+        gtt_map = {}
         for j, sname in enumerate(states_list):
-            g_dot_dot_lines.append(f"      double {sname}_s = {xtr(f'x[{j}]')};")
+            g_dot_dot_lines.append(f"      double _gx{j} = {xtr(f'x[{j}]')};")
+            gtt_map[sname] = f"_gx{j}"
         for j, pname in enumerate(params_list):
-            g_dot_dot_lines.append(f"      double {pname}_s = {xtr(f'full_params[{n_states + j}]')};")
-        # Extract time as double to avoid clash with C stdlib time() function
-        g_dot_dot_lines.append(f"      double time_s = {xtr('t')};")
+            g_dot_dot_lines.append(f"      double _gp{j} = {xtr(f'full_params[{n_states + j}]')};")
+            gtt_map[pname] = f"_gp{j}"
+        g_dot_dot_lines.append(f"      double _gt = {xtr('t')};")
+        gtt_map["time"] = "_gt"
 
-        # Generate expression using _s suffixed symbol names
-        subs_map = {}
-        for sname in states_list:
-            subs_map[local_symbols[sname]] = sp.Symbol(sname + "_s")
-        for pname in params_list:
-            subs_map[local_symbols[pname]] = sp.Symbol(pname + "_s")
-        subs_map[local_symbols["time"]] = sp.Symbol("time_s")
-        G_tt_subst = G_tt_sym.subs(subs_map)
-
-        G_tt_cpp = _get_cxx_printer().doprint(G_tt_subst)
+        G_tt_cpp = _get_printer(tuple(sorted(gtt_map.items()))).doprint(G_tt_sym)
         # Replace non-standard math macros (single-pass precompiled regex)
         G_tt_cpp = _MATH_MACRO_PATTERN.sub(lambda m: _MATH_MACRO_MAP[m.group(0)], G_tt_cpp)
 
@@ -1878,11 +1779,10 @@ def generate_event_code(events_df, states_list, params_list, n_states,
         if time_code is not None:
             # ============================================================
             # Fixed-time event
-            #
-            # No dg_dx / dg_dt needed: the saltation correction for fixed
-            # events uses dt_corr = t_event - scalar(t_event) directly,
-            # which is constructed from the AD type of the event time.
             # ============================================================
+
+            # No dg_dx / dg_dt: the saltation correction uses dt_corr = t_event -
+            # scalar(t_event), built from the AD type of the event time.
             time_code = str(time_code).replace("params[", "full_params[")
             
             event_lines.append(f"  // Fixed event {i}: {var_name} at t = {time_raw}")
@@ -1899,10 +1799,10 @@ def generate_event_code(events_df, states_list, params_list, n_states,
         elif root_code is not None:
             # ============================================================
             # Root-finding event
-            #
-            # Parse g(x, t) symbolically to compute dg/dx and dg/dt for
-            # the IFT-based saltation correction at runtime.
             # ============================================================
+
+            # g(x, t) is parsed symbolically for the dg/dx and dg/dt that the IFT
+            # saltation correction needs at runtime.
             root_code = str(root_code).replace("params[", "full_params[")
             
             # Get optional parameters
@@ -1916,11 +1816,10 @@ def generate_event_code(events_df, states_list, params_list, n_states,
                 direction = 0
 
             # --- Analytical gradients of g for saltation correction ---
-            #
-            # Non-terminal events modify state and need the full saltation
-            # correction: we compute dg/dx and dg/dt from the SymPy expression
-            # of g.  Terminal events only stop integration and don't modify
-            # state, so they get nullptr (runtime skips saltation).
+
+            # A non-terminal event modifies state and needs the full correction, so dg/dx
+            # and dg/dt come from the SymPy expression of g. A terminal event only stops
+            # the integration and gets nullptr.
             is_terminal = (terminal == "true")
 
             event_lines.append(f"  // Root event {i}: {var_name} when {root_raw} = 0")

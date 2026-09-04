@@ -27,7 +27,8 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
     convert_xor
 )
-from sympy.printing.cxx import CXX17CodePrinter
+from cppsympy import (CppdePrinter, TokenError, is_boolean, normalise_logic,
+                      parse_error)
 import os
 import re
 import keyword
@@ -147,6 +148,7 @@ def _get_safe_parse_dict_cached():
         
         # Special functions
         'Heaviside': sp.Heaviside, 'DiracDelta': sp.DiracDelta,
+        'And': sp.And, 'Or': sp.Or, 'Not': sp.Not,
         'KroneckerDelta': sp.KroneckerDelta, 'Piecewise': sp.Piecewise,
         'piecewise': _sbml_piecewise,
         
@@ -178,7 +180,7 @@ _MATH_MACRO_MAP = {
 class CodeGenContext:
     """
     Holds precomputed state for efficient code generation.
-    Avoids repeated symbol creation and regex compilation.
+    Avoids repeated symbol creation and printer construction.
     """
     
     def __init__(self, variables, parameters):
@@ -190,26 +192,17 @@ class CodeGenContext:
         self.par_symbols = {p: sp.Symbol(p, real=True) for p in self.parameters}
         self.all_symbols = {**self.var_symbols, **self.par_symbols}
         
-        # Build replacement mapping: symbol_name -> replacement string
+        # Build the slot mapping: symbol name -> the C++ it prints as
         self.replacements = {}
         for i, v in enumerate(self.variables):
             self.replacements[v] = f"x_obs[{i}]"
         for i, p in enumerate(self.parameters):
             self.replacements[p] = f"p[{i}]"
         
-        # One pattern over every name, substituted in a single pass. Name by
-        # name, a symbol called p or x_obs would rewrite the slots already
-        # emitted for the others: q, p becomes p[0], p[1] and then p[1][0].
-        # Longest first so a name that is a prefix of another cannot win.
-        names_sorted = sorted(self.replacements.keys(), key=len, reverse=True)
-        self.symbol_pattern = re.compile(
-            r"(?<![a-zA-Z0-9_])(?:"
-            + "|".join(re.escape(name) for name in names_sorted)
-            + r")(?![a-zA-Z0-9_\[])"
-        ) if names_sorted else None
-        
-        # Custom printer for faster code generation
-        self.printer = CXX17CodePrinter()
+        # The printer substitutes the slots, so no model symbol reaches the
+        # generated source: rewriting the finished source instead turns
+        # std::pow into p[0]::pow for a parameter named std.
+        self.printer = CppdePrinter(symbols=self.replacements)
         
         # Cache for converted expressions
         self._expr_cache = {}
@@ -251,11 +244,6 @@ class CodeGenContext:
         for macro, repl in _MATH_MACRO_MAP.items():
             cpp_code = cpp_code.replace(macro, repl)
         
-        # Apply all replacements in one pass
-        if self.symbol_pattern is not None:
-            cpp_code = self.symbol_pattern.sub(
-                lambda m: self.replacements[m.group(0)], cpp_code)
-        
         # Convert integer literals to double literals to avoid C++ template deduction issues
         cpp_code = _ensure_double_literals(cpp_code)
         
@@ -264,6 +252,7 @@ class CodeGenContext:
     
     def _parse_expr(self, expr_str):
         """Parse a string expression to SymPy."""
+        expr_str = normalise_logic(expr_str)
         safe_local = dict(_get_safe_parse_dict_cached())
         safe_local.update(self.all_symbols)
 
@@ -275,12 +264,15 @@ class CodeGenContext:
 
         transformations = standard_transformations + (convert_xor,)
 
-        return parse_expr(
-            expr_str,
-            local_dict=safe_local,
-            transformations=transformations,
-            evaluate=True,
-        )
+        try:
+            return parse_expr(
+                expr_str,
+                local_dict=safe_local,
+                transformations=transformations,
+                evaluate=True,
+            )
+        except (SyntaxError, TokenError) as e:
+            raise parse_error(expr_str, e) from None
     
     @staticmethod
     def _replace_dirac_delta(expr):
@@ -396,7 +388,7 @@ def _parse_expressions(exprs, ctx):
     parsed = {}
     for name, expr_str in exprs.items():
         try:
-            expr_str = str(expr_str).strip()
+            expr_str = normalise_logic(str(expr_str).strip())
             if expr_str == "0":
                 parsed[name] = sp.Integer(0)
             else:
@@ -414,9 +406,7 @@ def _parse_expressions(exprs, ctx):
                     evaluate=True,
                 )
         except Exception as e:
-            raise ValueError(
-                f"Failed to parse expression '{name}': {expr_str}\nError: {e}"
-            )
+            raise parse_error(expr_str, e, label=name) from None
     return parsed
 # =====================================================================
 # C++ source assembly (using StringIO)
@@ -438,19 +428,11 @@ def _strip_std_prefix(cpp):
 
 # =====================================================================
 # Common subexpression elimination
-#
-# funCpp expressions produced by upstream symbolic pipelines can be enormous
-# with heavy internal repetition (the same sub-tree appearing dozens of times
-# across outputs and within a single output). Without CSE every occurrence is
-# re-emitted verbatim, which blows up C++ compile time and, in AD mode, the
-# size of the dual expression-template tree walked once per observation.
-#
-# sp.cse lifts subexpressions shared across (or within) a group of expressions
-# into numbered temporaries materialised once. In the AD-templated `_eval_one`
-# helper the temp is stored into a `const T` local, which forces the dual ET to
-# evaluate at the temp boundary so later references are a scalar dual load
-# instead of a re-walk of the whole tree (mirrors codegen_cppODE.py::_cse_temps).
 # =====================================================================
+
+# sp.cse lifts a repeated subexpression into a `const T` local, which forces the
+# dual ET to evaluate at the temp boundary, so later references are a scalar
+# load instead of a re-walk of the whole tree. Mirrors codegen_cppODE._cse_temps.
 
 def _cse_exprs(exprs, prefix='_cse_t'):
     """Apply sympy CSE across a list of parsed sympy expressions.
@@ -512,6 +494,9 @@ def _generate_cpp_code(exprs, ctx, jacobian, hessian, ad, deriv2, modelname, ver
     buf.write("#define R_NO_REMAP\n")
     buf.write("#include <R.h>\n")
     buf.write("#include <Rinternals.h>\n")
+    # The eval template is one text for T = double and T = dual, and a
+    # piecewise emits cppde::select in both.
+    buf.write("#include <cppde/cppde_scalar_ops.hpp>\n")
     if emit_ad:
         buf.write("#ifdef _OPENMP\n#include <omp.h>\n#endif\n")
         buf.write("#include <cppde/cppde_dual_math.hpp>\n")
@@ -654,7 +639,10 @@ def _write_eval_template(buf, exprs, out_names, ctx, modelname, ad):
     temps, simplified = _cse_exprs(ordered, prefix='_cse_t')
     for sym, sub in temps:
         sub_cpp = _strip_std_prefix(ctx.to_cpp(sub))
-        buf.write(f"    const T {sym.name} = {sub_cpp};\n")
+        # A piecewise condition can be lifted into its own temp, and that one
+        # holds a truth value, not a model quantity.
+        temp_type = "bool" if is_boolean(sub) else "T"
+        buf.write(f"    const {temp_type} {sym.name} = {sub_cpp};\n")
     if temps:
         buf.write("\n")
 
@@ -759,10 +747,9 @@ def _write_eval_ad_impl(buf, out_names, ctx, modelname):
     buf.write("    (void)n_vars; (void)n_params; (void)n_out;\n")
     buf.write("    (void)dX; (void)dP;\n\n")
 
-    # dual<double, 0> tangent buffers come from the thread-local arena.
-    # One outer scope guard frees every per-obs CSE temp at function exit.
-    # Per-obs scopes are unsafe here because the AD vectors persist across
-    # iterations and would hold dangling tan_ pointers after a pop.
+    # dual<double, 0> tangent buffers come from the thread-local arena, freed by one
+    # outer scope guard at function exit. A per-obs scope would leave the AD vectors,
+    # which persist across iterations, holding dangling tan_ pointers after the pop.
     buf.write("    cppde::dual_arena::scope _eval_ad_scope;\n")
 
     buf.write(f"    std::vector<AD> x_ad({n_vars});\n")
@@ -797,11 +784,9 @@ def _write_eval_ad_impl(buf, out_names, ctx, modelname):
     buf.write("        for (int i = 0; i < n_out; ++i) {\n")
     buf.write("            y[obs + (size_t)n_obs * i] = y_ad[i].val();\n")
     buf.write("            for (int k = 0; k < n_theta; ++k) {\n")
-    # .d(k) on cppde::dual<double, 0> returns the k-th tangent, or a
-    # thread-local zero when the dual is non-depend (size_ == 0). Using the
-    # raw operator[] would dereference tan_ unconditionally and segfault for
-    # outputs that are constant in all parameters (e.g. y_i = "0"), since
-    # operator=(double) leaves tan_ == nullptr.
+    # .d(k) on cppde::dual<double, 0> returns the k-th tangent, or a thread-local
+    # zero when the dual is non-depend. Raw operator[] would dereference tan_
+    # unconditionally and fault for an output constant in all parameters.
     buf.write("                dy[obs + (size_t)n_obs * (i + (size_t)n_out * k)] = y_ad[i].d(k);\n")
     buf.write("            }\n")
     buf.write("        }\n")
@@ -1167,14 +1152,9 @@ def _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=False):
         buf.write("        }\n")
     buf.write(f"        {modelname}_eval_one<AD>(x_ad.data(), p_ad.data(), y_ad.data());\n")
     buf.write("        for (int i = 0; i < n_out; ++i) {\n")
-    # Read through a const reference so d1_at / dd_at pick the bounds-safe
-    # const overloads (which route through .d(.).d(.) and return a
-    # thread-local zero when the outer or inner tangent layer is non-depend).
-    # The non-const overloads use raw operator[] for armed-storage write
-    # semantics: they segfault for outputs that are constant in some/all
-    # parameters (e.g. `y = la` identity pass-through, where the inner
-    # tangent layer is never seeded because dP2 may be NULL) by dereferencing
-    # the inner tan_ == nullptr.
+    # Read through a const reference so d1_at / dd_at take the bounds-safe const
+    # overloads, which return a thread-local zero for a non-depend tangent layer.
+    # The non-const ones dereference the inner tan_ and fault on an unseeded seed.
     buf.write("            const AD& y_const = y_ad[i];\n")
     buf.write("            y[obs + (size_t)n_obs * i] = y_const.scalar();\n")
     buf.write("            for (int k = 0; k < n_theta; ++k) {\n")
@@ -1226,10 +1206,9 @@ def _write_jacobian_function(buf, jacobian, out_names, ctx, modelname):
         buf.write("        const double* x_obs = x_obs_buf;\n")
         buf.write("        (void)x_obs;  // suppress unused warning\n")
 
-    # Collect non-zero (output, symbol) entries, then CSE across them: shared
-    # denominators / factors across df/dsym entries lift into `const double`
-    # temps materialised once per obs (temps depend on x_obs/p, so they live
-    # inside the obs loop).
+    # Collect the non-zero (output, symbol) entries, then CSE across them: a shared
+    # denominator lifts into a `const double` temp inside the obs loop, where the
+    # x_obs and p it depends on are in scope.
     entries = []  # (output_i, symbol_j, sympy_expr)
     for i, out_name in enumerate(out_names):
         if out_name not in jacobian:

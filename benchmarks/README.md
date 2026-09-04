@@ -73,8 +73,8 @@ a trait has dropped to zero.
 ```
 Trait coverage [tiny]:
   stiff-extreme       1  scale separation over many decades
-  sparse              1  sparse or banded Jacobian -- exercises the KLU path
-  events           !! 0  timed discontinuities -- stop, jump, restart
+  sparse              1  sparse or banded Jacobian, exercises the KLU path
+  events           !! 0  timed discontinuities, stop, jump, restart
 ```
 
 `--tol`, `--max-states` and `--max-sens` override the tier's defaults
@@ -399,7 +399,7 @@ its reservation.
 ```
 benchmarks/
   fetch-models.R        download / update the PEtab collection
-  run-benchmarks.R      the driver -- start here
+  run-benchmarks.R      the driver, start here
   run-on-cluster.R      submit to SLURM     (dMod2::distributedComputing)
   run-with-runbg.R      submit over ssh     (dMod2::runbg)
   validate-models.R     check the SBML translation against the

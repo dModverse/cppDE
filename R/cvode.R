@@ -78,7 +78,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
       "    Fedora        : sudo dnf install sundials-devel\n",
       "    macOS (brew)  : brew install sundials\n",
       "    Windows       : from any shell (PowerShell / cmd / Git Bash)\n",
-      "                    call Rtools' pacman by full path -- substitute\n",
+      "                    call Rtools' pacman by full path, substitute\n",
       "                    your installed version for <ver> (e.g. 44 or 45):\n",
       "                      C:/rtools<ver>/usr/bin/pacman.exe -Sy --noconfirm mingw-w64-ucrt-x86_64-sundials\n",
       "                    The .pc files land in C:/rtools<ver>/ucrt64/\n",
@@ -91,18 +91,16 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   # --- Normalize rhs (same as cppODE) ---
   rhs <- unclass(rhs)
   rhs <- gsub("\n", "", rhs)
-  rhs <- sanitizeExprs(rhs)
 
   # Every expression the model is built from, as in cppODE().
+  checkSymbolNames(rhs, forcings, fixed)
   if (!is.null(events)) {
     for (col in c("var", "value", "time", "root"))
       if (col %in% names(events) && is.character(events[[col]]))
-        events[[col]] <- sanitizeExprs(events[[col]])
+        checkSymbolNames(events[[col]])
   }
   if (!is.null(rootfunc) && !identical(tolower(rootfunc), "equilibrate"))
-    rootfunc <- sanitizeExprs(rootfunc)
-  if (!is.null(forcings)) forcings <- sanitizeExprs(forcings)
-  if (!is.null(fixed))    fixed    <- sanitizeExprs(fixed)
+    checkSymbolNames(rootfunc)
 
   variables <- names(rhs)
   if (is.null(variables) || any(!nzchar(variables)))
@@ -172,7 +170,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
       "    Fedora        : sudo dnf install suitesparse-devel\n",
       "    macOS (brew)  : brew install suite-sparse\n",
       "    Windows       : from any shell (PowerShell / cmd / Git Bash)\n",
-      "                    call Rtools' pacman by full path -- substitute\n",
+      "                    call Rtools' pacman by full path, substitute\n",
       "                    your installed version for <ver> (e.g. 44 or 45):\n",
       "                      C:/rtools<ver>/usr/bin/pacman.exe -Sy --noconfirm mingw-w64-ucrt-x86_64-suitesparse\n",
       "                    then re-run R CMD INSTALL <path/to/cppDE>",

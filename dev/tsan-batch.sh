@@ -8,7 +8,7 @@
 #     it.  run_batch() annotates both edges (see CPPDE_TSAN_HB/HA in
 #     cppde_r_batch.hpp), which removes the bulk of that noise.  What remains
 #     are reads of the outlined function's argument block on the main thread's
-#     stack at region entry -- before any statement we could annotate.  Those
+#     stack at region entry, before any statement we could annotate.  Those
 #     are expected; a report is only interesting if BOTH accesses are worker
 #     threads.
 #

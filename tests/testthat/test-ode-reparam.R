@@ -91,10 +91,6 @@ test_that("rank-reduced reparam integrates over smaller theta space", {
 
   expect_equal(dim(res$sens1), c(length(tvec), 1L, 1L))
 
-  # Analytic: x(t) = x0 * exp(-k*t) = k * exp(-k*t)
-  # dx/dtheta = dx/dx0 * exp(theta) + dx/dk * exp(theta)
-  #           = exp(-kt) * k + (-t*x0*exp(-kt)) * k
-  #           = k * exp(-kt) * (1 - k*t)
   expected <- k * exp(-k * tvec) * (1 - k * tvec)
   expect_equal(as.numeric(res$sens1[, 1, 1]), expected, tolerance = 1e-8)
 })
@@ -141,20 +137,14 @@ test_that("deriv2 + log-reparam matches analytical d^2x/dtheta^2", {
 
   expect_equal(dim(res$sens2), c(length(tvec), 1L, 2L, 2L))
 
-  # Analytic:
-  # d^2x/dtheta_x0^2 = 0
-  # d^2x/dtheta_x0 dtheta_lk = -k*t*exp(-kt)
-  # d^2x/dtheta_lk^2 = x0*exp(-kt)*k*t*(kt - 1)
   expect_equal(as.numeric(res$sens2[, 1, 1, 1]),
                rep(0, length(tvec)), tolerance = 1e-8)
   expect_equal(as.numeric(res$sens2[, 1, 1, 2]),
                -k * tvec * exp(-k * tvec), tolerance = 1e-8)
   expect_equal(as.numeric(res$sens2[, 1, 2, 1]),   # symmetry
                -k * tvec * exp(-k * tvec), tolerance = 1e-8)
-  # The pure second derivative w.r.t. log k carries the full (k*t)^2
-  # curvature, and its last node sits at k*t = 1 where the analytic value is
-  # exactly zero, making the residual there absolute rather than relative.
-  # Hence a looser tolerance than the other components.
+  # The pure second derivative in log k passes through zero on this grid, so the
+  # residual there is absolute rather than relative and needs a looser tolerance.
   expect_equal(as.numeric(res$sens2[, 1, 2, 2]),
                x0 * exp(-k * tvec) * k * tvec * (k * tvec - 1),
                tolerance = 1e-6)
@@ -272,10 +262,9 @@ test_that("sens2 chain-rule parity: direct vs post-hoc composition", {
                      sens1ini = Phi_prime, sens2ini = Phi_pp,
                      abstol = tight$abstol, reltol = tight$reltol)
 
-  # Post-hoc chain rule:
-  #   H^theta[t, k, a, b] = sum_{i,j} H_id[t, k, i, j] * Phi'[i, a] * Phi'[j, b]
-  #                      + sum_i      S_id[t, k, i]   * Phi''[i, a, b]
-  # where i, j range over the full n_phi_rows = n_states + n_params = 4 slots.
+  # Post-hoc chain rule, i and j over the n_states + n_params slots:
+  #   H^theta[t,k,a,b] = sum_ij H_id[t,k,i,j] Phi'[i,a] Phi'[j,b]
+  #                    + sum_i  S_id[t,k,i]   Phi''[i,a,b]
   S_id <- res_id$sens1   # [t, k, i] but here i only has n_active = 4 slots (all)
   H_id <- res_id$sens2   # [t, k, i, j] with same i, j basis
   H_expected <- array(0, dim = dim(res_th$sens2))
@@ -420,11 +409,8 @@ test_that("same model supports per-call varying M (condition heterogeneity)", {
   expect_equal(dimnames(r1$sens1)$sens, "theta_lk")
   expect_equal(dimnames(r2$sens1)$sens, c("theta_x0", "theta_lk"))
 
-  # theta_lk column agrees across calls. Tolerance loosened to 1e-7
-  # (was 1e-10): with the SoA tangent slab + BLAS daxpy / dscal, FMA
-  # in the BLAS kernels produces ~1e-9 round-off drift vs the legacy
-  # per-element ET path that paired separate mul+add. Same algebra,
-  # different rounding: well within the 1e-10 abstol/reltol regime.
+  # The two calls agree to BLAS round-off: the tangent slab reaches the same
+  # algebra through daxpy / dscal, whose FMA rounds differently from mul+add.
   expect_equal(as.numeric(r1$sens1[, 1, 1]),
                as.numeric(r2$sens1[, 1, 2]),
                tolerance = 1e-7)

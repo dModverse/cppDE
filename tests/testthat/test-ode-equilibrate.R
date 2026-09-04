@@ -4,10 +4,8 @@
 skip_on_cran()
 
 # -- Shared setup --------------------------------------------------------------
-# System with known analytical steady state:
-#   R' = k_act - k_deact * R   ->  R_ss = k_act / k_deact
-#   A' = -k1*A*R + k2*pA       ->  conservation: A + pA = const
-#   pA'=  k1*A*R - k2*pA       ->  pA_ss = k1*R_ss / (k2 + k1*R_ss) * (A0+pA0)
+# The system has a closed-form steady state, so the equilibrated result can be
+# asserted against it rather than against a long transient solve.
 
 rhs <- c(
   R  = "k_act - k_deact * R",

@@ -118,8 +118,8 @@ A list of \code{\link[=solveODE]{solveODE()}} results, one per condition, carryi
 names of \code{conditions}.
 }
 \description{
-Integrates a compiled ODE model over several independent parameter sets --
-experimental conditions, or the subjects of a mixed-effects fit -- inside a
+Integrates a compiled ODE model over several independent parameter sets
+(experimental conditions, or the subjects of a mixed-effects fit) inside a
 single \code{.Call}, using OpenMP where the toolchain provides it.
 }
 \details{

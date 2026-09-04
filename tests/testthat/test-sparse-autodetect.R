@@ -1,11 +1,6 @@
-# Pins the dense/sparse auto-detection thresholds (>= 8 states, Jacobian
-# density <= 0.4), which live in `decide_sparse()` in
-# inst/python/codegen_cppODE.py and are shared by both backends.
-#
-# The models below have an exactly known structural density, so a threshold
-# change shows up as a failure rather than as a slow benchmark. `compile =
-# FALSE` is enough: the decision is made in codegen and recorded on the
-# returned handle as attr(m, "sparse").
+# Pins the dense/sparse thresholds of decide_sparse() (>= 8 states, Jacobian
+# density <= 0.4), shared by both backends. The models have an exactly known
+# density, and compile = FALSE is enough: the decision is recorded on the handle.
 
 skip_on_cran()
 
@@ -17,7 +12,7 @@ skip_if_not(isTRUE(cppDE:::cvodeConfig$klu_available),
 
 lu_of <- function(mod) if (isTRUE(attr(mod, "sparse"))) "sparse" else "dense"
 
-# Both backends must reach the same decision -- they share decide_sparse(), and
+# Both backends must reach the same decision, they share decide_sparse(), and
 # a divergence is exactly the drift the shared helper exists to prevent.
 expect_lu <- function(rhs, expected, label, ...) {
   a <- cppODE(rhs, deriv = FALSE, compile = FALSE, verbose = FALSE,
@@ -38,7 +33,7 @@ chain_rhs <- function(n) {
 }
 
 # Each row depends on exactly `w` states (cyclically), so nnz = n*w and the
-# density is exactly w/n -- which is what pins the 0.4 cutoff.
+# density is exactly w/n, which is what pins the 0.4 cutoff.
 band_rhs <- function(n, w) {
   eqs <- vapply(seq_len(n), function(i) {
     idx <- ((i - 1L + seq_len(w) - 1L) %% n) + 1L
@@ -79,9 +74,9 @@ test_that("auto-detection rejects density just above the cutoff", {
 # -- explicit pinning still wins ----------------------------------------------
 
 test_that("an explicit sparse/dense argument overrides the thresholds", {
-  # Small and dense -- auto would say dense.
+  # Small and dense, auto would say dense.
   expect_lu(chain_rhs(3), "sparse", "pin_sparse", sparse = TRUE)
-  # Large and sparse -- auto would say sparse.
+  # Large and sparse, auto would say sparse.
   expect_lu(chain_rhs(40), "dense", "pin_dense", sparse = FALSE)
 })
 
@@ -99,10 +94,10 @@ test_that("an explicit method stays dense however sparse the system looks", {
 
 # --------------------------------------------------------------------------
 # Sparse + first-order sensitivities
-#
-# A solve keeps BLAS single-threaded throughout, because a threaded MKL brings
-# libiomp5 alongside libgomp and corrupts the AD tangent blocks. The pin has to
-# be independent of the dense LU, which a sparse model never reaches.
+
+# BLAS stays single-threaded through a solve: a threaded MKL brings libiomp5
+# alongside libgomp and corrupts the AD tangent blocks. The pin holds
+# independently of the dense LU, which a sparse model never reaches.
 
 test_that("sparse Jacobian and dense Jacobian agree on first-order sensitivities", {
   # Chain of 8 states: Jacobian is bidiagonal, so auto-detection picks sparse.

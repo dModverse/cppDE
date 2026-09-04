@@ -1,5 +1,5 @@
 ## =================================================================
-## Benchmark: explicit solvers -- cppDE (tsit5, adams) vs deSolve
+## Benchmark: explicit solvers, cppDE (tsit5, adams) vs deSolve
 ## =================================================================
 rm(list = ls(all.names = TRUE))
 
@@ -46,7 +46,7 @@ print_row <- function(solver, npts, timing, diag = NULL, err = NA) {
 nrep <- 10L
 
 # =====================================================================
-#  Problem 1: Harmonic oscillator (2 states) -- exact solution
+#  Problem 1: Harmonic oscillator (2 states), exact solution
 # =====================================================================
 print_header("1. Harmonic oscillator (2 states, exact reference)")
 
@@ -97,7 +97,7 @@ print_row("deSolve rk4", nrow(r_rk4), t1, desolve_diag(r_rk4), err_rk4)
 
 
 # =====================================================================
-#  Problem 2: Lotka-Volterra (2 states) -- deSolve lsoda as reference
+#  Problem 2: Lotka-Volterra (2 states), deSolve lsoda as reference
 # =====================================================================
 print_header("2. Lotka-Volterra (2 states)")
 
@@ -147,7 +147,7 @@ print_row("deSolve lsoda", nrow(r_lsoda), t1, desolve_diag(r_lsoda), err_lsoda)
 
 
 # =====================================================================
-#  Problem 3: Pleiades 7-body (28 states) -- classic non-stiff benchmark
+#  Problem 3: Pleiades 7-body (28 states), classic non-stiff benchmark
 # =====================================================================
 print_header("3. Pleiades 7-body (28 states)")
 
@@ -224,7 +224,7 @@ print_row("deSolve lsoda", nrow(r_lsoda), t1, desolve_diag(r_lsoda))
 
 
 # =====================================================================
-#  Problem 4: Exponential decay (1 state) -- overhead measurement
+#  Problem 4: Exponential decay (1 state), overhead measurement
 # =====================================================================
 print_header("4. Exponential decay (1 state, overhead test)")
 

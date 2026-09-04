@@ -28,17 +28,11 @@ library(tidyr)
 library(patchwork)
 
 # ============================================================================
-# Benchmark: FitzHugh-Nagumo Chain -- Dense vs Sparse x BDF vs RB4
-#
-#   v_i' = v_i - v_i^3/3 - w_i + I_ext_i
-#          + D_i * sum_{j in neighbors(i)} (v_j - v_i)
-#   w_i' = eps_i * (v_i + a_i - b_i * w_i)
-#
-#   2*N states, parameters: eps_i, a_i, b_i, D_i, I_ext_i (per neuron)
-#
-#   Stiffness: controlled by eps (small eps => stiff)
-#   Sparsity:  controlled by reach (coupling radius)
+# Benchmark: FitzHugh-Nagumo Chain, Dense vs Sparse x BDF vs RB4
 # ============================================================================
+
+# 2N states with per-neuron parameters. Stiffness is controlled by eps (small
+# eps gives stiff), sparsity by reach, the coupling radius.
 
 # --- Parallelization ---
 n_cores <- as.integer(Sys.getenv("SLURM_CPUS_PER_TASK", unset = "1"))
@@ -431,7 +425,7 @@ df_wide <- df_ok %>%
 
 
 # -------------------------------------------------------------------------
-#  Plot 1: Heatmap -- dense/sparse ratio by n_states x sparsity
+#  Plot 1: Heatmap, dense/sparse ratio by n_states x sparsity
 # -------------------------------------------------------------------------
 
 heat_data <- df_wide %>%

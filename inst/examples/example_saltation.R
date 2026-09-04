@@ -1,15 +1,13 @@
 ## =================================================================
 ## Saltation transport, checked against a symbolic solution
-##
-## Every model below is solved twice. cppODE() integrates it with first
-## and second order sensitivities, and SymPy solves each smooth segment
-## with dsolve(), glues the segments at the firing time and
-## differentiates the composition twice. The two have to agree panel by
-## panel, including the parameter dependence of the firing time itself.
-##
-## In every figure the symbolic solution is the solid line and what
-## solveODE() returned is dashed on top of it.
 ## =================================================================
+
+## Every model is solved twice: cppODE() with first and second order
+## sensitivities, and SymPy through dsolve() per smooth segment, glued at the
+## firing time and differentiated twice. The two agree panel by panel.
+
+## In every figure the symbolic solution is the solid line and what solveODE()
+## returned is dashed on top of it.
 rm(list = ls(all.names = TRUE))
 setwd(tempdir())
 
@@ -64,10 +62,9 @@ toNumeric <- function(expr)
 ## Every parameter replaced by its value, time left free.
 atPoint <- function(expr, at) expr$subs(reticulate::py_dict(at$syms, at$values))
 
-## SymPy's lambdify reads its caller's frame to build a docstring, and a call
-## from R has no Python frame to read. Going through a Python function gives it
-## one, and compiling once per expression turns one round trip per time point
-## into one per panel.
+## SymPy's lambdify reads its caller's frame for a docstring and a call from R
+## has none, so it goes through a Python function. Compiling once per expression
+## turns one round trip per time point into one per panel.
 sympyGrid <- reticulate::py_run_string(
 "import sympy
 def over_grid(sym, expr, grid):
@@ -99,6 +96,7 @@ crossing <- function(conditions, at, after = 0) {
 ## -----------------------------------------------------------------
 ## Comparison and figures
 ## -----------------------------------------------------------------
+
 ## Panel labels carry the partial derivative sign, U+2202.
 lab1 <- function(var, a) sprintf("\u2202%s / \u2202%s", var, a)
 lab2 <- function(var, a, b) {
@@ -172,12 +170,11 @@ comparisonPlot <- function(df, orders, title)
 
 ## =================================================================
 ## 1. Root event on a coupled pair
-##
-## S' = a and C' = -b C, with d added to C when S reaches c. The firing
-## time t* = (c - S0)/a depends on three parameters, so every
-## sensitivity of C after the event carries a saltation term. With a = 1
-## the crossing lands exactly on a requested time.
 ## =================================================================
+
+## The firing time depends on three parameters, so every sensitivity after the
+## event carries a saltation term, and the crossing lands exactly on a
+## requested output time.
 events_pair <- data.frame(var = "C", time = NA, value = "d", method = "add",
                           root = "S - c", stringsAsFactors = FALSE)
 model_pair  <- cppODE(c(S = "a", C = "-b * C"), events = events_pair,
@@ -185,10 +182,9 @@ model_pair  <- cppODE(c(S = "a", C = "-b * C"), events = events_pair,
 
 pars_pair  <- c(S = 2, C = 4, a = 1, b = 0.1, c = 14, d = 3)
 times_pair <- seq(0, 20, len = 1000)
-## Tight tolerances throughout, so that what is left of the residual is the
-## solver and not the saltation transport. roottol matters as much as the two
-## others here: the firing time enters the state through the velocity at the
-## event, so a loosely localised root shows up as a state error.
+## Tight tolerances throughout, so what is left of the residual is the solver
+## and not the saltation transport. roottol matters as much: the firing time
+## enters the state through the velocity, so a loose root is a state error.
 res_pair <- solveODE(model_pair, times_pair, pars_pair,
                      abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
 
@@ -215,11 +211,10 @@ plot_pair_2
 
 ## =================================================================
 ## 2. Time-triggered event
-##
-## x' = -k x with v added at the parameter time te. Here dt*/dtheta is
-## supplied directly by the user expression rather than reconstructed
-## from a root condition, which is the other saltation path.
 ## =================================================================
+
+## dt*/dtheta is supplied directly by the user expression rather than
+## reconstructed from a root condition, which is the other saltation path.
 events_dose <- data.frame(var = "x", time = "te", value = "v", method = "add",
                           root = NA, stringsAsFactors = FALSE)
 model_dose  <- cppODE(c(x = "-k * x"), events = events_dose, deriv = TRUE,
@@ -249,11 +244,10 @@ plot_dose_2
 
 ## =================================================================
 ## 3. A root event that fires three times
-##
-## x' = -k x with v added whenever x falls back to xc. Each firing time
-## sits on top of the previous one, so the saltation corrections
-## compose and the sensitivities pick up all three.
 ## =================================================================
+
+## Each firing time sits on top of the previous one, so the saltation
+## corrections compose and the sensitivities pick up all three.
 events_pulse <- data.frame(var = "x", time = NA, value = "v", method = "add",
                            root = "x - xc", stringsAsFactors = FALSE)
 model_pulse  <- cppODE(c(x = "-k * x"), events = events_pulse, deriv = TRUE,
@@ -288,11 +282,10 @@ plot_pulse_2
 
 ## =================================================================
 ## 4. Explicit time dependence in the right-hand side
-##
-## x' = -k t x with v added when x falls to xc. The right-hand side
-## depends on time itself, so the second order transport needs the
-## time argument of the Heun legs and not only the shifted state.
 ## =================================================================
+
+## The right-hand side depends on time itself, so the second order transport
+## needs the time argument of the Heun legs and not only the shifted state.
 events_drift <- data.frame(var = "x", time = NA, value = "v", method = "add",
                            root = "x - xc", stringsAsFactors = FALSE)
 model_drift  <- cppODE(c(x = "-k * time * x"), events = events_drift,
@@ -320,14 +313,14 @@ plot_drift_2
 
 ## =================================================================
 ## 5. Oscillator between two elastic walls
-##
-## x'' = -w^2 x written as the pair (x, v), with a wall at +L and one at
-## -L. Each wall is a root event that turns the velocity around, and the
-## two fire alternately. The position stays continuous at a bounce, so
-## everything the event does to its sensitivities is saltation. The wall
-## it just left also holds that root at exactly zero when the solver
-## restarts, which must not count as the next crossing.
 ## =================================================================
+
+## Each wall is a root event that turns the velocity around, and the two fire
+## alternately. Position stays continuous at a bounce, so everything the event
+## does to its sensitivities is saltation.
+
+## The wall just left holds its root at exactly zero when the solver restarts,
+## which must not count as the next crossing.
 events_wall <- data.frame(var = c("v", "v"), time = c(NA, NA),
                           value = c("-1", "-1"),
                           method = c("multiply", "multiply"),
@@ -355,10 +348,9 @@ approach   <- oscillation(sp$Integer(0L), x_ini, v_ini)
 first_hit  <- crossing(list(approach - wall, approach + wall), point_wall)
 first_side <- sign(value(approach$subs(tSym, first_hit), point_wall))
 
-## The energy survives the reflection, so the speed at a wall is the same at
-## every bounce and every flight between the walls is one arc up to a sign and
-## a time shift. Solved once it stays small, while composing it bounce by
-## bounce through dsolve() nests one inverse tangent per wall.
+## The energy survives the reflection, so every flight between the walls is one
+## arc up to a sign and a time shift. Solved once it stays small, while composing
+## it bounce by bounce through dsolve() nests one inverse tangent per wall.
 energy <- sp$simplify(pow(sp$diff(approach, tSym), 2) + pow(freq, 2) * pow(approach, 2))
 speed  <- sp$sqrt(energy - pow(freq, 2) * pow(wall, 2))
 stopifnot(isTRUE(all.equal(

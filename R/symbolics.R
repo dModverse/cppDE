@@ -24,44 +24,42 @@ getSymbols <- function(expr, omit = NULL) {
   if (!is.null(omit)) syms <- setdiff(syms, omit)
   syms
 }
-#' Sanitize Expressions for SymPy Compatibility
+## Python 3 `keyword.kwlist`.
+.pythonKeywords <- c(
+  "False","None","True","and","as","assert","async","await","break","class",
+  "continue","def","del","elif","else","except","finally","for","from","global",
+  "if","import","in","is","lambda","nonlocal","not","or","pass","raise","return",
+  "try","while","with","yield"
+)
+
+#' Reject Symbol Names the Backend Cannot Parse
 #'
-#' Scans character expressions for reserved Python keywords and
-#' replaces each occurrence with the keyword followed by an underscore.
-#' Function names like \code{min}, \code{max}, \code{abs}, and
-#' \code{sum} are left untouched because they are valid in SymPy. A
-#' warning is emitted for each replacement.
+#' Stops when an expression or a symbol name holds a Python keyword.
 #'
-#' Names are sanitized along with the values.
-#'
-#' @param exprs Character vector of expressions, optionally named.
-#' @return Character vector with sanitized expressions and names.
+#' @param ... Character vectors of expressions or symbol names, optionally
+#'   named. Names are checked along with the values. `NULL` is ignored.
+#' @return `NULL`, invisibly. Called for the error.
 #'
 #' @keywords internal
-sanitizeExprs <- function(exprs) {
-  sanitized <- exprs
-  ## Names hold the state variables and are renamed with the expressions.
-  nms <- names(sanitized)
-  reserved_keywords <- c(
-    "False","None","True","and","as","assert","async","await","break","class",
-    "continue","def","del","elif","else","except","finally","for","from","global",
-    "if","import","in","is","lambda","nonlocal","not","or","pass","raise","return",
-    "try","while","with","yield"
-  )
+checkSymbolNames <- function(...) {
+  ## SymPy parses through Python's own parser, where a keyword is a syntax
+  ## error and True, False and None read as constants, dropping the symbol.
+  ## C++ keywords need no check: the printer emits a slot, not the name.
+  text <- unlist(list(...), use.names = TRUE)
+  if (!length(text)) return(invisible(NULL))
+  text <- c(as.character(text), names(text))
 
-  for (sym in reserved_keywords) {
-    pattern <- paste0("\\b", sym, "\\b")
-    repl    <- paste0(sym, "_")
-    if (any(grepl(pattern, sanitized)) ||
-        (!is.null(nms) && any(grepl(pattern, nms)))) {
-      warning(sprintf("Reserved keyword '%s' found - replaced by '%s'.",
-                      sym, repl))
-      sanitized <- gsub(pattern, repl, sanitized)
-      if (!is.null(nms)) nms <- gsub(pattern, repl, nms)
-    }
-  }
-  if (!is.null(nms)) names(sanitized) <- nms
-  sanitized
+  hit <- .pythonKeywords[vapply(
+    .pythonKeywords,
+    function(kw) any(grepl(paste0("\\b", kw, "\\b"), text)),
+    logical(1))]
+  if (!length(hit)) return(invisible(NULL))
+
+  stop("Python keyword used as a symbol name: ",
+       paste0("'", hit, "'", collapse = ", "),
+       ". SymPy parses the equations with Python's parser and cannot read ",
+       "such a name as a symbol. Rename it in the model definition.",
+       call. = FALSE)
 }
 #' Symbolic Differentiation via SymPy
 #'
@@ -74,42 +72,42 @@ sanitizeExprs <- function(exprs) {
 #'
 #' @details
 #' This function calls a Python module shipped with the package
-#' (\code{derivSymb.py}) through \pkg{reticulate}. All free symbols in
+#' (`derivSymb.py`) through \pkg{reticulate}. All free symbols in
 #' the expressions are detected automatically by the Python backend.
 #'
-#' Setting \code{real = TRUE} simplifies all results under the
+#' Setting `real = TRUE` simplifies all results under the
 #' assumption that variables are real, without invoking SymPy's
-#' \code{refine()} (which can recurse on non-analytic functions).
+#' `refine()` (which can recurse on non-analytic functions).
 #'
 #' @param exprs Named character vector of algebraic expressions. Each
 #'   name corresponds to a dependent variable \eqn{f_i}; the element
-#'   content defines the right-hand side expression. Both \code{^} and
-#'   \code{**} are accepted for exponentiation.
-#' @param real Logical; if \code{TRUE}, imaginary parts of symbolic
+#'   content defines the right-hand side expression. Both `^` and
+#'   `**` are accepted for exponentiation.
+#' @param real Logical; if `TRUE`, imaginary parts of symbolic
 #'   expressions are set to zero and real parts are replaced by their
 #'   argument. This ensures real-valued simplifications even for
-#'   non-analytic functions such as \code{abs()}, \code{max()},
-#'   \code{min()}, or \code{sign()}. Default \code{FALSE}.
-#' @param deriv2 Logical; if \code{TRUE}, also compute second
-#'   derivatives (Hessians). Default \code{FALSE}.
+#'   non-analytic functions such as `abs()`, `max()`,
+#'   `min()`, or `sign()`. Default `FALSE`.
+#' @param deriv2 Logical; if `TRUE`, also compute second
+#'   derivatives (Hessians). Default `FALSE`.
 #' @param fixed Character vector of variable names to be treated as
 #'   fixed parameters (no derivatives are taken with respect to them).
-#'   Default \code{NULL}.
-#' @param verbose Logical; if \code{TRUE}, print diagnostic information
-#'   during backend setup and execution. Default \code{FALSE}.
+#'   Default `NULL`.
+#' @param verbose Logical; if `TRUE`, print diagnostic information
+#'   during backend setup and execution. Default `FALSE`.
 #'
 #' @return
 #' A list with components:
 #' \describe{
-#'   \item{\code{jacobian}}{Character matrix of shape \eqn{(n_f, n_v)}
+#'   \item{`jacobian`}{Character matrix of shape \eqn{(n_f, n_v)}
 #'     containing the first derivatives
 #'     \eqn{\partial f_i / \partial v_j}, where \eqn{n_f} is the number
 #'     of functions and \eqn{n_v} the number of differentiation
 #'     variables (excluding fixed parameters).}
-#'   \item{\code{hessian}}{List of \eqn{n_f} character matrices, each of
+#'   \item{`hessian`}{List of \eqn{n_f} character matrices, each of
 #'     shape \eqn{(n_v, n_v)}, containing the second derivatives
 #'     \eqn{\partial^2 f_i / \partial v_j \partial v_k}. Returns
-#'     \code{NULL} when \code{deriv2 = FALSE}.}
+#'     `NULL` when `deriv2 = FALSE`.}
 #' }
 #'
 #' @examples

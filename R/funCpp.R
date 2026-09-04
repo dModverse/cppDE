@@ -59,6 +59,10 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   emit_deriv <- deriv || deriv2
   use_ad     <- emit_deriv && derivMode == "dual"
 
+  # The symbol arguments name the same symbols as the equations and are checked
+  # with them.
+  checkSymbolNames(eqns, variables, parameters, fixed)
+
   outnames <- names(eqns) %||% paste0("f", seq_along(eqns))
   if (!is.null(fixed)) { variables <- setdiff(variables, fixed); parameters <- union(parameters, fixed) }
   innames <- variables; diff_params <- setdiff(parameters, fixed); diff_syms <- c(variables, diff_params)
@@ -148,10 +152,10 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
 # ============================================================================
 # Runtime engine
-# Package level, so a model with one instance per condition carries this code
-# once instead of once per condition; `st` holds the per-instance data. Bodies
-# are as they were inside funCpp(), with `st$` on the instance data.
 # ============================================================================
+
+# Package level, so a model with one instance per condition carries this code
+# once rather than once per condition; `st` holds the per-instance data.
 
 
 # .Call needs plain doubles; a matrix already is one, so this is a no-op there.
@@ -243,10 +247,9 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   theta
 }
 
-# Align seeds onto the function's internal (vars, params) order, in flat
-# arrays ready for the dual-mode .C() entries. dX2/dP2 are returned as
-# length-zero numeric vectors when not provided; the C side guards them
-# via the `has_dX2` / `has_dP2` flags.
+# Align seeds onto the function's internal (vars, params) order, flat and ready
+# for the dual-mode .C() entries. Absent dX2/dP2 go in as length-zero vectors,
+# which the C side guards with the `has_dX2` / `has_dP2` flags.
 .alignSeedsDual <- function(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt) {
   n_vars <- length(st$innames); n_params <- length(st$parameters); n_theta <- length(theta)
   dX_arr <- array(0, c(n_obs, n_vars, n_theta))
@@ -347,11 +350,9 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   S2
 }
 
-# Identity seeds for raw dual-mode J/H: dX = I on vars, dP = I on params.
-# The combined θ-basis is c(st$innames, st$parameters) so the dy/d2y output
-# carries the canonical-symbol axes that the symbolic mode also produces.
-# (Values for st$parameters listed in `fixed` carry zero seed at AD time but
-# their column is kept; the caller drops it.)
+# Identity seeds for raw dual-mode J/H: dX = I on vars, dP = I on params, over
+# the combined basis c(st$innames, st$parameters) that the symbolic mode also
+# produces. A `fixed` parameter seeds zero but keeps its column.
 .identitySeedsRaw <- function(st, n_obs, fixed_rt) {
   n_vars <- length(st$innames); n_params <- length(st$parameters)
   theta_full <- c(st$innames, st$parameters)
@@ -678,11 +679,9 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   .attachExtras(arr, n_obs, chk$extra_vars, chk$extra_params, "hess")
 }
 
-# Many argument sets in one .Call. Only the first-order dual path is batched;
-# everything else loops, so the caller never has to branch.
-#
-# `sets` is a list of lists with the arguments of evaluate(): vars, params and
-# optionally dX, dP, attach.input, fixed.
+# Many argument sets in one .Call. Only the first-order dual path is batched,
+# everything else loops, so the caller never has to branch. `sets` is a list of
+# evaluate() argument lists: vars, params and optionally dX, dP, fixed.
 .evaluateBatch_impl <- function(st, sets, cores = 1L, deriv2 = FALSE) {
 
   one <- function(a) do.call(.evaluate_impl,

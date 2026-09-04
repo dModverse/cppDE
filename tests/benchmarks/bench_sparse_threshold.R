@@ -1,22 +1,14 @@
 #!/usr/bin/env Rscript
+
 # ============================================================================
-# Benchmark: Dense vs Sparse LU threshold -- Microbenchmark edition
-#
-# Tests all combinations of:
-#   method:  bdf, rb4
-#   sparse:  TRUE, FALSE
-#   type:    double (deriv=FALSE), Fdouble (deriv=TRUE)
-#
-# System: Brusselator 2D on NxN grid with variable coupling reach
-#   u_ij' = A + u^2v - (B+1)u + alpha * Sigma_{neighbors} (u_nb - u_ij)
-#   v_ij' = Bu - u^2v           + alpha * Sigma_{neighbors} (v_nb - v_ij)
-#
-#   reach=1: 4 direct neighbors (5-point stencil, very sparse)
-#   reach=2: 24 neighbors (Chebyshev ball radius 2)
-#   reach=N-1: fully coupled (dense Jacobian)
-#
-# Protocol: 1 warmup + 20 microbenchmark iterations per config
+# Benchmark: Dense vs Sparse LU threshold, Microbenchmark edition
 # ============================================================================
+
+# Every combination of method (bdf, rb4), sparse (TRUE, FALSE) and value type
+# (double, dual), on a 2D Brusselator with variable coupling reach: reach 1 is
+# the 5-point stencil, reach N-1 is fully coupled.
+
+# Protocol: 1 warmup and 20 microbenchmark iterations per config.
 
 .workingDir <- file.path(tempdir(), "cppDE_bench_sparse_threshold")
 dir.create(.workingDir, showWarnings = FALSE, recursive = TRUE)
@@ -29,46 +21,9 @@ suppressPackageStartupMessages({
 })
 
 # --- Configuration ---
-#
-# Hand-picked (N, reach) combos covering sparsity from ~98% down to ~37%
+
+# Hand-picked (N, reach) combos covering sparsity from about 98% down to 37%
 # and system dimensions from 8 to 2048 states.
-#
-#   N  reach  dim  sparsity
-#   2    1      8    37.5%    <- smallest system, barely sparse
-#   3    1     18    64.2%
-#   3    2     18    44.4%
-#   4    1     32    77.3%
-#   4    3     32    46.9%
-#   6    1     72    88.7%
-#   6    3     72    63.9%
-#   6    5     72    48.6%
-#   8    1    128    93.3%
-#   8    3    128    75.6%
-#   8    5    128    58.2%
-#  10    1    200    95.6%
-#  10    3    200    82.7%
-#  10    5    200    67.5%
-#  16    1    512    98.2%   <- full range for large systems
-#  16    3    512    92.2%
-#  16    5    512    83.5%
-#  16    7    512    74.0%
-#  16   10    512    60.8%
-#  16   13    512    52.1%
-#  16   15    512    49.8%
-#  24    1   1152    99.2%
-#  24    4   1152    94.1%
-#  24    8   1152    82.9%
-#  24   12   1152    70.2%
-#  24   16   1152    59.2%
-#  24   20   1152    52.0%
-#  24   23   1152    49.9%
-#  32    1   2048    99.5%
-#  32    5   2048    95.0%
-#  32   10   2048    84.9%
-#  32   15   2048    73.0%
-#  32   20   2048    62.0%
-#  32   25   2048    54.0%
-#  32   31   2048    50.0%
 
 SYSTEM_CONFIGS <- data.frame(
   N     = c( 2,  3, 3,  4, 4,  6, 6, 6,  8, 8, 8, 10,10,10,

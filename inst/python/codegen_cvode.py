@@ -113,20 +113,18 @@ def generate_cvode_cpp(
     # CVODE always builds the Jacobian above.
     use_sparse = decide_sparse(sparse, n_states, len(jac_nnz))
 
-    # KLU pre-ordering and BTF, from the same analysis the cppDE backend
-    # uses.  SUNLinSol_KLUGetCommon exposes the klu_common SUNDIALS created
-    # with klu_defaults(); both fields are read at the first klu_analyze,
-    # on the first setup call.
+    # KLU pre-ordering and BTF, from the same analysis the cppDE backend uses.
+    # SUNLinSol_KLUGetCommon exposes the klu_common that SUNDIALS built with
+    # klu_defaults(); both fields are read at the first klu_analyze.
     klu_settings = (analyze_klu_settings(n_states, [r for r, _, _ in jac_nnz],
                                          [c for _, c, _ in jac_nnz])
                     if use_sparse else None)
 
     # --- dense linear solver ---
-    # SUNLinSol_LapackDense routes the factorisation through the BLAS and
-    # LAPACK that R is linked against; SUNLinSol_Dense is SUNDIALS' own
-    # unblocked implementation. Which one is used follows from whether
-    # SUNDIALS was built with its LAPACK interface, as determined by
-    # ./configure at install time. Sparse Jacobians use KLU instead.
+
+    # SUNLinSol_LapackDense routes the factorisation through R's own BLAS and
+    # LAPACK, SUNLinSol_Dense is SUNDIALS' unblocked one; which applies follows
+    # from how SUNDIALS was built. Sparse Jacobians use KLU instead.
     use_lapack = (not use_sparse) and bool(lapack)
 
     # --- sens layout ---
@@ -136,13 +134,10 @@ def generate_cvode_cpp(
     n_sens_compile = len(sens_names)
 
     # --- Sensitivity layout ---
-    # sens1ini is always interpreted at solve() time as the full Phi'(theta)
-    # of shape [n_states + n_params, M], where M = Ns_active is the per-call
-    # active theta count (M may vary across calls). Legacy [n_states, n_active]
-    # input is auto-extended on the R side to identity-on-active-params before
-    # reaching the C++ entry point. Compile-time `fixed` drops the slot from
-    # the sens layout entirely; runtime `fixed` (if any) is translated by R
-    # into zero rows of Phi'(theta).
+
+    # sens1ini is read at solve() time as the full Phi'(theta), [n_states +
+    # n_params, M], with M the per-call active theta count. Compile-time `fixed`
+    # drops the slot from the layout, runtime `fixed` becomes zero rows.
 
     # df/dp_k only for non-fixed parameters
     df_dp_by_pk = {}
@@ -163,10 +158,9 @@ def generate_cvode_cpp(
     cv_method = "CV_BDF" if method == "bdf" else "CV_ADAMS"
 
     # --- rootfunc parsing ---
-    # Three cases:
-    #   (a) rootfunc is None: no root handling
-    #   (b) rootfunc == "equilibrate": post-step threshold check
-    #   (c) rootfunc is a list of expressions: CVodeRootInit + CV_ROOT_RETURN
+
+    # None means no root handling, "equilibrate" a post-step threshold check, and a
+    # list of expressions CVodeRootInit with CV_ROOT_RETURN.
     rootfunc_mode = "none"
     rootfunc_exprs_cpp = []
     if rootfunc is not None:
@@ -194,23 +188,10 @@ def generate_cvode_cpp(
                             "double", forcings_list))
 
     # --- Events (time- and root-triggered) ---
-    # For each event we compute at codegen time:
-    #   g_cpp      : C++ expression for the new value of the affected state,
-    #                i.e. the full post-event value x[var_idx]_new = g(x, t, p, F)
-    #                already incorporating the method (replace/add/multiply).
-    #   dg_dx[i]   : C++ expression for partial g / partial x_i  (sensitivity chain rule)
-    #   dg_dp[k]   : C++ expression for partial g / partial p_k
-    #   dg_dt      : explicit time partial of g
-    # Time events additionally get:
-    #   t_expr_cpp : C++ expression for event time (may reference params)
-    #   dt_dp[k]   : C++ expression for ∂t_e/∂p_k  (saltation of parameterised times)
-    # Root events additionally get:
-    #   r_cpp      : C++ expression for the root condition g(x, t, p)
-    #   dr_dx[i]   : partial of root w.r.t. each state
-    #   dr_dp[k]   : partial of root w.r.t. each param
-    #   dr_dt      : partial of root w.r.t. explicit time
-    #   direction  : -1 / 0 / +1
-    #   terminal   : stop integration after applying, yes/no
+
+    # Every event carries the post-event value g of the affected state, with the
+    # method already folded in, plus its partials in x, p and t. A time event adds
+    # the event time and its dt/dp, a root event the condition and its partials.
     time_events = []
     root_events = []
     if events is not None:
@@ -330,10 +311,9 @@ def generate_cvode_cpp(
                 })
             else:
                 # --- Root-triggered ---
-                # The event fires when r(x, t, p) crosses zero.  Saltation uses
-                # the IFT: dt_root/dp_k = -(dr/dp_k + Σ dr/dx_i · S_i[k]) / ġ,
-                # where ġ = Σ dr/dx_i · f_i + dr/dt  (the total time derivative
-                # of r along the trajectory).
+
+                # The event fires when r(x, t, p) crosses zero. Saltation uses the IFT:
+                # dt_root/dp_k = -(dr/dp_k + sum_i dr/dx_i S_i[k]) / rdot.
                 r_sym = _safe_sympify(str(root_raw), local_syms)
                 r_cpp = _to_cpp(r_sym, states_list, params_list, n_states,
                                 "double", forcings_list)
@@ -439,11 +419,10 @@ def generate_cvode_cpp(
         jyS_lines.append(f"    ySdot_arr[{i}] += ({cpp_of(e)}) * yS_arr[{j}];")
     jac_times_yS_body = "\n".join(jyS_lines)
 
-    # --- Compile-time preprocessor defs (only codegen-owned).
-    # Linker flags are supplied by the R wrapper from the configure-time
-    # detection (the `cvodeConfig` list at the top of R/cvode.R, patched
-    # in place by ./configure), not by codegen, so that the package
-    # stays portable across Linux distros and macOS/Homebrew.
+    # --- Compile-time preprocessor defs (only codegen-owned) ---
+
+    # Linker flags come from the R wrapper's configure-time detection, not from
+    # codegen, so the package stays portable across distros and Homebrew.
     compile_defs = []
     if use_sparse:
         compile_defs.append("-DCVODE_KLU")
@@ -540,11 +519,9 @@ def _render_source(
     has_root_events = len(root_events) > 0
     has_events      = has_time_events or has_root_events
 
-    # Forcings/events: PchipForcing storage lives in UserData so the
-    # SUNDIALS callbacks (and event lambdas) can read it.  The `F` vector
-    # is always present so event lambdas can uniformly capture it :
-    # empty if the model has no forcings.  Forcings contribute to df/dx
-    # (and to rhs/sens rhs via evaluation), but NOT to df/dp.
+    # PchipForcing storage lives in UserData so the SUNDIALS callbacks and the event
+    # lambdas can read it. `F` is always present, empty without forcings, so the
+    # lambdas capture it uniformly. Forcings reach df/dx but never df/dp.
     need_pchip = has_forcings  # include the PCHIP header
     # Event lambdas always capture F even when no forcings, so UserData
     # must have F available.  With events-only we still include pchip.
@@ -605,13 +582,10 @@ def _render_source(
         forcing_init_block = ""
 
     # --- Rootfunc / event-root registration ---
-    # CVodeRootInit is driven by the combined set of user rootfunc
-    # expressions and any root-triggered events.  The root_fn writes
-    # gout[0..n_user-1] from user rootfunc, then gout[n_user..] from
-    # event roots.  On CV_ROOT_RETURN the integration loop calls
-    # CVodeGetRootInfo and dispatches: user roots terminate (like the
-    # standalone rootfunc path); event roots apply their state change
-    # and saltation, then reinit and continue (unless marked terminal).
+
+    # root_fn writes the user rootfunc into gout[0..n_user-1] and the event roots
+    # after it. On CV_ROOT_RETURN a user root terminates, an event root applies its
+    # state change and saltation, then reinits and continues unless terminal.
     n_user_rootfunc = len(rootfunc_exprs_cpp) if rootfunc_mode == "user" else 0
     n_event_roots   = len(root_events)
     n_total_roots   = n_user_rootfunc + n_event_roots
@@ -622,10 +596,9 @@ def _render_source(
         root_gout_lines = []
         for i, expr_cpp in enumerate(rootfunc_exprs_cpp if has_user_root else []):
             root_gout_lines.append(f"  gout[{i}] = {expr_cpp};")
-        # Exhausted event roots emit a constant +1 so no further sign change is
-        # ever seen by CVode's rootfinder.  Between the change-over step and
-        # the CVodeReInit that follows event application the root history is
-        # reset, so no phantom crossing is registered from the -ε to +1 jump.
+        # An exhausted event root emits a constant +1, so CVode's rootfinder sees no
+        # further sign change. The root history is reset at the CVodeReInit that
+        # follows, so the jump from -eps to +1 registers no phantom crossing.
         for j, e in enumerate(root_events):
             root_gout_lines.append(
                 f"  gout[{n_user_rootfunc + j}] = "
@@ -670,10 +643,9 @@ static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
         rootfunc_init_block = ""
 
     # --- Events (time and root) ---
-    # We emit structs + builders conditional on what is present in the
-    # model.  Time events land in a sorted std::vector<TimeEvent>,
-    # traversed in the main loop; root events land in std::vector<RootEvent>,
-    # triggered by CVodeRootInit / CV_ROOT_RETURN dispatch.
+
+    # Time events land in a sorted std::vector<TimeEvent> traversed in the main
+    # loop, root events in std::vector<RootEvent> dispatched from CV_ROOT_RETURN.
     event_block_includes = "#include <functional>\n" if has_events else ""
     event_struct = ""
     if has_time_events:
@@ -912,13 +884,11 @@ static std::vector<RootEvent> build_root_events(const double* params,
         sens_store_block = ""
         sens_fevals_block = ""
 
-    # Event helpers emitted into the entry point.
-    # `apply_event` updates y[var_idx] and (if deriv) yS[*][var_idx]
-    # using the precomputed symbolic partials dg/dx, dg/dp.
-    # Shared saltation formula body (lives inside a lambda with captures
-    # to y, f_buf, yS, Ns_active, ud).  Templated on event type via the
-    # `ev` handle; works for both TimeEvent (uses ev.dt_dp_fn directly)
-    # and RootEvent (IFT-computed dt_root_dp passed in).
+    # Event helpers emitted into the entry point. `apply_event` updates y[var_idx]
+    # and, with deriv, yS[*][var_idx] from the precomputed partials dg/dx, dg/dp.
+
+    # The saltation body is templated on the event handle: TimeEvent uses
+    # ev.dt_dp_fn, RootEvent the IFT-computed dt_root_dp passed in.
     event_sens_reinit = ""
     time_event_apply_lambda = ""
     root_event_apply_lambda = ""
@@ -944,21 +914,13 @@ static std::vector<RootEvent> build_root_events(const double* params,
         event_builder_block = ""
 
     if has_time_events:
-        # Full first-order saltation for parameterised time events
-        # (Barton & Lee; derived from the flow's dependence on the
-        # shifted event-time boundary):
-        #   S_new[var]     = Σ dg/dx_i · S_old[i] + dg/dp_k
-        #                  + (Σ dg/dx_i · f_old[i] + dg/dt − f_new[var]) · dt_e/dp_k
-        #   S_new[j ≠ var] = S_old[j] + (f_old[j] − f_new[j]) · dt_e/dp_k
-        # IC sens slots: dt_e/dp_k is zero (t_e depends on parameters only),
-        # so the time-shift term vanishes and we fall back to the
-        # fixed-time formula.
-        #
-        # iS indexes theta-slots; chain-rule applied at the call site:
-        # dt_e/dθ_iS = Σ_k dt_e/dp_k · M[NEQ+k, iS], with M from ud.Phi_prime.
-        # The legacy "iS maps to a single param slot" non-reparam path is
-        # subsumed: under R-side legacy auto-extension, M[NEQ+k, iS] is
-        # identity-on-active-params, so the sum collapses to a single term.
+        # First-order saltation for a parameterised time event (Barton & Lee), with
+        # Gdot = sum_i dg/dx_i f_old[i] + dg/dt - f_new[var]:
+        #   S_new[var] = sum_i dg/dx_i S_old[i] + dg/dp_k + Gdot dt_e/dp_k
+
+        # Every other state shifts by (f_old[j] - f_new[j]) dt_e/dp_k. iS indexes theta
+        # slots, and the chain rule dt_e/dtheta = sum_k dt_e/dp_k M[NEQ+k, iS] is
+        # applied at the call site, with M from ud.Phi_prime.
         if deriv:
             phi_rows_e = n_states + n_params
             time_event_apply_lambda = f"""  auto apply_time_event = [&](const TimeEvent& ev) {{
@@ -1048,16 +1010,12 @@ static std::vector<RootEvent> build_root_events(const double* params,
         event_pre_t0_block = ""
 
     if has_root_events:
-        # Batched root-event application.  Every event triggering at the
-        # same t_e is resolved against a single pre-event snapshot (x_old,
-        # f_old, S_old) and shares one dt*/dp per sens slot; the flow
-        # correction (f_old − f_new)·dt_dp is applied at most once per
-        # state.  Sequential apply would double-count the flow term on
-        # non-target states whenever two events fire simultaneously (e.g.
-        # two events sharing the same root function).  dt_dp is taken
-        # from the first non-terminal triggered event; simultaneous roots
-        # from different functions cross at the same t by construction,
-        # so their dt* agrees to first order.
+        # Batched root-event application: every event at the same t_e resolves against
+        # one pre-event snapshot and shares one dt/dp per sens slot, so the flow
+        # correction (f_old - f_new) dt_dp lands at most once per state.
+
+        # dt_dp comes from the first non-terminal triggered event: simultaneous roots
+        # cross at the same t by construction, so their dt agrees to first order.
         if deriv:
             phi_rows_r = n_states + n_params
             root_event_apply_lambda = f"""  auto apply_root_events_batch = [&](const std::vector<int>& triggered_idx,
@@ -1194,15 +1152,10 @@ static std::vector<RootEvent> build_root_events(const double* params,
         equilibrate_check_block = ""
 
     # --- do_cvode_step: single step with CV_ROOT_RETURN dispatch ---
-    # Returns: 0 = reached target normally
-    #          1 = user rootfunc terminated
-    #          2 = terminal root event terminated
-    #         -1 = error (return_code/solver_msg set; caller branches on rc<0)
-    # The lambda's internal `-1` is a local signal; `return_code` itself
-    # carries the raw CVODE flag so diagnostics() can map it precisely.
-    # On (1)/(2) the caller is responsible for pushing the final output row.
-    # The retry-loop body is only emitted when events or a user rootfunc are
-    # present: otherwise CVode never returns CV_ROOT_RETURN.
+
+    # Returns 0 for the target reached, 1 for a user rootfunc stop, 2 for a terminal
+    # root event, -1 for an error, with return_code carrying the raw CVODE flag.
+    # On 1 and 2 the caller pushes the final output row.
     if has_events:
         time_check = "has_time_events = true; (void)has_time_events;"  # placeholder
         if deriv:
@@ -1313,10 +1266,9 @@ static std::vector<RootEvent> build_root_events(const double* params,
     else:
         do_cvode_step_lambda = ""
 
-    # --- Zero-copy sink: the batch entry can size the results before the
-    # solve when nothing dynamic can add points. Time events add a row each
-    # (unless already a requested time), and their times are parameters, so
-    # they are evaluated per condition. Root handling stays dynamic.
+    # --- Zero-copy sink: the batch entry can size the results before the solve
+    # when nothing dynamic adds points. A time event adds a row unless its time is
+    # already requested, and those times are per-condition; roots stay dynamic.
     cv_fixed_grid = (len(root_events) == 0 and rootfunc_mode == "none")
     n_cv_ev = len(time_events) if cv_fixed_grid else 0
     if cv_fixed_grid:
@@ -1395,7 +1347,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
 {event_sens_reinit}      if (hard_fail) {{ stop = true; break; }}
       cv_rebase();
       // An event time that is not itself a requested output time still gets a
-      // row, carrying the post-event state -- same contract as the native
+      // row, carrying the post-event state, same contract as the native
       // backend. When it coincides with times[k] the branch below emits it.
       if (t_e < times[k]) {{
         out_t.push_back(t_e);
@@ -1706,6 +1658,7 @@ static int sens_rhs1_fn(int Ns, sunrealtype t,
 #include <sunlinsol/sunlinsol_dense.h>
 {ls_includes}#include <sundials/sundials_types.h>
 #include <sundials/sundials_context.h>
+#include <cppde/cppde_scalar_ops.hpp>
 #include <cppde/cppde_step_trace.hpp>
 #include <cppde/cppde_r_batch.hpp>
 {forcing_include}{event_block_includes}

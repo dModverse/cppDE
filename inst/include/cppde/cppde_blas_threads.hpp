@@ -6,7 +6,7 @@
  layer of Intel MKL's single dynamic library is libiomp5, so a solve inside an
  R session linked against MKL ends up with two OpenMP runtimes live in one
  process, which is undefined behaviour.  It shows up as silently wrong
- sensitivity blocks -- the step controller then sees a diverging error
+ sensitivity blocks, the step controller then sees a diverging error
  estimate and gives up, rather than the solve returning a wrong answer.
  (Confirmed by MKL_THREADING_LAYER=GNU and =SEQUENTIAL both making it go away,
  while MKL_NUM_THREADS=2 does not.)
@@ -16,7 +16,7 @@
  conditions concurrently, and the per-solve BLAS calls are far too small to
  thread usefully anyway.
 
- The pin is scoped, not permanent -- the thread count is process-global state
+ The pin is scoped, not permanent, the thread count is process-global state
  that belongs to the caller, so a solve restores whatever was set before it.
 
  Copyright (C) 2026 Simon Beyer

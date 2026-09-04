@@ -85,11 +85,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
   method <- match.arg(method)
   if (method == "rb4") method <- "rosenbrock4"
-  # Both multistep methods ("bdf", "adams") are instantiations of the
-  # cppde::multistepper class template, selected at compile time via
-  # the multistep_method enum.  The single-step methods (rb4, tsit5)
+  # Both multistep methods ("bdf", "adams") instantiate cppde::multistepper,
+  # selected at compile time by the multistep_method enum; the single-step ones
   # use onestep_controller / onestep_dense_output.
-  # The internal helper is_multistep() centralises the dispatch.
   is_multistep <- function(m) m %in% c("bdf", "adams")
   is_explicit  <- function(m) m %in% c("tsit5")
 
@@ -103,19 +101,17 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # --- Clean up ODE definitions ---
   rhs <- unclass(rhs)
   rhs <- gsub("\n", "", rhs)
-  rhs <- sanitizeExprs(rhs)
 
-  # Every expression the model is built from, so renamed symbols stay
-  # consistent. Numeric event columns hold no identifiers.
+  # Every expression the model is built from. Numeric event columns hold no
+  # identifiers, and "equilibrate" is a keyword of rootfunc, not an expression.
+  checkSymbolNames(rhs, forcings, fixed)
   if (!is.null(events)) {
     for (col in c("var", "value", "time", "root"))
       if (col %in% names(events) && is.character(events[[col]]))
-        events[[col]] <- sanitizeExprs(events[[col]])
+        checkSymbolNames(events[[col]])
   }
   if (!is.null(rootfunc) && !identical(tolower(rootfunc), "equilibrate"))
-    rootfunc <- sanitizeExprs(rootfunc)
-  if (!is.null(forcings)) forcings <- sanitizeExprs(forcings)
-  if (!is.null(fixed))    fixed    <- sanitizeExprs(fixed)
+    checkSymbolNames(rootfunc)
 
   # --- Extract variable and parameter names ---
   variables <- names(rhs)
@@ -185,9 +181,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   n_total_sens <- n_sens_initials + n_sens_params
 
   # --- Resolve nStack (compile-time AD slab width) ---
-  # Inf keeps the AD on the heap and takes the width from ncol(sens1ini) at
-  # run time, NULL puts it on the stack at n_total_sens, and a positive K fixes
-  # the width, which every call's active dimension then has to fit into.
+  # Inf heap-allocates and takes the width from ncol(sens1ini) at run time,
+  # NULL stacks it at n_total_sens, K fixes it and every call has to fit K.
   if (!deriv && is.numeric(nStack) && length(nStack) == 1L && is.infinite(nStack)) {
     nStack <- NULL  # heap AD is meaningful only with deriv = TRUE
   }
@@ -256,9 +251,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   if (verbose) message("  \u2713 ODE and Jacobian generated")
 
   # --- Sparse LU decision ---
-  # The codegen already decided and generated the matching Jacobian functor.
-  # use_sparse MUST match what codegen produced, otherwise the Jacobian
-  # functor signature won't match the stepper's matrix type.
+  # use_sparse must match what the codegen generated: the Jacobian functor
+  # signature is tied to the stepper's matrix type.
   use_sparse <- isTRUE(codegen_result$use_sparse)
 
   if (use_sparse) {
@@ -284,10 +278,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
     event_code <- paste(event_lines, collapse = "\n")
 
-    ## Fixed-event times as plain-double expressions over the same flat
-    ## [states, params] vector the solver gets. With these the batch entry can
-    ## size the output exactly even when an event time is off the requested
-    ## grid; NULL means it cannot (a root event, or a time built from a forcing).
+    ## Fixed-event times as plain-double expressions over the flat [states, params]
+    ## vector, so the batch entry can size its output exactly. NULL means it cannot:
+    ## a root event, or a time built from a forcing.
     event_time_exprs <- codegen$fixed_event_time_exprs(
       events_df = events, states_list = variables, params_list = params,
       n_states = n_variables, forcings_list = forcings)
@@ -331,8 +324,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   # --- Using declarations ---
   # N is nStack_width, so the AD type is cppde::dual<double, N>, arena-allocated
-  # at N = 0. deriv2 uses cppde::dual2nd<double, N>, which inherits from the
-  # nested dual and keeps its storage layout and accessors.
+  # at N = 0; deriv2 uses cppde::dual2nd<double, N> with the same layout.
   if (deriv2) {
     usings <- c(
       "using namespace cppde;",
@@ -372,7 +364,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   externC <- c(
     "// Pure C++ solve: no R API, no escaping exceptions.  Results are read out",
     "// of the AD types into plain double here, while the arena scope is still",
-    "// open -- tangents live in the arena and die when it pops.",
+    "// open, tangents live in the arena and die when it pops.",
     "static int solve_impl(const cppde::rbatch::solve_args& args,",
     "                      cppde::rbatch::solve_result& res) noexcept {",
     "try {",
@@ -444,7 +436,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       sprintf("  const int n_stack_max  = %s;  // compile-time AD slab width (INT_MAX under heap AD)",
               if (is_heap) "INT_MAX" else as.character(nStack_width)),
       "  // Per-call active sens dimension: from sens1ini's column count when supplied",
-      "  // (which is the auto-extended full Phi' shape on the R side -- legacy",
+      "  // (which is the auto-extended full Phi' shape on the R side, legacy",
       "  // [n_states, n_active] input is padded with an identity block on the param",
       "  // rows before reaching here), or n_sens_total - n_runtime_fixed when not",
       "  // supplied (identity-fallback seeding).",
@@ -534,8 +526,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   # --- Slab-bind state and parameter tangents -------------------------------
   # On the heap-AD path every state and parameter tangent points into one
-  # contiguous slab block per vector, so seeding and the emitted assignments
-  # write into it. For every other value type the slab is an empty stub.
+  # contiguous slab block per vector; for every other value type it is a stub.
   if (deriv) {
     externC <- c(
       externC,
@@ -770,12 +761,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   # --- Integration setup ---
   # Dense or sparse LU, Rosenbrock4 or one of the two multistep methods, which
-  # are instantiations of the same cppde::multistepper with the method as a
-  # template argument. NDF against BDF is a runtime flag.
+  # instantiate the same cppde::multistepper. NDF against BDF is a runtime flag.
   resizer_tag   <- "cppde::initially_resizer"
 
   # Generate the C++ stepper type for value type V and LU pattern J.
-  # Only meaningful for is_multistep(method) -- callers on the rb4 path
+  # Only meaningful for is_multistep(method), callers on the rb4 path
   # never invoke this helper.
   make_stepper_type <- function(V, J) {
     method_enum <- switch(method,
@@ -787,10 +777,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
             method_enum, V, J, resizer_tag)
   }
 
-  # The multistepper_* stepper type strings are only meaningful for the
-  # multistep methods.  For Rosenbrock4 the make_stepper_type() helper
-  # would error out on the unknown method name, so we instantiate them
-  # lazily -- only for is_multistep(method).
+  # make_stepper_type() errors on a method name that is not multistep, so the
+  # stepper type strings are built lazily, only for is_multistep(method).
   ms_double <- ms_AD <- ms_AD2 <- NULL
   if (use_sparse) {
     rb4_double <- "rosenbrock4<double, sparse_lu_tag>"
@@ -811,15 +799,14 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       ms_AD2    <- make_stepper_type("AD2",    "cppde::dense_lu_tag")
     }
   }
-  # Tsit5 stepper types (no Jacobian pattern -- explicit method)
+  # Tsit5 stepper types (no Jacobian pattern, explicit method)
   tsit5_double <- "cppde::tsit5<double>"
   tsit5_AD     <- "cppde::tsit5<AD>"
   tsit5_AD2    <- "cppde::tsit5<AD2>"
 
   if (is_multistep(method)) {
     # ---- Multistep stepper (bdf / adams) ----
-    # All multistep methods reuse cppde::multistepper_controller -- the
-    # controller is templated on the stepper type and works uniformly
+    # cppde::multistepper_controller is templated on the stepper type and works
     # with any multistepper instantiation.
     ms_type <- if (deriv2) ms_AD2 else if (deriv) ms_AD else ms_double
     stepper_setup_lines <- c(
@@ -863,11 +850,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     is_equilibrate <- identical(tolower(rootfunc), "equilibrate")
     termination_arg <- if (is_equilibrate) ", cppde::detail::no_dt_estimator{}, ss_termination" else ""
 
-    # Slab priming for the single-step path, as in the multistep branch: the
-    # call lands on the controller before the move into the dense wrapper, so
-    # the slabs reachable through it are primed for the whole solve. The
-    # stepper gates it on the value type, so it is a no-op where it does not
-    # apply.
+    # Slab priming for the single-step path, as in the multistep branch: the call
+    # lands on the controller before the move into the dense wrapper, so the slabs
+    # reachable through it are primed for the whole solve. Gated on the value type.
     onestep_prep_line <- if (deriv) {
       "  controlledStepper.prepare_sensitivities(static_cast<unsigned>(n_sens));"
     } else {
@@ -913,12 +898,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   # --- Initial step size estimation ---
   # The multistep methods use the cvHin port, the single-step ones
-  # estimate_initial_dt with an analytic second derivative for rb4 and a finite
-  # difference for tsit5. order = 1 suits all of them, see cppde_utils.hpp.
+  # estimate_initial_dt. order = 1 suits all of them, see cppde_utils.hpp.
   method_order <- 1L
 
   if (is_multistep(method)) {
-    # cppde_hin -- needs only `sys`; no compute_ydd closure, no order param.
+    # cppde_hin, needs only `sys`; no compute_ydd closure, no order param.
     estimate_dt_block <- c(
       sprintf("  // --- Determine initial dt (%s, CVODES cvHin port) ---", method),
       sprintf("  %s dt;", numType),
@@ -981,9 +965,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
   # --- Multistep methods: dt re-estimator lambda for event restarts ---
-  # Handed to integrate_times as the DtEstimator and called on every restart.
-  # times.back() goes in as the upper-bound hint, so the geometric-mean seed
-  # keeps the remaining window in view.
+  # Handed to integrate_times as the DtEstimator, called on every restart.
+  # times.back() is the upper-bound hint that keeps the remaining window in view.
   dt_est_block <- character(0)
   if (is_multistep(method)) {
     dt_est_block <- c(
@@ -1020,7 +1003,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
                "    solver_message = e.what();",
                "  } catch (const std::exception& e) {",
                "    // Anything else that derives from std::exception (bad_alloc,",
-               "    // overflow_error from a wild RHS, ...) -- classify as unclassified",
+               "    // overflow_error from a wild RHS, ...), classify as unclassified",
                "    // but still return partial results rather than aborting R.",
                "    checker.set_return_code(cppde::RC_UNRECOGNIZED_ERR);",
                "    solver_message = e.what();",
@@ -1116,9 +1099,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   dflag  <- if (deriv)  "true" else "false"
   d2flag <- if (deriv2) "true" else "false"
   ## Whether `times` alone fixes the output grid, so the batch can size its
-  ## results up front. A time event on the grid emits one row there and leaves
-  ## it alone; an event time off the grid adds a row, which pre_acquire detects
-  ## and declines. A root event or a rootfunc is dynamic and never qualifies.
+  ## results up front. An event time off the grid adds a row, which pre_acquire
+  ## declines; a root event or a rootfunc is dynamic and never qualifies.
   has_root_events <- !is.null(events) && "root" %in% names(events) &&
     any(!is.na(events$root))
   fixed_grid <- !has_root_events && rootfunc_code == ""
@@ -1253,10 +1235,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   attr(modelname, "sparse")        <- use_sparse
   attr(modelname, "method")        <- method
   attr(modelname, "useNDF")        <- useNDF
-  # Dimension names -- under reparametrization the sens columns are theta slots
-  # The sens dim defaults to model-parameter names (legacy / identity seeding
-  # basis). solveODE() overrides this per call when sens1ini is supplied with
-  # full Phi'(theta) shape (uses colnames(sens1ini) or theta1..M).
+  # Dimension names: under reparametrization the sens columns are theta slots.
+  # The sens dim defaults to model-parameter names; solveODE() overrides it per
+  # call when sens1ini carries a full Phi' shape.
   if (deriv) {
     attr(modelname, "dimNames") <- list(
       time = "time",

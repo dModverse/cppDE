@@ -22,10 +22,8 @@ test_that("funCpp returns correct output", {
 })
 
 test_that("parameters named like the generated arrays do not collide", {
-  # The emitted code indexes p[] and x_obs[]. Substituting one symbol at a time
-  # let a parameter of that name rewrite the slots already emitted for the
-  # others, so what came out depended on the order the parameters were listed
-  # in: q, p turned into p[0], p[1] and then into p[1][0].
+  # The emitted code indexes p[] and x_obs[]. A parameter of that name is
+  # substituted for its own slot, in whatever order the parameters are listed.
   trafo <- c(o1 = "p + 2 * x", o2 = "y * k",
              o3 = "x_obs + y_local", o4 = "p * y_local - k")
   pars   <- c(p = 2, x = 3, y = 5, k = 7, x_obs = 11, y_local = 13)
@@ -45,6 +43,43 @@ test_that("parameters named like the generated arrays do not collide", {
     expect_equal(unname(jac["o4", "p"]), 13, tolerance = 1e-10)
     expect_equal(unname(jac["o4", "y_local"]), 2, tolerance = 1e-10)
   }
+})
+
+test_that("symbols named after C++ tokens do not reach the generated source", {
+  # The printer writes std::pow and spells a reserved word default_. A symbol
+  # of either name is substituted for its slot, so neither reaches the source.
+  trafo <- c(o1 = "std * exp(ini * log(10)) + default",
+             o2 = "sqrt(int) + std^2")
+
+  for (mode in c("dual", "symbolic")) {
+    f <- funCpp(trafo, variables = "int", parameters = c("std", "ini", "default"),
+                deriv = TRUE, derivMode = mode, compile = TRUE,
+                modelname = paste0("cxx_tokens_", mode), convenient = TRUE)
+    res <- f$func(int = 4, std = 2, ini = 0.5, default = 3)
+    jac <- f$jac(int = 4, std = 2, ini = 0.5, default = 3)[1, , ]
+
+    expect_equal(unname(res[1, ]), c(2 * 10^0.5 + 3, 6), tolerance = 1e-10,
+                 label = paste("values,", mode))
+    expect_equal(unname(jac["o1", "std"]), 10^0.5, tolerance = 1e-8)
+    expect_equal(unname(jac["o1", "default"]), 1, tolerance = 1e-10)
+    expect_equal(unname(jac["o2", "int"]), 0.25, tolerance = 1e-8)
+  }
+})
+
+test_that("a Python keyword as a symbol name is rejected", {
+  # SymPy parses through Python, where the name is a syntax error, and True,
+  # False and None read as constants and drop the symbol from the model.
+  expect_error(funCpp(c(y = "class * 2"), modelname = "py_kw_eqn"),
+               "Python keyword used as a symbol name: 'class'")
+  expect_error(funCpp(c(y = "a * 2"), parameters = c("a", "lambda"),
+                      modelname = "py_kw_par"),
+               "'lambda'")
+  expect_error(funCpp(c(lambda = "a * 2"), parameters = "a",
+                      modelname = "py_kw_out"),
+               "'lambda'")
+  expect_error(funCpp(c(y = "a * True"), parameters = c("a", "True"),
+                      modelname = "py_kw_const"),
+               "'True'")
 })
 
 # -- Jacobian correctness -----------------------------------------------------
@@ -178,10 +213,8 @@ test_that("funCpp dual and symbolic agree under second-order chain rule", {
 })
 
 # -- dual + deriv2 + identity pass-through (regression) ------------------------
-# Repro of a previous segfault: when an output is just `param` (or `var`) the
-# inner Hessian seed is never armed. The non-const dual2nd::dd_at writeback
-# used raw operator[] and dereferenced the inner tan_ == nullptr. The codegen
-# now reads through a const view so dd_at takes the bounds-safe overload.
+# An output that is just a bare param or var arms no inner Hessian seed, so the
+# dual2nd writeback has to reach it through the bounds-safe const overload.
 
 test_that("funCpp dual deriv2 handles identity pass-through", {
   trafo <- c(la = "la", y2 = "la^2 + b", zero = "0")

@@ -1,30 +1,23 @@
 ## =====================================================================
-##  tiers.R -- three benchmark depths, and the coverage rule that makes
-##  the smallest one trustworthy.
-##
-##  The point of `tiny` is to answer "did this change help or hurt?" in a
-##  couple of minutes.  That only works if every *kind* of problem is
-##  represented: a tier that happens to contain no sparse system cannot
-##  detect a regression in the sparse linear solver, and one with no
-##  event cannot detect a regression in event handling.
-##
-##  Tier membership is therefore an explicit, stable list -- so numbers
-##  stay comparable across runs -- and `tier_coverage()` checks that the
-##  list still touches every trait, failing loudly when it does not.
+##  tiers.R: three benchmark depths, and the coverage rule behind the smallest.
 ## =====================================================================
+
+##  `tiny` answers "did this change help or hurt?" in a couple of minutes, which
+##  only works if every kind of problem is represented. Membership is therefore
+##  an explicit stable list, and tier_coverage() fails loudly when a trait drops.
 
 ## The traits are the axes along which solver performance actually
 ## differs.  Each one exercises a distinct code path or numerical regime.
 BENCH_TRAITS <- c(
   "stiff-extreme"  = "scale separation over many decades (Robertson, E5)",
   "stiff-moderate" = "stiff, but without extreme scale separation",
-  "oscillatory"    = "sustained limit cycle -- error accumulates as phase drift",
+  "oscillatory"    = "sustained limit cycle, error accumulates as phase drift",
   "relaxation"     = "stiffness switches on and off along the trajectory",
-  "sparse"         = "sparse or banded Jacobian -- exercises the KLU path",
+  "sparse"         = "sparse or banded Jacobian, exercises the KLU path",
   "large"          = ">= 100 states",
-  "events"         = "timed discontinuities -- stop, jump, restart",
-  "many-sens"      = ">= 20 sensitivity parameters -- wide AD",
-  "few-sens"       = "<= 5 sensitivity parameters -- narrow AD",
+  "events"         = "timed discontinuities, stop, jump, restart",
+  "many-sens"      = ">= 20 sensitivity parameters, wide AD",
+  "few-sens"       = "<= 5 sensitivity parameters, narrow AD",
   "rational"       = "Michaelis-Menten / Hill kinetics (division by states)",
   "transcendental" = "exp / log / trigonometric terms in the RHS",
   "log-horizon"    = "output grid spanning >= 6 decades in time",
@@ -35,10 +28,9 @@ BENCH_TRAITS <- c(
 ##  Trait inference
 ## ---------------------------------------------------------------------
 
-## Derived from the assembled problem, so PEtab models are classified
-## without a hand-maintained table.  The regime traits (stiffness,
-## oscillation) cannot be read off the equations and are set explicitly
-## where they apply.
+## Derived from the assembled problem, so PEtab models are classified without a
+## hand-maintained table. Stiffness and oscillation cannot be read off the
+## equations and are set explicitly where they apply.
 infer_traits <- function(p) {
   tr <- character(0)
   rhs <- p$rhs
@@ -118,10 +110,9 @@ lang_divides_by <- function(e, states) {
 ## contribute, so `tiny` stays inside a few minutes.
 BENCH_TIERS <- list(
 
-  ## ~5 min.  One representative per trait -- the regression basis.
-  ## The members were chosen as the cheapest carrier of the traits they
-  ## contribute; the per-solve costs in the comments come from a measured
-  ## run, so a future edit can keep the tier inside its budget.
+  ## ~5 min. One representative per trait, the regression basis, each chosen as
+  ## the cheapest carrier of the traits it contributes. The per-solve costs in
+  ## the comments come from a measured run, so an edit can keep to the budget.
   tiny = list(
     classic = c("robertson",        # stiff-extreme, log-horizon, few-sens
                 "orego",            # oscillatory                      2.3 ms
@@ -183,7 +174,7 @@ print_tier_coverage <- function(cov, tier_name = "") {
   gaps <- cov$trait[cov$n == 0L]
   if (length(gaps))
     warning("tier covers no problem with trait(s): ", paste(gaps, collapse = ", "),
-            "\n  a regression in that area would go unnoticed -- extend BENCH_TIERS",
+            "\n  a regression in that area would go unnoticed, extend BENCH_TIERS",
             call. = FALSE, immediate. = TRUE)
   invisible(cov)
 }

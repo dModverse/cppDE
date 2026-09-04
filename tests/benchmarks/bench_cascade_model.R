@@ -1,8 +1,9 @@
 ## =================================================================
-## Benchmark: cascade signaling network -- stiff solvers
-##   cppDE (bdf/ndf/rb4/tsit5) heap vs static ntheta = 44
-##   CVODE (dense vs KLU)  +  deSolve LSODES
+## Benchmark: cascade signaling network, stiff solvers
 ## =================================================================
+
+## cppDE (bdf/ndf/rb4/tsit5) heap against static ntheta, CVODE (dense and KLU),
+## and deSolve LSODES.
 rm(list = ls(all.names = TRUE))
 
 .args     <- commandArgs(trailingOnly = TRUE)
@@ -10,10 +11,8 @@ rm(list = ls(all.names = TRUE))
 .abstol   <- if (length(.args) >= 2) as.numeric(.args[2]) else 1e-6
 .reltol   <- if (length(.args) >= 3) as.numeric(.args[3]) else 1e-6
 
-# -----------------------------------------------------------------
-# Resolve the directory holding this script (before we setwd away),
-# so we can find the companion Julia benchmark.
-# -----------------------------------------------------------------
+# Resolve the directory holding this script before setwd() moves away, so the
+# companion Julia benchmark can be found.
 .scriptDir <- local({
   af <- commandArgs(trailingOnly = FALSE)
   hit <- grep("^--file=", af, value = TRUE)
@@ -172,16 +171,15 @@ for (nm in names(norms))
 cat("\n\n")
 
 # =====================================================================
-#  Julia OrdinaryDiffEq.jl comparison
-#    Tsit5 / AutoTsit5(Rodas4) / QNDF -- bare ODE solve, no sens
+#  Julia OrdinaryDiffEq.jl comparison: bare ODE solve, no sensitivities
 # =====================================================================
 .hdr("Julia OrdinaryDiffEq.jl benchmark")
 
 .juliaBin <- Sys.which("julia")
 if (!nzchar(.juliaBin)) {
-  cat("julia not on PATH -- skipping Julia comparison.\n")
+  cat("julia not on PATH, skipping Julia comparison.\n")
 } else if (!file.exists(.juliaScript)) {
-  cat(sprintf("Julia script not found at %s -- skipping.\n", .juliaScript))
+  cat(sprintf("Julia script not found at %s, skipping.\n", .juliaScript))
 } else {
   .juliaCSV    <- file.path(.workingDir, "julia_bench_results.csv")
   .juliaSolCSV <- file.path(.workingDir, "julia_solution.csv")
@@ -192,10 +190,9 @@ if (!nzchar(.juliaBin)) {
     cat("  (Julia: ForwardDiff over solve + dual-aware internalnorm so sens are tolerance-controlled)\n")
   .sep2()
 
-  # R prepends /usr/lib/R/lib (libRblas etc.) to LD_LIBRARY_PATH; if Julia
-  # inherits that, it can pick up R's BLAS/LAPACK over its own bundled MKL
-  # and segfault inside Dual{Float64,N} matmul during ForwardDiff. Clear it
-  # for the child process.
+  # R prepends its own lib dir to LD_LIBRARY_PATH. Julia inheriting that can pick
+  # up R's BLAS over its bundled MKL and segfault inside the dual matmul during
+  # ForwardDiff, so it is cleared for the child process.
   .rc <- system2(.juliaBin,
                  args = c(sprintf("--project=%s", shQuote(.scriptDir)),
                           shQuote(.juliaScript),
@@ -240,10 +237,9 @@ if (!nzchar(.juliaBin)) {
           ref_sens <- setdiff(colnames(wide_ref), state_cols)
           common   <- intersect(j_sens, ref_sens)
           if (length(common) > 0) {
-            # Tight ground-truth reference: LSODES on the augmented system at
-            # atol=rtol=1e-12. Lets us see the *actual* sens-error of each
-            # method at the bench tolerance, instead of comparing two
-            # similarly-loose estimates against each other.
+            # Tight ground-truth reference: LSODES on the augmented system at 1e-12, so the
+            # actual sensitivity error of each method shows, rather than two similarly
+            # loose estimates compared against each other.
             cat(sprintf("\n  Tight ref: LSODES @ atol=rtol=1e-12 (computing...)\n"))
             ref_tight <- tryCatch(
               odeC(yini, times, m_cOde, parsC, method = "lsodes",
@@ -278,7 +274,7 @@ if (!nzchar(.juliaBin)) {
                           length(common)))
             }
           } else {
-            cat("  (no common sens columns Julia vs LSODES -- naming mismatch)\n")
+            cat("  (no common sens columns Julia vs LSODES, naming mismatch)\n")
           }
         }
         .sep2()

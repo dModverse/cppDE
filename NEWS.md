@@ -1,3 +1,27 @@
+# cppDE 0.9.3
+
+* A `piecewise` translates. Comparisons are defined on the AD nodes of both
+  orders and a piecewise is emitted as `cppde::select(cond, a, b)`. Both
+  branches are evaluated, so each has to be safe to evaluate.
+* `&&`, `||` and `!` are accepted in equations. Python's own parser does the
+  grouping, so `a > b && c > d` keeps its meaning without parentheses.
+* An expression that does not parse names itself and gives a reason on one
+  line. The old message was truncated by reticulate and then indexed out of
+  range.
+* A model symbol can no longer collide with an identifier the generator emits.
+  Symbols are substituted for their slot while the expression is printed, not
+  in the finished source, where a parameter named `std` rewrote `std::pow`
+  into `p[18]::pow`.
+* A symbol named after a C++ keyword compiles, `default` and `int` included.
+* A symbol named after a Python keyword is rejected and named in the message,
+  in `funCpp()` as well as in `cppODE()` and `cvode()`. It used to be renamed,
+  which left the caller holding the old name. SymPy parses through Python's
+  parser, where such a name is a syntax error.
+* The `double` locals of a root event's `G_tt` lambda are named by position,
+  not after the model's own symbols.
+* `cppde::value_of(x)` is the value accessor across arithmetic types, both dual
+  orders and their expression templates.
+
 # cppDE 0.9.2
 
 * A root event whose crossing falls exactly on an evaluated time now fires.

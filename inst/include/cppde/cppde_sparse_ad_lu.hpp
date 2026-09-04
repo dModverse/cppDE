@@ -137,7 +137,7 @@ class sparse_lu_solver<AD_T, std::enable_if_t<is_ad<AD_T>::value>>
 
   // Re-adopt W's CSC structure into the persistent buffers whenever it is not
   // the one already held.  Keying this on nnz alone would reuse a stale Ap/Ai
-  // for a different pattern with the same entry count -- and would leave KLU
+  // for a different pattern with the same entry count, and would leave KLU
   // holding a symbolic factorization of the old graph.
   bool adopt_structure(const csc_matrix<F>& W)
   {

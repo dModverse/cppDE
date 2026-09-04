@@ -29,9 +29,8 @@
   n_phi_rows <- n_states + n_params
 
   ## --- Detect sens1ini shape per call ---
-  ## Legacy [n_states, n_active] means an implicit identity on the parameter
-  ## rows, full Phi' [n_phi_rows, M] supplies them, and a partial Phi' names the
-  ## rows it supplies and has the rest zero-padded. NULL seeds the identity.
+  ## Legacy [n_states, n_active] leaves the parameter rows at the identity, full
+  ## Phi' supplies them, partial names the rows it supplies and zero-pads the rest.
   if (!is.null(sens1ini) && !deriv)
     stop("'sens1ini' supplied but model has deriv = FALSE")
   if (!is.null(sens2ini) && !deriv2)
@@ -94,9 +93,8 @@
   }
 
   ## --- Output sens column names (per call) ---
-  ## - full + colnames present  -> user-provided theta names
-  ## - full + no colnames       -> theta1..thetaM
-  ## - legacy / NULL            -> active_sens (model-parameter basis)
+  ## Full Phi' uses its own colnames, or theta1..thetaM when it carries none;
+  ## legacy and NULL use active_sens, the model-parameter basis.
   sens_col_names <- if (sens1ini_is_full) {
     cn <- colnames(sens1ini)
     if (!is.null(cn)) cn else sprintf("theta%d", seq_len(n_theta_active))
@@ -105,10 +103,8 @@
   }
 
   ## --- Coerce sens1ini to flat [n_phi_rows, n_theta_active] ---
-  ## Performance: skip column/row reorder when the order already matches
-  ## (the common case in optimisation loops where the same shape is reused).
-  ## Legacy padding uses one preallocated zero matrix + indexed assignment
-  ## rather than rbind (which would allocate twice).
+  ## The reorder is skipped when the order already matches, the common case when
+  ## an optimiser reuses one shape. Legacy padding fills a preallocated matrix.
   coerce_sens1ini <- function(x, n_cols, col_names, arg) {
     if (!is.numeric(x)) stop("'", arg, "' must be numeric")
 
@@ -186,9 +182,8 @@
   }
 
   ## --- Build sens1ini for the C++ side ---
-  ## CVODE always needs a full Phi' (codegen has no identity-fallback). Native
-  ## cppDE accepts NULL: the generated C++ then identity-seeds via diff(ai).
-  ## Runtime `fixed` becomes zero rows when we synthesize the default Phi'.
+  ## CVODE always needs a full Phi', the generated cppDE code accepts NULL and
+  ## identity-seeds via diff(ai). Runtime `fixed` becomes zero rows in a default.
   if (deriv && is.null(sens1ini) && is_cvode) {
     default_pp <- matrix(0, nrow = n_phi_rows, ncol = n_active,
                          dimnames = list(c(variables, parameters), active_sens))
@@ -200,7 +195,7 @@
     dim(sens1ini) <- c(n_phi_rows, n_active)
   } else if (!is.null(sens1ini)) {
     flat <- coerce_sens1ini(sens1ini, n_theta_active, sens_col_names, "sens1ini")
-    ## Preserve 2-D shape for C++ Rf_ncols() -- distinguishes [phi_rows, M] from a flat vector.
+    ## Preserve 2-D shape for C++ Rf_ncols(), distinguishes [phi_rows, M] from a flat vector.
     dim(flat) <- c(n_phi_rows, n_theta_active)
     sens1ini <- flat
   }
@@ -208,10 +203,8 @@
   if (!is.null(sens2ini)) {
     if (!is.numeric(sens2ini)) stop("'sens2ini' must be numeric")
     ## Legacy [n_states, M, M] is accepted only alongside a legacy or absent
-    ## sens1ini, where Phi'' vanishes on the parameter block. Full is the
-    ## unified shape, and partial names the subset of rows it supplies, the
-    ## rest being zero. It composes with any sens1ini shape, the C++ side
-    ## receiving the padded tensor either way.
+    ## sens1ini, where Phi'' vanishes on the parameter block. Full is the unified
+    ## shape; partial names the rows it supplies and the C++ side gets it padded.
     legacy_d2_ok <- !sens1ini_is_full && n_phi_rows != n_states
     expected_rows <- c(variables, parameters)
 
@@ -618,8 +611,8 @@ solveODE <- function(model, times, parms,
 #' Solve Many Conditions in One Call
 #'
 #' @description
-#' Integrates a compiled ODE model over several independent parameter sets --
-#' experimental conditions, or the subjects of a mixed-effects fit -- inside a
+#' Integrates a compiled ODE model over several independent parameter sets
+#' (experimental conditions, or the subjects of a mixed-effects fit) inside a
 #' single `.Call`, using OpenMP where the toolchain provides it.
 #'
 #' @details
@@ -826,8 +819,8 @@ batchAvailable <- function(model) {
 #' Prepare a Batch for Repeated Solving
 #'
 #' @description
-#' Validates and marshals a set of conditions once, so that repeated solves --
-#' an optimiser evaluating the same model at new parameters -- only pay for the
+#' Validates and marshals a set of conditions once, so that repeated solves
+#' (an optimiser evaluating the same model at new parameters) only pay for the
 #' numbers that actually changed. [solveODEBatch()] redoes the full argument
 #' marshalling on every call, which caps how well the batch scales.
 #'
@@ -926,9 +919,9 @@ solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
 }
 
 
-# Thread count for a batch of K conditions.  Deliberately not read from
-# OMP_NUM_THREADS: the BLAS pinning in cppde_ad_lu.hpp used to overwrite it
-# process-wide, so it is not a trustworthy source.
+# Thread count for a batch of K conditions. Deliberately not read from
+# OMP_NUM_THREADS: nothing keeps a process-wide variable in step with the
+# BLAS thread count cppDE actually pins, so it is not a trustworthy source.
 .batchCores <- function(cores, K) {
   if (!is.null(cores)) {
     cores <- as.integer(cores)

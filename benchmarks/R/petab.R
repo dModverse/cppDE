@@ -1,18 +1,13 @@
 ## =====================================================================
-##  petab.R -- turn a PEtab problem into a cppDE benchmark problem.
-##
-##  A "benchmark problem" is the minimum a solver comparison needs:
-##
-##      rhs    named character   dx/dt as R-syntax strings
-##      parms  named numeric     state initials followed by parameters
-##      times  numeric           output grid
-##      sens   character         parameters to differentiate w.r.t.
-##
-##  PEtab carries more than that (observables, noise models, multiple
-##  conditions, pre-equilibration).  What is used and what is dropped is
-##  recorded in the problem's `notes`, and printed by the runner, so no
-##  simplification is silent.
+##  petab.R: turn a PEtab problem into a cppDE benchmark problem.
 ## =====================================================================
+
+##  A benchmark problem is the minimum a solver comparison needs: rhs as
+##  R-syntax strings, parms as state initials followed by parameters, times as
+##  the output grid, and sens as the parameters to differentiate with respect to.
+
+##  PEtab carries more than that. What is used and what is dropped is recorded
+##  in the problem's `notes` and printed by the runner, so nothing is silent.
 
 ## Requires sbml.R to have been sourced first (see bench_source() in
 ## harness.R, which loads the files in dependency order).
@@ -25,11 +20,9 @@ if (!requireNamespace("yaml", quietly = TRUE))
 ##  PEtab file discovery
 ## ---------------------------------------------------------------------
 
-## The collection follows `<Dir>/<Dir>.yaml`, with a handful of extra
-## yaml files for model variants sitting in sub-directories.
-## `variants = TRUE` also returns the alternative formulations that some
-## models keep in sub-directories; the default is the one canonical
-## problem per publication.
+## The collection follows `<Dir>/<Dir>.yaml`, with extra yaml files for model
+## variants in sub-directories. `variants = TRUE` returns those alternative
+## formulations too; the default is the one canonical problem per publication.
 petab_list <- function(root, variants = FALSE) {
   dirs <- list.dirs(root, recursive = FALSE)
   yamls <- unlist(lapply(dirs, function(d) {
@@ -47,7 +40,7 @@ petab_list <- function(root, variants = FALSE) {
     any(grepl("sbml_files", txt)) && any(grepl("parameter_file", txt))
   }, NA)
   yamls <- yamls[keep]
-  ## Name problems after their directory -- that is the publication key
+  ## Name problems after their directory, that is the publication key
   ## ("Bertozzi_PNAS2020"), whereas the yaml is sometimes "problem.yaml".
   nm <- basename(dirname(yamls))
   sub <- nm[duplicated(nm)]
@@ -57,9 +50,8 @@ petab_list <- function(root, variants = FALSE) {
   data.frame(name = nm, yaml = unname(yamls), stringsAsFactors = FALSE)
 }
 
-## Counting `<species` in the file costs milliseconds, whereas fully
-## parsing Froehlich_CellSystems2018 (1228 states, 2686 reactions) costs
-## minutes.  The runner uses this to apply --max-states before paying
+## Counting `<species` costs milliseconds where fully parsing the largest model
+## costs minutes, so the runner applies --max-states through this before paying
 ## for a model it is going to skip.
 petab_species_count <- function(yaml_path) {
   d <- dirname(yaml_path)
@@ -214,7 +206,7 @@ petab_case <- function(loaded, condition = NULL, max_sens = 64L,
         if (!is.na(num)) {
           cond_map[[target]] <- num
         } else {
-          ## the cell names another parameter -- use its nominal value
+          ## the cell names another parameter, use its nominal value
           ref <- san_id(v)
           if (!is.na(nominal[ref])) {
             cond_map[[target]] <- unname(nominal[ref])
@@ -267,7 +259,7 @@ petab_case <- function(loaded, condition = NULL, max_sens = 64L,
       length(pw$switch_times),
       paste(format(pw$switch_times, digits = 6), collapse = ", ")))
   if (isTRUE(pw$state_switch))
-    notes <- c(notes, "piecewise switches on a state variable -- EXCLUDED")
+    notes <- c(notes, "piecewise switches on a state variable, EXCLUDED")
   ode$rhs <- fold_constants(ode$rhs)
 
   ## Auxiliary switch states are constant between events.
@@ -291,10 +283,9 @@ petab_case <- function(loaded, condition = NULL, max_sens = 64L,
 
   ## -- sensitivity parameter set --------------------------------------------
   sens_all <- intersect(names(vals), unique(estimated))
-  ## Event times are emitted as numeric constants, so the saltation term
-  ## that a parameter controlling a switch time would contribute is not
-  ## in the model.  Rather than report a silently wrong gradient, drop
-  ## those parameters from the sensitivity set.
+  ## Event times are emitted as numeric constants, so a parameter controlling a
+  ## switch time contributes no saltation term. Those parameters are dropped from
+  ## the sensitivity set rather than reported with a silently wrong gradient.
   switch_pars <- intersect(pw$cond_symbols, sens_all)
   if (length(pw$switch_times) && length(switch_pars)) {
     sens_all <- setdiff(sens_all, switch_pars)

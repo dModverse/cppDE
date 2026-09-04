@@ -1,56 +1,28 @@
 #!/usr/bin/env Rscript
+
 ## =====================================================================
-##  run-with-runbg.R -- run the benchmark on plain ssh hosts through
-##  dMod2's runbg(), the scheduler-less sibling of run-on-cluster.R.
-##
+##  run-with-runbg.R: run the benchmark on plain ssh hosts via runbg().
+## =====================================================================
+
 ##      Rscript benchmarks/run-with-runbg.R --dry-run
 ##      Rscript benchmarks/run-with-runbg.R --machines you@box --submit
-##      Rscript benchmarks/run-with-runbg.R --check   --jobname cppde_bg
-##      Rscript benchmarks/run-with-runbg.R --log     --jobname cppde_bg
 ##      Rscript benchmarks/run-with-runbg.R --collect --jobname cppde_bg
-##      Rscript benchmarks/run-with-runbg.R --purge   --jobname cppde_bg
-##
-##  The work is split exactly as in run-on-cluster.R -- same tiers, same
-##  cost-balanced shards (benchmarks/R/shards.R) -- so results from the
-##  two routes are comparable.  The problems are parsed *here* and travel
-##  inside the transferred workspace, so a host needs neither this
-##  repository nor the PEtab collection: only cppDE (with SUNDIALS, and
-##  KLU for the sparse paths), a C++ compiler, and an R reachable over
-##  ssh.
-##
-##  What runbg does differently from distributedComputing
-##  -----------------------------------------------------
-##  distributedComputing() hands one SLURM array to a scheduler, which
-##  places the tasks and guarantees the requested cores and memory.
-##  runbg() has no scheduler: it scp's the workspace to each entry of
-##  `machine` and starts `R CMD BATCH` there, one background job per
-##  entry.  Three consequences decide whether a number can be trusted:
-##
-##    * `--machines` is the entire placement policy.  Naming a host n
-##      times -- which `--shards n` does for you -- starts n concurrent
-##      R processes on it, and nothing but this script stops them from
-##      oversubscribing the box.  The preflight therefore reads each
-##      host's cores, memory and load and refuses a placement that does
-##      not fit, and the memory guards (--compile-slots,
-##      --max-compile-gb, --max-worker-gb; see R/harness.R) bound what
-##      the jobs can allocate once they are running.  Both exist because
-##      the failure mode is not a slow run: a two-job, eight-worker sweep
-##      took a 12-core machine off the network on 2026-08-01 and the
-##      shard died with it.
-##    * Nothing reserves the machine.  Whoever else is logged in lands in
-##      the timings, so ratios (cppDE vs CVODE, both measured in the
-##      same process) stay valid while absolute milliseconds do not.
-##      Every row carries `node` and `cpu` so this can be checked.
-##    * Authentication has to be non-interactive.  runbg() shells out to
-##      ssh/scp with no password path -- unlike distributedComputing()'s
-##      `ssh_passwd` -- so key-based auth or a running agent is required,
-##      including for `--machines localhost`.
-##
-##  runbg's own `walltime` argument is not exposed here: in dMod2 it
-##  splices a second statement into the try() call and the generated
-##  remote script no longer parses.  Bound the run with the tier and
-##  --max-states instead.
-## =====================================================================
+
+##  Same tiers and cost-balanced shards as run-on-cluster.R, so results from
+##  the two routes are comparable. The problems are parsed here and travel in
+##  the workspace; a host needs only cppDE and a C++ compiler.
+
+##  runbg() has no scheduler: `--machines` is the entire placement policy, and
+##  naming a host n times starts n concurrent R processes on it. The preflight
+##  refuses a placement that does not fit and the memory guards bound the rest.
+
+##  Nothing reserves the machine, so ratios stay valid while absolute
+##  milliseconds do not; every row carries node and cpu. Authentication has to
+##  be non-interactive, including for `--machines localhost`.
+
+##  runbg's own `walltime` is not exposed: in dMod2 it splices a second
+##  statement into the try() call and the remote script no longer parses.
+##  Bound the run with the tier and --max-states instead.
 
 suppressPackageStartupMessages({
   library(cppDE)
@@ -146,7 +118,7 @@ if (tf(OPT$help)) {
       "\n               than --max-density) is additionally run with it",
       "\n               pinned both ways on both backends, in the same",
       "\n               shard and the same results.csv as the head-to-head\n")
-  cat("\n  Memory guards -- a host without a scheduler has nothing else",
+  cat("\n  Memory guards, a host without a scheduler has nothing else",
       "\n  standing between a sweep and the kernel's OOM path:",
       "\n  --compile-slots <n>   concurrent compilers per *host*, shared by",
       "\n                        every job on it; the build is the peak, so",
@@ -195,10 +167,9 @@ placement <- machines[((seq_len(n_shards) - 1L) %% length(machines)) + 1L]
 bench_cores <- as.integer(OPT$`bench-cores`)
 OPT$shards <- as.character(n_shards)
 
-## The semaphore counts per host, not per job, so the default is a
-## property of the host and not of how many jobs happen to land on it.
-## Four concurrent builds at the default 8 GB ceiling is ~32 GB of
-## compiler on a machine, which is the budget being defended.
+## The semaphore counts per host, not per job, so the default is a property of
+## the host. Four concurrent builds at the 8 GB ceiling is ~32 GB of compiler
+## on a machine, which is the budget being defended.
 if (!nzchar(OPT$`compile-slots`))
   OPT$`compile-slots` <- as.character(min(bench_cores, 4L))
 compile_slots  <- as.integer(OPT$`compile-slots`)
@@ -210,12 +181,9 @@ if (is.na(compile_slots) || compile_slots < 0L)
 if (is.na(max_compile_gb)) stop("--max-compile-gb must be a number")
 if (is.na(max_worker_gb)) stop("--max-worker-gb must be a number")
 
-## runbg() names its files after `filename` and works in getwd(): it
-## writes <jobname>.RData plus one <jobname>_<k>.R per job, scp's every
-## *.c/*.cpp/*.o/*.so it finds next to them, and later fetches the
-## results back into the same place.  Keeping that in a scratch directory
-## rather than the package root is what stops it from shipping unrelated
-## sources and from dropping a gigabyte-sized workspace into the repo.
+## runbg() names its files after `filename` and works in getwd(), scp'ing every
+## *.c/*.cpp/*.o/*.so next to them and fetching results back there. A scratch
+## directory keeps it from shipping unrelated sources into the repo.
 STAGE <- file.path(ROOT, "benchmarks", "results", ".runbg")
 dir.create(STAGE, showWarnings = FALSE, recursive = TRUE)
 
@@ -224,10 +192,9 @@ dir.create(STAGE, showWarnings = FALSE, recursive = TRUE)
 ##  Talking to the hosts
 ## ---------------------------------------------------------------------
 
-## BatchMode=yes turns a missing key into an error instead of a password
-## prompt that would hang an Rscript forever.
-## A host that answered but could not report a field prints "?" rather
-## than NA, so a gap in the probe reads as a gap and not as a number.
+## BatchMode=yes turns a missing key into an error instead of a password prompt
+## that would hang an Rscript forever. A host that answered but could not report
+## a field prints "?", so a gap reads as a gap and not as a number.
 fmt_num <- function(x, digits = 0) {
   if (!isTRUE(is.finite(x))) "?" else sprintf(paste0("%.", digits, "f"), x)
 }
@@ -240,31 +207,20 @@ ssh_run <- function(host, cmd) {
   list(status = attr(out, "status") %||% 0L, out = out)
 }
 
-## Everything the job needs from a host, asked in one round trip and with
-## the same R that runbg will start (`R`, not `Rscript`, and --vanilla,
-## so ~/.Renviron is out of the picture on both sides alike).
-##
-## The last field costs a few seconds per host because it generates,
-## compiles and *solves* a one-state model.  That is the point:
-## `cvodeConfig$available` is a flag written at install time and says
-## nothing about whether a solve works.  A SUNDIALS displaced at load
-## time by another copy on the loader's search path links, loads, and
-## then aborts the process at the first solve -- which is worth finding
-## out here rather than an hour into a job.  Solving also exercises the
-## reticulate/SymPy codegen the benchmark depends on.
-##
-## The five static fields are flushed *before* the solve, so a solve that
-## takes the process down is distinguishable from a host that never
-## answered: the reply is short rather than absent.
-## Compiling a model prints the compiler command line, and it lands in
-## the same stream as the answer, so the reply is tagged and picked out
-## by tag rather than by position.
-##
-## The capacity fields exist so that placement is checked against the
-## machine instead of against an assumption.  They are read on the host
-## rather than guessed here because the pool is heterogeneous: cores and
-## RAM differ per box, and `MemAvailable` moves with whoever else is
-## logged in, which is precisely the quantity a submission has to respect.
+## Everything the job needs from a host, in one round trip and with the same R
+## runbg will start (`R`, not `Rscript`, and --vanilla, so ~/.Renviron is out of
+## the picture on both sides alike).
+
+## The last field generates, compiles and solves a one-state model, because
+## `cvodeConfig$available` is an install-time flag: a SUNDIALS displaced on the
+## loader path links and loads, then aborts the process at the first solve.
+
+## The static fields are flushed before the solve, so a reply that stops short
+## is distinguishable from a host that never answered. The reply is tagged,
+## because compiling prints the compiler command line into the same stream.
+
+## The capacity fields are read on the host rather than guessed: the pool is
+## heterogeneous and `MemAvailable` moves with whoever else is logged in.
 host_report <- function(host) {
   rcode <- paste0(
     'mi <- tryCatch(readLines("/proc/meminfo", warn = FALSE),',
@@ -303,21 +259,17 @@ host_report <- function(host) {
        cvode = f[3L] == "TRUE", klu = f[4L] == "TRUE", cxx = f[5L] == "TRUE",
        cores = num(f[6L]), mem_total = num(f[7L]), mem_avail = num(f[8L]),
        load1 = num(f[9L]), unixpkg = f[10L] == "TRUE",
-       ## The static fields are flushed before the solve, so a reply that
-       ## stops after them means the solve took the R process down rather
-       ## than raising a condition -- exactly what a displaced SUNDIALS
-       ## does, and what a config flag can never report.
+       ## The static fields are flushed before the solve, so a reply that stops after
+       ## them means the solve took the R process down rather than raising a
+       ## condition, which is what a displaced SUNDIALS does and no flag can report.
        solve = if (is.null(s)) NA else s[1L] == "TRUE",
        why = if (is.null(s)) paste("the CVODE solve aborted the R process:",
                                    tail3()) else "")
 }
 
-## Probing every distinct host beats discovering on collect that the jobs
-## died at `library(cppDE)` an hour ago -- or, worse, that the host is
-## gone.  Two kinds of verdict come out of this, and they are kept apart
-## because only one of them is a judgement call: a missing CVODE is a
-## fact and always refuses, while a placement that is too big for the box
-## is an estimate and can be overridden with --force.
+## Probing every distinct host beats discovering on collect that the jobs died
+## an hour ago. A missing CVODE is a fact and always refuses; a placement too
+## big for the box is an estimate and can be overridden with --force.
 preflight <- function(hosts) {
   bad <- character(0)
   over <- character(0)
@@ -360,13 +312,12 @@ preflight <- function(hosts) {
       over <- c(over, h)
     }
 
-    ## The guards' own ceiling, checked against the machine rather than
-    ## assumed to fit it.  The semaphore counts per host, so the number of
-    ## compilers that can run at once is the semaphore, not the semaphore
-    ## times the jobs -- but it can never exceed the workers either.
-    ## Planning for only part of the free memory is deliberate: MemAvailable
-    ## is a snapshot of a box nothing reserves, and the co-tenant who shows
-    ## up next has to fit somewhere too.
+    ## The guards' own ceiling, checked against the machine rather than assumed to
+    ## fit it. The semaphore counts per host, so it bounds the concurrent compilers,
+    ## but it can never exceed the workers either.
+
+    ## Planning for only part of the free memory is deliberate: MemAvailable is a
+    ## snapshot of a box nothing reserves, and the next co-tenant has to fit too.
     eff_slots <- if (compile_slots > 0L) min(compile_slots, workers) else workers
     ceiling_gb <- if (max_compile_gb > 0) eff_slots * max_compile_gb else Inf
     cat(sprintf("  %-24s build ceiling %s vs %s GB budget (%.0f%% of free)\n", "",
@@ -465,11 +416,9 @@ merge_results <- function(res) {
 ##  Modes that only need the job name
 ## ---------------------------------------------------------------------
 
-## R CMD BATCH names its transcript after the *basename* of the script,
-## and ssh drops us in the home directory, so the log sits beside the job
-## folder rather than inside it.  Both are tried: that default has moved
-## before, and a job whose log cannot be found is a job that cannot be
-## debugged.
+## R CMD BATCH names its transcript after the basename of the script and ssh
+## drops us in the home directory, so the log sits beside the job folder rather
+## than inside it. Both are tried: an unfindable log is an undebuggable job.
 if (tf(OPT$log)) {
   n <- as.integer(OPT$`log-lines`)
   for (k in seq_along(placement)) {
@@ -516,7 +465,7 @@ if (tf(OPT$collect)) {
 TIER <- BENCH_TIERS[[OPT$tier]]
 if (is.null(TIER)) stop("unknown --tier '", OPT$tier, "'")
 
-## An explicit --tol wins, otherwise the tier decides -- the same rule as
+## An explicit --tol wins, otherwise the tier decides, the same rule as
 ## run-benchmarks.R and run-on-cluster.R, so the identical command run
 ## the other way sweeps the identical tolerances.
 tol_name <- if ("tol" %in% SET) OPT$tol else TIER$tol
@@ -553,7 +502,7 @@ for (h in unique(placement))
               sum(placement == h) * bench_cores))
 
 ## The compile ceiling is per host and not per job, so it is reported
-## that way -- with two jobs on a box the number below is still the whole
+## that way, with two jobs on a box the number below is still the whole
 ## budget, which is the property that makes it safe.
 cat(sprintf("memory guards: %s concurrent compiler(s) per host x %s GB = %s GB peak build%s\n",
             if (compile_slots > 0L) as.character(compile_slots) else "unlimited",
@@ -570,14 +519,12 @@ nrep     <- as.integer(OPT$nrep)
 min_time <- as.numeric(OPT$`min-time`)
 maxs2    <- as.integer(OPT$`max-sens2`)
 
-## runbg() saves one workspace and copies it to every job, so the payload
-## is paid per shard.  Naming what travels rather than taking all of
-## ls(.GlobalEnv) keeps `problems` out of it -- R's serialiser writes the
-## shards' cases a second time if the undivided list is also present, and
-## the full tier is already near a gigabyte on its own.
-## BENCH_SEM is an environment, not a function, and the guards resolve it
-## by name in .GlobalEnv at call time -- so it has to travel explicitly or
-## the first compile on a host fails looking for it.
+## runbg() saves one workspace and copies it to every job, so the payload is
+## paid per shard. Naming what travels keeps `problems` out of it: R's
+## serialiser writes the shards' cases twice if the undivided list is present.
+
+## BENCH_SEM is an environment, not a function, and the guards resolve it by
+## name in .GlobalEnv at call time, so it has to travel explicitly.
 payload <- c(Filter(function(n) is.function(get(n, envir = .GlobalEnv)),
                     ls(.GlobalEnv)),
              "shards", "tolerances", "modes", "cfgs", "sweep_cfgs",
@@ -599,7 +546,7 @@ cat(sprintf("equivalent local run:\n  Rscript benchmarks/run-benchmarks.R --tier
             else " --no-sparse-sweep"))
 
 if (!tf(OPT$submit)) {
-  cat("\nDry run -- nothing sent.\n")
+  cat("\nDry run, nothing sent.\n")
   if ("machines" %in% SET) { cat("host probe:\n"); try(preflight(placement)) }
   else cat("Add --machines user@host to probe the hosts from here.\n")
   cat("\nThen re-run with --machines user@host --submit\n")
@@ -629,14 +576,11 @@ saveRDS(OPT[setdiff(names(OPT), FLAGS)], REC)
 setwd(STAGE)
 invisible(dMod2::runbg(
   {
-    ## Runs on a host.  `.node` is this job's shard index, set by runbg
-    ## after the workspace is loaded; `shards` and the benchmark
-    ## functions arrive in that workspace.
-    ##
-    ## The workspace carries function *objects*, and runbg only re-
-    ## attaches the packages that were attached here, so cppDE is loaded
-    ## explicitly -- without it every model fails with "could not find
-    ## function cppDE" and the shard returns nothing.
+    ## Runs on a host. `.node` is this job's shard index, set by runbg after the
+    ## workspace is loaded; `shards` and the benchmark functions arrive in it.
+
+    ## runbg only re-attaches the packages attached here, so cppDE is loaded
+    ## explicitly or every model fails and the shard returns nothing.
     library(cppDE)
     stopifnot(isTRUE(cppDE:::cvodeConfig$available))
     Sys.setenv(OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1",
@@ -644,13 +588,12 @@ invisible(dMod2::runbg(
     builddir <- file.path(tempdir(), paste0("cppde_bench_", .node))
     dir.create(builddir, showWarnings = FALSE, recursive = TRUE)
 
-    ## The memory guards, set up before the workers are forked so they
-    ## inherit both of them.  The compiler cap is written into a Makevars
-    ## under builddir, which is node-local ($TMPDIR): on a pool with a
-    ## shared home the file must not be one that the other hosts' jobs
-    ## can see, let alone overwrite.  The per-worker cap is best-effort
-    ## and reports back rather than failing, so a host without the `unix`
-    ## package still runs -- the preflight has already said so.
+    ## The memory guards, set up before the workers are forked so they inherit
+    ## both. The compiler cap is written into a Makevars under builddir, node-local
+    ## ($TMPDIR): on a shared home it must not be a file other jobs can see.
+
+    ## The per-worker cap is best-effort and reports back rather than failing, so a
+    ## host without the `unix` package still runs; the preflight has said so.
     bench_limit_compiler(max_compile_gb, dir = builddir)
     if (max_worker_gb > 0 && !isTRUE(bench_limit_process(max_worker_gb)))
       message("note: could not set a per-worker memory limit on ",

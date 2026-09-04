@@ -1,16 +1,15 @@
 #!/usr/bin/env Rscript
+
 ## =====================================================================
-##  run-benchmarks.R -- cppDE versus SUNDIALS CVODE(S).
-##
-##  Usage (from the package root):
-##
+##  run-benchmarks.R: cppDE versus SUNDIALS CVODE(S).
+## =====================================================================
+
 ##      Rscript benchmarks/run-benchmarks.R --quick
 ##      Rscript benchmarks/run-benchmarks.R --suite all --conditions all
 ##      Rscript benchmarks/run-benchmarks.R --models Boehm,Fujita --tol wp
-##
-##  Run `--help` for the full option list.  Results land in
+
+##  Run `--help` for the full option list. Results land in
 ##  benchmarks/results/<timestamp>/ as results.csv plus six figures.
-## =====================================================================
 
 suppressPackageStartupMessages({
   library(cppDE)
@@ -100,10 +99,10 @@ user_opts <- stats::setNames(vector("list", length(attr(OPTS, ".set"))),
 
 if (isTRUE(as.logical(OPTS$help))) {
   cat("
-cppDE benchmark suite -- cppDE vs SUNDIALS CVODE(S)
+cppDE benchmark suite, cppDE vs SUNDIALS CVODE(S)
 
   --tier <tiny|medium|full>     benchmark depth                  [medium]
-        tiny    ~5 min,  one representative of every problem trait --
+        tiny    ~5 min,  one representative of every problem trait,
                 the basis for judging a small change
         medium  ~30 min, at least two per trait, wider size range
         full    everything the size limit allows
@@ -142,14 +141,14 @@ cppDE benchmark suite -- cppDE vs SUNDIALS CVODE(S)
         solvers, modes and tolerances, so both sides of every matched
         cell see the same machine load and the speed-up ratios stay
         valid.  Absolute times are inflated by shared cache, memory
-        bandwidth and turbo clocking -- use --cores 1 for those, and
+        bandwidth and turbo clocking, use --cores 1 for those, and
         never compare absolute times across different --cores values.
         The value is recorded in results.csv and run-info.txt.
   --compile-slots <n>           concurrent compilers            [min(cores,4)]
         The peak of a run is the build, not the solve: a large model with
         sensitivities is a very large translation unit and g++ answers it
         in gigabytes.  This bounds how many of those run at once, counted
-        per *machine* -- a second benchmark process on the same box shares
+        per *machine*, a second benchmark process on the same box shares
         the same slots.  0 disables the semaphore.
   --max-compile-gb <g>          address-space cap per compiler   [8]
         A model needing more fails to build and is skipped, instead of
@@ -163,7 +162,7 @@ cppDE benchmark suite -- cppDE vs SUNDIALS CVODE(S)
   --no-sparse-sweep             leave out the dense/sparse sweep
         By default every model where the linear solver is actually a
         choice is additionally run with it pinned dense and pinned
-        sparse, on both backends -- four extra cells per tolerance, next
+        sparse, on both backends, four extra cells per tolerance, next
         to the two auto-detected ones.  That is what validates the
         auto-detection instead of only using it, and it lands in the same
         results.csv (column `pinned`) and the same figures as the
@@ -259,10 +258,9 @@ if (max_worker_gb > 0 && !isTRUE(bench_limit_process(max_worker_gb)))
   warning("no per-worker memory limit set: install the `unix` package",
           call. = FALSE, immediate. = TRUE)
 
-## The directory name carries what the run *was*, not only when it
-## happened: a results tree is browsed far more often than it is opened,
-## and "tiny_c8_nosens-sens1" answers at a glance what a bare timestamp
-## does not.  Timestamp stays first so the tree still sorts by time.
+## The directory name carries what the run was, not only when: a results tree is
+## browsed far more often than opened, and "tiny_c8_nosens-sens1" answers at a
+## glance. The timestamp stays first so the tree still sorts by time.
 stamp <- format(Sys.time(), "%Y%m%d-%H%M%S")
 tag <- run_tag(stamp, OPTS$tier, cores, OPTS$modes, suite = OPTS$suite,
                models = model_filter,
@@ -357,7 +355,7 @@ if (OPTS$suite %in% c("all", "petab")) {
 }
 
 ## Match either the registry key ("e5") or the problem's display name
-## ("E5"), case-insensitively -- the two differ for the classic problems.
+## ("E5"), case-insensitively, the two differ for the classic problems.
 if (length(model_filter)) {
   disp <- vapply(problems, function(cases) cases[[1L]]$name, "")
   hit <- Reduce(`|`, lapply(model_filter, function(f)
@@ -444,7 +442,7 @@ write_run_readme(df, outdir, list(
   options = paste(sprintf("%s=%s", names(OPTS), unlist(OPTS)), collapse = " ")))
 
 cat("\n\n==============================================================\n")
-cat("SUMMARY -- geometric mean speed-up versus CVODE_bdf\n")
+cat("SUMMARY, geometric mean speed-up versus CVODE_bdf\n")
 cat("==============================================================\n")
 s <- speedup_table(df)
 if (!is.null(s)) {
@@ -463,7 +461,7 @@ if (!is.null(s)) {
 sg <- sparse_gain_table(df)
 if (!is.null(sg) && nrow(sg)) {
   cat("\n==============================================================\n")
-  cat("DENSE vs SPARSE LU -- geometric mean, > 1 means sparse was faster\n")
+  cat("DENSE vs SPARSE LU, geometric mean, > 1 means sparse was faster\n")
   cat("==============================================================\n")
   for (bk in unique(sg$backend)) {
     x <- sg[sg$backend == bk, ]

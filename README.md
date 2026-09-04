@@ -36,8 +36,8 @@ automatically via forward-mode automatic differentiation.
 - **LAPACK-backed dense solver** for `cvode()` when SUNDIALS provides
   it, routing the factorization through the BLAS that R is linked
   against
-- **Batched solving**: `solveODEBatch()` integrates many conditions – or
-  the subjects of a mixed-effects fit – in one `.Call`, over OpenMP
+- **Batched solving**: `solveODEBatch()` integrates many conditions, or
+  the subjects of a mixed-effects fit, in one `.Call`, over OpenMP
   threads, avoiding the fork and result serialization that a
   `parallel::mclapply()` loop pays per evaluation
 
@@ -66,7 +66,7 @@ are gated on optional dependencies, detected by `./configure`
 They are independent: KLU is not part of SUNDIALS, and `cppODE()` calls
 KLU without involving SUNDIALS at all. A missing library disables only
 its own feature; the install succeeds either way. Without OpenMP,
-`solveODEBatch()` still returns correct results – it just runs the
+`solveODEBatch()` still returns correct results, it just runs the
 conditions serially.
 
 Five ways to provide them:

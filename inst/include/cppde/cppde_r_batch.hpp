@@ -443,8 +443,8 @@ inline void split_dimnames(SEXP dn, SEXP* var_nm, SEXP* sens_nm) {
 }
 
 // `dn` is either list(variables, sens) shared by every condition, or a list of
-// K such pairs. Conditions rarely agree on their sensitivity labels -- a
-// reparametrised chain gives each one its own -- and setting them in R
+// K such pairs. Conditions rarely agree on their sensitivity labels, a
+// reparametrised chain gives each one its own, and setting them in R
 // afterwards duplicates the whole sensitivity array.
 inline SEXP dimnames_for(SEXP dn, int k, int K) {
   if (Rf_isNull(dn)) return R_NilValue;

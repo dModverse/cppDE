@@ -10,7 +10,7 @@ derivSymb(exprs, real = FALSE, deriv2 = FALSE, fixed = NULL, verbose = FALSE)
 \item{exprs}{Named character vector of algebraic expressions. Each
 name corresponds to a dependent variable \eqn{f_i}; the element
 content defines the right-hand side expression. Both \code{^} and
-\code{**} are accepted for exponentiation.}
+\verb{**} are accepted for exponentiation.}
 
 \item{real}{Logical; if \code{TRUE}, imaginary parts of symbolic
 expressions are set to zero and real parts are replaced by their
