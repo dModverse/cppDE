@@ -13,6 +13,7 @@ cvodeConfig <- new.env(parent = emptyenv())
 #'
 #' @keywords internal
 #' @importFrom reticulate py_require
+#' @useDynLib cppDE, .registration = TRUE, .fixes = "C_"
 #' @noRd
 .onLoad <- function(libname, pkgname) {
   reticulate::py_require("sympy")
@@ -67,6 +68,36 @@ cvodeConfig <- new.env(parent = emptyenv())
       Sys.setenv(PATH = paste(dll_path, cur_path, sep = ";"))
     }
   }
+}
+
+#' Package attach
+#'
+#' @keywords internal
+#' @noRd
+.onAttach <- function(libname, pkgname) {
+  .announceForkGuard()
+}
+
+# Report the guard installed by R_init_cppDE(), so that single-threaded BLAS in a
+# forked worker is not a surprise, and say so where nothing resolved and the
+# deadlock is still reachable. Silent when there is nothing to pin. Reached from
+# .onAttach, not .onLoad: tooling loads a namespace without being asked to.
+.announceForkGuard <- function() {
+  if (isTRUE(getOption("cppDE.quiet"))) return(invisible(NULL))
+  g <- tryCatch(forkGuard(), error = function(e) NULL)
+  if (is.null(g) || !isTRUE(g$guard)) return(invisible(NULL))
+
+  if (is.na(g$api)) {
+    packageStartupMessage(
+      "cppDE: no BLAS thread-control entry point found. If this BLAS is ",
+      "threaded, a forked worker can deadlock; start R with OMP_NUM_THREADS=1. ",
+      "See ?forkGuard.")
+  } else if (!is.na(g$threads) && g$threads > 1L) {
+    packageStartupMessage(sprintf(
+      "cppDE: %s runs %d threads; each fork() pins it to 1 and restores it afterwards (?forkGuard).",
+      g$api, g$threads))
+  }
+  invisible(NULL)
 }
 
 #' Lazy import of internal Python modules

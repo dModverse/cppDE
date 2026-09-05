@@ -1,0 +1,3 @@
+# Windows has no fork(); the guard compiles to nothing and only the vendor probe
+# behind forkGuard() is built. GetProcAddress() needs no extra library.
+PKG_CPPFLAGS = -I../inst/include

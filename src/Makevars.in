@@ -1,0 +1,4 @@
+# Generated from src/Makevars.in by ./configure.  @DLLIB@ is -ldl where dlsym()
+# is not in libc, which is glibc before 2.34.
+PKG_CPPFLAGS = -I../inst/include
+PKG_LIBS = @DLLIB@

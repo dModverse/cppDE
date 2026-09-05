@@ -904,4 +904,33 @@ if [ -f vignettes/Methods.pdf ]; then
   cp -f vignettes/Methods.pdf vignettes/Methods.pdf.asis inst/doc/
 fi
 
+
+# ---------------------------------------------------------------------
+# Write src/Makevars.
+#
+# The BLAS thread-count entry points behind the fork guard are resolved
+# with dlsym(), which glibc moved into libc in 2.34. Probe rather than
+# link -ldl unconditionally: not every platform ships that library.
+# ---------------------------------------------------------------------
+CC=$("${RBIN}" CMD config CC)
+CFLAGS=$("${RBIN}" CMD config CFLAGS)
+
+cat > conftest_dl.c <<'EOF'
+#include <dlfcn.h>
+int main(void) { return dlsym((void *) 0, "cppDE_probe") != (void *) 0; }
+EOF
+
+dllib=""
+if $CC $CFLAGS conftest_dl.c -o conftest_dl >/dev/null 2>&1; then
+  log "dlsym: in libc"
+elif $CC $CFLAGS conftest_dl.c -o conftest_dl -ldl >/dev/null 2>&1; then
+  dllib="-ldl"
+  log "dlsym: needs -ldl"
+else
+  log "dlsym: unavailable; the BLAS fork guard will find no entry points"
+fi
+rm -f conftest_dl.c conftest_dl
+
+sed -e "s|@DLLIB@|$dllib|" src/Makevars.in > src/Makevars
+
 log "Summary:  CVODE=$([ $sundials_available = 1 ] && echo ON || echo off), KLU=$([ $klu_available = 1 ] && echo ON || echo off), CVODE_LAPACK=$([ $cvode_lapack_available = 1 ] && echo ON || echo off), OPENMP=$([ $openmp_available = 1 ] && echo ON || echo off)"

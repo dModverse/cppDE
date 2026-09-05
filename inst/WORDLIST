@@ -1,8 +1,10 @@
 BDF
+BLIS
 CMD
 CMake
 CVODE
 CVODES
+dMod
 FSAL
 FlexiBLAS
 Hermite
@@ -26,6 +28,7 @@ Rosenbrock
 Rtools
 Rtools’
 Runge
+runtimes
 SBML
 Serban
 Shampine

@@ -1,3 +1,22 @@
+# cppDE 0.9.4
+
+* A threaded BLAS no longer deadlocks a forked worker. Its worker threads do not
+  survive `fork()`, and the first call in the child large enough to thread hangs
+  on a lock they held. BLAS is now pinned to one thread for the width of every
+  `fork()` and the previous count is restored in the parent.
+* `forkGuard()` reports which BLAS cppDE steers, its thread count and whether the
+  handler is installed. Attaching the package says the same in one line, which
+  `options(cppDE.quiet = TRUE)` suppresses. The guard is installed when the DLL
+  loads, so it is in place whether or not the package is attached.
+* The BLAS thread-count probe covers FlexiBLAS and BLIS alongside MKL and
+  OpenBLAS.
+* The Windows branch of that probe searched the process image, which never
+  exports these entry points, so the guard against two live OpenMP runtimes did
+  nothing there.
+* The package has a `src/`, holding the fork guard's entry point and nothing
+  else. `./configure` writes `src/Makevars` after probing whether `dlsym()`
+  needs `-ldl`.
+
 # cppDE 0.9.3
 
 * A `piecewise` translates. Comparisons are defined on the AD nodes of both

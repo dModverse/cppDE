@@ -13,3 +13,4 @@
 ^CLAUDE\.md$
 ^benchmarks$
 ^cran-comments\.md$
+^src/Makevars$

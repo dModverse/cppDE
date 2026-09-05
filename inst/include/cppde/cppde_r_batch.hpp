@@ -106,7 +106,9 @@ struct solve_result {
   //
   //  libgomp's thread pool does not survive fork(): a child reusing it with more
   //  than one thread deadlocks. dMod forks in mstrust, so the child is marked at
-  //  fork time and runs serially. The handler is installed at DSO load.
+  //  fork time and runs serially. The flag is per DSO, so every generated model
+  //  installs its own handler at DSO load. The BLAS half of the same hazard is
+  //  handled once for the process, see cppde_blas_threads.hpp.
   // ---------------------------------------------------------------------------
 namespace detail {
 
