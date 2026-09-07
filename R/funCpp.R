@@ -39,8 +39,15 @@
 #'   contracted via BLAS. Both modes deliver `jac`, `hess`, and
 #'   `evaluate` with the same signatures.
 #'
-#' @return A list with components `func`, `jac`, `hess`, and
-#'   `evaluate` (`NULL` when not generated). Carries attributes
+#' @return A list with components `func`, `jac`, `hess`, `evaluate` and,
+#'   in `derivMode = "dual"`, `vjp` (`NULL` when not generated). `vjp(vars,
+#'   params, w)` is the reverse counterpart of `evaluate`: it contracts the
+#'   Jacobian with a cotangent `w` of the outputs, at a cost independent of the
+#'   number of upstream parameters, and returns `y`, `wx` and `wp`. `w` is
+#'   `[n_obs, n_out]` or `[n_obs, n_out, n_seed]`, and `wp` sums over
+#'   observations because the parameters are shared across them. The reverse
+#'   path has no interpreted fallback and needs `compile = TRUE`. Carries
+#'   attributes
 #'   `equations`, `variables`, `parameters`, `fixed`, `modelname`,
 #'   `srcfile`, `derivMode`, and (for `derivMode = "symbolic"`)
 #'   `jacobian.symb`, `hessian.symb`.
@@ -122,6 +129,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   hess_impl     <- if (deriv2)     function(...) .hess_impl(st, ...)
   evaluate_impl <- if (emit_deriv) function(...) .evaluate_impl(st, ...)
   evaluateBatch_impl <- if (emit_deriv) function(...) .evaluateBatch_impl(st, ...)
+  vjp_impl      <- if (emit_deriv && use_ad) function(...) .vjp_impl(st, ...)
 
   # --- Output ---
   ## Installed with keep.source, funCpp's body carries srcrefs, so the wrappers
@@ -132,12 +140,13 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     jac      = if (convenient) .makeDerivWrapper(st, jac_impl, FALSE) else jac_impl,
     hess     = if (convenient) .makeDerivWrapper(st, hess_impl, TRUE) else hess_impl,
     evaluate = if (convenient) .makeEvalWrapper(st, evaluate_impl) else evaluate_impl,
-    evaluateBatch = evaluateBatch_impl
+    evaluateBatch = evaluateBatch_impl,
+    vjp      = vjp_impl
   )
   attr(outfn, "equations") <- eqns; attr(outfn, "variables") <- variables; attr(outfn, "parameters") <- parameters
   attr(outfn, "fixed") <- fixed; attr(outfn, "modelname") <- modelname; attr(outfn, "srcfile") <- normalizePath(cpp_file, "/", FALSE)
   attr(outfn, "derivMode") <- derivMode
-  for (nm in c("func", "jac", "hess", "evaluate", "evaluateBatch")) {
+  for (nm in c("func", "jac", "hess", "evaluate", "evaluateBatch", "vjp")) {
     if (!is.null(outfn[[nm]])) {
       attr(outfn[[nm]], "modelname") <- modelname
       attr(outfn[[nm]], "srcfile")   <- attr(outfn, "srcfile")
@@ -385,6 +394,61 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     for (i in seq_len(n_obs)) { env <- setNames(as.list(c(M[i,], p)), c(st$innames, st$parameters)); res[i,] <- vapply(st$parsed_exprs, function(e) eval(e, env), numeric(1)) }
   }
   .attachExtras(res, n_obs, chk$extra_vars, chk$extra_params, "fun")
+}
+
+# --- Reverse path ---
+
+# One vector-Jacobian product per seed row: given the cotangent w of the
+# outputs, return the cotangents of the variables and of the parameters. Cost is
+# independent of the upstream parameter count, unlike .call_eval_ad(), which
+# propagates one tangent per parameter.
+#
+# w is [n_obs, n_out] for a single seed or [n_obs, n_out, n_seed] for several.
+# wp is summed over observations because the parameters are shared across them.
+.vjp_impl <- function(st, vars, params = numeric(0), w) {
+  chk <- .checkInputs(st, vars, params); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
+  n_vars <- length(st$innames); n_params <- length(st$parameters)
+  n_out  <- length(st$outnames)
+
+  if (is.null(dim(w))) w <- matrix(w, n_obs, n_out)
+  n_seed <- if (length(dim(w)) == 3L) dim(w)[3L] else 1L
+  if (dim(w)[1L] != n_obs || dim(w)[2L] != n_out)
+    stop("w must be [n_obs, n_out] or [n_obs, n_out, n_seed].")
+
+  dn_x <- list(NULL, st$innames, NULL)
+  dn_p <- list(st$parameters, NULL)
+
+  funsym <- paste0(st$modelname, "_vjp")
+  symc <- .nativeSym(paste0(funsym, "_c"))
+  if (!is.null(symc)) {
+    r <- .callSym(symc, .asdbl(M), .asdbl(p), .asdbl(w),
+                  as.integer(n_obs), as.integer(n_seed))
+    y <- r[[1L]]; dimnames(y) <- list(NULL, st$outnames)
+    wx <- r[[2L]]; dimnames(wx) <- dn_x
+    wp <- r[[3L]]; dimnames(wp) <- dn_p
+    return(list(y = y, wx = wx, wp = wp))
+  }
+
+  sym <- .nativeSym(funsym)
+  if (is.null(sym))
+    stop("Reverse entry '", funsym, "' is not loaded. The reverse path has no ",
+         "interpreted fallback, so the model needs funCpp(compile = TRUE).",
+         call. = FALSE)
+  out <- .cSym(sym,
+            x        = as.double(M),
+            p        = as.double(p),
+            w        = as.double(w),
+            y        = double(n_out * n_obs),
+            wx       = double(n_obs * n_vars * n_seed),
+            wp       = double(n_params * n_seed),
+            n_obs    = as.integer(n_obs),
+            n_vars   = as.integer(n_vars),
+            n_params = as.integer(n_params),
+            n_out    = as.integer(n_out),
+            n_seed   = as.integer(n_seed))
+  list(y  = matrix(out$y, n_obs, n_out, dimnames = list(NULL, st$outnames)),
+       wx = array(out$wx, c(n_obs, n_vars, n_seed), dimnames = dn_x),
+       wp = matrix(out$wp, n_params, n_seed, dimnames = dn_p))
 }
 
 # --- Dual-path .C() helpers ---

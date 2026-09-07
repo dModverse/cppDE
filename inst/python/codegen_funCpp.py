@@ -501,6 +501,7 @@ def _generate_cpp_code(exprs, ctx, jacobian, hessian, ad, deriv2, modelname, ver
         buf.write("#ifdef _OPENMP\n#include <omp.h>\n#endif\n")
         buf.write("#include <cppde/cppde_dual_math.hpp>\n")
         buf.write("#include <cppde/cppde_dual_expr.hpp>\n")
+        buf.write("#include <cppde/cppde_codual_math.hpp>\n")
     if emit_ad2:
         buf.write("#include <cppde/cppde_dual2nd.hpp>\n")
         buf.write("#include <cppde/cppde_dual2nd_math.hpp>\n")
@@ -539,6 +540,16 @@ std::fill(y, y + ny_, {NAN_});
 std::fill(dy, dy + ny_ * (size_t)(*n_theta_p), {NAN_});""",
         )
         _write_eval_ad_batch(buf, modelname)
+        _write_vjp_impl(buf, out_names, ctx, modelname)
+        _write_guarded(
+            buf,
+            lambda b: _write_vjp_function(b, modelname),
+            f"""const size_t ny_ = (size_t)(*n_obs_p) * (size_t)(*n_out_p);
+const size_t ns_ = (size_t)(*n_seed_p);
+std::fill(y, y + ny_, {NAN_});
+std::fill(wx, wx + (size_t)(*n_obs_p) * (size_t)(*n_vars_p) * ns_, {NAN_});
+std::fill(wp, wp + (size_t)(*n_params_p) * ns_, {NAN_});""",
+        )
     if emit_ad2:
         _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=True)
         _write_guarded(
@@ -869,6 +880,28 @@ def _write_call_entries(buf, modelname, n_vars, n_params, n_out,
 }}
 
 """)
+    if ad:
+        buf.write(f"""SEXP {modelname}_vjp_c(SEXP xS, SEXP pS, SEXP wS,
+                   SEXP nS, SEXP nsS) {{
+  const int n_obs = INTEGER(nS)[0], n_seed = INTEGER(nsS)[0];
+  const int n_vars = {n_vars}, n_params = {n_params}, n_out = {n_out};
+  const int ns1 = n_seed > 0 ? n_seed : 1;
+  SEXP y = PROTECT(Rf_allocMatrix(REALSXP, n_obs, n_out));
+  SEXP d = PROTECT(Rf_allocVector(INTSXP, 3));
+  INTEGER(d)[0] = n_obs; INTEGER(d)[1] = n_vars; INTEGER(d)[2] = ns1;
+  SEXP wx = PROTECT(Rf_allocArray(REALSXP, d));
+  SEXP wp = PROTECT(Rf_allocMatrix(REALSXP, n_params, ns1));
+  {modelname}_vjp_impl(REAL(xS), Rf_isNull(pS) ? nullptr : REAL(pS), REAL(wS),
+      REAL(y), REAL(wx), REAL(wp), n_obs, n_vars, n_params, n_out, n_seed);
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 3));
+  SET_VECTOR_ELT(out, 0, y);
+  SET_VECTOR_ELT(out, 1, wx);
+  SET_VECTOR_ELT(out, 2, wp);
+  UNPROTECT(5);
+  return out;
+}}
+
+""")
     if ad2:
         buf.write(f"""SEXP {modelname}_eval_ad2_c(SEXP xS, SEXP pS, SEXP dXS, SEXP dPS,
                         SEXP dX2S, SEXP dP2S, SEXP nS, SEXP nthS) {{
@@ -898,6 +931,93 @@ def _write_call_entries(buf, modelname, n_vars, n_params, n_out,
 }}
 
 """)
+
+
+def _write_vjp_impl(buf, out_names, ctx, modelname):
+    """
+    Generate the reverse-mode entry point: given a cotangent w of the outputs,
+    fill the cotangents of the variables and of the parameters. Cost is
+    independent of the upstream parameter count, which is what distinguishes it
+    from `_eval_ad`.
+
+    Layouts (R column-major):
+      x   [n_obs, n_vars]                    -> obs + n_obs * j
+      p   [n_params]                         -> j
+      w   [n_obs, n_out, n_seed]             -> obs + n_obs * (i + n_out * s)
+      y   [n_obs, n_out]                     -> obs + n_obs * i
+      wx  [n_obs, n_vars, n_seed]            -> obs + n_obs * (j + n_vars * s)
+      wp  [n_params, n_seed]                 -> j + n_params * s
+
+    wp accumulates over observations because the parameters are shared across
+    them; wx does not, because each observation has its own variables.
+    """
+    n_vars = len(ctx.variables)
+    n_params = len(ctx.parameters)
+    n_out = len(out_names)
+
+    buf.write(
+        f"static void {modelname}_vjp_impl(const double* x, const double* p,\n"
+        f"                         const double* w,\n"
+        f"                         double* y, double* wx, double* wp,\n"
+        f"                         int n_obs, int n_vars, int n_params,\n"
+        f"                         int n_out, int n_seed) {{\n"
+    )
+    buf.write("    using RD = cppde::codual<double>;\n")
+    buf.write("    cppde::codual_tape<double>& tape_ = cppde::codual_tape_for<double>();\n")
+    buf.write("    (void)n_vars; (void)n_params; (void)n_out; (void)x; (void)p;\n\n")
+
+    buf.write("    const size_t ns_ = (size_t)(n_seed > 0 ? n_seed : 1);\n")
+    buf.write("    std::fill(wx, wx + (size_t)n_obs * (size_t)n_vars * ns_, 0.0);\n")
+    buf.write("    std::fill(wp, wp + (size_t)n_params * ns_, 0.0);\n\n")
+
+    buf.write(f"    std::vector<RD> x_cd({n_vars});\n")
+    buf.write(f"    std::vector<RD> p_cd({n_params});\n")
+    buf.write(f"    std::vector<RD> y_cd({n_out});\n\n")
+
+    buf.write("    for (int obs = 0; obs < n_obs; ++obs) {\n")
+    # One recording per observation: the partials depend on x, the seeds do not.
+    buf.write("        tape_.rewind();\n")
+    if n_params > 0:
+        buf.write("        for (int j = 0; j < n_params; ++j) {\n")
+        buf.write("            p_cd[j] = RD(p[j]);\n")
+        buf.write("            p_cd[j].independent();\n")
+        buf.write("        }\n")
+    if n_vars > 0:
+        buf.write("        for (int j = 0; j < n_vars; ++j) {\n")
+        buf.write("            x_cd[j] = RD(x[obs + (size_t)n_obs * j]);\n")
+        buf.write("            x_cd[j].independent();\n")
+        buf.write("        }\n")
+    buf.write(f"        {modelname}_eval_one<RD>(x_cd.data(), p_cd.data(), y_cd.data());\n")
+    buf.write("        for (int i = 0; i < n_out; ++i)\n")
+    buf.write("            y[obs + (size_t)n_obs * i] = y_cd[i].x();\n\n")
+
+    # The partials are independent of the seed, so one recording serves every
+    # seed row and only the sweep repeats.
+    buf.write("        for (int s = 0; s < n_seed; ++s) {\n")
+    buf.write("            tape_.prepare();\n")
+    buf.write("            for (int i = 0; i < n_out; ++i)\n")
+    buf.write("                y_cd[i].seed(w[obs + (size_t)n_obs * (i + (size_t)n_out * s)]);\n")
+    buf.write("            tape_.reverse();\n")
+    if n_vars > 0:
+        buf.write("            for (int j = 0; j < n_vars; ++j)\n")
+        buf.write("                wx[obs + (size_t)n_obs * (j + (size_t)n_vars * s)] = x_cd[j].adjoint();\n")
+    if n_params > 0:
+        buf.write("            for (int j = 0; j < n_params; ++j)\n")
+        buf.write("                wp[j + (size_t)n_params * s] += p_cd[j].adjoint();\n")
+    buf.write("        }\n")
+    buf.write("    }\n}\n\n")
+
+
+def _write_vjp_function(buf, modelname):
+    buf.write(
+        f"void {modelname}_vjp(double* x, double* p, double* w,\n"
+        f"                     double* y, double* wx, double* wp,\n"
+        f"                     int* n_obs_p, int* n_vars_p, int* n_params_p,\n"
+        f"                     int* n_out_p, int* n_seed_p) {{\n"
+        f"    {modelname}_vjp_impl(x, p, w, y, wx, wp, *n_obs_p, *n_vars_p,\n"
+        f"                         *n_params_p, *n_out_p, *n_seed_p);\n"
+        "}\n\n"
+    )
 
 
 def _write_eval_ad_batch(buf, modelname):

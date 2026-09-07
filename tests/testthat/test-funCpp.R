@@ -230,3 +230,61 @@ test_that("funCpp dual deriv2 handles identity pass-through", {
   expect_equal(unname(d$dy),  unname(s$dy),  tolerance = 1e-10)
   expect_equal(unname(d$d2y), unname(s$d2y), tolerance = 1e-10)
 })
+
+
+# -- Reverse mode ---------------------------------------------------------------
+
+test_that("vjp contracts the Jacobian the symbolic path returns", {
+  trafo <- c(y1 = "a * exp(-k * t) + b", y2 = "log(a + k * k) * t")
+  pars  <- c(a = 2, b = -0.5, k = 0.7)
+  M     <- matrix(c(0.3, 1.1, 2.7), ncol = 1, dimnames = list(NULL, "t"))
+  w     <- matrix(c(0.4, -1.3, 2.2, 0.9, -0.6, 1.7), nrow = 3, ncol = 2)
+
+  fr <- funCpp(trafo, variables = "t", parameters = names(pars), deriv = TRUE,
+               derivMode = "dual", modelname = "vjp_dual", compile = TRUE,
+               convenient = FALSE)
+  fs <- funCpp(trafo, variables = "t", parameters = names(pars), deriv = TRUE,
+               derivMode = "symbolic", modelname = "vjp_symb", compile = TRUE,
+               convenient = FALSE)
+
+  r <- fr$vjp(M, pars, w)
+  J <- fs$jac(M, pars)
+
+  expect_equal(unname(r$y), unname(fs$func(M, pars)), tolerance = 1e-12)
+
+  # A variable is per observation, a parameter is shared, so the parameter
+  # cotangent sums over observations and the variable one does not.
+  wt <- vapply(seq_len(nrow(M)),
+               function(o) sum(w[o, ] * J[o, , "t"]), numeric(1))
+  expect_equal(unname(r$wx[, 1, 1]), wt, tolerance = 1e-12)
+
+  for (nm in names(pars))
+    expect_equal(unname(r$wp[nm, 1]), sum(w * J[, , nm]), tolerance = 1e-12,
+                 label = paste("wp", nm))
+})
+
+test_that("vjp sweeps several seeds against one recording", {
+  trafo <- c(y1 = "a * b", y2 = "sin(a) + b * b")
+  pars  <- c(a = 0.6, b = 1.4)
+
+  f <- funCpp(trafo, variables = NULL, parameters = names(pars), deriv = TRUE,
+              derivMode = "dual", modelname = "vjp_seeds", compile = TRUE,
+              convenient = FALSE)
+
+  # Seeding the identity over the outputs recovers the full Jacobian row by row.
+  w <- array(0, c(1, 2, 2))
+  w[1, 1, 1] <- 1
+  w[1, 2, 2] <- 1
+  r <- f$vjp(NULL, pars, w)
+
+  expect_equal(dim(r$wp), c(2L, 2L))
+  expect_equal(unname(r$wp[, 1]), c(pars[["b"]], pars[["a"]]), tolerance = 1e-12)
+  expect_equal(unname(r$wp[, 2]), c(cos(pars[["a"]]), 2 * pars[["b"]]),
+               tolerance = 1e-12)
+})
+
+test_that("vjp is absent in symbolic mode", {
+  f <- funCpp(c(y = "a * a"), parameters = "a", deriv = TRUE,
+              derivMode = "symbolic", modelname = "vjp_none", convenient = FALSE)
+  expect_null(f$vjp)
+})

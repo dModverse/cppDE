@@ -1,9 +1,12 @@
 #!/bin/sh
-# Build and run the expression-template harness.
+# Build and run a direct C++ harness.
 #
 #   dev/cxx/run.sh              build, run, and run again under ASan/UBSan
 #   dev/cxx/run.sh --record F   write the numeric output to F (reference run)
 #   dev/cxx/run.sh --against F  diff this build's output against F
+#
+# A leading --codual selects the reverse-AD harness instead of the
+# expression-template one; the remaining arguments are unchanged.
 #
 # The output is the assertion: two revisions that compute the same thing must
 # produce byte-identical output.
@@ -12,6 +15,12 @@ set -eu
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 SRC="$REPO/dev/cxx/test_dual_expr.cpp"
 OUT=${TMPDIR:-/tmp}/cppde_etest
+
+if [ "${1:-}" = "--codual" ]; then
+  SRC="$REPO/dev/cxx/test_codual.cpp"
+  OUT=${TMPDIR:-/tmp}/cppde_codual
+  shift
+fi
 RINC=$(Rscript -e 'cat(R.home("include"))')
 RLIB=$(Rscript -e 'cat(R.home("lib"))')
 

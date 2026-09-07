@@ -1,6 +1,7 @@
 /*
  Main header for cppDE: ODE integration and sensitivity calculation
- using in-tree forward-mode dual numbers for automatic differentiation.
+ using in-tree dual numbers (forward) and coduals (reverse) for automatic
+ differentiation.
 
  This is the ODE surface, not the whole library. The batch entry point, the
  chain-rule kernels and the return codes are included by the generated sources
@@ -34,6 +35,11 @@
 #include <cppde/cppde_dual2nd.hpp>
 #include <cppde/cppde_dual2nd_math.hpp>
 #include <cppde/cppde_dual2nd_expr.hpp>
+
+// ============================================================================
+//  cppde::codual (reverse-mode AD backend)
+// ============================================================================
+#include <cppde/cppde_codual_math.hpp>
 
 // ============================================================================
 //  cppDE types and infrastructure

@@ -59,8 +59,14 @@ contracted via BLAS. Both modes deliver \code{jac}, \code{hess}, and
 \code{evaluate} with the same signatures.}
 }
 \value{
-A list with components \code{func}, \code{jac}, \code{hess}, and
-\code{evaluate} (\code{NULL} when not generated). Carries attributes
+A list with components \code{func}, \code{jac}, \code{hess}, \code{evaluate} and,
+in \code{derivMode = "dual"}, \code{vjp} (\code{NULL} when not generated). \code{vjp(vars, params, w)} is the reverse counterpart of \code{evaluate}: it contracts the
+Jacobian with a cotangent \code{w} of the outputs, at a cost independent of the
+number of upstream parameters, and returns \code{y}, \code{wx} and \code{wp}. \code{w} is
+\verb{[n_obs, n_out]} or \verb{[n_obs, n_out, n_seed]}, and \code{wp} sums over
+observations because the parameters are shared across them. The reverse
+path has no interpreted fallback and needs \code{compile = TRUE}. Carries
+attributes
 \code{equations}, \code{variables}, \code{parameters}, \code{fixed}, \code{modelname},
 \code{srcfile}, \code{derivMode}, and (for \code{derivMode = "symbolic"})
 \code{jacobian.symb}, \code{hessian.symb}.

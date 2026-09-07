@@ -1,10 +1,10 @@
 /*
  Centralized AD type traits for cppDE.
 
- Consolidates is_ad / inner_type / scalar_type / scalar_value plus the bulk
- value/derivative extraction helpers (extract_values, extract_derivs,
- max_deriv_size, bulk_extract_derivs, bulk_inject_results) into a single
- header. Specialized for cppde::dual<T,N>; second-order via
+ Consolidates is_ad / is_reverse / inner_type / scalar_type / scalar_value
+ plus the bulk value/derivative extraction helpers (extract_values,
+ extract_derivs, max_deriv_size, bulk_extract_derivs, bulk_inject_results)
+ into a single header. Specialized for cppde::dual<T,N>; second-order via
  cppde::dual2nd<T,N> = dual<dual<T,N>,N> falls out of the recursive
  specialisations: no separate trait entries.
 
@@ -28,6 +28,7 @@
 namespace cppde {
   template<class T, unsigned N> class dual;
   template<class T, unsigned N> class dual2nd;
+  template<class T>             class codual;
 }
 
 namespace cppde {
@@ -40,6 +41,18 @@ namespace ad_traits {
 template<class T>           struct is_ad : std::false_type {};
 template<class T, unsigned N>     struct is_ad<cppde::dual<T, N>>    : std::true_type {};
 template<class T, unsigned N>     struct is_ad<cppde::dual2nd<T, N>> : std::true_type {};
+
+// ============================================================================
+//  is_reverse<T>
+//
+//  cppde::codual<T> is an AD type but deliberately NOT an is_ad one: is_ad
+//  promises tangent slots, which drive the sensitivity loop in wrms_max_ewt,
+//  the tangent slab and the LU peeling. A codual carries a tape slot instead,
+//  so the few sites that must tell it apart from a plain scalar test this.
+// ============================================================================
+
+template<class T>           struct is_reverse : std::false_type {};
+template<class T>                 struct is_reverse<cppde::codual<T>> : std::true_type {};
 
 // is_dual2nd<T>: matches only cppde::dual2nd<S, N>, not its base class.
 // Used by the LU/slab/multistepper paths to dispatch to the dual2nd-aware
@@ -58,6 +71,7 @@ template<class T, unsigned N>     struct is_dual2nd<cppde::dual2nd<T, N>> : std:
 template<class T>           struct inner_type                    { using type = T; };
 template<class T, unsigned N>     struct inner_type<cppde::dual<T, N>>    { using type = T; };
 template<class T, unsigned N>     struct inner_type<cppde::dual2nd<T, N>> { using type = cppde::dual<T, N>; };
+template<class T>                 struct inner_type<cppde::codual<T>>     { using type = T; };
 template<class T> using inner_type_t = typename inner_type<T>::type;
 
 // ============================================================================
@@ -67,6 +81,7 @@ template<class T> using inner_type_t = typename inner_type<T>::type;
 template<class T>           struct scalar_type                    { using type = T; };
 template<class T, unsigned N>     struct scalar_type<cppde::dual<T, N>>     : scalar_type<T> {};
 template<class T, unsigned N>     struct scalar_type<cppde::dual2nd<T, N>>  : scalar_type<T> {};
+template<class T>                 struct scalar_type<cppde::codual<T>>      : scalar_type<T> {};
 template<class T> using scalar_type_t = typename scalar_type<T>::type;
 
 // ============================================================================
@@ -84,6 +99,11 @@ inline double scalar_value(const cppde::dual<T, N>& v) {
 
 template<class T, unsigned N>
 inline double scalar_value(const cppde::dual2nd<T, N>& v) {
+  return scalar_value(v.x());
+}
+
+template<class T>
+inline double scalar_value(const cppde::codual<T>& v) {
   return scalar_value(v.x());
 }
 
