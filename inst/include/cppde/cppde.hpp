@@ -99,4 +99,13 @@
 #include <cppde/cppde_multistepper_controller.hpp>
 #include <cppde/cppde_multistepper_dense_output.hpp>
 
+// ============================================================================
+//  Reverse-mode sweep
+//
+//  Checkpoint per accepted step, replay under codual, one backwards pass. The
+//  step-level machinery is stepper-agnostic; each stepper family supplies its
+//  own checkpoint.
+// ============================================================================
+#include <cppde/cppde_reverse_step.hpp>
+
 #endif // CPPDE_HPP

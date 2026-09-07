@@ -60,6 +60,9 @@ public:
 
   typedef tsit5<Value, Resizer>              stepper_type;
 
+  // Same method on another scalar type, for the reverse replay.
+  template<class Value2> using rebind_value = tsit5<Value2, Resizer>;
+
   static constexpr order_type stepper_order = 5;
   static constexpr order_type error_order   = 4;
 

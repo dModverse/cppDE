@@ -554,6 +554,10 @@ public:
   typedef cppde::stepper_tag              stepper_category;
   typedef multistepper<Method, Value, JacobianPattern, Resizer> stepper_type;
 
+  // Same method on another scalar type, for the reverse replay.
+  template<class Value2> using rebind_value =
+    multistepper<Method, Value2, JacobianPattern, Resizer>;
+
   static constexpr bool is_sparse = is_sparse_tag<JacobianPattern>::value;
 
   // Maximum order this instantiation supports.  For pure NDF / pure BDF

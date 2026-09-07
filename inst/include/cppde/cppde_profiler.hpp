@@ -204,7 +204,9 @@ private:
 class profiler {
 public:
   struct scoped_timer {
-    // Empty: compiler eliminates entirely
+    // Empty, so it compiles away. The user-provided destructor keeps gcc from
+    // reporting the RAII variable at every call site as set but not used.
+    ~scoped_timer() {}
   };
 
   scoped_timer timer(prof_cat) const { return {}; }

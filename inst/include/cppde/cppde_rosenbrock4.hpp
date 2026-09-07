@@ -148,6 +148,12 @@ public:
 
   typedef rosenbrock4<Value, JacobianPattern, Coefficients, Resizer> stepper_type;
 
+  // Same method on another scalar type. The coefficients follow Value2, so a
+  // hand-supplied set does not survive the rebind.
+  template<class Value2> using rebind_value =
+    rosenbrock4<Value2, JacobianPattern,
+                default_rosenbrock_coefficients<Value2>, Resizer>;
+
   static constexpr bool is_sparse = is_sparse_tag<JacobianPattern>::value;
   static constexpr bool is_dense = !is_sparse;
 

@@ -60,6 +60,21 @@ public:
     return *this;
   }
 
+  // Compound assignment. Defined out of line in cppde_codual_math.hpp via the
+  // free operators, so every recording rule lives in one place.
+  codual& operator+=(const codual& o);
+  codual& operator-=(const codual& o);
+  codual& operator*=(const codual& o);
+  codual& operator/=(const codual& o);
+  template<class U, std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+  codual& operator+=(const U& v) { val_ += static_cast<T>(v); return *this; }
+  template<class U, std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+  codual& operator-=(const U& v) { val_ -= static_cast<T>(v); return *this; }
+  template<class U, std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+  codual& operator*=(const U& v);
+  template<class U, std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+  codual& operator/=(const U& v);
+
   // -- accessors --------------------------------------------------------------
   const T& x()   const { return val_; }
   T&       x()         { return val_; }

@@ -5,8 +5,8 @@
 #   dev/cxx/run.sh --record F   write the numeric output to F (reference run)
 #   dev/cxx/run.sh --against F  diff this build's output against F
 #
-# A leading --codual selects the reverse-AD harness instead of the
-# expression-template one; the remaining arguments are unchanged.
+# A leading --codual or --reverse-step selects a reverse-AD harness instead of
+# the expression-template one; the remaining arguments are unchanged.
 #
 # The output is the assertion: two revisions that compute the same thing must
 # produce byte-identical output.
@@ -16,30 +16,38 @@ REPO=$(cd "$(dirname "$0")/../.." && pwd)
 SRC="$REPO/dev/cxx/test_dual_expr.cpp"
 OUT=${TMPDIR:-/tmp}/cppde_etest
 
-if [ "${1:-}" = "--codual" ]; then
-  SRC="$REPO/dev/cxx/test_codual.cpp"
-  OUT=${TMPDIR:-/tmp}/cppde_codual
-  shift
-fi
+case "${1:-}" in
+  --codual)
+    SRC="$REPO/dev/cxx/test_codual.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_codual
+    shift
+    ;;
+  --reverse-step)
+    SRC="$REPO/dev/cxx/test_reverse_step.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_reverse_step
+    shift
+    ;;
+esac
 RINC=$(Rscript -e 'cat(R.home("include"))')
-RLIB=$(Rscript -e 'cat(R.home("lib"))')
+# Windows keeps no import libraries under R.home("lib"); bin/<arch> holds the
+# DLLs and mingw links straight against those.
+RLIB=$(Rscript -e 'cat(if (.Platform$OS.type == "windows") R.home(file.path("bin", .Platform$r_arch)) else R.home("lib"))')
 
 CXX=${CXX:-g++}
 STD=-std=gnu++17
 INC="-I $REPO/inst/include -I $RINC"
 # cppde.hpp declares the BLAS/LAPACK entry points R provides; link against R
 # so any that get instantiated resolve.
-LIBS="-L $RLIB -lR"
+LIBS="-L $RLIB -lR -lRblas -lRlapack"
 
 # -O2 matches how generated models are built.
 $CXX $STD -O2 -DNDEBUG -Wall -Wextra $INC -o "$OUT" "$SRC" $LIBS
 
-# -O1, not -O0: CPPDE_ET_INLINE is always_inline, which gcc can refuse to
-# honour at -O0.
-$CXX $STD -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
-     $INC -o "$OUT.asan" "$SRC" $LIBS
-
-export LD_LIBRARY_PATH="$RLIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# Windows resolves the DLLs off PATH, which needs the POSIX spelling of RLIB.
+case $(uname -s) in
+  MINGW*|MSYS*|CYGWIN*) PATH=$(cygpath -u "$RLIB"):$PATH; export PATH ;;
+  *) export LD_LIBRARY_PATH="$RLIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+esac
 
 case "${1:-}" in
   --record)
@@ -60,5 +68,12 @@ case "${1:-}" in
     ;;
 esac
 
-ASAN_OPTIONS=detect_stack_use_after_scope=1 "$OUT.asan" > /dev/null
-echo "asan/ubsan clean"
+# -O1, not -O0: CPPDE_ET_INLINE is always_inline, which gcc can refuse to
+# honour at -O0. Skipped where the sanitizer runtimes are not installed.
+if $CXX $STD -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+        $INC -o "$OUT.asan" "$SRC" $LIBS 2>/dev/null; then
+  ASAN_OPTIONS=detect_stack_use_after_scope=1 "$OUT.asan" > /dev/null
+  echo "asan/ubsan clean"
+else
+  echo "asan/ubsan skipped: no sanitizer runtime"
+fi

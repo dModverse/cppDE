@@ -527,9 +527,9 @@ IFT-Abkürzung. Die Stepper-Templates werden dort erweitert, wo `codual` noch ni
 **Zerfällt in zwei Teile, und die Reihenfolge ist die Entscheidung aus dem Meilenstein-Abschnitt.**
 
 - **3a, `tsit5`.** Expliziter Runge-Kutta, sieben Stufen mit FSAL. Kein Newton, keine Ordnungswahl,
-  keine Historie über Schrittgrenzen. Der Checkpoint ist `x`, `t`, `dt` und `k7` für das FSAL. Die
-  Abstraktion, die hier entsteht, muss die beiden anderen tragen, also wird sie danach gebaut und
-  nicht nach `tsit5` allein.
+  keine Historie über Schrittgrenzen. Der Checkpoint ist `x`, `t`, `dt`; `k7` gehört nicht hinein,
+  siehe Befund 2 unten. Die Abstraktion, die hier entsteht, muss die beiden anderen tragen, also
+  wird sie danach gebaut und nicht nach `tsit5` allein.
 - **3b, `multistepper` und `rosenbrock4`.** Nach dem Meilenstein, also nach Stufe 7. Newton-IFT,
   variable Ordnung, Nordsieck-Historie, `qwait` mit `saved_tq5`, dazu beide LU-Tags. Das ist der
   schwerste Block des Plans, und er trifft dann auf eine stehende, gegen den Vorwärtsmodus geprüfte
@@ -544,6 +544,55 @@ werden, also ein `if constexpr` und kein zweiter Pfad.
 Test, mit ausgeschalteter Steuerungskette: für einen einzelnen Schritt ist
 `w' * (dy_{k+1}/dy_k)` aus dem Rückwärtslauf gleich der Kontraktion der Vorwärtssensitivität
 desselben Schritts, auf Rundungsniveau. Das ist prüfbar, ohne dass die Trajektorie steht.
+
+**Stand 3a, 2026-09-08: steht.** `inst/include/cppde/cppde_reverse_step.hpp` trägt
+`step_checkpoint<Stepper, T>` und `step_recorder<Stepper, T>`; der Test ist
+`dev/cxx/test_reverse_step.cpp`, gefahren über `dev/cxx/run.sh --reverse-step`. Geprüft ist
+`w' S` gegen `S' w` bei 1e-14 relativ, für die drei Einheitsseeds und für einen gemischten,
+über einen, zwei und vier verkettete Schritte, dazu der neu gerechnete Schrittwert bitgleich
+gegen den Vorwärtslauf.
+
+Fünf Befunde:
+
+1. **`codual` fehlten die zusammengesetzten Zuweisungen.** `vec_axpy` schreibt
+   `y[i] += alpha * x[i]`, und `+=` gab es nicht; ohne sie instanziiert kein Stepper. Nachgetragen
+   nach dem Muster von `dual`, also frei definiert im Mathe-Header. Die skalaren `+=` und `-=`
+   behalten den Slot statt einen Knoten zu schreiben, weil `d(x + c)/dx` gleich eins ist. Das ist
+   dieselbe Lehre wie bei `select` in Stufe 2: die codual-Oberfläche muss alles tragen, was ein
+   Aufrufer auf dem Zustandstyp macht, nicht nur die Rechenoperationen. Sonst ging `tsit5`
+   unverändert durch.
+2. **Der Checkpoint von `tsit5` enthält `k7` nicht, anders als oben angenommen.** Das
+   FSAL-Recycling ist eine Ersparnis, keine Abhängigkeit: das übernommene `k1` ist `f(x, t)` am
+   Checkpoint, die Neurechnung erzeugt es bitgleich. Ein gespeichertes `k7` als Konstante
+   einzuspielen würde dem Band gerade die Abhängigkeit `dk1/dx` nehmen, also den Gradienten
+   verfälschen. Der Checkpoint ist damit `x`, `t`, `dt`. Der Vier-Schritt-Fall im Test deckt genau
+   das ab.
+3. **Die Abstraktion heißt `carry`.** Ein Schritt ist `(carry, theta) -> x_out`, wobei `carry`
+   alles ist, was er aus einem früheren Schritt liest. Für ein Einschrittverfahren ist das der
+   Zustand, für den Multistepper das Nordsieck-Array; `load()` legt beides als Tape-Unabhängige an,
+   der zweite Teil im Ausgabeparameter `history`. Damit steht die Naht für 3b, ohne dass sie heute
+   geraten werden musste. Dazu `rebind_value` an allen drei Steppern, ein Alias je Klasse, weil nur
+   der Stepper seine übrigen Template-Argumente kennt.
+4. **Der Verifikationsschalter hat nach der Gegenprobe aus Stufe 0 nichts mehr zu schalten.** Dort
+   ist entschieden, dass `h` dual dauerhaft draußen bleibt; ein "voller" Modus mit
+   Schrittweitenterm existiert also gar nicht, und `if constexpr` über Steuergrößen, die ohnehin
+   `double` sind, wäre ein toter Knopf. Der Vergleich, den er tragen sollte, ist stattdessen der
+   Test selbst: eingefrorener Reverse-Pfad gegen Vorwärtssensitivitäten, und der ist eine
+   Gleichheit auf Rundungsniveau.
+5. **Wer `do_step` direkt fährt, muss `prepare_sensitivities()` selbst rufen.** Sonst nimmt der
+   FSAL-Zweig unter `dual` den Wert von `k7` nach `k1` und lässt dessen Tangenten stehen, weil
+   `m_K.slot_stride()` bei ungeprimtem Stagemakel null ist. Das hat den ersten Testlauf über zwei
+   Schritte um 1e-3 danebenliegen lassen; der Fehler saß im Vorwärtsorakel, nicht im Adjoint.
+   Betrifft nur Testtreiber, im Produktionspfad ruft der Controller es.
+
+Nebenher: `dev/cxx/run.sh` kennt `--reverse-step`, findet die R-Bibliothek auch unter Windows, wo
+sie nicht in `R.home("lib")` liegt, und überspringt den Sanitizer-Schritt statt an ihm abzubrechen,
+wenn die Runtimes fehlen. Der `-O2`-Build ist mit `-Wall -Wextra` warnungsfrei; dafür hat der
+No-op-`scoped_timer` in `cppde_profiler.hpp` einen eigenen Destruktor bekommen.
+
+**Was 3b von hier aus noch braucht:** eine `step_checkpoint`-Spezialisierung je Stepper, die
+`history` füllt, plus die IFT-Abkürzung im Newton-Korrektor. `step_recorder` selbst ist
+stepperfrei und sollte unverändert tragen.
 
 ### Stufe 4. Die Trajektorie rückwärts
 

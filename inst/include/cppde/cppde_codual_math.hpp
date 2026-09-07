@@ -113,6 +113,29 @@ CPPDE_CODUAL_MIXED(/, a.x() / sv, T(1) / sv,
 #undef CPPDE_CODUAL_MIXED
 
 // =============================================================================
+// Compound assignment
+//
+// Routed through the free operators, so the recording rules are stated once.
+// The scalar += and -= in the class body keep the slot: d(x + c)/dx is one.
+// =============================================================================
+
+template<class T>
+inline codual<T>& codual<T>::operator+=(const codual<T>& o) { return *this = *this + o; }
+template<class T>
+inline codual<T>& codual<T>::operator-=(const codual<T>& o) { return *this = *this - o; }
+template<class T>
+inline codual<T>& codual<T>::operator*=(const codual<T>& o) { return *this = *this * o; }
+template<class T>
+inline codual<T>& codual<T>::operator/=(const codual<T>& o) { return *this = *this / o; }
+
+template<class T>
+template<class U, std::enable_if_t<std::is_arithmetic_v<U>, int>>
+inline codual<T>& codual<T>::operator*=(const U& v) { return *this = *this * v; }
+template<class T>
+template<class U, std::enable_if_t<std::is_arithmetic_v<U>, int>>
+inline codual<T>& codual<T>::operator/=(const U& v) { return *this = *this / v; }
+
+// =============================================================================
 // Math: unary functions
 //
 // VAL_EXPR and DERIV_EXPR may invoke any std math function, so the whole suite
