@@ -288,7 +288,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     rev_result <- codegen$generate_ode_cpp(
       rhs_dict = as.list(setNames(rhs, variables)),
       params_list = params,
-      num_type = "RV",
+      num_type = "AD",
       fixed_states = fixed_initials,
       fixed_params = fixed_params,
       forcings_list = forcings,
@@ -335,7 +335,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         states_list = variables,
         params_list = params,
         n_states = n_variables,
-        num_type = "RV",
+        num_type = "AD",
         forcings_list = forcings,
         rhs_dict = as.list(setNames(rhs, variables))
       )
@@ -371,7 +371,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # --- Generate forcing initialization code ---
   forcing_init_code <- paste(codegen$generate_forcing_init_code(n_forcings, numType), collapse = "\n")
   rev_forcing_init_code <- if (is_reverse)
-    paste(codegen$generate_forcing_init_code(n_forcings, "RV"), collapse = "\n") else ""
+    paste(codegen$generate_forcing_init_code(n_forcings, "AD"), collapse = "\n") else ""
 
 
   # --- C++ includes ---
@@ -1226,8 +1226,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "",
       "  // Forcings on the reverse type. Their nodes are numbers, so this is a",
       "  // second reader over the same data, not a second interpolation.",
-      "  std::vector<cppde::PchipForcing<rev_::RV> > _rev_forcings(n_forcings);",
-      "  std::vector<const cppde::PchipForcing<rev_::RV>*> _rev_F(n_forcings);",
+      "  std::vector<cppde::PchipForcing<rev_::AD> > _rev_forcings(n_forcings);",
+      "  std::vector<const cppde::PchipForcing<rev_::AD>*> _rev_F(n_forcings);",
       "  for (int fi = 0; fi < n_forcings; ++fi) {",
       "    const int n_points = args.flen[fi];",
       "    std::vector<double> ft(args.ftimes[fi], args.ftimes[fi] + n_points);",
@@ -1419,9 +1419,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "// The same model on the tape type. The backward pass instantiates it once",
     "// per step and throws the tape away again, so nothing here outlives a step.",
     "namespace rev_ {",
-    "using RV = cppde::codual<double>;",
+    "using AD = cppde::codual<double>;",
     rev_ode_code, "", rev_jac_code,
-    event_builder("RV", rev_event_code),
+    event_builder("AD", rev_event_code),
     "}") else character(0)
 
   cpp_text <- c(

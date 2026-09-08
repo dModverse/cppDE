@@ -975,6 +975,14 @@ Skalartyp nach Dingen fragt, die ein `double` nicht beantwortet — `.val()` in 
 `G_tt`-Korrektur ist die Stelle, an der es auffällt. Die Ereignisse liegen dafür in einer
 `build_events`-Funktion je Typ statt inline in `solve_impl`.
 
+**Der zweite Rumpf wird unter dem Namen `AD` generiert, nicht unter einem eigenen.** Der Codegen
+erkennt genau `"AD"` und `"AD2"` als AD-Typen und hängt daran mehr, als der Name vermuten lässt:
+`std::exp` wird zu `cppde::exp`, `.val()` bekommt seine Tiefe, der Arena-Scope wird gesetzt. Ein
+dritter Name ging still an allem davon vorbei — das Modell emittierte `std::exp(codual<double>)`
+und übersetzte nicht. Aufgefallen ist es erst an Boehm, also am ersten Modell mit einer
+Exponentialfunktion in der rechten Seite; die Toy-Modelle der Testsuite haben keine. Welcher Typ
+`AD` ist, entscheidet jetzt die Namespace-Alias, nicht der Codegen.
+
 **Der Sammler hängt im Produktionstreiber**, nicht in einem zweiten. Der Beobachter des Modells
 meldet jede Beobachtung an den Store, `integrate_times_dense` bekommt die beiden Haken hinten
 angehängt, und danach läuft der Sweep, einmal je Seed-Spalte.
@@ -1033,6 +1041,10 @@ und damit ein Bruch, während das Anhängen an Position 14 additiv ist. Erst rev
 bringen, dann über die Umbenennung entscheiden.
 
 `cvode()` bleibt in dieser Stufe unberührt; sein Reverse-Modus ist Stufe 8.
+
+**Der Sparse-Pfad ist gefahren.** Boehm ist ein KLU-Modell (8x8, 67 Prozent dünn), und der
+transponierte Solve über `klu_tsolve` stimmt dort mit dem Vorwärtsmodus auf 7.5e-6 überein, was
+bei `rtol = 1e-10` genau der Diskretisierungsabstand ist.
 
 ### Stufe 7. Die Kette in dMod2
 
