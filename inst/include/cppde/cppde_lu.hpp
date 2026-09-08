@@ -48,6 +48,7 @@ namespace ad_lu {
 struct detail_null_sparse_lu {
   template<class W> void factorize(const W&) {}
   template<class B> void solve(B&) const {}
+  template<class B> void solve_transposed(B&) const {}
   void solve_scalar(std::vector<double>&) const {}
   void reset_pattern() {}
 };
@@ -192,6 +193,21 @@ public:
       m_sparse_lu.solve_scalar(b);
     } else {
       m_dense_lu.solve_scalar(b);
+    }
+  }
+
+  // ====================================================================
+  //  solve_transposed: W^-T b, the reverse mode's half of the same
+  //  factorisation. Value type only, the derivative side of an implicit
+  //  equation being the caller's own sweep.
+  // ====================================================================
+
+  void solve_transposed(state_type& b)
+  {
+    if constexpr (is_sparse) {
+      m_sparse_lu.solve_transposed(b);
+    } else {
+      m_dense_lu.solve_transposed(b);
     }
   }
 

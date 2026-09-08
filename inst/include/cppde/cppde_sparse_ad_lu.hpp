@@ -91,6 +91,9 @@ public:
   void solve(std::vector<Scalar>& b) const
   { m_solver.solve(b); }
 
+  void solve_transposed(std::vector<Scalar>& b) const
+  { m_solver.solve_transposed(b); }
+
   // Batched solve: B ← W⁻¹ B (column-major n × nrhs)
   void solve_batch(std::vector<Scalar>& B, int nrhs) const
   { m_solver.solve_batch(B.data(), nrhs); }

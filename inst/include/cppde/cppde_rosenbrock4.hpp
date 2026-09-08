@@ -150,6 +150,15 @@ public:
 
   // Same method on another scalar type. The coefficients follow Value2, so a
   // hand-supplied set does not survive the rebind.
+  // Scratch the reverse replay needs and the forward path does not: the Jacobian
+  // under the tape type and the right-hand side each equation is formed against.
+  // Empty for a value type that never replays, so no forward run pays for it.
+  struct replay_scratch {
+    dense_matrix<Value> J;
+    std::vector<Value>  dfdt, rhs;
+  };
+  struct no_replay_scratch {};
+
   template<class Value2> using rebind_value =
     rosenbrock4<Value2, JacobianPattern,
                 default_rosenbrock_coefficients<Value2>, Resizer>;
@@ -231,6 +240,221 @@ public:
   void reset_counters() { m_n_fevals = 0; m_n_jevals = 0; m_n_lu_setups = 0; }
 
   // ====================================================================
+  //  stages: the six Rosenbrock stages, with the linear solve left open.
+  //
+  //  The forward path hands in the LU, the reverse replay hands in the equation
+  //  each solve stands for. One body for both, so the stage arithmetic cannot
+  //  drift between the two directions.
+  //
+  //  dfdt is what the Jacobian evaluation filled; the caller owns it because the
+  //  two paths keep it in different places.
+  // ====================================================================
+
+  template<class DerivFunc, class Solve>
+  void stages(DerivFunc& deriv_func, const state_type& x,
+              time_type t_s, time_type dt_s,
+              state_type& xout, state_type& xerr,
+              state_type& dfdt, Solve& solve)
+  {
+    const size_t n = x.size();
+
+    // --- Stage 1 ---
+    vec_copy_with_slab(m_g1.m_v, m_G.slab(0), m_dxdt.m_v, m_dxdt_slab);
+    vec_axpy_with_slab(m_g1.m_v, m_G.slab(0),
+                       dt_s * ad_lu::scalar_value(m_coef.d1),
+                       dfdt, m_dfdt_unslabbed);
+    { auto _tp = m_prof.timer(prof_cat::lu_solve);
+      solve(m_g1.m_v); }
+
+    // --- Stage 2 ---
+    vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       ad_lu::scalar_value(m_coef.a21),
+                       m_g1.m_v, m_G.slab(0));
+    { auto _tp = m_prof.timer(prof_cat::f_eval);
+      deriv_func(m_xtmp.m_v, m_g2.m_v, value_type(t_s + m_coef.c2 * dt_s)); }
+    ++m_n_fevals;
+    vec_axpy_with_slab(m_g2.m_v, m_G.slab(1),
+                       dt_s * ad_lu::scalar_value(m_coef.d2),
+                       dfdt, m_dfdt_unslabbed);
+    vec_axpy_with_slab(m_g2.m_v, m_G.slab(1),
+                       ad_lu::scalar_value(m_coef.c21) / dt_s,
+                       m_g1.m_v, m_G.slab(0));
+    { auto _tp = m_prof.timer(prof_cat::lu_solve);
+      solve(m_g2.m_v); }
+
+    // --- Stage 3 ---
+    vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       ad_lu::scalar_value(m_coef.a31),
+                       m_g1.m_v, m_G.slab(0));
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       ad_lu::scalar_value(m_coef.a32),
+                       m_g2.m_v, m_G.slab(1));
+    { auto _tp = m_prof.timer(prof_cat::f_eval);
+      deriv_func(m_xtmp.m_v, m_g3.m_v, value_type(t_s + m_coef.c3 * dt_s)); }
+    ++m_n_fevals;
+    vec_axpy_with_slab(m_g3.m_v, m_G.slab(2),
+                       dt_s * ad_lu::scalar_value(m_coef.d3),
+                       dfdt, m_dfdt_unslabbed);
+    vec_axpy_with_slab(m_g3.m_v, m_G.slab(2),
+                       ad_lu::scalar_value(m_coef.c31) / dt_s,
+                       m_g1.m_v, m_G.slab(0));
+    vec_axpy_with_slab(m_g3.m_v, m_G.slab(2),
+                       ad_lu::scalar_value(m_coef.c32) / dt_s,
+                       m_g2.m_v, m_G.slab(1));
+    { auto _tp = m_prof.timer(prof_cat::lu_solve);
+      solve(m_g3.m_v); }
+
+    // --- Stage 4 ---
+    vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       ad_lu::scalar_value(m_coef.a41),
+                       m_g1.m_v, m_G.slab(0));
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       ad_lu::scalar_value(m_coef.a42),
+                       m_g2.m_v, m_G.slab(1));
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       ad_lu::scalar_value(m_coef.a43),
+                       m_g3.m_v, m_G.slab(2));
+    { auto _tp = m_prof.timer(prof_cat::f_eval);
+      deriv_func(m_xtmp.m_v, m_g4.m_v, value_type(t_s + m_coef.c4 * dt_s)); }
+    ++m_n_fevals;
+    vec_axpy_with_slab(m_g4.m_v, m_G.slab(3),
+                       dt_s * ad_lu::scalar_value(m_coef.d4),
+                       dfdt, m_dfdt_unslabbed);
+    vec_axpy_with_slab(m_g4.m_v, m_G.slab(3),
+                       ad_lu::scalar_value(m_coef.c41) / dt_s,
+                       m_g1.m_v, m_G.slab(0));
+    vec_axpy_with_slab(m_g4.m_v, m_G.slab(3),
+                       ad_lu::scalar_value(m_coef.c42) / dt_s,
+                       m_g2.m_v, m_G.slab(1));
+    vec_axpy_with_slab(m_g4.m_v, m_G.slab(3),
+                       ad_lu::scalar_value(m_coef.c43) / dt_s,
+                       m_g3.m_v, m_G.slab(2));
+    { auto _tp = m_prof.timer(prof_cat::lu_solve);
+      solve(m_g4.m_v); }
+
+    // --- Stage 5 ---
+    vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       ad_lu::scalar_value(m_coef.a51),
+                       m_g1.m_v, m_G.slab(0));
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       ad_lu::scalar_value(m_coef.a52),
+                       m_g2.m_v, m_G.slab(1));
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       ad_lu::scalar_value(m_coef.a53),
+                       m_g3.m_v, m_G.slab(2));
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       ad_lu::scalar_value(m_coef.a54),
+                       m_g4.m_v, m_G.slab(3));
+    { auto _tp = m_prof.timer(prof_cat::f_eval);
+      deriv_func(m_xtmp.m_v, m_g5.m_v, value_type(t_s + dt_s)); }
+    ++m_n_fevals;
+    vec_axpy_with_slab(m_g5.m_v, m_G.slab(4),
+                       ad_lu::scalar_value(m_coef.c51) / dt_s,
+                       m_g1.m_v, m_G.slab(0));
+    vec_axpy_with_slab(m_g5.m_v, m_G.slab(4),
+                       ad_lu::scalar_value(m_coef.c52) / dt_s,
+                       m_g2.m_v, m_G.slab(1));
+    vec_axpy_with_slab(m_g5.m_v, m_G.slab(4),
+                       ad_lu::scalar_value(m_coef.c53) / dt_s,
+                       m_g3.m_v, m_G.slab(2));
+    vec_axpy_with_slab(m_g5.m_v, m_G.slab(4),
+                       ad_lu::scalar_value(m_coef.c54) / dt_s,
+                       m_g4.m_v, m_G.slab(3));
+    { auto _tp = m_prof.timer(prof_cat::lu_solve);
+      solve(m_g5.m_v); }
+
+    // --- Error estimate (stage 6) ---
+    // Uses the Hairer-Wanner 6-stage formulation: an additional
+    // f-evaluation and W⁻¹ solve to produce the embedded error.
+    // The error is added to the solution (local extrapolation).
+    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
+                       1.0,
+                       m_g5.m_v, m_G.slab(4));
+    { auto _tp = m_prof.timer(prof_cat::f_eval);
+      deriv_func(m_xtmp.m_v, xerr, value_type(t_s + dt_s)); }
+    ++m_n_fevals;
+  // xerr belongs to the controller and is not slab-bound. The alphas go in as
+  // plain doubles, the coefficients having no tangents anyway, which keeps the
+  // axpy free of arena allocations.
+    vec_axpy(xerr, ad_lu::scalar_value(m_coef.c61) / dt_s, m_g1.m_v);
+    vec_axpy(xerr, ad_lu::scalar_value(m_coef.c62) / dt_s, m_g2.m_v);
+    vec_axpy(xerr, ad_lu::scalar_value(m_coef.c63) / dt_s, m_g3.m_v);
+    vec_axpy(xerr, ad_lu::scalar_value(m_coef.c64) / dt_s, m_g4.m_v);
+    vec_axpy(xerr, ad_lu::scalar_value(m_coef.c65) / dt_s, m_g5.m_v);
+    { auto _tp = m_prof.timer(prof_cat::lu_solve);
+      solve(xerr); }
+
+    // --- Solution ---
+    for (size_t i = 0; i < n; ++i)
+      xout[i] = m_xtmp.m_v[i] + xerr[i];
+  }
+
+  // ====================================================================
+  //  replay_step: one step for the reverse sweep.
+  //
+  //  The same six stages, with every linear solve replaced by the equation it
+  //  solves: W g = rhs, with g handed in at the value the forward run computed
+  //  and W = -J + I/(gamma*dt) on the tape. Their derivatives close by the
+  //  implicit function theorem, one transposed solve each against the matrix all
+  //  six share.
+  //
+  //  sink is what marks the tape between the equations, which the sweep needs;
+  //  see cppde_reverse_step.hpp.
+  // ====================================================================
+
+  template<class Sys, class TimeArg, class Sink>
+  void replay_step(Sys& system, const state_type& x, TimeArg t, TimeArg dt,
+                   state_type& xout, state_type& xerr, Sink& sink)
+  {
+    auto& deriv_func  = system.first;
+    auto& jacobi_func = system.second;
+
+    const size_t n = x.size();
+    const time_type t_s  = static_cast<time_type>(ad_lu::scalar_value(t));
+    const time_type dt_s = static_cast<time_type>(ad_lu::scalar_value(dt));
+
+    m_resizer.adjust_size(x, [this](auto&& arg) {
+      return this->resize_impl(std::forward<decltype(arg)>(arg));
+    });
+
+    deriv_func(x, m_dxdt.m_v, value_type(t_s));
+
+    const value_type inv_gamma_dt =
+        static_cast<value_type>(1) / (m_coef.gamma * dt_s);
+
+    // The emitted Jacobian writes -J, which is what W is built from.
+    if (m_replay.J.rows() != static_cast<int>(n)) m_replay.J.resize(n, n);
+    else m_replay.J.set_zero();
+    m_replay.dfdt.assign(n, value_type());
+    jacobi_func(x, m_replay.J, value_type(t_s), m_replay.dfdt);
+
+    auto equation = [&](state_type& v) {
+      m_replay.rhs = v;
+      sink.begin(v);
+      state_type& res = sink.residual();
+      res.assign(n, value_type());
+      for (size_t i = 0; i < n; ++i) {
+        value_type acc = inv_gamma_dt * v[i];
+        for (size_t j = 0; j < n; ++j) acc = acc + m_replay.J(i, j) * v[j];
+        res[i] = acc - m_replay.rhs[i];
+      }
+      sink.done();
+    };
+
+    stages(deriv_func, x, t_s, dt_s, xout, xerr, m_replay.dfdt, equation);
+  }
+
+  // The scaling the equations are linearised against: W = -J + inv_gamma_dt * I.
+  time_type replay_inv_gamma_dt(time_type dt_s) const {
+    return static_cast<time_type>(1)
+         / (static_cast<time_type>(ad_lu::scalar_value(m_coef.gamma)) * dt_s);
+  }
+
+  // ====================================================================
   //  do_step (with error output)
   // ====================================================================
 
@@ -286,140 +510,8 @@ public:
       m_lu.set_jacobian_valid();
       m_lu.set_lu_valid(dt_s);
     }
-
-    // --- Stage 1 ---
-    vec_copy_with_slab(m_g1.m_v, m_G.slab(0), m_dxdt.m_v, m_dxdt_slab);
-    vec_axpy_with_slab(m_g1.m_v, m_G.slab(0),
-                       dt_s * ad_lu::scalar_value(m_coef.d1),
-                       m_lu.dfdt_mut(), m_dfdt_unslabbed);
-    { auto _tp = m_prof.timer(prof_cat::lu_solve);
-      m_lu.solve(m_g1.m_v); }
-
-    // --- Stage 2 ---
-    vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       ad_lu::scalar_value(m_coef.a21),
-                       m_g1.m_v, m_G.slab(0));
-    { auto _tp = m_prof.timer(prof_cat::f_eval);
-      deriv_func(m_xtmp.m_v, m_g2.m_v, value_type(t_s + m_coef.c2 * dt_s)); }
-    ++m_n_fevals;
-    vec_axpy_with_slab(m_g2.m_v, m_G.slab(1),
-                       dt_s * ad_lu::scalar_value(m_coef.d2),
-                       m_lu.dfdt_mut(), m_dfdt_unslabbed);
-    vec_axpy_with_slab(m_g2.m_v, m_G.slab(1),
-                       ad_lu::scalar_value(m_coef.c21) / dt_s,
-                       m_g1.m_v, m_G.slab(0));
-    { auto _tp = m_prof.timer(prof_cat::lu_solve);
-      m_lu.solve(m_g2.m_v); }
-
-    // --- Stage 3 ---
-    vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       ad_lu::scalar_value(m_coef.a31),
-                       m_g1.m_v, m_G.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       ad_lu::scalar_value(m_coef.a32),
-                       m_g2.m_v, m_G.slab(1));
-    { auto _tp = m_prof.timer(prof_cat::f_eval);
-      deriv_func(m_xtmp.m_v, m_g3.m_v, value_type(t_s + m_coef.c3 * dt_s)); }
-    ++m_n_fevals;
-    vec_axpy_with_slab(m_g3.m_v, m_G.slab(2),
-                       dt_s * ad_lu::scalar_value(m_coef.d3),
-                       m_lu.dfdt_mut(), m_dfdt_unslabbed);
-    vec_axpy_with_slab(m_g3.m_v, m_G.slab(2),
-                       ad_lu::scalar_value(m_coef.c31) / dt_s,
-                       m_g1.m_v, m_G.slab(0));
-    vec_axpy_with_slab(m_g3.m_v, m_G.slab(2),
-                       ad_lu::scalar_value(m_coef.c32) / dt_s,
-                       m_g2.m_v, m_G.slab(1));
-    { auto _tp = m_prof.timer(prof_cat::lu_solve);
-      m_lu.solve(m_g3.m_v); }
-
-    // --- Stage 4 ---
-    vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       ad_lu::scalar_value(m_coef.a41),
-                       m_g1.m_v, m_G.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       ad_lu::scalar_value(m_coef.a42),
-                       m_g2.m_v, m_G.slab(1));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       ad_lu::scalar_value(m_coef.a43),
-                       m_g3.m_v, m_G.slab(2));
-    { auto _tp = m_prof.timer(prof_cat::f_eval);
-      deriv_func(m_xtmp.m_v, m_g4.m_v, value_type(t_s + m_coef.c4 * dt_s)); }
-    ++m_n_fevals;
-    vec_axpy_with_slab(m_g4.m_v, m_G.slab(3),
-                       dt_s * ad_lu::scalar_value(m_coef.d4),
-                       m_lu.dfdt_mut(), m_dfdt_unslabbed);
-    vec_axpy_with_slab(m_g4.m_v, m_G.slab(3),
-                       ad_lu::scalar_value(m_coef.c41) / dt_s,
-                       m_g1.m_v, m_G.slab(0));
-    vec_axpy_with_slab(m_g4.m_v, m_G.slab(3),
-                       ad_lu::scalar_value(m_coef.c42) / dt_s,
-                       m_g2.m_v, m_G.slab(1));
-    vec_axpy_with_slab(m_g4.m_v, m_G.slab(3),
-                       ad_lu::scalar_value(m_coef.c43) / dt_s,
-                       m_g3.m_v, m_G.slab(2));
-    { auto _tp = m_prof.timer(prof_cat::lu_solve);
-      m_lu.solve(m_g4.m_v); }
-
-    // --- Stage 5 ---
-    vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       ad_lu::scalar_value(m_coef.a51),
-                       m_g1.m_v, m_G.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       ad_lu::scalar_value(m_coef.a52),
-                       m_g2.m_v, m_G.slab(1));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       ad_lu::scalar_value(m_coef.a53),
-                       m_g3.m_v, m_G.slab(2));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       ad_lu::scalar_value(m_coef.a54),
-                       m_g4.m_v, m_G.slab(3));
-    { auto _tp = m_prof.timer(prof_cat::f_eval);
-      deriv_func(m_xtmp.m_v, m_g5.m_v, value_type(t_s + dt_s)); }
-    ++m_n_fevals;
-    vec_axpy_with_slab(m_g5.m_v, m_G.slab(4),
-                       ad_lu::scalar_value(m_coef.c51) / dt_s,
-                       m_g1.m_v, m_G.slab(0));
-    vec_axpy_with_slab(m_g5.m_v, m_G.slab(4),
-                       ad_lu::scalar_value(m_coef.c52) / dt_s,
-                       m_g2.m_v, m_G.slab(1));
-    vec_axpy_with_slab(m_g5.m_v, m_G.slab(4),
-                       ad_lu::scalar_value(m_coef.c53) / dt_s,
-                       m_g3.m_v, m_G.slab(2));
-    vec_axpy_with_slab(m_g5.m_v, m_G.slab(4),
-                       ad_lu::scalar_value(m_coef.c54) / dt_s,
-                       m_g4.m_v, m_G.slab(3));
-    { auto _tp = m_prof.timer(prof_cat::lu_solve);
-      m_lu.solve(m_g5.m_v); }
-
-    // --- Error estimate (stage 6) ---
-    // Uses the Hairer-Wanner 6-stage formulation: an additional
-    // f-evaluation and W⁻¹ solve to produce the embedded error.
-    // The error is added to the solution (local extrapolation).
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       1.0,
-                       m_g5.m_v, m_G.slab(4));
-    { auto _tp = m_prof.timer(prof_cat::f_eval);
-      deriv_func(m_xtmp.m_v, xerr, value_type(t_s + dt_s)); }
-    ++m_n_fevals;
-  // xerr belongs to the controller and is not slab-bound. The alphas go in as
-  // plain doubles, the coefficients having no tangents anyway, which keeps the
-  // axpy free of arena allocations.
-    vec_axpy(xerr, ad_lu::scalar_value(m_coef.c61) / dt_s, m_g1.m_v);
-    vec_axpy(xerr, ad_lu::scalar_value(m_coef.c62) / dt_s, m_g2.m_v);
-    vec_axpy(xerr, ad_lu::scalar_value(m_coef.c63) / dt_s, m_g3.m_v);
-    vec_axpy(xerr, ad_lu::scalar_value(m_coef.c64) / dt_s, m_g4.m_v);
-    vec_axpy(xerr, ad_lu::scalar_value(m_coef.c65) / dt_s, m_g5.m_v);
-    { auto _tp = m_prof.timer(prof_cat::lu_solve);
-      m_lu.solve(xerr); }
-
-    // --- Solution ---
-    for (size_t i = 0; i < n; ++i)
-      xout[i] = m_xtmp.m_v[i] + xerr[i];
+    auto lu_solve = [this](state_type& v) { m_lu.solve(v); };
+    stages(deriv_func, x, t_s, dt_s, xout, xerr, m_lu.dfdt_mut(), lu_solve);
   }
 
   // ====================================================================
@@ -548,6 +640,9 @@ protected:
 private:
 
   lu_type m_lu;
+
+  std::conditional_t<cppde::ad_traits::is_reverse<Value>::value,
+                     replay_scratch, no_replay_scratch> m_replay;
 
   resizer_type m_resizer;
   resizer_type m_x_err_resizer;

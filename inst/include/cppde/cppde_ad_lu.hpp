@@ -127,6 +127,20 @@ public:
     return x;
   }
 
+  // Solve in-place against the transpose: b <- W^-T b. The reverse mode's
+  // implicit-function step, where the same factorisation serves both directions.
+  void solve_transposed(std::vector<Scalar>& b) const
+  {
+    char trans = 'T';
+    int nrhs = 1;
+    int info = 0;
+    F77_CALL(dgetrs)(&trans, &m_n, &nrhs,
+             const_cast<double*>(m_lu_data.data()), &m_n,
+             const_cast<int*>(m_ipiv.data()),
+             b.data(), &m_n, &info
+                       FCONE);
+  }
+
   // Scalar-only solve (identity for base case: same as solve)
   void solve_scalar(std::vector<double>& b) const
   { solve(b); }

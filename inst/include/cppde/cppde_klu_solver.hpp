@@ -158,6 +158,21 @@ public:
   { solve(b.data()); }
 
   // ------------------------------------------------------------------
+  //  Solve against the transpose: b <- W^-T b. KLU factorises once and
+  //  serves both directions, which is what the reverse mode needs.
+  // ------------------------------------------------------------------
+  void solve_transposed(double* b) const
+  {
+    klu_tsolve(const_cast<klu_symbolic*>(m_symbolic),
+               const_cast<klu_numeric*>(m_numeric),
+               m_n, 1, b,
+               const_cast<klu_common*>(&m_common));
+  }
+
+  void solve_transposed(std::vector<double>& b) const
+  { solve_transposed(b.data()); }
+
+  // ------------------------------------------------------------------
   //  Batched solve: B ← W⁻¹ B  (B is n × nrhs, column-major)
   // ------------------------------------------------------------------
   void solve_batch(double* B, int nrhs) const

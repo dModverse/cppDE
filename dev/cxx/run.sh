@@ -5,8 +5,8 @@
 #   dev/cxx/run.sh --record F   write the numeric output to F (reference run)
 #   dev/cxx/run.sh --against F  diff this build's output against F
 #
-# A leading --codual or --reverse-step selects a reverse-AD harness instead of
-# the expression-template one; the remaining arguments are unchanged.
+# A leading --codual, --reverse-step, --reverse-step-rb4,
+# --reverse-step-multistep or --reverse-trajectory selects a reverse-AD harness.
 #
 # The output is the assertion: two revisions that compute the same thing must
 # produce byte-identical output.
@@ -27,6 +27,26 @@ case "${1:-}" in
     OUT=${TMPDIR:-/tmp}/cppde_reverse_step
     shift
     ;;
+  --reverse-step-rb4)
+    SRC="$REPO/dev/cxx/test_reverse_step_rb4.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_reverse_step_rb4
+    shift
+    ;;
+  --reverse-step-multistep)
+    SRC="$REPO/dev/cxx/test_reverse_step_multistep.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_reverse_step_multistep
+    shift
+    ;;
+  --reverse-trajectory-methods)
+    SRC="$REPO/dev/cxx/test_reverse_trajectory_methods.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_reverse_trajectory_methods
+    shift
+    ;;
+  --reverse-trajectory)
+    SRC="$REPO/dev/cxx/test_reverse_trajectory.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_reverse_trajectory
+    shift
+    ;;
 esac
 RINC=$(Rscript -e 'cat(R.home("include"))')
 # Windows keeps no import libraries under R.home("lib"); bin/<arch> holds the
@@ -38,7 +58,12 @@ STD=-std=gnu++17
 INC="-I $REPO/inst/include -I $RINC"
 # cppde.hpp declares the BLAS/LAPACK entry points R provides; link against R
 # so any that get instantiated resolve.
-LIBS="-L $RLIB -lR -lRblas -lRlapack"
+# libRlapack is absent where R takes LAPACK from the BLAS it links, as a
+# FlexiBLAS build does; there the symbols come out of libRblas.
+LIBS="-L $RLIB -lR -lRblas"
+for f in "$RLIB"/libRlapack.* "$RLIB"/Rlapack.*; do
+  if [ -e "$f" ]; then LIBS="$LIBS -lRlapack"; break; fi
+done
 
 # -O2 matches how generated models are built.
 $CXX $STD -O2 -DNDEBUG -Wall -Wextra $INC -o "$OUT" "$SRC" $LIBS

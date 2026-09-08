@@ -104,6 +104,7 @@ public:
  using value_type = typename State::value_type;
 
  using TerminationFunc = std::function<bool(const State&, const Time&)>;
+ using StepObserver    = std::function<void()>;
 
  EventEngine(Stepper& st, System& sys,
              const std::vector<FixedEvent<State, value_type>>& fixed,
@@ -113,6 +114,15 @@ public:
      m_dt_estimator(std::move(dt_est)) {}
 
  void set_termination(TerminationFunc f) { m_termination = std::move(f); }
+
+ // Called after every accepted step of the dense loop, which is where the
+ // reverse mode drops its checkpoint. It reads the stepper itself, so it needs
+ // no arguments. Unset costs one predictable branch per step.
+ //
+ // The controlled loop is not hooked: it steps in place and clips to the next
+ // output time, so a checkpoint there needs the state before the step rather
+ // than after it. That comes with the non-dense reverse path.
+ void set_step_observer(StepObserver f) { m_step_obs = std::move(f); }
 
  cppde::profiler& get_profiler() const {
    if constexpr (has_controlled_stepper_method<Stepper>::value) {
@@ -230,7 +240,7 @@ private:
    // The restarted step is interpolated at t_start below.
    m_st.set_dense_demand(t_event, true, true);
    m_st.do_step(m_sys);
-   ++steps; checker(); checker.reset();
+   ++steps; note_step(); checker(); checker.reset();
    checker.set_last_order(get_stepper_order(m_st));
 
    t_start = m_st.previous_time();
@@ -456,7 +466,7 @@ public:
 
    m_st.initialize(x, times.front(), dt);
    m_st.set_dense_demand(*it, dense_always, fwd);
-   m_st.do_step(m_sys); ++steps; checker(); checker.reset();
+   m_st.do_step(m_sys); ++steps; note_step(); checker(); checker.reset();
    checker.set_last_order(get_stepper_order(m_st));
 
    Time t_start = m_st.previous_time();
@@ -524,7 +534,7 @@ public:
        }
 
        m_st.set_dense_demand(*it, dense_always, fwd);
-       m_st.do_step(m_sys); ++steps; checker(); checker.reset();
+       m_st.do_step(m_sys); ++steps; note_step(); checker(); checker.reset();
        checker.set_last_order(get_stepper_order(m_st));
        t_start = m_st.previous_time(); t_end = m_st.current_time();
        dt = m_st.current_time_step();
@@ -576,7 +586,7 @@ public:
          init_stepper_after_event(x, t_eval_s, dt);
          // The restarted step is interpolated at t_start below.
          m_st.set_dense_demand(t_eval_s, true, fwd);
-         m_st.do_step(m_sys); ++steps; checker(); checker.reset();
+         m_st.do_step(m_sys); ++steps; note_step(); checker(); checker.reset();
          checker.set_last_order(get_stepper_order(m_st));
          t_start = m_st.previous_time(); t_end = m_st.current_time();
          dt = m_st.current_time_step();
@@ -653,6 +663,10 @@ private:
  const std::vector<RootEvent<State, Time>>& m_root;
  DtEstimator m_dt_estimator;
  TerminationFunc m_termination;
+ StepObserver m_step_obs;
+
+ void note_step() { if (m_step_obs) m_step_obs(); }
+
  // Integration endpoint, set at the start of process_{controlled,dense}.
  // Used as the upper-bound hint for cppde_hin when re-estimating the
  // initial step size after an event restart on multistep methods.

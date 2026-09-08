@@ -76,6 +76,7 @@
 #include <algorithm>
 #include <type_traits>
 #include <cassert>
+#include <functional>
 #include <vector>
 
 #include <cppde/cppde_tls.hpp>
@@ -522,6 +523,20 @@ constexpr int method_max_order(multistep_method m) {
 //  multistepper<Method, Value, JacobianPattern, Resizer>
 // ============================================================================
 
+// ============================================================================
+//  The carry across a step boundary, apart from the Nordsieck slots: the order,
+//  the step-size history and the counters that decide how the coefficients are
+//  built. Values only and free of the scalar type, so a run in double hands it
+//  to a replay under another one.
+// ============================================================================
+
+template<int MaxOrder>
+struct multistep_carry {
+  int    q = 1, L = 2, qwait = 2, nst = 0, nscon = 0;
+  double h = 0.0, hscale = 0.0, eta = 1.0;
+  std::array<double, MaxOrder + 1> tau{};
+};
+
 template<
   multistep_method Method = multistep_method::bdf,
   class Value = double,
@@ -798,7 +813,7 @@ public:
       if (m_nst > 0) {
         if (std::abs(dt_s - m_hscale) > 1e-14 * std::max(1.0, std::abs(m_hscale))) {
           m_eta = dt_s / m_hscale;
-          ndfRescale(n);
+          ndfRescale();
         }
         m_h = m_hscale;
       } else {
@@ -806,6 +821,10 @@ public:
         if (m_hscale == 0.0) m_hscale = dt_s;
       }
     }
+
+    if (m_snapshot)
+      m_snapshot(static_cast<double>(ndf_detail::scalar_value(t_s)),
+                 static_cast<double>(ndf_detail::scalar_value(m_h)));
 
   // ================================================================
   //  1b. Error weights from the accepted solution, before the prediction
@@ -1060,7 +1079,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       if (m_nst > 0) {
         if (std::abs(dt_s - m_hscale) > 1e-14 * std::max(1.0, std::abs(m_hscale))) {
           m_eta = dt_s / m_hscale;
-          ndfRescale(n);
+          ndfRescale();
         }
         m_h = m_hscale;
       } else {
@@ -1068,6 +1087,10 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         if (m_hscale == 0.0) m_hscale = dt_s;
       }
     }
+
+    if (m_snapshot)
+      m_snapshot(static_cast<double>(ndf_detail::scalar_value(t_s)),
+                 static_cast<double>(ndf_detail::scalar_value(m_h)));
 
     // ================================================================
     //  1b. Compute error weight vector from ACCEPTED solution
@@ -1171,6 +1194,151 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     trace_step(/*is_adams_step=*/true,
                /*t_end=*/static_cast<double>(scalar_value(t_s + m_h)));
   }
+
+  // ====================================================================
+  //  set_step_snapshot: fires once per attempt, after the Nordsieck rescale and
+  //  before the prediction, which is where the carry a step reads is final.
+  //
+  //  The reverse checkpoint cannot be taken after the step: the history is
+  //  mutated in place, and an attempt the controller throws away rescales it
+  //  again before the accepted one runs. The last snapshot before an acceptance
+  //  is the accepted attempt's own. Unset costs one branch per attempt.
+  //
+  //  It is handed the step's time and the size it settled on, which is m_h and
+  //  not the size the controller offered.
+  // ====================================================================
+
+  using step_snapshot = std::function<void(double t, double h)>;
+  void set_step_snapshot(step_snapshot f) { m_snapshot = std::move(f); }
+
+  // ====================================================================
+  //  The carry across a step boundary, for the reverse checkpoint.
+  //
+  //  Everything a step reads that an earlier step wrote, apart from the
+  //  Nordsieck slots themselves: the order, the step-size history and the
+  //  counters that decide how the coefficients are built. Values only, so a run
+  //  in double hands it to a replay under another scalar type.
+  // ====================================================================
+
+  using carry = multistep_carry<max_order>;
+
+  void save_carry(carry& c) const
+  {
+    using ndf_detail::scalar_value;
+    c.q = m_q; c.L = m_L; c.qwait = m_qwait; c.nst = m_nst; c.nscon = m_nscon;
+    c.h      = static_cast<double>(scalar_value(m_h));
+    c.hscale = static_cast<double>(scalar_value(m_hscale));
+    c.eta    = static_cast<double>(scalar_value(m_eta));
+    for (int j = 0; j <= max_order; ++j)
+      c.tau[j] = static_cast<double>(scalar_value(m_tau[j]));
+  }
+
+  // Restores the scalars and sizes the history to n states. The slot values are
+  // written through zn_mut(), which is also where a caller registers them as
+  // tape inputs.
+  void load_carry(const carry& c, std::size_t n)
+  {
+    state_type probe(n);
+    resize_impl(probe);
+    m_q = c.q; m_L = c.L; m_qwait = c.qwait; m_nst = c.nst; m_nscon = c.nscon;
+    m_h      = static_cast<time_type>(c.h);
+    m_hscale = static_cast<time_type>(c.hscale);
+    m_eta    = static_cast<time_type>(c.eta);
+    for (int j = 0; j <= max_order; ++j)
+      m_tau[j] = static_cast<time_type>(c.tau[j]);
+    m_initialized = true;
+  }
+
+  state_type& zn_mut(int j) { return m_zn[j].m_v; }
+
+  // ====================================================================
+  //  replay_residual: one step for the reverse sweep.
+  //
+  //  Rescale, predict and coefficients exactly as the forward step, then the
+  //  corrector short-circuited. y is handed in at the value the forward run
+  //  converged to, and what stands in for the iteration, Newton for the BDF
+  //  family and PECE for Adams, is the equation both of them solve,
+  //
+  //    res = (y - zn0) + rl1*zn1 - gamma*f(y, t+h),
+  //
+  //  whose derivative closes by the implicit function theorem rather than by
+  //  differentiating the iterates. No Jacobian and no LU: the iteration matrix
+  //  belongs to the iteration, not to the equation.
+  //
+  //  Two calls, and the split is load-bearing: the caller marks the tape between
+  //  them. Everything that reads y other than the equation itself has to be
+  //  recorded after that mark, or the sweep reaches the equation before y's
+  //  cotangent is complete and the solve runs on a partial one.
+  // ====================================================================
+
+  template<class System, class TimeArg>
+  void replay_residual(System& system, const state_type& x, TimeArg t, TimeArg dt,
+                       const state_type& y, state_type& res)
+  {
+    using ndf_detail::scalar_value;
+    time_type t_s  = static_cast<time_type>(scalar_value(t));
+    time_type dt_s = static_cast<time_type>(scalar_value(dt));
+
+    typedef typename unwrap_reference<System>::type system_type;
+    typedef typename unwrap_reference<
+      typename system_type::first_type>::type deriv_func_type;
+    system_type&     sys        = system;
+    deriv_func_type& deriv_func = sys.first;
+
+    const size_t n = x.size();
+    resize_impl(x);
+
+    if (m_nst > 0) {
+      if (std::abs(dt_s - m_hscale) > 1e-14 * std::max(1.0, std::abs(m_hscale))) {
+        m_eta = dt_s / m_hscale;
+        ndfRescale();
+      }
+      m_h = m_hscale;
+    } else {
+      m_h = dt_s;
+      if (m_hscale == 0.0) m_hscale = dt_s;
+    }
+
+    ndfPredict(n);
+
+    // Both families solve the same equation with different coefficients, so the
+    // residual below is one formula: gamma = h * rl1 in either case.
+    time_type rl1;
+    if constexpr (Method == multistep_method::adams) {
+      adams_set_coefficients(m_q, m_qwait, m_h, m_tau, m_l, m_tq);
+      rl1 = time_type(1.0) / m_l[1];
+    } else {
+      ndfSet();
+      const double kappa_q = m_use_ndf_kappa ? ndf_constants::NDF_KAPPA[m_q] : 0.0;
+      rl1 = time_type(1.0) / (m_l[1] * time_type(1.0 - kappa_q));
+    }
+    m_gamma = m_h * rl1;
+
+    const time_type t_new = t_s + m_h;
+    deriv_func(y, m_ftemp.m_v, value_type(t_new));
+
+    for (size_t i = 0; i < n; ++i)
+      res[i] = (y[i] - m_zn[0].m_v[i]) + rl1 * m_zn[1].m_v[i]
+             - m_gamma * m_ftemp.m_v[i];
+  }
+
+  // The step's outputs, recorded after the caller has marked the tape: the
+  // accumulated correction the Nordsieck update reads, the step end and the
+  // error estimate.
+  void replay_outputs(const state_type& y, state_type& x_out, state_type& xerr)
+  {
+    const size_t n = y.size();
+    for (size_t i = 0; i < n; ++i) {
+      m_acor.m_v[i] = y[i] - m_zn[0].m_v[i];
+      x_out[i]      = y[i];
+      xerr[i]       = m_acor.m_v[i];
+    }
+    m_newton_converged = true;
+  }
+
+  // The step's own gamma, valid after replay_step. The residual's derivative in
+  // y is gamma * W, so the transposed solve is scaled by it.
+  time_type gamma() const { return m_gamma; }
 
   // ====================================================================
   //  Error norm: dsm = acnrm * tq[2]
@@ -1437,7 +1605,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   {
     auto _tp = m_prof.timer(prof_cat::nordsieck);
     m_eta = eta;
-    ndfRescale(m_zn[0].m_v.size());
+    ndfRescale();
   }
 
   void set_order_for_next_step(int new_q)
@@ -1624,6 +1792,11 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   template<class TimeArg> void set_tn_current(TimeArg tn) { m_tn_current = static_cast<time_type>(ndf_detail::scalar_value(tn)); }
   void set_tolerances(double atol, double rtol) { m_atol = atol; m_rtol = rtol; }
+
+  // How many corrector iterations a step may spend. The default is the solver's
+  // own budget; a caller that needs the equation solved rather than the
+  // iteration stopped, such as a reverse-mode reference, raises it.
+  void set_max_corrector_iters(int n) { m_max_newton_iter = n; }
   void set_qwait(int qw) { m_qwait = qw; }
 
   int n_fevals() const { return m_n_fevals; }
@@ -2153,7 +2326,7 @@ public:
     }
   }
 
-  void ndfRescale(size_t n)
+  void ndfRescale()
   {
     time_type factor = m_eta;
     for (int j = 1; j <= m_q; ++j) {
@@ -2197,7 +2370,6 @@ public:
 
   void ndfDecreaseOrder()
   {
-    const size_t n = m_zn[0].m_v.size();
     std::array<time_type, L_MAX + 1> ll;
     ll.fill(time_type(0));
     ll[2] = time_type(1);
@@ -2339,6 +2511,7 @@ public:
   time_type m_tn_current;
   bool m_initialized;
   int m_n_fevals, m_n_jevals;
+  step_snapshot m_snapshot;
 
   // Setup trigger diagnostics
   int m_n_setup_total = 0, m_n_setup_force = 0, m_n_setup_nojac = 0;

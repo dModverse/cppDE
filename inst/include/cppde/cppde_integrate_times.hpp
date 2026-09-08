@@ -15,6 +15,7 @@
 #ifndef CPPDE_INTEGRATE_TIMES_HPP
 #define CPPDE_INTEGRATE_TIMES_HPP
 
+#include <functional>
 #include <vector>
 
 #include <cppde/cppde_events.hpp>
@@ -25,6 +26,12 @@
 
 namespace cppde {
 namespace detail {
+
+// The termination predicate names State and Time, which the earlier arguments
+// already fix. Blocking deduction here lets a caller pass nullptr, or reach the
+// arguments behind it, without spelling the std::function out.
+template<class T> struct undeduced { using type = T; };
+template<class T> using undeduced_t = typename undeduced<T>::type;
 
 // ============================================================================
 // Public API
@@ -40,7 +47,7 @@ size_t integrate_times(
    const std::vector<RootEvent<State, Time>>& root,
    StepChecker& checker, double root_tol = 1e-8, size_t max_trigger_root = 1,
    DtEstimator dt_est = DtEstimator(),
-   std::function<bool(const State&, const Time&)> termination = nullptr,
+   undeduced_t<std::function<bool(const State&, const Time&)>> termination = nullptr,
    cppde::controlled_stepper_tag = cppde::controlled_stepper_tag())
 {
  // Pin BLAS to one thread for this solve, see cppde_blas_threads.hpp. The
@@ -70,7 +77,8 @@ size_t integrate_times_dense(
    const std::vector<RootEvent<State, Time>>& root,
    StepChecker& checker, double root_tol = 1e-8, size_t max_trigger_root = 1,
    DtEstimator dt_est = DtEstimator(),
-   std::function<bool(const State&, const Time&)> termination = nullptr,
+   undeduced_t<std::function<bool(const State&, const Time&)>> termination = nullptr,
+   std::function<void()> step_obs = nullptr,
    cppde::dense_output_stepper_tag = cppde::dense_output_stepper_tag())
 {
  // Pin BLAS to one thread for this solve, see cppde_blas_threads.hpp. The
@@ -80,6 +88,8 @@ size_t integrate_times_dense(
  auto times = merge_user_and_event_times<Time>(t_begin, t_end, fixed);
  EventEngine<Stepper, System, State, Time, DtEstimator> eng(stepper, system, fixed, root, std::move(dt_est));
  if (termination) eng.set_termination(std::move(termination));
+ // The reverse mode's checkpoint collector; see cppde_reverse_trajectory.hpp.
+ if (step_obs) eng.set_step_observer(std::move(step_obs));
  try {
    size_t steps = eng.process_dense(x, times, dt, obs, checker, root_tol, max_trigger_root);
    transfer_stepper_diagnostics(stepper, checker);

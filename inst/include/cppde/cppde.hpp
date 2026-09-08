@@ -104,8 +104,10 @@
 //
 //  Checkpoint per accepted step, replay under codual, one backwards pass. The
 //  step-level machinery is stepper-agnostic; each stepper family supplies its
-//  own checkpoint.
+//  own checkpoint. The trajectory layer stores those checkpoints, walks them
+//  backwards and seeds the observation times through the dense output.
 // ============================================================================
 #include <cppde/cppde_reverse_step.hpp>
+#include <cppde/cppde_reverse_trajectory.hpp>
 
 #endif // CPPDE_HPP
