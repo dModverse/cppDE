@@ -183,50 +183,50 @@ public:
     // Use TimeArg (not time_type) so AD derivative components propagate
     // through the deriv_func t arguments below.
     const TimeArg h    = dt;
-    // Stage AXPY alphas extracted to scalar: matches rosenbrock4
-    // convention. AD-time propagation in stage assembly is dropped here
-    // (the deriv_func calls below still receive a TimeArg-typed t so AD
-    // tangents propagate where they matter).
-    const double h_s = static_cast<double>(ad_lu::scalar_value(dt));
+    // Stage AXPY alphas. Scalar for a plain or forward-AD time, where dt never
+    // carries a tangent; symbolic under the reverse sweep, so dy/dh comes out
+    // of the tape and the adjoint runs through the step-size control.
+    // See ad_traits::step_coef.
+    using coef_type = ad_traits::step_coef_t<TimeArg>;
+    const coef_type hc = ad_traits::step_coef_of(dt);
 
     // --- Stage 2:  xtmp = x + h*a21 * k1 ---
     vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       h_s * a21, m_k1.m_v, m_K.slab(0));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a21, m_k1.m_v, m_K.slab(0));
     deriv_func(m_xtmp.m_v, m_k2.m_v, t + c2 * h);
     ++m_n_fevals;
 
     // --- Stage 3:  xtmp = x + h*(a31*k1 + a32*k2) ---
     vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a31, m_k1.m_v, m_K.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a32, m_k2.m_v, m_K.slab(1));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a31, m_k1.m_v, m_K.slab(0));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a32, m_k2.m_v, m_K.slab(1));
     deriv_func(m_xtmp.m_v, m_k3.m_v, t + c3 * h);
     ++m_n_fevals;
 
     // --- Stage 4 ---
     vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a41, m_k1.m_v, m_K.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a42, m_k2.m_v, m_K.slab(1));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a43, m_k3.m_v, m_K.slab(2));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a41, m_k1.m_v, m_K.slab(0));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a42, m_k2.m_v, m_K.slab(1));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a43, m_k3.m_v, m_K.slab(2));
     deriv_func(m_xtmp.m_v, m_k4.m_v, t + c4 * h);
     ++m_n_fevals;
 
     // --- Stage 5 ---
     vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a51, m_k1.m_v, m_K.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a52, m_k2.m_v, m_K.slab(1));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a53, m_k3.m_v, m_K.slab(2));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a54, m_k4.m_v, m_K.slab(3));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a51, m_k1.m_v, m_K.slab(0));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a52, m_k2.m_v, m_K.slab(1));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a53, m_k3.m_v, m_K.slab(2));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a54, m_k4.m_v, m_K.slab(3));
     deriv_func(m_xtmp.m_v, m_k5.m_v, t + c5 * h);
     ++m_n_fevals;
 
     // --- Stage 6 ---
     vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a61, m_k1.m_v, m_K.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a62, m_k2.m_v, m_K.slab(1));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a63, m_k3.m_v, m_K.slab(2));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a64, m_k4.m_v, m_K.slab(3));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a65, m_k5.m_v, m_K.slab(4));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a61, m_k1.m_v, m_K.slab(0));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a62, m_k2.m_v, m_K.slab(1));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a63, m_k3.m_v, m_K.slab(2));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a64, m_k4.m_v, m_K.slab(3));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a65, m_k5.m_v, m_K.slab(4));
     deriv_func(m_xtmp.m_v, m_k6.m_v, t + c6 * h);
     ++m_n_fevals;
 
@@ -235,25 +235,25 @@ public:
   // vec_axpy are used. Each axpy is one scalar-times-dual binop, which the
   // expression path fuses into a single tangent loop.
     vec_copy(xout, x);
-    vec_axpy(xout, h_s * b1, m_k1.m_v);
-    vec_axpy(xout, h_s * b2, m_k2.m_v);
-    vec_axpy(xout, h_s * b3, m_k3.m_v);
-    vec_axpy(xout, h_s * b4, m_k4.m_v);
-    vec_axpy(xout, h_s * b5, m_k5.m_v);
-    vec_axpy(xout, h_s * b6, m_k6.m_v);
+    vec_axpy(xout, hc * b1, m_k1.m_v);
+    vec_axpy(xout, hc * b2, m_k2.m_v);
+    vec_axpy(xout, hc * b3, m_k3.m_v);
+    vec_axpy(xout, hc * b4, m_k4.m_v);
+    vec_axpy(xout, hc * b5, m_k5.m_v);
+    vec_axpy(xout, hc * b6, m_k6.m_v);
 
     deriv_func(xout, m_k7.m_v, t + h);
     ++m_n_fevals;
 
     // --- Error estimate: xerr = h * sum(e_i * k_i)  (e_i = bhat_i - b_i) ---
     vec_zero(xerr);
-    vec_axpy(xerr, h_s * e1, m_k1.m_v);
-    vec_axpy(xerr, h_s * e2, m_k2.m_v);
-    vec_axpy(xerr, h_s * e3, m_k3.m_v);
-    vec_axpy(xerr, h_s * e4, m_k4.m_v);
-    vec_axpy(xerr, h_s * e5, m_k5.m_v);
-    vec_axpy(xerr, h_s * e6, m_k6.m_v);
-    vec_axpy(xerr, h_s * e7, m_k7.m_v);
+    vec_axpy(xerr, hc * e1, m_k1.m_v);
+    vec_axpy(xerr, hc * e2, m_k2.m_v);
+    vec_axpy(xerr, hc * e3, m_k3.m_v);
+    vec_axpy(xerr, hc * e4, m_k4.m_v);
+    vec_axpy(xerr, hc * e5, m_k5.m_v);
+    vec_axpy(xerr, hc * e6, m_k6.m_v);
+    vec_axpy(xerr, hc * e7, m_k7.m_v);
 
     // FSAL: k7 becomes k1 for the next step (if accepted)
     m_fsal_valid = false;  // will be set by prepare_dense_output / accept

@@ -1,11 +1,16 @@
 /*
  One integration step backwards: checkpoint, replay under codual, sweep.
 
- A step is the map (carry, theta) -> x_out, where carry is what the step reads
- that an earlier step produced. The forward run stores it per accepted step; the
- reverse run replays the step from it under cppde::codual, and one sweep turns a
- cotangent on x_out into cotangents on carry and theta. Tape and replay live one
- step at a time, so the memory bound is a step, not a trajectory.
+ A step is the map (x, t, h, theta) -> (x_out, xerr), where x, t and h are what
+ the step reads that an earlier step produced. The forward run stores them per
+ accepted step; the reverse run replays the step under cppde::codual, and one
+ sweep turns a cotangent on x_out into cotangents on all four. Tape and replay
+ live one step at a time, so the memory bound is a step, not a trajectory.
+
+ h is a tape independent, not a constant. The controller derives it from the
+ previous step's error estimate, so the adjoint runs through the step-size and
+ order control rather than around it; xerr is recorded for the same reason and
+ is what the trajectory sweep seeds the control law through.
 
  Replay rather than hand-written adjoint equations: the sweep must differentiate
  the stepper's own arithmetic, which no codegen emits.
@@ -38,7 +43,8 @@ namespace reverse {
 //  in the order step_recorder calls it:
 //
 //    std::size_t n() const     states in the step-start state
-//    double t, dt              the two the controller chose
+//    double t, dt              the two the controller chose; the recorder makes
+//                              them independents, they are not stepper-specific
 //
 //    capture(const Stepper&, const std::vector<Value>& x, double t, double dt)
 //        Reads the live forward stepper. Values only, whatever it integrated in.
@@ -111,12 +117,18 @@ struct step_checkpoint<cppde::tsit5<Value, Resizer>, T> {
 //                           functor reads, as tape inputs
 //    record(sys, cp)        replays the step, leaving the stepper live
 //    seed(w) / seed(i, w)   cotangent of the step end; repeated seeds add
+//    seed_err(w)            cotangent of the embedded error estimate, the way
+//                           the control law reaches back into the step
 //    sweep()                one backwards pass
-//    wx()                   cotangent of the step start
+//    wx(), wt(), wdt()      cotangents of the step start, its time and its size
 //    accumulate(v, out)     adds the cotangents of registered inputs onto out
 //
 //  Seeding sits after record() so a caller may record more on top of the step;
 //  stage 4 seeds through calc_state, whose interpolation is on the same tape.
+//
+//  tape_stepsize(false) drops t and h from the independents, which is the
+//  frozen path: it computes exactly what the forward sensitivities do, and is
+//  the verification switch, not a shipped mode.
 // ============================================================================
 
 template<class Stepper, class T = double>
@@ -140,15 +152,22 @@ public:
     for (std::size_t i = 0; i < v.size(); ++i) v[i].independent();
   }
 
+  // Whether the step's time and size go on the tape. On by default: the
+  // adjoint is meant to run through the step-size control.
+  void tape_stepsize(bool on) { m_tape_stepsize = on; }
+
   // Replays the step. The stepper is left holding the recorded stages so
   // calc_state can be seeded on top.
   template<class RSys>
   void record(RSys& sys, const checkpoint_type& cp) {
     cp.load(m_stepper, m_x, m_history);
+    m_t  = rev_type(static_cast<T>(cp.t));
+    m_dt = rev_type(static_cast<T>(cp.dt));
+    if (m_tape_stepsize) { m_t.independent(); m_dt.independent(); }
     const std::size_t n = m_x.size();
     m_xout.assign(n, rev_type());
     m_xerr.assign(n, rev_type());
-    m_stepper.do_step(sys, m_x, cp.t, m_xout, cp.dt, m_xerr);
+    m_stepper.do_step(sys, m_x, m_t, m_xout, m_dt, m_xerr);
   }
 
   // Cotangent of the step end. Repeated seeds accumulate, so several outputs
@@ -159,6 +178,13 @@ public:
   }
   void seed(std::size_t i, const T& w) { m_xout[i].seed(w); }
 
+  // Cotangent of the embedded error estimate. The controller reads xerr to pick
+  // the next step size, so this is where that dependence re-enters the step.
+  void seed_err(const std::vector<T>& w) {
+    for (std::size_t i = 0; i < m_xerr.size() && i < w.size(); ++i)
+      m_xerr[i].seed(w[i]);
+  }
+
   void sweep() {
     tape().reverse();
     m_wx.assign(m_x.size(), T());
@@ -166,11 +192,16 @@ public:
     m_whistory.assign(m_history.size(), T());
     for (std::size_t i = 0; i < m_history.size(); ++i)
       m_whistory[i] = m_history[i].adjoint();
+    m_wt  = m_t.adjoint();
+    m_wdt = m_dt.adjoint();
   }
 
-  // Valid after sweep(): the cotangent the previous step receives.
+  // Valid after sweep(): the cotangents the previous step receives. wdt is what
+  // the control law consumes, wt what the step before it adds to its own.
   const std::vector<T>& wx()        const { return m_wx; }
   const std::vector<T>& whistory()  const { return m_whistory; }
+  const T&              wt()        const { return m_wt; }
+  const T&              wdt()       const { return m_wdt; }
 
   // out += cotangents of v. Parameters are shared across steps, so their
   // cotangent is a sum over the trajectory.
@@ -181,12 +212,16 @@ public:
 
   // The replayed step end, for comparison against the forward run's.
   const std::vector<rev_type>& xout() const { return m_xout; }
+  const std::vector<rev_type>& xerr() const { return m_xerr; }
   rev_stepper&                 stepper()    { return m_stepper; }
 
 private:
   rev_stepper            m_stepper;
   std::vector<rev_type>  m_x, m_history, m_xout, m_xerr;
+  rev_type               m_t, m_dt;
   std::vector<T>         m_wx, m_whistory;
+  T                      m_wt{}, m_wdt{};
+  bool                   m_tape_stepsize = true;
 };
 
 }  // namespace reverse

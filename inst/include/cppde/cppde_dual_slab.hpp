@@ -418,6 +418,21 @@ inline void vec_axpy_with_slab(
   }
 }
 
+// Stage AXPY with a coefficient that may itself be symbolic. A double takes the
+// slab path; the reverse replay, where h is on the tape, has no slab to use and
+// goes element-wise.
+template<class T, class A>
+inline void vec_axpy_stage(
+    std::vector<T>& y, detail::tangent_slab<T>& y_slab,
+    const A& alpha,
+    const std::vector<T>& x, const detail::tangent_slab<T>& x_slab)
+{
+  if constexpr (std::is_same_v<A, double>)
+    vec_axpy_with_slab(y, y_slab, alpha, x, x_slab);
+  else
+    vec_axpy(y, alpha, x);
+}
+
 // Slab-aware vector zero. It must not assign T(0) to the elements: that runs
 // dual<T,0>::operator=(const U&), which drops tan_ and the slab binding with
 // it. Without a slab it multiplies by zero, keeping any allocated buffer.

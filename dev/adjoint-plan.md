@@ -552,7 +552,7 @@ desselben Schritts, auf Rundungsniveau. Das ist prüfbar, ohne dass die Trajekto
 über einen, zwei und vier verkettete Schritte, dazu der neu gerechnete Schrittwert bitgleich
 gegen den Vorwärtslauf.
 
-Fünf Befunde:
+Sechs Befunde:
 
 1. **`codual` fehlten die zusammengesetzten Zuweisungen.** `vec_axpy` schreibt
    `y[i] += alpha * x[i]`, und `+=` gab es nicht; ohne sie instanziiert kein Stepper. Nachgetragen
@@ -573,13 +573,28 @@ Fünf Befunde:
    der zweite Teil im Ausgabeparameter `history`. Damit steht die Naht für 3b, ohne dass sie heute
    geraten werden musste. Dazu `rebind_value` an allen drei Steppern, ein Alias je Klasse, weil nur
    der Stepper seine übrigen Template-Argumente kennt.
-4. **Der Verifikationsschalter hat nach der Gegenprobe aus Stufe 0 nichts mehr zu schalten.** Dort
-   ist entschieden, dass `h` dual dauerhaft draußen bleibt; ein "voller" Modus mit
-   Schrittweitenterm existiert also gar nicht, und `if constexpr` über Steuergrößen, die ohnehin
-   `double` sind, wäre ein toter Knopf. Der Vergleich, den er tragen sollte, ist stattdessen der
-   Test selbst: eingefrorener Reverse-Pfad gegen Vorwärtssensitivitäten, und der ist eine
-   Gleichheit auf Rundungsniveau.
-5. **Wer `do_step` direkt fährt, muss `prepare_sensitivities()` selbst rufen.** Sonst nimmt der
+4. **`h` ist im Reverse-Pfad eine Tape-Unabhängige, keine Konstante.** Das ist Festlegung 1 und
+   der Auslieferungsstand; der Verifikationsschalter schaltet die Kette *ab*, nicht *an*.
+   `ad_traits::step_coef` entscheidet den Typ der Stage-Koeffizienten: `double` für einen
+   arithmetischen oder vorwärts-AD-Zeittyp, symbolisch unter `is_reverse`. Der Vorwärtspfad ist
+   damit unverändert, und zwar nicht aus Sparsamkeit, sondern weil `dt` dort nie eine Tangente
+   bekommt: `onestep_controller::error()` gibt ein `double` zurück und das Kontrollgesetz ist
+   `dt *= factor` mit `double`-Faktor. Ein duales `h` schleppte dort eine Nulltangente durch jede
+   Stage-AXPY. Wichtig dabei: `time_type` des Controllers ist `stepper_type::value_type`
+   (`cppde_onestep_controller.hpp:87`) und **nicht** `double`, ein Umschalten auf "symbolisch für
+   jeden AD-Zeittyp" träfe also sehr wohl den Produktionspfad.
+
+   Der Schalter ist `step_recorder::tape_stepsize(false)`. Er nimmt `t` und `h` aus den
+   Unabhängigen; der Rest des Bandes ist unberührt, weil eine nicht abhängige `codual` ohnehin
+   keinen Knoten schreibt. Der Test prüft beide Stellungen gegeneinander: eingefroren sind beide
+   Zeitkotangenten exakt null und der x/theta-Block ist identisch mit dem vollen Lauf.
+
+5. **Das Orakel für den Schrittweitenterm ist das Compile-Makro, das der Plan vorgesehen hat.**
+   `CPPDE_SYMBOLIC_STEPSIZE` lässt `step_coef` auch für einen Vorwärts-AD-Zeittyp symbolisch
+   werden. Damit trägt die Vorwärtsreferenz `h` als eigene Richtung und der Vergleich ist wieder
+   eine Gleichheit auf Rundungsniveau statt einer Plausibilisierung. Nur die Test-TU definiert es.
+   Damit sind es im Test `n_x + n_theta + 2` Richtungen: Zustand, Parameter, `t0` und `h`.
+6. **Wer `do_step` direkt fährt, muss `prepare_sensitivities()` selbst rufen.** Sonst nimmt der
    FSAL-Zweig unter `dual` den Wert von `k7` nach `k1` und lässt dessen Tangenten stehen, weil
    `m_K.slot_stride()` bei ungeprimtem Stagemakel null ist. Das hat den ersten Testlauf über zwei
    Schritte um 1e-3 danebenliegen lassen; der Fehler saß im Vorwärtsorakel, nicht im Adjoint.
@@ -590,9 +605,19 @@ sie nicht in `R.home("lib")` liegt, und überspringt den Sanitizer-Schritt statt
 wenn die Runtimes fehlen. Der `-O2`-Build ist mit `-Wall -Wextra` warnungsfrei; dafür hat der
 No-op-`scoped_timer` in `cppde_profiler.hpp` einen eigenen Destruktor bekommen.
 
+Berührt für das symbolische `h`: `ad_traits::step_coef` und `step_coef_of` als der eine Ort, an
+dem die Entscheidung fällt; `vec_axpy_stage` in `cppde_dual_slab.hpp`, das bei einem
+`double`-Koeffizienten den Slab-Pfad nimmt und sonst elementweise geht, weil der Reverse-Replay
+keinen Slab hat; in `tsit5::do_step` die fünfzehn Stage-AXPYs, die Lösung und die Fehlerschätzung.
+Der Zeitpunkt `t` ist aus demselben Grund eine Unabhängige: `t_k = t_0 + sum h_j` trägt eine
+Ableitung, sobald die `h_j` eine tragen, und ein nicht-autonomer Modellrumpf liest sie.
+
 **Was 3b von hier aus noch braucht:** eine `step_checkpoint`-Spezialisierung je Stepper, die
 `history` füllt, plus die IFT-Abkürzung im Newton-Korrektor. `step_recorder` selbst ist
-stepperfrei und sollte unverändert tragen.
+stepperfrei und sollte unverändert tragen. Für `rosenbrock4` und den Multistepper müssen die
+Stage-Koeffizienten dieselbe `step_coef`-Behandlung bekommen wie `tsit5`; im Multistepper hängen
+zusätzlich die Nordsieck-Koeffizienten `m_l` und `m_tq` an der Schrittweitenhistorie und gehören
+damit ebenfalls aufs Band.
 
 ### Stufe 4. Die Trajektorie rückwärts
 
@@ -784,6 +809,30 @@ schärferes Orakel.
   gewachsen ist. Jede Stufe trägt deshalb ihren Anteil der Fläche mit, statt sie am Ende
   nachzureichen; die Kombinationsmatrix gehört von Stufe 3b an in die Tests und nicht in eine
   Schlussstufe.
+
+## Noch zu untersuchen
+
+- **Ein symbolisches `t` in den Saltationskorrekturen, und was es vorwärts kosten würde.**
+  `cppde_saltation.hpp` leitet die Ereigniszeit heute von Hand her: `compute_dt_star` löst die
+  Wurzelbedingung per IFT und trägt eine Korrektur zweiter Ordnung nach. Seit Stufe 3a kann der
+  Zeittyp selbst eine Ableitung tragen, `dual` wie `codual`, und `ad_traits::step_coef` ist der
+  eine Ort, an dem das umgestellt würde. Drei Fragen, in dieser Reihenfolge:
+
+  1. Bekommt `t*` seine Ableitung direkt aus der Differentiation der Wurzelbedingung, und wie viel
+     der handgeschriebenen Herleitung entfällt dadurch? Betrifft beide Richtungen, nicht nur den
+     Adjoint.
+  2. Falls ja: ist das auf Ereignismodellen auch schneller, oder nur kürzer? Ein duales `t*` ersetzt
+     handgeschriebene Formeln durch AD-Arithmetik, und das ist nicht automatisch der billigere Weg.
+  3. Falls es sich lohnt: sind `t` und `dt` dual im **Normalfall** verkraftbar? Heute stehen sie
+     bewusst draußen, weil `dt` vorwärts ohnehin keine Tangente bekommt, die Nulltangente also durch
+     jede Stage-AXPY liefe. Ob das messbar ist, ist offen — die Stage-AXPYs sind BLAS-gestützt und
+     der Zuschlag ist eine Spalte auf `n_theta`, es kann also gut sein, dass es im Rauschen liegt.
+     Zu messen auf einem Modell ohne Ereignisse, sonst zahlt man den Preis für einen Nutzen, den
+     nur die Ereignismodelle haben. Wenn es nichts kostet, entfällt die Fallunterscheidung in
+     `step_coef` und der Vorwärtsmodus wird einfacher statt komplizierter.
+
+  Gehört ans Ende: erst wenn Stufe 5 steht und die vorhandene Saltation gegen den Adjoint geprüft
+  ist, gibt es einen Vergleichsmaßstab für Punkt 1 und ein Modell für Punkt 2.
 
 ## Was nicht
 

@@ -108,6 +108,37 @@ inline double scalar_value(const cppde::codual<T>& v) {
 }
 
 // ============================================================================
+//  step_coef<TimeArg>: the type the steppers combine their stages in.
+//
+//  Reverse keeps the step size symbolic, so the sweep picks up dy/dh and the
+//  adjoint runs through the step-size control. Forward scalarises it: there dt
+//  carries no tangent anyway, because the error norm and the control law are
+//  both double, so a symbolic h would cost tangent arithmetic on zeros.
+//
+//  CPPDE_SYMBOLIC_STEPSIZE lifts that for forward too. It is how the reverse
+//  step-size term gets an exact oracle instead of a plausibility argument, and
+//  it belongs to a test build, never to a shipped one.
+// ============================================================================
+
+template<class TimeArg>
+struct step_coef {
+#ifdef CPPDE_SYMBOLIC_STEPSIZE
+  static constexpr bool symbolic = !std::is_arithmetic_v<TimeArg>;
+#else
+  static constexpr bool symbolic = is_reverse<TimeArg>::value;
+#endif
+  using type = std::conditional_t<symbolic, TimeArg, double>;
+};
+
+template<class TimeArg> using step_coef_t = typename step_coef<TimeArg>::type;
+
+template<class TimeArg>
+inline step_coef_t<TimeArg> step_coef_of(const TimeArg& dt) {
+  if constexpr (step_coef<TimeArg>::symbolic) return dt;
+  else return scalar_value(dt);
+}
+
+// ============================================================================
 //  Bulk extraction / injection helpers (generic over any AD type with the
 //  standard accessor surface).
 // ============================================================================
