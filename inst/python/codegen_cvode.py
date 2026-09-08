@@ -2009,12 +2009,16 @@ extern "C" SEXP solve_{modelname}(
     SEXP timesSEXP, SEXP paramsSEXP, SEXP sens1iniSEXP, SEXP sens2iniSEXP,
     SEXP fixedSEXP, SEXP abstolSEXP, SEXP reltolSEXP, SEXP maxprogressSEXP,
     SEXP maxstepsSEXP, SEXP hiniSEXP, SEXP root_tolSEXP, SEXP maxrootSEXP,
-    SEXP forcingTimesSEXP, SEXP forcingValuesSEXP, SEXP dimnamesSEXP)
+    SEXP forcingTimesSEXP, SEXP forcingValuesSEXP, SEXP seedSEXP,
+    SEXP dimnamesSEXP)
 {{
   cppde::rbatch::solve_args a = cppde::rbatch::read_solve_args(
       timesSEXP, paramsSEXP, sens1iniSEXP, sens2iniSEXP, fixedSEXP,
       abstolSEXP, reltolSEXP, maxprogressSEXP, maxstepsSEXP, hiniSEXP,
-      root_tolSEXP, maxrootSEXP, forcingTimesSEXP, forcingValuesSEXP);
+      root_tolSEXP, maxrootSEXP, forcingTimesSEXP, forcingValuesSEXP, seedSEXP);
+  // Nothing is protected yet, so the longjmp is safe here.
+  if (a.seed != nullptr)
+    Rf_error("the cvode backend has no reverse mode; compile with cppODE()");
   return cppde::rbatch::solve_one(a, NEQ, {deriv_flag}, false, &solve_impl, dimnamesSEXP);
 }}
 

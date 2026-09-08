@@ -51,6 +51,11 @@ struct solve_args {
   const double* sens1ini = nullptr;  int n_sens1 = 0;  int n_sens1_cols = 0;
   const double* sens2ini = nullptr;  int n_sens2 = 0;
   const int*    fixed    = nullptr;  int n_fixed = 0;
+  // The reverse-mode seed, [n_out, n_states, n_seed] as R lays it out. One
+  // sweep per column; n_seed_rows has to be the run's own output row count,
+  // because a root event observes twice more than it was asked to.
+  const double* seed     = nullptr;
+  int n_seed_rows = 0, n_seed_states = 0, n_seed_cols = 0;
   double abstol = 1e-6, reltol = 1e-6, hini = 0.0, root_tol = 1e-6;
   int maxprogress = 50, maxsteps = 1000000, maxroot = 1;
   std::vector<const double*> ftimes, fvalues;
@@ -61,6 +66,10 @@ struct solve_args {
 // arena and die with solve_impl's scope, so results must be flattened there.
 struct solve_result {
   std::vector<double> time, variable, sens1, sens2;
+  // The reverse sweep's answer, [n_states + n_params, n_seed]. Never routed
+  // through `acquire`: it is one small matrix, not a per-step array.
+  std::vector<double> adjoint;
+  int n_adj_rows = 0, n_adj_cols = 0;
   int n_out = 0, n_sens = 0;
   int return_code = RC_SUCCESS;
   std::string message;
@@ -208,7 +217,8 @@ inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
                                   SEXP reltolSEXP, SEXP maxprogressSEXP,
                                   SEXP maxstepsSEXP, SEXP hiniSEXP,
                                   SEXP root_tolSEXP, SEXP maxrootSEXP,
-                                  SEXP forcingTimesSEXP, SEXP forcingValuesSEXP) {
+                                  SEXP forcingTimesSEXP, SEXP forcingValuesSEXP,
+                                  SEXP seedSEXP = R_NilValue) {
   solve_args a;
   a.times   = REAL(timesSEXP);
   a.n_times = Rf_length(timesSEXP);
@@ -226,6 +236,14 @@ inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
   if (!Rf_isNull(fixedSEXP)) {
     a.fixed   = INTEGER(fixedSEXP);
     a.n_fixed = Rf_length(fixedSEXP);
+  }
+  if (!Rf_isNull(seedSEXP)) {
+    a.seed = REAL(seedSEXP);
+    SEXP d = Rf_getAttrib(seedSEXP, R_DimSymbol);
+    const int nd = Rf_isNull(d) ? 0 : Rf_length(d);
+    a.n_seed_rows   = nd >= 1 ? INTEGER(d)[0] : Rf_length(seedSEXP);
+    a.n_seed_states = nd >= 2 ? INTEGER(d)[1] : 1;
+    a.n_seed_cols   = nd >= 3 ? INTEGER(d)[2] : 1;
   }
 
   a.abstol      = REAL(abstolSEXP)[0];
@@ -262,7 +280,8 @@ inline solve_args read_cond_args(SEXP cond) {
                          cond_elt(cond, 6),  cond_elt(cond, 7),
                          cond_elt(cond, 8),  cond_elt(cond, 9),
                          cond_elt(cond, 10), cond_elt(cond, 11),
-                         cond_elt(cond, 12), cond_elt(cond, 13));
+                         cond_elt(cond, 12), cond_elt(cond, 13),
+                         cond_elt(cond, 14));
 }
 
 // ---------------------------------------------------------------------------
@@ -345,7 +364,8 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
                               bool deriv, bool deriv2) {
   const int n_out  = r.n_out;
   const int n_sens = r.n_sens;
-  const int n_el   = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + 1;
+  const bool adj   = (r.n_adj_cols > 0);
+  const int n_el   = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + (adj ? 1 : 0) + 1;
 
   SEXP ans   = PROTECT(Rf_allocVector(VECSXP, n_el));
   SEXP names = PROTECT(Rf_allocVector(STRSXP, n_el));
@@ -354,6 +374,7 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
   SET_STRING_ELT(names, slot++, Rf_mkChar("variable"));
   if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("sens1"));
   if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("sens2"));
+  if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("trace"));
   Rf_setAttrib(ans, R_NamesSymbol, names);
@@ -386,6 +407,13 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
     std::memcpy(REAL(a), r.sens2.data(), sizeof(double) * r.sens2.size());
     SET_VECTOR_ELT(ans, slot++, a);
     UNPROTECT(2);
+  }
+
+  if (adj) {
+    SEXP am = PROTECT(Rf_allocMatrix(REALSXP, r.n_adj_rows, r.n_adj_cols));
+    std::memcpy(REAL(am), r.adjoint.data(), sizeof(double) * r.adjoint.size());
+    SET_VECTOR_ELT(ans, slot++, am);
+    UNPROTECT(1);
   }
 
   SEXP diag = PROTECT(build_diagnostics(r));
@@ -528,7 +556,8 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
     }
   }
 
-  const int n_el = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + 1;
+  const bool adj = (r.n_adj_cols > 0);
+  const int n_el = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + (adj ? 1 : 0) + 1;
   SEXP ans   = PROTECT(Rf_allocVector(VECSXP, n_el));
   SEXP names = PROTECT(Rf_allocVector(STRSXP, n_el));
   int slot = 0;
@@ -536,6 +565,7 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
   SET_STRING_ELT(names, slot++, Rf_mkChar("variable"));
   if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("sens1"));
   if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("sens2"));
+  if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("trace"));
   Rf_setAttrib(ans, R_NamesSymbol, names);
@@ -546,12 +576,19 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
   if (deriv)  SET_VECTOR_ELT(ans, slot++, ctx.sens1);
   if (deriv2) SET_VECTOR_ELT(ans, slot++, ctx.sens2);
 
+  int extra = 0;
+  if (adj) {
+    SEXP am = PROTECT(Rf_allocMatrix(REALSXP, r.n_adj_rows, r.n_adj_cols)); ++extra;
+    std::memcpy(REAL(am), r.adjoint.data(), sizeof(double) * r.adjoint.size());
+    SET_VECTOR_ELT(ans, slot++, am);
+  }
+
   SEXP diag = PROTECT(build_diagnostics(r));
   SET_VECTOR_ELT(ans, slot++, diag);
   SEXP tr = PROTECT(build_trace(r.trace));
   SET_VECTOR_ELT(ans, slot++, tr);
 
-  UNPROTECT(4 + ctx.nprot);   // tr, diag, names, ans, then everything ctx took
+  UNPROTECT(4 + extra + ctx.nprot);
   return ans;
 }
 

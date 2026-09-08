@@ -20,7 +20,8 @@ solveODE(
   roottol = 1e-06,
   maxroot = 1L,
   onFailure = c("stop", "warn", "silent"),
-  traceFile = NULL
+  traceFile = NULL,
+  seed = NULL
 )
 }
 \arguments{
@@ -103,11 +104,23 @@ supplied, the per-step trace \code{data.frame} is written to that path.
 The trace is also attached to the returned list as \verb{$trace}. Ignored
 for models compiled without trace support (\verb{$trace} is \code{NULL} in
 that case).}
+
+\item{seed}{Reverse-mode seed, for a model compiled with
+\code{cppODE(..., sweep = "reverse")} and required by one. A
+\verb{[n_out, n_states]} matrix or an \verb{[n_out, n_states, n_seed]} array, whose
+first dimension is the solve's own output row count: a root event observes
+at times it was not asked for, so that count is not \code{length(times)} in
+general. What comes back is \verb{w' * dx/dtheta} summed over times and states,
+one column per seed column. Supplying it to a forward model is an error, as
+is leaving it out on a reverse one.}
 }
 \value{
 A named list with components \code{time}, \code{variable}, \code{diagnostics}, and,
 when \code{attr(model, "deriv")} is \code{TRUE}, \code{sens1}, plus \code{sens2} when
-\code{attr(model, "deriv2")} is \code{TRUE}. Output arrays are time-first:
+\code{attr(model, "deriv2")} is \code{TRUE}. A model compiled with
+\code{sweep = "reverse"} carries neither, and returns \code{adjoint} instead:
+\verb{[n_states + n_params, n_seed]}, indexed exactly as a forward \code{sens1ini}
+seeds. Output arrays are time-first:
 \code{variable} is \verb{[n_t, n_x]}, \code{sens1} is \verb{[n_t, n_x, n_s]}, and
 \code{sens2} is \verb{[n_t, n_x, n_s, n_s]}. The dimension names of \code{sens1}
 and \code{sens2} reflect the active (non-fixed) sensitivity parameters.

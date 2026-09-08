@@ -19,7 +19,8 @@ prepareBatch(
   maxsteps = 1000000L,
   hini = 0,
   roottol = 1e-06,
-  maxroot = 1L
+  maxroot = 1L,
+  seed = NULL
 )
 }
 \arguments{
@@ -93,6 +94,15 @@ estimation.}
 Default \code{1e-6}.}
 
 \item{maxroot}{Maximum number of triggers per root event. Default \code{1}.}
+
+\item{seed}{Reverse-mode seed, for a model compiled with
+\code{cppODE(..., sweep = "reverse")} and required by one. A
+\verb{[n_out, n_states]} matrix or an \verb{[n_out, n_states, n_seed]} array, whose
+first dimension is the solve's own output row count: a root event observes
+at times it was not asked for, so that count is not \code{length(times)} in
+general. What comes back is \verb{w' * dx/dtheta} summed over times and states,
+one column per seed column. Supplying it to a forward model is an error, as
+is leaving it out on a reverse one.}
 }
 \value{
 An object of class \code{"cppDEbatch"} for \code{\link[=solveBatch]{solveBatch()}}.

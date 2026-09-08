@@ -193,7 +193,6 @@ static void forward_value(store_of<S>& store, std::vector<double>& x_obs)
   x_obs.clear();
   auto obs = [&](const std::vector<double>& xs, const double& t) {
     store.observe(t);
-    coll.mark_observation();
     x_obs.insert(x_obs.end(), xs.begin(), xs.end());
   };
 

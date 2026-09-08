@@ -169,13 +169,31 @@ public:
     m_controls.push_back(cs);
   }
 
+  // The post-jump state is observed at the time the jump sits at, before or
+  // after the event note depending on which site fired it, so the marking runs
+  // in both directions: push_event scans backwards over what already stands at
+  // that time, observe() forwards while the window is open. A root event also
+  // observes just before the jump, at t minus a whisker, which is why the
+  // backward scan stops on the first time that differs.
   void observe(double t) {
-    m_obs.push_back(observation{t, m_steps.size(), event_record<T>::npos});
+    std::size_t ev = event_record<T>::npos;
+    if (m_open_event != event_record<T>::npos) {
+      if (t == m_open_t) ev = m_open_event;
+      else               m_open_event = event_record<T>::npos;
+    }
+    m_obs.push_back(observation{t, m_steps.size(), ev});
   }
 
-  void push_event(const event_record<T>& e) { m_events.push_back(e); }
-  event_record<T>& last_event() { return m_events.back(); }
-  observation&     obs_mut(std::size_t i) { return m_obs[i]; }
+  void push_event(const event_record<T>& e) {
+    m_events.push_back(e);
+    const std::size_t idx = m_events.size() - 1;
+    for (std::size_t i = m_obs.size(); i-- > 0;) {
+      if (m_obs[i].t != e.t) break;
+      m_obs[i].event = idx;
+    }
+    m_open_event = idx;
+    m_open_t     = e.t;
+  }
 
   std::size_t n_events() const { return m_events.size(); }
   const event_record<T>& event(std::size_t i) const { return m_events[i]; }
@@ -209,6 +227,8 @@ private:
   std::vector<control_state>   m_controls;
   std::vector<observation>     m_obs;
   std::vector<event_record<T>> m_events;
+  std::size_t                  m_open_event = event_record<T>::npos;
+  double                       m_open_t     = 0.0;
   control_params               m_params;
 };
 
@@ -309,12 +329,8 @@ private:
   }
 
 public:
-  // One intervention. The post-jump state is observed at the same time the jump
-  // sits at, before or after this note depending on which site fired it, so the
-  // marking runs in both directions: backwards over the observations already
-  // standing at that time, forwards through m_open_event. A root event also
-  // observes the state just before the jump, at t minus a whisker, which is why
-  // the backward scan stops on the first time that differs.
+  // One intervention, turned into a record. The store does the marking of the
+  // observation the jump produced, so an observer only ever needs the store.
   template<class Note>
   void on_event(const Note& e) {
     event_record<T> r;
@@ -329,24 +345,6 @@ public:
     if (e.triggered) r.triggered = *e.triggered;
     if (e.switched)  r.switched  = *e.switched;
     m_store.push_event(r);
-
-    const std::size_t idx = m_store.n_events() - 1;
-    for (std::size_t i = m_store.n_obs(); i-- > 0;) {
-      if (m_store.obs(i).t != e.t) break;
-      m_store.obs_mut(i).event = idx;
-    }
-    m_open_event = idx;
-    m_open_t     = e.t;
-  }
-
-  // Called by the caller's observer wrapper for every observation, so a
-  // post-jump observation recorded after its note is marked too. The first one
-  // at another time closes the window.
-  void mark_observation() {
-    if (m_open_event == event_record<T>::npos) return;
-    const std::size_t i = m_store.n_obs() - 1;
-    if (m_store.obs(i).t == m_open_t) m_store.obs_mut(i).event = m_open_event;
-    else                              m_open_event = event_record<T>::npos;
   }
 
   template<class State>
@@ -372,8 +370,6 @@ private:
   control_state                 m_next;
   history_log                   m_hlog;
   int                           m_rejected_seen = 0;
-  std::size_t                   m_open_event = event_record<T>::npos;
-  double                        m_open_t     = 0.0;
 };
 
 // ============================================================================
@@ -438,6 +434,15 @@ public:
   {
     no_events none;
     sweep(store, params, make_sys, none, seeds, solver);
+  }
+
+  // An explicit method with events: no equation to solve, jumps to replay.
+  template<class MakeSys, class MakeEvents>
+  void sweep(const store_type& store, const std::vector<T>& params,
+             MakeSys make_sys, MakeEvents make_events, const std::vector<T>& seeds)
+  {
+    no_solver none;
+    sweep(store, params, make_sys, make_events, seeds, none);
   }
 
   template<class MakeSys, class MakeEvents, class Solver>

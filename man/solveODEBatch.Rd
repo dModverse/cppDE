@@ -22,7 +22,8 @@ solveODEBatch(
   maxroot = 1L,
   cores = NULL,
   traceFile = NULL,
-  onFailure = c("stop", "warn", "silent")
+  onFailure = c("stop", "warn", "silent"),
+  seed = NULL
 )
 }
 \arguments{
@@ -112,6 +113,15 @@ thread.}
 completes, naming the ones that failed. Unlike \code{\link[=solveODE]{solveODE()}}, \code{"stop"}
 does not discard the results that did succeed until every condition has
 been run.}
+
+\item{seed}{Reverse-mode seed, for a model compiled with
+\code{cppODE(..., sweep = "reverse")} and required by one. A
+\verb{[n_out, n_states]} matrix or an \verb{[n_out, n_states, n_seed]} array, whose
+first dimension is the solve's own output row count: a root event observes
+at times it was not asked for, so that count is not \code{length(times)} in
+general. What comes back is \verb{w' * dx/dtheta} summed over times and states,
+one column per seed column. Supplying it to a forward model is an error, as
+is leaving it out on a reverse one.}
 }
 \value{
 A list of \code{\link[=solveODE]{solveODE()}} results, one per condition, carrying the

@@ -392,10 +392,12 @@ Jede Stufe endet auf einem Test, der ohne die folgende Stufe läuft.
 | `bdf` | steht | steht | `--reverse-step-multistep`, `--reverse-trajectory-methods` |
 | `adams` | steht | steht | dieselben |
 
-Offen sind danach Stufe 5 (Ereignisse und Wurzeln), Stufe 6 (die Naht nach R), Stufe 7 (die Kette
-in dMod2) und Stufe 8 (CVODES ASA als Vergleich). Der Sparse-Pfad ist an keiner Stelle gefahren.
-Die Steuerungskette über Schrittgrenzen trägt bisher nur der Einschritt-Controller; für den
-Multistepper ist sie offen und in "Noch zu untersuchen" beschrieben.
+Dazu Stufe 5 (Ereignisse und Wurzeln, `--reverse-events`) und Stufe 6 (die Naht nach R,
+`tests/testthat/test-reverse.R`).
+
+Offen sind Stufe 7 (die Kette in dMod2) und Stufe 8 (CVODES ASA als Vergleich). Der Sparse-Pfad ist
+an keiner Stelle gefahren. Die Steuerungskette über Schrittgrenzen trägt bisher nur der
+Einschritt-Controller; für den Multistepper ist sie offen und in "Noch zu untersuchen" beschrieben.
 
 ### Stufe 0. Branch und die Größe des Schrittweitenterms messen
 
@@ -961,6 +963,44 @@ den Schritt danach. Das waren 1e-7 und hat wie ein Adjoint-Fehler ausgesehen.
 
 ### Stufe 6. Die Naht
 
+**Stand 2026-09-08: steht.** `cppODE(..., sweep = "reverse")`, `solveODE(..., seed = W)`,
+zurück kommt `$adjoint` mit `[n_states + n_params, n_seed]`. Test
+`tests/testthat/test-reverse.R`, einundzwanzig Prüfungen: alle vier Verfahren, Ereignisse,
+Wurzeln, Forcings, der Batch-Einstieg und die Fehlermeldungen.
+
+**Der Reverse-Modus ist ein viertes Objekt, und der Modellrumpf steht darin zweimal.** Einmal in
+`double`, was der Vorwärtslauf integriert, und einmal in `namespace rev_` auf `cppde::codual`, was
+der Rückwärtslauf abspielt. Zwei Generierungen statt eines Templates, weil der emittierte Code den
+Skalartyp nach Dingen fragt, die ein `double` nicht beantwortet — `.val()` in der
+`G_tt`-Korrektur ist die Stelle, an der es auffällt. Die Ereignisse liegen dafür in einer
+`build_events`-Funktion je Typ statt inline in `solve_impl`.
+
+**Der Sammler hängt im Produktionstreiber**, nicht in einem zweiten. Der Beobachter des Modells
+meldet jede Beobachtung an den Store, `integrate_times_dense` bekommt die beiden Haken hinten
+angehängt, und danach läuft der Sweep, einmal je Seed-Spalte.
+
+**Die Naht ist nicht scharf, und kann es nicht sein.** Die beiden Läufe adaptieren unabhängig: der
+Vorwärtslauf unter Sensitivitäten, wo die Fehlernorm das Maximum über die Tangentenspalten nimmt,
+der Rückwärtslauf in reinem `double`. Sie integrieren also zwei Diskretisierungen, und der Abstand
+ist der von Stufe 0, `O(tol)`:
+
+| tol | Wert | Gradient |
+|---|---|---|
+| 1e-6 | 9.2e-6 | 4.7e-5 |
+| 1e-8 | 5.5e-8 | 2.5e-7 |
+| 1e-10 | 2.8e-9 | 5.1e-8 |
+| 1e-12 | 5.4e-11 | 7.2e-11 |
+
+Der Gradientenabstand fällt mit dem Wertabstand, also ist es die Diskretisierung und nicht der
+Adjoint. Der Test prüft deshalb die Skalierung; scharf geprüft wird auf einer gemeinsamen
+Schrittfolge, und das ist `dev/cxx/test_reverse_*.cpp`. **Für dMod2 ist das kein Verlust, sondern
+ein Gewinn:** der Reverse-Gradient gehört zu genau der Trajektorie, die eine reine Wertvorhersage
+liefert, Wert und Gradient sind also konsistent, was sie unter Vorwärtssensitivitäten nicht sind.
+
+**Was dabei nicht gebraucht wurde:** ein Fehler für `useDenseOutput = FALSE` mit Wurzeln. Der
+Reverse-Modus schaltet die Option ohnehin auf `TRUE` und sagt es, weil der Sammler im Dense-Loop
+hängt. `cvode()` erhebt einen Fehler, sobald ein `seed` ankommt.
+
 Zwei Teile, und der erste ist kleiner als gedacht.
 
 **Das Modellobjekt.** `cppODE(..., sweep = "reverse")` übersetzt ein viertes Objekt und stempelt
@@ -970,7 +1010,11 @@ Zwei Teile, und der erste ist kleiner als gedacht.
 `sens1ini` an einem `deriv = FALSE`-Modell verweigert (`:34-37`). Keine Modusfahne wandert durch die
 Kette.
 
-**Das Argument.** `seed` als 15. positionelles Argument vor `dimnames`. Betroffen sind
+**Das Argument.** `seed` als 15. positionelles Argument vor `dimnames`. **Erledigt**, mit einem Zusatz, den der Plan
+nicht vorhergesehen hat: `read_solve_args` hat den Parameter mit Vorgabe `R_NilValue`, also
+übersetzt eine alte generierte Quelle weiter, und `solve_result` trägt den Adjoint an `acquire`
+vorbei, weil er eine kleine Matrix ist und kein Feld je Schritt. Der Prealloc-Pfad des Batch ist
+für Reverse-Modelle abgeschaltet, weil er für den Adjoint keinen Platz hat. Betroffen sind
 `cppDE/R/solveODE.R:348-352` und die Validierung ab `:3`, die Aufrufstellen `:583-590`,
 `:661-670`, `:697-728`, `:831-837`, `:872-874`, dazu `read_solve_args`
 (`cppde_r_batch.hpp:205`), `read_cond_args` (`:256`, braucht `cond_elt(cond, 14)`) und beide

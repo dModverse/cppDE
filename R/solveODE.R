@@ -1,11 +1,12 @@
-# Marshal one condition into the 14 positional .Call arguments.  Shared by
+# Marshal one condition into the 15 positional .Call arguments.  Shared by
 # solveODE() and solveODEBatch() so both see identical validation.
 .odeCallArgs <- function(model, times, parms,
                          sens1ini = NULL, sens2ini = NULL,
                          fixed = NULL, forcings = NULL,
                          abstol = 1e-6, reltol = 1e-6,
                          maxattemps = 50L, maxsteps = 1e6L,
-                         hini = 0, roottol = 1e-6, maxroot = 1L) {
+                         hini = 0, roottol = 1e-6, maxroot = 1L,
+                         seed = NULL) {
 
   ## --- Unpack model attributes ---
   stopifnot(is.character(model), length(model) == 1L)
@@ -35,6 +36,25 @@
     stop("'sens1ini' supplied but model has deriv = FALSE")
   if (!is.null(sens2ini) && !deriv2)
     stop("'sens2ini' supplied but model has deriv2 = FALSE")
+
+  ## --- Reverse mode: which direction the model was built for ---
+  ## The mode is stamped on the model, not passed per call, exactly as `deriv`
+  ## is: it decides which code was emitted and cannot be chosen afterwards.
+  is_reverse <- identical(attr(model, "sweep"), "reverse")
+  if (!is.null(seed) && !is_reverse)
+    stop("'seed' supplied but the model was not compiled with sweep = \"reverse\"")
+  if (is.null(seed) && is_reverse)
+    stop("a model compiled with sweep = \"reverse\" needs a 'seed'")
+  if (!is.null(seed)) {
+    if (!is.numeric(seed)) stop("'seed' must be numeric")
+    d <- dim(seed)
+    if (is.null(d) || length(d) < 2L || length(d) > 3L)
+      stop("'seed' must be a [n_out, n_states] matrix or an ",
+           "[n_out, n_states, n_seed] array")
+    if (d[2] != n_states)
+      stop("'seed' has ", d[2], " state columns, the model has ", n_states)
+    storage.mode(seed) <- "double"
+  }
 
   is_2d_sens1 <- !is.null(sens1ini) &&
     (is.matrix(sens1ini) ||
@@ -348,8 +368,11 @@
   list(call_args = list(times, parms_ordered, sens1ini, sens2ini, fixed_indices,
                         as.double(abstol), as.double(reltol), maxattemps, maxsteps,
                         as.double(hini), as.double(roottol), maxroot,
-                        forcing_times_list, forcing_values_list),
-       times = times, variables = variables, sens_col_names = sens_col_names)
+                        forcing_times_list, forcing_values_list, seed),
+       times = times, variables = variables, sens_col_names = sens_col_names,
+       theta_names = c(variables, parameters),
+       seed_names = if (!is.null(seed) && length(dim(seed)) == 3L)
+                      dimnames(seed)[[3]] else NULL)
 }
 
 
@@ -368,6 +391,10 @@
   if (!is.null(result$sens2) && is.null(dimnames(result$sens2)))
     dimnames(result$sens2) <- list(time = NULL, variable = variables,
                                    sens1 = out_sens, sens2 = out_sens)
+  ## The reverse answer is one row per model parameter, states first, so it
+  ## indexes the same way a forward sens1ini seeds.
+  if (!is.null(result$adjoint) && is.null(dimnames(result$adjoint)))
+    dimnames(result$adjoint) <- list(prep$theta_names, prep$seed_names)
 
   diag <- result$diagnostics
   if (!is.null(diag)) {
@@ -564,10 +591,22 @@
 #'   for models compiled without trace support (`$trace` is `NULL` in
 #'   that case).
 #'
+#' @param seed Reverse-mode seed, for a model compiled with
+#'   `cppODE(..., sweep = "reverse")` and required by one. A
+#'   `[n_out, n_states]` matrix or an `[n_out, n_states, n_seed]` array, whose
+#'   first dimension is the solve's own output row count: a root event observes
+#'   at times it was not asked for, so that count is not `length(times)` in
+#'   general. What comes back is `w' * dx/dtheta` summed over times and states,
+#'   one column per seed column. Supplying it to a forward model is an error, as
+#'   is leaving it out on a reverse one.
+#'
 #' @return
 #' A named list with components `time`, `variable`, `diagnostics`, and,
 #' when `attr(model, "deriv")` is `TRUE`, `sens1`, plus `sens2` when
-#' `attr(model, "deriv2")` is `TRUE`. Output arrays are time-first:
+#' `attr(model, "deriv2")` is `TRUE`. A model compiled with
+#' `sweep = "reverse"` carries neither, and returns `adjoint` instead:
+#' `[n_states + n_params, n_seed]`, indexed exactly as a forward `sens1ini`
+#' seeds. Output arrays are time-first:
 #' `variable` is `[n_t, n_x]`, `sens1` is `[n_t, n_x, n_s]`, and
 #' `sens2` is `[n_t, n_x, n_s, n_s]`. The dimension names of `sens1`
 #' and `sens2` reflect the active (non-fixed) sensitivity parameters.
@@ -587,12 +626,13 @@ solveODE <- function(model, times, parms,
                      maxattemps = 50L, maxsteps = 1e6L,
                      hini = 0, roottol = 1e-6, maxroot = 1L,
                      onFailure = c("stop", "warn", "silent"),
-                     traceFile = NULL) {
+                     traceFile = NULL, seed = NULL) {
 
   onFailure <- match.arg(onFailure)
 
   prep <- .odeCallArgs(model, times, parms, sens1ini, sens2ini, fixed, forcings,
-                       abstol, reltol, maxattemps, maxsteps, hini, roottol, maxroot)
+                       abstol, reltol, maxattemps, maxsteps, hini, roottol, maxroot,
+                       seed)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model)))
   if (is.null(SYM)) stop("Model not loaded. Run compile() first.", call. = FALSE)
@@ -667,12 +707,13 @@ solveODEBatch <- function(model, conditions,
                           hini = 0, roottol = 1e-6, maxroot = 1L,
                           cores = NULL,
                           traceFile = NULL,
-                          onFailure = c("stop", "warn", "silent")) {
+                          onFailure = c("stop", "warn", "silent"),
+                          seed = NULL) {
 
   onFailure <- match.arg(onFailure)
   preps <- .batchPreps(model, conditions, times, parms, sens1ini, sens2ini,
                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                       hini, roottol, maxroot)
+                       hini, roottol, maxroot, seed)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   .batchRun(model, preps, SYM, .batchDimnames(preps, SYM), names(conditions),
@@ -696,7 +737,7 @@ solveODEBatch <- function(model, conditions,
 # and prepareBatch().
 .batchPreps <- function(model, conditions, times, parms, sens1ini, sens2ini,
                         fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                        hini, roottol, maxroot) {
+                        hini, roottol, maxroot, seed = NULL) {
 
   if (!is.list(conditions) || !length(conditions))
     stop("'conditions' must be a non-empty list", call. = FALSE)
@@ -705,7 +746,7 @@ solveODEBatch <- function(model, conditions,
 
   known <- c("times", "parms", "sens1ini", "sens2ini", "fixed", "forcings",
              "abstol", "reltol", "maxattemps", "maxsteps", "hini", "roottol",
-             "maxroot")
+             "maxroot", "seed")
   bad <- setdiff(unlist(lapply(conditions, names)), known)
   if (length(bad))
     stop("unknown per-condition argument(s): ", paste(unique(bad), collapse = ", "),
@@ -716,7 +757,7 @@ solveODEBatch <- function(model, conditions,
                  sens2ini = sens2ini, fixed = fixed, forcings = forcings,
                  abstol = abstol, reltol = reltol, maxattemps = maxattemps,
                  maxsteps = maxsteps, hini = hini, roottol = roottol,
-                 maxroot = maxroot)
+                 maxroot = maxroot, seed = seed)
 
   lapply(seq_along(conditions), function(i) {
     a <- utils::modifyList(shared, conditions[[i]])
@@ -725,7 +766,7 @@ solveODEBatch <- function(model, conditions,
            "batch-wide", call. = FALSE)
     .odeCallArgs(model, a$times, a$parms, a$sens1ini, a$sens2ini, a$fixed,
                  a$forcings, a$abstol, a$reltol, a$maxattemps, a$maxsteps,
-                 a$hini, a$roottol, a$maxroot)
+                 a$hini, a$roottol, a$maxroot, a$seed)
   })
 }
 
@@ -834,11 +875,12 @@ prepareBatch <- function(model, conditions,
                          fixed = NULL, forcings = NULL,
                          abstol = 1e-6, reltol = 1e-6,
                          maxattemps = 50L, maxsteps = 1e6L,
-                         hini = 0, roottol = 1e-6, maxroot = 1L) {
+                         hini = 0, roottol = 1e-6, maxroot = 1L,
+                         seed = NULL) {
 
   preps <- .batchPreps(model, conditions, times, parms, sens1ini, sens2ini,
                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                       hini, roottol, maxroot)
+                       hini, roottol, maxroot, seed)
 
   sym <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   structure(list(
