@@ -390,10 +390,12 @@ Jede Stufe endet auf einem Test, der ohne die folgende Stufe läuft.
 | `tsit5` | steht | steht, mit Steuerungskette | `--reverse-step`, `--reverse-trajectory` |
 | `rb4` | steht | steht | `--reverse-step-rb4`, `--reverse-trajectory-methods` |
 | `bdf` | steht | steht | `--reverse-step-multistep`, `--reverse-trajectory-methods` |
-| `adams` | steht | offen, siehe `dev/adams-tail.md` | dieselben |
+| `adams` | steht | steht | dieselben |
 
 Offen sind danach Stufe 5 (Ereignisse und Wurzeln), Stufe 6 (die Naht nach R), Stufe 7 (die Kette
 in dMod2) und Stufe 8 (CVODES ASA als Vergleich). Der Sparse-Pfad ist an keiner Stelle gefahren.
+Die Steuerungskette über Schrittgrenzen trägt bisher nur der Einschritt-Controller; für den
+Multistepper ist sie offen und in "Noch zu untersuchen" beschrieben.
 
 ### Stufe 0. Branch und die Größe des Schrittweitenterms messen
 
@@ -466,6 +468,12 @@ Typ. `is_ad` bleibt für `codual` falsch, siehe die Befunde oben.
 nicht erreichbar, weil kein Emitter ihn ausgibt. Das Orakel ist trotzdem dasselbe, `dual` gegen
 `codual` auf derselben Formel, und der C++-Weg ist schärfer, weil er auf 1e-14 vergleicht statt auf
 die 1e-10 der R-Suite.
+
+**Nachgetragen 2026-09-08: die Verschiebung um eine Konstante schreibt keinen Knoten.** `x + c` hat
+die Ableitung eins, also ist der Knoten, der sie tragen würde, die Identität; das Ergebnis benennt
+stattdessen den Slot seines Operanden. Auf dem Testmodell von Stufe 4 ändert das nichts, weil dessen
+rechte Seite keine konstanten Verschiebungen hat, auf einem Modell mit Offsets oder Hill-Termen
+dagegen jede zweite Operation. `s - x` dreht die Ableitung um und schreibt weiter.
 
 Abgedeckt: die vier Operatoren mit ihren gemischten Skalar-Überladungen, fünfzehn unäre Funktionen,
 `abs` beidseitig der Null, `pow` in allen drei Formen, `min`, `max`, `clamp`, dazu geteilte
@@ -852,8 +860,7 @@ Vier Befunde:
 Der Preis: ein Schritt mit zwei verworfenen Versuchen tapet drei Runge-Kutta-Schritte statt einem,
 im Test 1144 Knoten statt 511. Das Band bleibt trotzdem ein Schritt breit.
 
-**Stand Stufe 4 für die übrigen Verfahren, 2026-09-08: `bdf`, `rb4` und `tsit5` stehen, `adams`
-nicht.** Der Trajektorien-Treiber verzweigt auf die Form, die ein Verfahren hat, und der Test ist
+**Stand Stufe 4 für die übrigen Verfahren, 2026-09-08: alle vier stehen.** Der Trajektorien-Treiber verzweigt auf die Form, die ein Verfahren hat, und der Test ist
 `dev/cxx/test_reverse_trajectory_methods.cpp` über `--reverse-trajectory-methods`. Was dabei
 gefunden wurde, in der Reihenfolge, in der es auffiel:
 
@@ -880,10 +887,28 @@ gefunden wurde, in der Reihenfolge, in der es auffiel:
    `set_max_corrector_iters` gibt ihr den Spielraum; damit fällt `adams` von 70 Prozent auf 1e-3 und
    `bdf` auf 1e-6.
 
-**Offen und genau lokalisiert: der Nachlauf von `adams` ab dem ersten Ordnungswechsel.** Die
-Eingrenzung steht in `dev/adams-tail.md`, mit dem, was ausgeschlossen ist und wo weiterzusuchen
-wäre. Bis das geklärt ist, steht die Trajektorien-Prüfung für `adams` auf 1e-2 und trägt nichts;
-der Schritt-Test für `adams` trägt bei 1e-9.
+6. **Der verworfene Versuch war der Fehler, und er saß nicht in `adams`.** Ein Versuch, den der
+   Controller wegwirft, skaliert die Nordsieck-Historie, bevor der angenommene läuft, und bei
+   wiederholtem Fehlschlag senkt er zusätzlich die Ordnung oder setzt `zn[1]` aus der rechten
+   Seite neu. Der Rückwärtslauf hat den Schritt danach aus dessen eigenem Checkpoint geladen und
+   damit richtig gerechnet, aber die Kette zwischen zwei Schritten hat die Skalierung nicht
+   getragen: das Ende von Schritt k war nicht mehr der Anfang von Schritt k+1. Auf `adams` ist das
+   als Faktor 3.117 auf Nordsieck-Slot 1 aufgefallen, auf `bdf` hat es sich hinter der Toleranz
+   versteckt, und `dev/adams-tail.md` hat an der falschen Stelle gesucht, weil der erste sichtbare
+   Ausreißer der Schritt vor dem verworfenen Versuch war und nicht der mit ihm.
+
+   Der Träger ist jetzt ein Protokoll statt einer Rekonstruktion. `multistepper` schreibt jede
+   Operation, die der Controller außerhalb von `do_step` auf der Historie ausführt, in ein
+   optionales `history_log`: Rescale, Ordnungswechsel, die gesicherte Korrektur und den
+   Ordnung-1-Neustart, dazu `complete_step` als Schnittmarke. Der Sammler übergibt jedem
+   Checkpoint das Stück zwischen zwei Annahmen, und `step_checkpoint::apply_tail` fährt es
+   nach. Das ersetzt die alte Rekonstruktion aus `q_next` und `eta`, die den verworfenen Versuch
+   nicht kennen konnte, und es ist zugleich die Semantik des Plans: eine Kontrollentscheidung wird
+   wiederholt, nicht neu getroffen.
+
+   Damit steht die Trajektorien-Prüfung für beide Multistep-Verfahren auf 1e-6 statt auf 1e-2 und
+   1e-6, und der verbleibende Abstand ist der aus Befund 5, also der Korrektor der Referenz und
+   nicht der Adjoint. `dev/adams-tail.md` ist gegenstandslos und entfällt.
 
 ### Stufe 5. Events und Wurzeln
 

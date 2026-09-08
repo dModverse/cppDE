@@ -162,6 +162,35 @@ int main() {
     std::printf("%-14s %.17g\n", "seed x3", a.adjoint());
   }
 
+  // A shift by a constant is the identity in the derivative, so it records
+  // nothing and the result names its operand's node. What matters is that the
+  // gradient is unchanged; the node count is the saving.
+  {
+    cppde::codual_tape<double>& tp = cppde::codual_tape_for<double>();
+    tp.rewind();
+    codual<double> a(2.0); a.independent();
+    const std::size_t before = tp.size();
+    codual<double> y = ((a + 3.0) - 1.0) + 0.5;    // value 4.5, derivative 1
+    check(tp.size() == before, "a shift by a constant records no node");
+    check(std::fabs(y.x() - 4.5) <= 1e-15, "the shift still moves the value");
+    tp.prepare();
+    y.seed(1.0);
+    tp.reverse();
+    check(std::fabs(a.adjoint() - 1.0) <= 1e-15, "the shift leaves the derivative at one");
+
+    // The turned shift is not one: s - a has derivative -1 and records.
+    tp.rewind();
+    codual<double> b(2.0); b.independent();
+    const std::size_t one_input = tp.size();
+    codual<double> z = 5.0 - b;
+    check(tp.size() == one_input + 1, "the turned shift records one node");
+    tp.prepare();
+    z.seed(1.0);
+    tp.reverse();
+    check(std::fabs(b.adjoint() + 1.0) <= 1e-15, "and turns the derivative");
+    std::printf("%-14s %.17g\n", "shift", y.x());
+  }
+
   // scope restores the node count, so a nested recording leaves no residue.
   {
     cppde::codual_tape<double>& tp = cppde::codual_tape_for<double>();

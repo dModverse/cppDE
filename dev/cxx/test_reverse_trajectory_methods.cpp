@@ -252,11 +252,10 @@ static void forward_sens(const store_of<S>& store, std::size_t n_carry,
     st.do_step(sys, x, D(cp.t), xout, D(cp.dt), xerr);
     if constexpr (multistep) {
       check(st.newton_converged(), "the reference corrector converged");
-      st.complete_step();
-      st.set_tn_current(cp.t + cp.dt);
-      st.prepare_dense_output();
-      if (cp.q_next > st.current_order()) st.save_acor_to_zn_qmax();
-      if (cp.q_next != st.current_order()) st.set_order_for_next_step(cp.q_next);
+      // The same tail the reverse replay runs, from the same record: the
+      // Nordsieck update, the order the controller chose, and every rescale it
+      // applied before the next step, thrown-away attempts included.
+      cp.apply_tail(st, sys);
       for (std::size_t i = 0; i < NX; ++i) x[i] = st.zn_mut(0)[i];
     } else {
       st.prepare_dense_output();
@@ -274,11 +273,7 @@ static void forward_sens(const store_of<S>& store, std::size_t n_carry,
       ++next_obs;
     }
 
-    if constexpr (multistep) {
-      if (std::abs(cp.eta - 1.0) > 1e-14) st.rescale(cp.eta);
-    } else {
-      x = xout;
-    }
+    if constexpr (!multistep) x = xout;
   }
   check(next_obs == store.n_obs(), "every observation reached by the reference");
 }
@@ -318,11 +313,7 @@ static void replay_values(const store_of<S>& store, std::vector<double>& x_obs,
     if constexpr (multistep) st.load_carry(cp.carry, NX);
     st.do_step(sys, x, cp.t, xout, cp.dt, xerr);
     if constexpr (multistep) {
-      st.complete_step();
-      st.set_tn_current(cp.t + cp.dt);
-      st.prepare_dense_output();
-      if (cp.q_next > st.current_order()) st.save_acor_to_zn_qmax();
-      if (cp.q_next != st.current_order()) st.set_order_for_next_step(cp.q_next);
+      cp.apply_tail(st, sys);
       for (std::size_t i = 0; i < NX; ++i) x[i] = st.zn_mut(0)[i];
     } else {
       st.prepare_dense_output();
@@ -334,14 +325,11 @@ static void replay_values(const store_of<S>& store, std::vector<double>& x_obs,
       ++o;
     }
     if constexpr (multistep) {
-      if (std::abs(cp.eta - 1.0) > 1e-14) st.rescale(cp.eta);
       // The carry this tail produced has to be the carry the run recorded for
-      // the next step, or the checkpoints do not describe the run.
-      // Skipped where the next step threw an attempt away: its retry reloads the
-      // history before the accepted attempt runs, so what this tail produced is
-      // not what that step was entered with.
-      if (verify_carry && k + 1 < store.n_steps()
-          && store.control(k + 1).rejected == 0) {
+      // the next step, or the checkpoints do not describe the run. It holds
+      // across thrown-away attempts too: what they did to the history is part
+      // of the tail record.
+      if (verify_carry && k + 1 < store.n_steps()) {
         const auto& nxt = store.step(k + 1);
         for (int j = 0; j <= nxt.carry.q; ++j)
           for (std::size_t i = 0; i < NX; ++i)
@@ -411,6 +399,7 @@ static void run_method(const char* name, double tol)
   auto jac_d = jacobian<double>{pv};
 
   const std::size_t n_seed = store.n_obs() * NX;
+  std::size_t max_nodes = 0;
   auto sweep_with = [&](const std::vector<double>& seeds, std::vector<double>& out) {
     cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
     cppde::reverse::trajectory_recorder<S, double> rev;
@@ -420,6 +409,7 @@ static void run_method(const char* name, double tol)
                 return make_system<codual<double>>(pc);
               },
               seeds, solver);
+    if (rev.max_tape_nodes() > max_nodes) max_nodes = rev.max_tape_nodes();
     // An observation before the first step never passes through one, so the
     // replay has nothing to interpolate there.
     for (std::size_t o = 0; o < store.n_obs(); ++o)
@@ -460,21 +450,29 @@ static void run_method(const char* name, double tol)
   for (std::size_t k = 0; k < n_seed; ++k)
     all[k] = 0.3 * static_cast<double>(k % 5) - 0.7;
   compare("all", all);
+
+  // The bound the design claims: one step of tape, not one trajectory. Printed
+  // per method because what a step costs differs by an order of magnitude
+  // between them, rosenbrock4 putting its whole iteration matrix on the tape
+  // where an explicit method puts only its stages.
+  const std::size_t node = sizeof(cppde::codual_tape<double>::node);
+  std::printf("  tape %zu nodes at the widest step, %zu bytes;"
+              " the whole run taped would be %zu\n",
+              max_nodes, max_nodes * node, max_nodes * store.n_steps() * node);
 }
 
 int main() {
   using cppde::multistep_method;
-  // The three floors are the oracle's, not the adjoint's. An explicit method's
-  // reference reproduces the recorded trajectory exactly. An implicit one's
-  // re-solves the corrector, and its stopping rule takes the maximum over every
-  // sensitivity direction, so it stops elsewhere than the value run did and its
-  // trajectory drifts; Newton's residual is small enough that bdf still compares
-  // at 1e-6, PECE's is not, and Adams inherits that drift amplified. Where the
-  // adjoint itself is checked sharply is the step, in
+  // The two floors are the oracle's, not the adjoint's. An explicit method's
+  // reference reproduces the recorded trajectory exactly, so it stands at 1e-10.
+  // An implicit one's re-solves the corrector, and its stopping rule takes the
+  // maximum over every sensitivity direction, so it stops elsewhere than the
+  // value run did and the trajectory drifts by the residual it stopped on.
+  // Where the adjoint itself is checked sharply is the step, in
   // test_reverse_step_multistep.cpp, which runs both methods at 1e-9 over every
   // order, order change, rescale and dense-output seed.
   run_method<cppde::multistepper<multistep_method::bdf, double, cppde::dense_lu_tag>>("bdf", 1e-6);
-  run_method<cppde::multistepper<multistep_method::adams, double, cppde::dense_lu_tag>>("adams", 1e-2);
+  run_method<cppde::multistepper<multistep_method::adams, double, cppde::dense_lu_tag>>("adams", 1e-6);
   run_method<cppde::rosenbrock4<double>>("rb4", 1e-10);
   run_method<cppde::tsit5<double>>("tsit5", 1e-10);
 

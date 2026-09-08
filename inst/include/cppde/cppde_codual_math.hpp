@@ -10,6 +10,9 @@
  - Binary y = f(a, b): record(a.slot, f_a, b.slot, f_b)
  - An operand without dependence contributes no operand slot, which keeps
    constants off the tape rather than recording a zero partial.
+ - A single operand whose partial is one needs no node either: the result names
+   the operand's own slot, and the sweep is spared an edge it would multiply by
+   one. That covers every shift by a constant, and a stepper does many.
  - Comparisons fall back to .x(), as they do for dual.
 
  No eager gate: these are the only definitions of these operators for codual.
@@ -36,6 +39,14 @@ inline codual<T> codual_unary(const T& value, const codual<T>& a, const T& fa) {
   codual_tape<T>& tp = codual_tape_for<T>();
   if (!tp.live(a.slot())) return codual<T>(value, codual<T>::none);
   return codual<T>(value, tp.record(a.slot(), fa));
+}
+
+// y = x + c: the derivative is the identity, so the result is the same tape
+// node under another value. A node with one operand and partial one is exactly
+// that identity, so recording it would add work and no information.
+template<class T>
+inline codual<T> codual_shift(const T& value, const codual<T>& a) {
+  return codual<T>(value, a.slot());
 }
 
 template<class T>
@@ -105,13 +116,30 @@ inline codual<T> operator-(const codual<T>& a) {
     return detail::codual_unary((VAL_SA), a, (FA_SA));                        \
   }
 
-CPPDE_CODUAL_MIXED(+, a.x() + sv, T(1),  sv + a.x(), T(1))
-CPPDE_CODUAL_MIXED(-, a.x() - sv, T(1),  sv - a.x(), T(-1))
 CPPDE_CODUAL_MIXED(*, a.x() * sv, sv,    sv * a.x(), sv)
 CPPDE_CODUAL_MIXED(/, a.x() / sv, T(1) / sv,
                       sv / a.x(), -sv / (a.x() * a.x()))
 
 #undef CPPDE_CODUAL_MIXED
+
+// + and - against a scalar are shifts and carry the operand's slot instead of a
+// node. Only s - a turns the derivative over, and that one records.
+template<class T, class U, std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline codual<T> operator+(const codual<T>& a, const U& s) {
+  return detail::codual_shift(a.x() + static_cast<T>(s), a);
+}
+template<class T, class U, std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline codual<T> operator+(const U& s, const codual<T>& a) {
+  return detail::codual_shift(static_cast<T>(s) + a.x(), a);
+}
+template<class T, class U, std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline codual<T> operator-(const codual<T>& a, const U& s) {
+  return detail::codual_shift(a.x() - static_cast<T>(s), a);
+}
+template<class T, class U, std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline codual<T> operator-(const U& s, const codual<T>& a) {
+  return detail::codual_unary(static_cast<T>(s) - a.x(), a, T(-1));
+}
 
 // =============================================================================
 // Compound assignment

@@ -139,6 +139,9 @@ public:
   }
 
   const checkpoint_type& step(std::size_t k)    const { return m_steps[k]; }
+  // The collector fills a checkpoint's tail record only once the step after it
+  // has been accepted, which is when the operations in between are complete.
+  checkpoint_type&       step_mut(std::size_t k)       { return m_steps[k]; }
   const control_state&   control(std::size_t k) const { return m_controls[k]; }
   const observation&     obs(std::size_t i)     const { return m_obs[i]; }
 
@@ -180,6 +183,7 @@ public:
       (void)dt0;
       st.controlled_stepper().stepper().set_step_snapshot(
           [this](double t, double h) { this->snapshot(t, h); });
+      st.controlled_stepper().stepper().set_history_log(&m_hlog);
     }
   }
 
@@ -195,6 +199,7 @@ public:
       control_state cs;
       cs.rejected = static_cast<unsigned>(ctl.n_rejected() - m_rejected_seen);
       m_rejected_seen = ctl.n_rejected();
+      hand_over_history();
       m_store.push(m_pending, cs);
       return;
     } else {
@@ -218,6 +223,26 @@ public:
 private:
   static constexpr bool snapshot_family = has_step_snapshot<Stepper>::value;
 
+  // The history operations logged since the previous acceptance are the
+  // previous step's tail, then whatever attempts this step threw away, then
+  // this step's own completion and tail. complete_step writes the cut: what
+  // stands before it is what the previous checkpoint has to replay, what stands
+  // after it opens the next window.
+  void hand_over_history() {
+    if constexpr (snapshot_family) {
+      std::size_t cut = m_hlog.size();
+      for (std::size_t i = m_hlog.size(); i-- > 0;)
+        if (m_hlog[i].op == history_op::complete) { cut = i; break; }
+      if (m_store.n_steps() > 0) {
+        auto& prev = m_store.step_mut(m_store.n_steps() - 1);
+        prev.ops.assign(m_hlog.begin(), m_hlog.begin() + cut);
+        prev.ops_recorded = true;
+      }
+      m_hlog.erase(m_hlog.begin(),
+                   m_hlog.begin() + (cut < m_hlog.size() ? cut + 1 : cut));
+    }
+  }
+
   void snapshot(double t, double h) {
     if constexpr (snapshot_family) {
       auto& st = m_st.controlled_stepper().stepper();
@@ -231,6 +256,7 @@ private:
   DenseStepper&                 m_st;
   typename trajectory_store<Stepper, T>::checkpoint_type m_pending;
   control_state                 m_next;
+  history_log                   m_hlog;
   int                           m_rejected_seen = 0;
 };
 

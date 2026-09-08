@@ -537,6 +537,29 @@ struct multistep_carry {
   std::array<double, MaxOrder + 1> tau{};
 };
 
+// ============================================================================
+//  What the controller does to the Nordsieck history outside do_step: the
+//  rescale, the order change, the correction it saves for an order increase,
+//  and the order-1 restart.
+//
+//  Between two accepted steps that is the previous step's tail plus every
+//  attempt this one threw away, and a thrown-away attempt is not free: it
+//  rescales the history the next attempt reads. All of it is control decision,
+//  so a reverse replay repeats the record instead of deriving it again.
+// ============================================================================
+
+enum class history_op : unsigned char {
+  rescale,      // value is eta
+  order,        // value is the new order
+  save_acor,    // zn[qmax] <- acor, which an order increase reads
+  hscale,       // value is the new step scale
+  reload_zn1,   // zn[1] <- h * f(zn[0], tn), the order-1 restart
+  complete      // the accepted step's own Nordsieck update, as a cut mark
+};
+
+struct history_entry { history_op op; double value; };
+using history_log = std::vector<history_entry>;
+
 template<
   multistep_method Method = multistep_method::bdf,
   class Value = double,
@@ -1211,6 +1234,10 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   using step_snapshot = std::function<void(double t, double h)>;
   void set_step_snapshot(step_snapshot f) { m_snapshot = std::move(f); }
 
+  // Where the operations above get written. Unset, which is every run that is
+  // not being differentiated backwards, costs one null test per operation.
+  void set_history_log(history_log* log) { m_hlog = log; }
+
   // ====================================================================
   //  The carry across a step boundary, for the reverse checkpoint.
   //
@@ -1465,6 +1492,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   void complete_step()
   {
+    // A cut, not an operation: it separates the operations that belong to the
+    // step just accepted from those the previous one left behind.
+    log_history(history_op::complete, 0.0);
     auto _tp = m_prof.timer(prof_cat::nordsieck);
     const size_t n = m_zn[0].m_v.size();
     ++m_nst;
@@ -1610,6 +1640,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   void set_order_for_next_step(int new_q)
   {
+    log_history(history_op::order, static_cast<double>(new_q));
     // BDF/NDF and Adams use different Nordsieck adjustment formulas
     // (cvAdjustBDF vs cvAdjustAdams in CVODE).  Selected at compile time.
     constexpr bool in_adams = (Method == multistep_method::adams);
@@ -1784,6 +1815,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   template<class TimeArg> void set_hscale(TimeArg hs) {
     m_hscale = static_cast<time_type>(ndf_detail::scalar_value(hs));
     m_h      = m_hscale;
+    log_history(history_op::hscale,
+                static_cast<double>(ndf_detail::scalar_value(m_hscale)));
   }
   double saved_tq5() const { return m_saved_tq5; }
   const state_type& zn(int j) const { return m_zn[j].m_v; }
@@ -1928,6 +1961,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // Save acor to zn[qmax]
   void save_acor_to_zn_qmax()
   {
+    log_history(history_op::save_acor, 0.0);
     const size_t n = m_zn[0].m_v.size();
     for (size_t i = 0; i < n; ++i)
       m_zn[max_order].m_v[i] = m_acor.m_v[i];
@@ -1937,6 +1971,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   template<class DerivFunc>
   void reload_zn1_from_f(DerivFunc& deriv_func)
   {
+    log_history(history_op::reload_zn1, 0.0);
     const size_t n = m_zn[0].m_v.size();
     deriv_func(m_zn[0].m_v, m_ftemp.m_v, m_tn_current);
     ++m_n_fevals;
@@ -2326,8 +2361,14 @@ public:
     }
   }
 
+  void log_history(history_op op, double value) {
+    if (m_hlog) m_hlog->push_back(history_entry{op, value});
+  }
+
   void ndfRescale()
   {
+    log_history(history_op::rescale,
+                static_cast<double>(ndf_detail::scalar_value(m_eta)));
     time_type factor = m_eta;
     for (int j = 1; j <= m_q; ++j) {
       vec_scale_with_slab(m_zn[j].m_v, m_zn_block.slab(j),
@@ -2512,6 +2553,7 @@ public:
   bool m_initialized;
   int m_n_fevals, m_n_jevals;
   step_snapshot m_snapshot;
+  history_log*  m_hlog = nullptr;
 
   // Setup trigger diagnostics
   int m_n_setup_total = 0, m_n_setup_force = 0, m_n_setup_nojac = 0;

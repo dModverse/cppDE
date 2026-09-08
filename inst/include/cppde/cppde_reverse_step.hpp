@@ -62,12 +62,14 @@ namespace reverse {
 //        consumes.
 //
 //    finish(RStepper&, const std::vector<codual<T>>& xout,
-//                       std::vector<codual<T>>& carry_out)
-//        The step's tail: whatever the controller does to the carry after
-//        accepting, replayed from the decisions the forward run took, and the
-//        carry the next step reads written into carry_out. Optional; without it
-//        the carry out is the step end, which is a one-step method's whole
-//        carry.
+//                       std::vector<codual<T>>& carry_out, RSys&)
+//        The step's tail: whatever the controller does to the carry between
+//        this step's acceptance and the next one's, replayed from the record
+//        the forward run left, and the carry the next step reads written into
+//        carry_out. The system comes with it because one of those operations,
+//        the order-1 restart, reseeds the history from the right-hand side.
+//        Optional; without it the carry out is the step end, which is a
+//        one-step method's whole carry.
 //
 //  history is what carries the multistepper, whose carry is the Nordsieck array
 //  and not the state alone. Empty for a one-step method.
@@ -137,9 +139,9 @@ struct step_checkpoint<cppde::rosenbrock4<Value, Resizer>, T>
   // snapshot has to be taken before anything is interpolated. tsit5 needs no
   // such call, and must not get one: it would arm the FSAL recycle, and the next
   // replayed step starts from its own checkpoint rather than from this one.
-  template<class RStepper>
+  template<class RStepper, class RSys>
   void finish(RStepper& rst, const std::vector<codual<T>>& xout,
-              std::vector<codual<T>>& carry_out) const
+              std::vector<codual<T>>& carry_out, RSys&) const
   {
     rst.prepare_dense_output();
     carry_out = xout;
@@ -173,6 +175,16 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern, Resiz
   double         dt = 0.0;
   int            q_next = 1;    // order the controller picked for the next step
   double         eta    = 1.0;  // and the rescale it applied
+
+  // What the controller did to the history between this step's acceptance and
+  // the next one's: its own tail, and every attempt the next step threw away.
+  // A thrown-away attempt is not free, it rescales the history the accepted one
+  // is then entered with, so without this record the reverse chain hands the
+  // next step a carry at the wrong scale: right value, wrong gradient.
+  // Not recorded means no run filled it and the two fields above describe the
+  // tail on their own, which is how the step-level tests build a checkpoint.
+  history_log ops;
+  bool        ops_recorded = false;
 
   std::size_t n() const { return n_states; }
 
@@ -222,21 +234,45 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern, Resiz
     }
   }
 
-  template<class RStepper>
-  void finish(RStepper& rst, const std::vector<codual<T>>& /*xout*/,
-              std::vector<codual<T>>& carry_out) const
+  // The tail on a stepper of any value type: the reverse replay and a forward
+  // reference over the recorded sequence both need it. Everything in it is a
+  // decision the forward run took, replayed rather than taken again.
+  template<class St, class RSys>
+  void apply_tail(St& st, RSys& sys) const
   {
-    rst.complete_step();
+    st.complete_step();
     // The Nordsieck interpolant is anchored at tn_current, which the controller
     // sets here and the replay has to as well.
-    rst.set_tn_current(t + dt);
-    rst.prepare_dense_output();
-    // An order increase reads the top slot, which the controller fills with the
-    // accumulated correction first. Without it the new slot is whatever the
-    // previous replayed step left there.
-    if (q_next > carry.q) rst.save_acor_to_zn_qmax();
-    if (q_next != carry.q) rst.set_order_for_next_step(q_next);
-    if (std::abs(eta - 1.0) > 1e-14) rst.rescale(static_cast<T>(eta));
+    st.set_tn_current(t + dt);
+    st.prepare_dense_output();
+    if (ops_recorded) {
+      for (const history_entry& e : ops) {
+        switch (e.op) {
+          case history_op::rescale:
+            st.rescale(static_cast<typename St::time_type>(e.value)); break;
+          case history_op::order:
+            st.set_order_for_next_step(static_cast<int>(e.value)); break;
+          // An order increase reads the top slot, which the controller fills
+          // with the accumulated correction first.
+          case history_op::save_acor:  st.save_acor_to_zn_qmax(); break;
+          case history_op::hscale:     st.set_hscale(e.value); break;
+          case history_op::reload_zn1: st.reload_zn1_from_f(sys.first); break;
+          case history_op::complete:   break;   // the cut, applied above
+        }
+      }
+    } else {
+      if (q_next > carry.q) st.save_acor_to_zn_qmax();
+      if (q_next != carry.q) st.set_order_for_next_step(q_next);
+      if (std::abs(eta - 1.0) > 1e-14)
+        st.rescale(static_cast<typename St::time_type>(eta));
+    }
+  }
+
+  template<class RStepper, class RSys>
+  void finish(RStepper& rst, const std::vector<codual<T>>& /*xout*/,
+              std::vector<codual<T>>& carry_out, RSys& sys) const
+  {
+    apply_tail(rst, sys);
 
     const int q_out = rst.current_order();
     carry_out.assign(static_cast<std::size_t>(q_out + 1) * n_states, codual<T>());
@@ -321,14 +357,14 @@ struct has_step_snapshot<S, std::void_t<decltype(std::declval<S&>().set_step_sna
     std::declval<typename S::step_snapshot>()))>
 > : std::true_type {};
 
-template<class Checkpoint, class RStepper, class State, class = void>
+template<class Checkpoint, class RStepper, class State, class Sys, class = void>
 struct has_finish : std::false_type {};
 
-template<class Checkpoint, class RStepper, class State>
-struct has_finish<Checkpoint, RStepper, State,
+template<class Checkpoint, class RStepper, class State, class Sys>
+struct has_finish<Checkpoint, RStepper, State, Sys,
     std::void_t<decltype(std::declval<const Checkpoint&>().finish(
         std::declval<RStepper&>(), std::declval<const State&>(),
-        std::declval<State&>()))>
+        std::declval<State&>(), std::declval<Sys&>()))>
 > : std::true_type {};
 
 template<class RStepper, class Time, class State, class = void>
@@ -453,7 +489,7 @@ public:
     m_stepper.do_step(sys, m_x, m_t, m_xout, dt, m_xerr);
     m_dt_used = dt;
     m_tend    = m_t + dt;
-    close_step(m_cp_finish);
+    close_step(m_cp_finish, sys);
   }
 
   // Registers the solution of an implicit equation as tape inputs and returns the
@@ -517,7 +553,7 @@ public:
 
     m_dt_used = dt;
     m_tend    = m_t + dt;
-    close_step(m_cp_finish);
+    close_step(m_cp_finish, sys);
   }
 
   // One attempt of an implicit method. The corrector is not iterated: y is the
@@ -544,7 +580,7 @@ public:
 
     m_dt_used = dt;
     m_tend    = m_t + dt;
-    close_step(m_cp_finish);
+    close_step(m_cp_finish, sys);
   }
 
   solve_point&    live_implicit()  { return m_implicit[m_n_implicit - 1]; }
@@ -656,12 +692,13 @@ public:
 private:
   // The step's tail, where the stepper has one. Without it the carry out is the
   // step end itself, which a one-step method's next step reads unchanged.
-  void close_step(const checkpoint_type* cp) {
+  template<class RSys>
+  void close_step(const checkpoint_type* cp, RSys& sys) {
     using state = std::vector<rev_type>;
-    if constexpr (has_finish<checkpoint_type, rev_stepper, state>::value) {
-      cp->finish(m_stepper, m_xout, m_carry_out);
+    if constexpr (has_finish<checkpoint_type, rev_stepper, state, RSys>::value) {
+      cp->finish(m_stepper, m_xout, m_carry_out, sys);
     } else {
-      (void)cp;
+      (void)cp; (void)sys;
       m_carry_out = m_xout;
     }
   }
