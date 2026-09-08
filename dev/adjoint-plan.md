@@ -353,6 +353,13 @@ kostet deshalb nur die Checkpoint-Struktur von `tsit5`, und die wird ohnehin geb
 
 **Was dazugehört.** Stufen 1, 2, 3 (nur `tsit5`), 4, 6 und 7 auf den kleinen Fixtures.
 
+**Nachgezogen am 2026-09-08: der Meilenstein rutscht ans Ende.** Nicht weil die Begründung oben
+falsch wäre, sie hat für `tsit5` getragen, sondern weil der Produktionspfad ausnahmslos `bdf` ist
+und ein Meilenstein auf `tsit5` die Naht und die dMod2-Kette gegen ein Verfahren prüft, das dort
+niemand kompiliert. Also erst 3b, dann 5, dann Naht und Kette gegen den vollen Satz. Als Modell
+dafür Boehm statt eines Zerfallsmodells: es steht als Fixture bereit, hat neun Parameter, eine
+Beobachtungsfunktion und Daten, und ist damit ein echter `obj()`-Aufruf statt einer Attrappe.
+
 **Stufe 2 ist dabei, und zwar wegen `Pexpl`, nicht wegen `Y`.** `Y` ist vermeidbar,
 `normL2(data, Xs(m) * Pexpl(...))` mit zustandsbenannten Daten braucht keine Beobachtungsfunktion
 (`test-Xs.R:20`, `inst/examples/normL2.R`). `Pexpl` liegt auf jedem Pfad und ist per Vorgabe ein
@@ -375,6 +382,18 @@ prüfen gegen `numDeriv::grad` bei Toleranz 1e-3.
 ## Stufen
 
 Jede Stufe endet auf einem Test, der ohne die folgende Stufe läuft.
+
+**Stand 2026-09-08.** Die vier Verfahren über die beiden Ebenen, die es bisher gibt:
+
+| | Schritt rückwärts | Trajektorie | Harness |
+|---|---|---|---|
+| `tsit5` | steht | steht, mit Steuerungskette | `--reverse-step`, `--reverse-trajectory` |
+| `rb4` | steht | steht | `--reverse-step-rb4`, `--reverse-trajectory-methods` |
+| `bdf` | steht | steht | `--reverse-step-multistep`, `--reverse-trajectory-methods` |
+| `adams` | steht | offen, siehe `dev/adams-tail.md` | dieselben |
+
+Offen sind danach Stufe 5 (Ereignisse und Wurzeln), Stufe 6 (die Naht nach R), Stufe 7 (die Kette
+in dMod2) und Stufe 8 (CVODES ASA als Vergleich). Der Sparse-Pfad ist an keiner Stelle gefahren.
 
 ### Stufe 0. Branch und die Größe des Schrittweitenterms messen
 
@@ -549,10 +568,10 @@ desselben Schritts, auf Rundungsniveau. Das ist prüfbar, ohne dass die Trajekto
 `step_checkpoint<Stepper, T>` und `step_recorder<Stepper, T>`; der Test ist
 `dev/cxx/test_reverse_step.cpp`, gefahren über `dev/cxx/run.sh --reverse-step`. Geprüft ist
 `w' S` gegen `S' w` bei 1e-14 relativ, für die drei Einheitsseeds und für einen gemischten,
-über einen, zwei und vier verkettete Schritte, dazu der neu gerechnete Schrittwert bitgleich
-gegen den Vorwärtslauf.
+über einen, zwei und vier verkettete Schritte, dazu der neu gerechnete Schrittwert gegen den
+Vorwärtslauf bei 1e-15.
 
-Sechs Befunde:
+Sieben Befunde:
 
 1. **`codual` fehlten die zusammengesetzten Zuweisungen.** `vec_axpy` schreibt
    `y[i] += alpha * x[i]`, und `+=` gab es nicht; ohne sie instanziiert kein Stepper. Nachgetragen
@@ -600,10 +619,21 @@ Sechs Befunde:
    Schritte um 1e-3 danebenliegen lassen; der Fehler saß im Vorwärtsorakel, nicht im Adjoint.
    Betrifft nur Testtreiber, im Produktionspfad ruft der Controller es.
 
+7. **Der Schrittwert ist nicht bitgleich, und kann es nicht sein.** Ein `std::vector<double>`
+   nimmt für jedes Stage-AXPY die BLAS-Überladung von `vec_axpy`, deren Kernel Multiply-Add
+   verschmilzt; der Replay geht über das Band, wo jede Operation ein Knoten ist und nichts
+   verschmelzen kann. Das sind ein bis drei ULP über eine Handvoll Schritte, unabhängig vom
+   BLAS-Backend, und mit einer skalaren Schleife auch für `double` verschwinden sie restlos. Die
+   Prüfung steht deshalb auf 1e-15 statt auf `==`. Für Stufe 4 heißt das: der Adjoint ist die
+   Ableitung der neu gerechneten Trajektorie, die von der gemeldeten um diesen Betrag abweicht,
+   also weit unter dem lokalen Fehler.
+
 Nebenher: `dev/cxx/run.sh` kennt `--reverse-step`, findet die R-Bibliothek auch unter Windows, wo
 sie nicht in `R.home("lib")` liegt, und überspringt den Sanitizer-Schritt statt an ihm abzubrechen,
-wenn die Runtimes fehlen. Der `-O2`-Build ist mit `-Wall -Wextra` warnungsfrei; dafür hat der
-No-op-`scoped_timer` in `cppde_profiler.hpp` einen eigenen Destruktor bekommen.
+wenn die Runtimes fehlen, und hängt `-lRlapack` nur an, wo es die Bibliothek gibt: ein
+FlexiBLAS-R hat keine, und ohne die Fallunterscheidung baut der Harness dort gar nicht. Der
+`-O2`-Build ist mit `-Wall -Wextra` warnungsfrei; dafür hat der No-op-`scoped_timer` in
+`cppde_profiler.hpp` einen eigenen Destruktor bekommen.
 
 Berührt für das symbolische `h`: `ad_traits::step_coef` und `step_coef_of` als der eine Ort, an
 dem die Entscheidung fällt; `vec_axpy_stage` in `cppde_dual_slab.hpp`, das bei einem
@@ -611,6 +641,93 @@ dem die Entscheidung fällt; `vec_axpy_stage` in `cppde_dual_slab.hpp`, das bei 
 keinen Slab hat; in `tsit5::do_step` die fünfzehn Stage-AXPYs, die Lösung und die Fehlerschätzung.
 Der Zeitpunkt `t` ist aus demselben Grund eine Unabhängige: `t_k = t_0 + sum h_j` trägt eine
 Ableitung, sobald die `h_j` eine tragen, und ein nicht-autonomer Modellrumpf liest sie.
+
+**Stand 3b (`bdf` und `adams`), 2026-09-08: der Schritt steht.** `step_checkpoint` hat eine
+Spezialisierung für `multistepper`, der Test ist `dev/cxx/test_reverse_step_multistep.cpp` über
+`dev/cxx/run.sh --reverse-step-multistep`. Geprüft ist `w' S` gegen `S' w` für die Abbildung
+`(zn_in, theta) -> zn_out` bei 1e-9 relativ, mit jedem Nordsieck-Slot einzeln geseedet und einem
+gemischten Seed, für beide Verfahren auf Ordnung 2 bis 4 aus einem echten Controller-Anlauf, mit
+gehaltener, erhöhter und gesenkter Ordnung und mit angewandtem Rescale.
+
+**`adams` war fast geschenkt, und der Grund ist eine Gleichung, keine Ähnlichkeit.** PECE und Newton
+lösen dieselbe Form: `res = (y - zn0) + rl1*zn1 - gamma*f(y, t+h)` mit `gamma = h*rl1`, nur mit
+`rl1 = 1/l[1]` statt der NDF-Variante und mit `adams_set_coefficients` statt `ndfSet`. Der Replay
+verzweigt also in zwei Zeilen, und der Rückwärtslauf ist derselbe transponierte Solve. Dass PECE
+vorwärts ohne Jacobi auskommt, heißt nicht, dass die Ableitung ohne einen auskommt: für den IFT
+braucht auch der Adams-Pfad einen, und der emittiert ihn ohnehin.
+
+Der Adams-Korrektor konvergiert allerdings linear und hält bei seinem eigenen `dcon`, was den
+Vergleich sonst auf Lösertoleranz statt Rundung festnagelt. Der Test iteriert ihn deshalb auf beiden
+Seiten aus, was für Adams zulässig ist und für die BDF-Familie nicht: dort ist der Fixpunkt Newtons,
+und die Fixpunktiteration konvergiert auf einem steifen Schritt gar nicht gegen ihn.
+
+Offen bleiben `rosenbrock4`, der Sparse-Pfad und die Trajektorie unter dem Multistepper.
+
+Sechs Befunde:
+
+1. **Der Korrektor wird nicht iteriert, sondern eingesetzt.** `multistepper::replay_residual` fährt
+   Rescale, Predict und Koeffizienten wie `step_bdf_family` und legt dann statt der Iteration die
+   Gleichung aufs Band, die sie löst: `res = (y - zn0) + rl1*zn1 - gamma*f(y, t+h)`, mit `y` aus dem
+   Checkpoint. Damit braucht der Rückwärtslauf im Stepper weder Jacobi noch LU, und die
+   `codual`-Instanziierung des Multisteppers kommt an der LAPACK-LU vorbei, die für einen Tape-Typ
+   gar nicht übersetzt.
+2. **Die Naht ist ein unterbrochener Sweep.** `codual_tape::reverse(hi, lo)` fährt nur ein Stück;
+   dazwischen löst der Aufrufer transponiert. Die tragende Bedingung ist eine Reihenfolge: alles,
+   was `y` außer der Gleichung selbst liest, muss über der Marke aufgezeichnet sein, sonst erreicht
+   der Sweep die Gleichung mit einem halben Kotangens. Deshalb ist `replay_residual` von
+   `replay_outputs` getrennt, und die Marke liegt zwischen den beiden.
+3. **Der Codegen schreibt −J, nicht J.** `factorize_W` addiert nur die Diagonale, `W = -J + I/gamma`.
+   Der Vorwärtspfad verzeiht ein falsches Vorzeichen, weil die Iterationsmatrix nur die Iteration
+   steuert und der Korrektor trotzdem konvergiert; der Rückwärtspfad benutzt `W` einmal und direkt,
+   und liefert dann den Korrekturterm mit umgedrehtem Vorzeichen. Das hat einen halben Tag gekostet
+   und gehört deshalb hier hin.
+4. **Die Matrix wird frisch faktorisiert, an der Lösung.** Die des Vorwärtslaufs ist per Konstruktion
+   veraltet, `MSBP = 20` und `MSBJ = 51`. Der Preis ist ein Jacobi und eine LU je Rückwärtsschritt,
+   was der Bench aus Stufe 7 zu bewerten hat. `solve_transposed` gibt es jetzt dicht über `dgetrs`
+   mit `trans = 'T'` und dünn über `klu_tsolve`, beide auf derselben Faktorisierung.
+5. **`gamma` und `t_new` gehören vor den Nachlauf gelesen.** Der Rescale des Controllers verschiebt
+   `m_h`, und die Gleichung gehört zu dem Schritt, der genommen wurde. Der Recorder hält beide fest,
+   bevor `finish` läuft; ohne das steht der Jacobi bei der falschen Zeit und die Kotangenten liegen
+   um 1e-6 daneben.
+6. **Der Carry ist verallgemeinert, nicht verzweigt.** `step_checkpoint::finish` ist der zweite
+   Erweiterungspunkt neben `load`: für ein Einschrittverfahren ist der Carry das Schrittende, für
+   den Multistepper das ganze Nordsieck-Array nach `complete_step`, Ordnungswechsel und Rescale.
+   Der Trajektorien-Treiber reicht `wx` und `whistory` gemeinsam zurück und musste dafür nicht
+   verzweigen.
+
+Der Sweep trägt inzwischen **mehrere Unterbrechungspunkte statt einem**: `step_recorder` hält einen
+Stapel von Gleichungen, und `sweep()` fährt von der jüngsten abwärts, zwischen je zwei Marken ein
+Segment. Für den Multistepper ist das ein Punkt, für `rosenbrock4` sechs. Das steht und ist gegen
+beide Multistep-Verfahren geprüft.
+
+Nebenher: der Test seedet jede Richtung mit der Größe dessen, was sie stört, statt mit eins. Die
+Fehlernorm nimmt das Maximum über jede Sensitivitätsrichtung, und eine Einheitstangente auf einem
+hohen Nordsieck-Slot liegt Größenordnungen über dem Slot selbst, was den Korrektor der Referenz
+blockiert statt ihn zu schärfen. Die Abbildung ist linear im Seed, also wird `S` wieder entskaliert.
+
+**Stand 3b (`rosenbrock4`), 2026-09-08: steht.** Sechs lineare Solves gegen ein gemeinsames
+`W = I/(gamma*dt) - J(x, t)`, also sechs implizite Gleichungen statt einer. Test:
+`dev/cxx/test_reverse_step_rb4.cpp` über `--reverse-step-rb4`, `w' S` gegen `S' w` bei 1e-11 über
+einen, zwei und vier verkettete Schritte.
+
+Vier Befunde:
+
+1. **Der Stufenrumpf wird geteilt, nicht kopiert.** `stages()` ist aus `do_step` herausgezogen und
+   nimmt den Solve als Parameter: vorwärts die LU, rückwärts die Gleichung, die er ersetzt. Sechs
+   Stufen mit ihren Alphas zweimal hinzuschreiben wäre genau die Duplizierung, die den Adjoint
+   später still von der Vorwärtsseite wegdriften lässt. Dieselbe Bewegung wie bei `wrms_state` und
+   `accept_factor` in Stufe 4b.
+2. **Der Sweep trägt mehrere Unterbrechungspunkte.** Die Marken bilden einen Stapel und zwischen je
+   zwei benachbarten läuft ein Solve. Die tragende Bedingung ist dieselbe wie beim Multistepper:
+   alles, was `g_i` außer seiner eigenen Gleichung liest, muss über der Marke `i` liegen, was die
+   Stufenreihenfolge von selbst liefert.
+3. **Der Checkpoint trägt keine Stufenwerte.** Erwartet waren `6*n` Doubles je Schritt; tatsächlich
+   holt der Replay jeden Stufenwert aus derselben Faktorisierung zurück, die der Sweep transponiert
+   benutzt. Der Checkpoint ist damit der eines Einschrittverfahrens, `x`, `t`, `dt`.
+4. **`W` geht symbolisch aufs Band.** Der emittierte Jacobi ist unter `codual` reine
+   Funktorauswertung in eine `dense_matrix<codual>`, die LU wird nicht angefasst. Der Preis ist
+   `n^2` Knoten je Stufe plus einmal `n^2` für den Jacobi, also die breiteste Bandnutzung der vier
+   Verfahren.
 
 **Was 3b von hier aus noch braucht:** eine `step_checkpoint`-Spezialisierung je Stepper, die
 `history` füllt, plus die IFT-Abkürzung im Newton-Korrektor. `step_recorder` selbst ist
@@ -633,11 +750,140 @@ Die Vorlage für die Testform ist `test-ode-methods.R:52`, die vorhandene Sensit
 statt finiter Differenzen.
 
 Mit eingeschalteter Steuerungskette, also im Auslieferungsstand, ist die Differenz zum
-ausgeschalteten Lauf der Schrittweitenterm. Nach der Gegenprobe aus Stufe 0 muss sie **auf Höhe des
-lokalen Fehlers verschwinden** und nicht mit `rtol` skalieren, denn innerhalb eines Kontrollpfads
-trägt die Schrittweite nichts bei. Eine große Differenz ist damit ein Fehler im Rückwärtslauf und
-kein wiedergewonnener Term. Das macht Stufe 4 zu einer Gleichheitsprüfung und ersetzt die
-Plausibilisierung, die hier ursprünglich vorgesehen war.
+ausgeschalteten Lauf der Schrittweitenterm. Der Plan hat hier erwartet, dass sie auf Höhe des
+lokalen Fehlers verschwindet; gemessen ist sie `O(tol)` mit einem Vorfaktor von etwa 3e4, siehe den
+Stand von 4b. Die Prüfung ist deshalb die **Skalierung mit `rtol`** und keine Schranke: der Term
+fällt mit der Toleranz, ein vergessener Kanal fiele nur wie `tol^(1/5)`, und zwischen beidem liegen
+über sechs Dekaden drei Größenordnungen.
+
+**Zerfällt in zwei Teile, wie Stufe 3.**
+
+- **4a, die Trajektorie ohne die Steuerungskette.** Checkpointspeicher, Rückwärtsschleife,
+  Dense-Output, Seeds an den Beobachtungszeiten, Parameter-Akkumulator. Zeit und Schrittweite sind
+  je Schritt Tape-Unabhängige, ihre Kotangenten werden gelesen, aber nicht an den Schritt davor
+  gereicht. Das rechnet genau das, was die Vorwärtssensitivitäten rechnen, und ist gegen sie auf
+  Rundungsniveau prüfbar.
+- **4b, die Steuerungskette über Schrittgrenzen.** `dt_{k+1} = dt_k * factor(err_k, err_{k-1})` und
+  `t_{k+1} = t_k + dt_k` mit aufs Band gelegt. Drei Kanäle, die 4a nicht hat: die Fehlernorm unter
+  `codual` statt als `double`, `err_old` als eigener Kanal einen Schritt weiter zurück, und die
+  verworfenen Versuche, die `dt_k` aus `x_k` mitbestimmen und deshalb mit repliziert werden müssen.
+  In den Checkpoint gehören dafür die angebotene Schrittweite, `err_old`, `first_step` und die Zahl
+  der Versuche. Deren Schrittweiten nicht: der Replay leitet sie her, aus demselben Grund, aus dem
+  der Checkpoint keine Stufenwerte trägt. `last_rejected` ebenso wenig, das ist `Versuche > 0`.
+
+**Stand 4a, 2026-09-08: steht.** `inst/include/cppde/cppde_reverse_trajectory.hpp` trägt
+`trajectory_store<Stepper, T>` und `trajectory_recorder<Stepper, T>`; der Test ist
+`dev/cxx/test_reverse_trajectory.cpp` über `dev/cxx/run.sh --reverse-trajectory`. Geprüft ist die
+Summe über die Beobachtungen von `w' S` gegen den Adjoint-Gradienten bei 1e-13 relativ, für jeden
+Einheitsseed an jeder der sieben Beobachtungszeiten einzeln und für einen gemischten Seed über alle
+zugleich, auf einem adaptiven Lauf mit 33 Schritten und zwei verworfenen Versuchen.
+
+Fünf Befunde:
+
+1. **Der Sammler hängt im Produktionstreiber, nicht in einer Testschleife.** `EventEngine` bekommt
+   `set_step_observer`, `integrate_times_dense` reicht es als Argument hinter `termination` durch,
+   und der Haken sitzt an allen vier Stellen des Dense-Loops, an denen ein Schritt angenommen wird,
+   `reinit_after_event` eingeschlossen. Ungesetzt ist es ein vorhersagbarer Zweig je Schritt. Die
+   `process_controlled`-Schleife bleibt außen vor: sie schrittet an Ort und Stelle und schneidet auf
+   die nächste Ausgabezeit, ein Checkpoint braucht dort den Zustand vor dem Schritt statt danach.
+2. **Der Vergleich muss auf derselben Schrittfolge stehen.** Der duale Vorwärtslauf adaptiert
+   anders als der reine Wertlauf, weil die Fehlernorm das Maximum über die Sensitivitätsspalten
+   nimmt; er repliziert deshalb die aufgezeichnete Folge über `do_step` statt selbst zu steuern.
+   Sonst vergleicht man zwei Diskretisierungen und die Toleranz wäre `rtol`, nicht Rundung.
+3. **`termination` war nicht mehr überspringbar.** Der Parameter deduziert `State` und `Time` mit,
+   also passte `nullptr` nicht mehr, sobald ein Argument dahinter steht. `undeduced_t` in
+   `cppde_integrate_times.hpp` blockiert die Deduktion an dieser einen Stelle; bestehende Aufrufe
+   sind unberührt, weil `ss_termination` schon eine `std::function` ist.
+4. **Das Band bleibt ein Schritt breit, und der Test sagt die Zahl.** Auf dem Testmodell 1144
+   Knoten am breitesten Schritt, 27 kB; dieselbe Trajektorie ganz getapet wären 906 kB, und der
+   Faktor wächst mit der Schrittzahl. Der Checkpointspeicher dagegen ist 1320 Byte über 33 Schritte,
+   für ein Einschrittverfahren `n_x + 2` Doubles je Schritt. `begin()` spult vor jedem Schritt zurück
+   und behält die Kapazität, das Band alloziert also einmal. Was je Schritt noch alloziert, ist die
+   Parameterkopie im Systemfunktor; gegen sieben RHS-Auswertungen ist das Rauschen, und ein
+   Funktor, der die Parameter per Referenz hält, würde auch das sparen.
+5. **Eine Beobachtung vor dem Schrittanfang wird geklemmt.** Der Vorwärtsloop beobachtet in diesem
+   Fall den Zustand bei `t_start`, nicht bei `t_eval`; der Rückwärtslauf klemmt die
+   Interpolationszeit auf das Bracket und trifft damit denselben Zweig. Ohne Ereignisse feuert er
+   nie, mit Ereignissen wäre es ein stiller Gradientenfehler.
+
+**Stand 4b, 2026-09-08: steht.** Ein Schritt liest drei Größen vom vorigen statt einer: Zustand,
+Zeit und die angebotene Schrittweite, dazu `err_old`. `control_chain(false)` lässt die drei weg und
+ist damit der eingefrorene Pfad und das Orakel. Der Test fährt beide Stellungen gegeneinander,
+mit zwei verworfenen Versuchen im Lauf.
+
+Vier Befunde:
+
+1. **Die Kontrollarithmetik steht jetzt einmal da, nicht zweimal.** `wrms_state`, `accept_factor`
+   und `reject_factor` in `onestep_detail` sind über den Wertetyp geschrieben und werden vom
+   Controller wie vom Replay gerufen; `error()` und `update_stepsize()` sind darauf umgebaut und
+   liefern bitgleich dasselbe. Ohne das wäre eine spätere Änderung am Kontrollgesetz ein stiller
+   Gradientenfehler, und genau das ist das benannte Hauptrisiko des Plans. Möglich wird es dadurch,
+   dass `cppde::pow`, `sqrt`, `abs`, `min` und `max` für `double` wie für `codual` aufgehen.
+2. **Der Schrittweitenterm ist nicht null, aber `O(tol)`.** Auf dem Testmodell bei `rtol = 1e-9`
+   liegt er bei 3e-5 relativ zum Gradienten, also mit einem Vorfaktor von etwa 3e4. Über sechs
+   Dekaden `rtol` fällt er um 7e-5:
+
+   | rtol | Schritte | Kettenterm | Verhältnis |
+   |---|---|---|---|
+   | 1e-6 | 9 | 1.16e-3 | |
+   | 1e-8 | 21 | 1.41e-4 | 0.12 |
+   | 1e-10 | 51 | 2.06e-6 | 0.015 |
+   | 1e-12 | 128 | 8.25e-8 | 0.040 |
+
+   Das bestätigt Stufe 0 von der anderen Seite: der Term ist die theta-Ableitung des
+   Diskretisierungsfehlers und verschwindet mit ihm, liegt also unter der Genauigkeit, mit der der
+   Solver den Wert selbst kennt. Er ist aber bei realistischen Toleranzen nicht vernachlässigbar
+   klein gegenüber dem, was ein Optimierer sieht.
+3. **Die Skalierung ist die Prüfung, nicht eine Schranke.** Ein vergessener Kanal hinterließe einen
+   Rest über die Schrittweite selbst, und die fällt bei einem Verfahren fünfter Ordnung wie
+   `tol^(1/5)`, über sechs Dekaden also nur um 6e-2 statt um 1e-6. Zwischen den beiden Fällen
+   liegen drei Größenordnungen, und der Test prüft das Ende-zu-Ende-Verhältnis statt einer einzelnen
+   Dekade, weil die Schrittfolge bei jeder Toleranz eine andere ist. Eine absolute Schranke auf den
+   Term wäre modellabhängig und würde nichts aussagen.
+
+4. **Die Schrittweite im Checkpoint war gerundet.** Der Sammler nahm sie als
+   `current_time() - previous_time()`, und `fl(t + h) - t` ist nicht `h`. Der Replay lief damit auf
+   einer minimal anderen Schrittweite als der Vorwärtslauf. Aufgefallen ist es an der Prüfung, dass
+   ein Schritt ohne verworfenen Versuch die Größe genommen haben muss, die ihm angeboten wurde;
+   die Kette liest `dt_in` aus dem Controller und der Checkpoint las es aus den Zeiten, und die
+   beiden gingen auseinander. Jetzt kommt beides aus dem Controller, `dt_old()`. Auf den
+   Kettenterm hat es keinen sichtbaren Einfluss, er liegt weit darüber.
+
+Der Preis: ein Schritt mit zwei verworfenen Versuchen tapet drei Runge-Kutta-Schritte statt einem,
+im Test 1144 Knoten statt 511. Das Band bleibt trotzdem ein Schritt breit.
+
+**Stand Stufe 4 für die übrigen Verfahren, 2026-09-08: `bdf`, `rb4` und `tsit5` stehen, `adams`
+nicht.** Der Trajektorien-Treiber verzweigt auf die Form, die ein Verfahren hat, und der Test ist
+`dev/cxx/test_reverse_trajectory_methods.cpp` über `--reverse-trajectory-methods`. Was dabei
+gefunden wurde, in der Reihenfolge, in der es auffiel:
+
+1. **Veraltete Tape-Slots werden strukturell unwirksam gemacht, nicht weggeräumt.** Slots sind jetzt
+   monoton: `rewind()` schiebt die Basis vor, statt Indizes wiederzuverwenden, also benennt ein Wert
+   aus einem früheren Schritt einen Slot, den das Band nicht mehr besitzt, und liest sich als
+   Konstante. Ohne das trägt ein wiederverwendeter Puffer eine Abhängigkeit auf einen fremden
+   Knoten, und das ist ein falscher Gradient bei richtigem Wert. Das ist die Voraussetzung dafür,
+   dass Recorder und Replay-Stepper über alle Schritte wiederverwendet werden dürfen, was der
+   Speicher- und Laufzeitpunkt ist: der Rückwärtslauf alloziert einmal und danach nicht mehr.
+2. **Der Carry des Multisteppers wird vor dem Schritt aufgezeichnet, nicht danach.** Die Historie
+   wird an Ort und Stelle verändert, und ein verworfener Versuch skaliert sie noch einmal, bevor der
+   angenommene läuft. `set_step_snapshot` feuert je Versuch nach dem Rescale; die letzte Aufnahme
+   vor einer Annahme ist die des angenommenen Versuchs.
+3. **Drei Aufrufe fehlten im Nachlauf**, alle im Controller vorhanden und im Replay nicht:
+   `set_tn_current`, gegen das die Nordsieck-Interpolation verankert ist; `save_acor_to_zn_qmax`,
+   dessen Ergebnis der Ordnungswechsel liest; und für `rosenbrock4` `prepare_dense_output`, dessen
+   Interpolant aus den Stufen gebaut wird.
+4. **`gamma` und `t_new` gehören vor den Nachlauf gelesen**, weil der Rescale die Schrittweite
+   verschiebt.
+5. **Der Vergleichsmaßstab ist bei impliziten Verfahren der schwache Teil, nicht der Adjoint.** Die
+   Vorwärtsreferenz löst den Korrektor selbst, und dessen Abbruchregel nimmt das Maximum über jede
+   Sensitivitätsrichtung: sie hält früher als der Wertlauf und bei hoher Ordnung gar nicht.
+   `set_max_corrector_iters` gibt ihr den Spielraum; damit fällt `adams` von 70 Prozent auf 1e-3 und
+   `bdf` auf 1e-6.
+
+**Offen und genau lokalisiert: der Nachlauf von `adams` ab dem ersten Ordnungswechsel.** Die
+Eingrenzung steht in `dev/adams-tail.md`, mit dem, was ausgeschlossen ist und wo weiterzusuchen
+wäre. Bis das geklärt ist, steht die Trajektorien-Prüfung für `adams` auf 1e-2 und trägt nichts;
+der Schritt-Test für `adams` trägt bei 1e-9.
 
 ### Stufe 5. Events und Wurzeln
 
@@ -784,11 +1030,14 @@ schärferes Orakel.
 
 ## Risiken
 
-- **Der Schrittweitenterm ist vernachlässigbar, und das ist gemessen.** Stufe 0 hat es am
-  2026-09-07 entschieden: die Kennzahl skaliert mit der Sweep-Dichte, ist also Sprunghöhe und keine
-  Ableitung. Das Risiko ist erledigt und in einen Vorteil umgeschlagen, weil das Orakel für Stufe 4
-  dadurch schärfer wird. Was bleibt, ist die Unstetigkeit von `y_h` in theta selbst, und die trifft
-  jedes Ableitungsverfahren gleichermaßen.
+- **Der Schrittweitenterm ist `O(tol)`, und das ist zweimal gemessen.** Stufe 0 hat am 2026-09-07
+  gezeigt, dass die Kennzahl mit der Sweep-Dichte skaliert, also Sprunghöhe ist und keine Ableitung;
+  Stufe 4b hat am 2026-09-08 den Term selbst gemessen, indem sie beide Stellungen des Reverse-Pfads
+  gegeneinander gefahren hat. Er fällt mit `rtol`, liegt also unter der Genauigkeit, mit der der
+  Solver den Wert kennt, ist aber bei realistischen Toleranzen nicht klein: 3e-5 relativ bei
+  `rtol = 1e-9`. Das Risiko ist damit erledigt, aber nicht so, wie der Plan es erwartet hat: die
+  Prüfung in Stufe 4 ist die Skalierung und keine Gleichheit. Was bleibt, ist die Unstetigkeit von
+  `y_h` in theta selbst, und die trifft jedes Ableitungsverfahren gleichermaßen.
 - **Der variable-Ordnungs-Multistepper ist das schwerste Stück.** Die Ordnungsauswahl über exakte
   Gleitkommagleichheit und das `qwait`-Fenster mit `saved_tq5`, das eine Schrittweite Verzögerung
   trägt (`cppde_multistepper.hpp:1419-1423`), sind Zustand über Schrittgrenzen hinweg und gehören
@@ -812,6 +1061,14 @@ schärferes Orakel.
 
 ## Noch zu untersuchen
 
+- **Was die Steuerungskette in Wandzeit kostet, und ob sie das wert ist.** Stufe 4b hat sie gebaut,
+  wie Festlegung 1 es verlangt, und dabei zwei Zahlen geliefert, die vorher nur behauptet waren: der
+  Term ist `O(tol)`, aber bei `rtol = 1e-9` liegt er bei 3e-5 relativ zum Gradienten, und ein
+  Schritt mit verworfenen Versuchen tapet drei Runge-Kutta-Schritte statt einem. Beides steht der
+  Festlegung nicht entgegen, denn die volle Kette ist die exakte Ableitung dessen, was der Solver
+  gerechnet hat, und der eingefrorene Pfad ist es nicht. Aber wenn der Bench aus Stufe 7 zeigt, dass
+  die Kette spürbar kostet, ist die Abwägung eine gemessene und keine prinzipielle. Zu messen mit
+  Stufe 7, nicht vorher.
 - **Ein symbolisches `t` in den Saltationskorrekturen, und was es vorwärts kosten würde.**
   `cppde_saltation.hpp` leitet die Ereigniszeit heute von Hand her: `compute_dt_star` löst die
   Wurzelbedingung per IFT und trägt eine Korrektur zweiter Ordnung nach. Seit Stufe 3a kann der
