@@ -395,9 +395,11 @@ Jede Stufe endet auf einem Test, der ohne die folgende Stufe läuft.
 Dazu Stufe 5 (Ereignisse und Wurzeln, `--reverse-events`) und Stufe 6 (die Naht nach R,
 `tests/testthat/test-reverse.R`).
 
-Offen sind Stufe 7 (die Kette in dMod2) und Stufe 8 (CVODES ASA als Vergleich). Der Sparse-Pfad ist
-an keiner Stelle gefahren. Die Steuerungskette über Schrittgrenzen trägt bisher nur der
-Einschritt-Controller; für den Multistepper ist sie offen und in "Noch zu untersuchen" beschrieben.
+Dazu Stufe 7 (die Kette in dMod2), `dMod2/tests/testthat/test-reverse.R`.
+
+Offen ist Stufe 8 (CVODES ASA als Vergleich). Die Steuerungskette über Schrittgrenzen trägt bisher
+nur der Einschritt-Controller; für den Multistepper ist sie offen und in "Noch zu untersuchen"
+beschrieben. Der Sparse-Pfad ist inzwischen gefahren, auf Boehm.
 
 ### Stufe 0. Branch und die Größe des Schrittweitenterms messen
 
@@ -1048,8 +1050,62 @@ bei `rtol = 1e-10` genau der Diskretisierungsabstand ist.
 
 ### Stufe 7. Die Kette in dMod2
 
-Auf `devel-reverseAD` in dMod2. Jede Schicht bekommt neben ihrer Vorwärtsform eine
-Rückwärtsform:
+**Stand 2026-09-08: steht.** `obj(pars, sweep = "reverse")` läuft durch `normL2 -> Y -> Xs -> P`.
+Test `tests/testthat/test-reverse.R` in dMod2, fünfundzwanzig Prüfungen; Beispiel
+`inst/examples/example_ReverseAD.R`, sieben Abschnitte auf Spielzeugmodellen; dazu ein
+Reverse-Abschnitt in `example_Boehm_JProteomeRes2014.R`.
+
+**Der Aufruf ist `odemodel(..., reverse = TRUE)` und danach ein Argument.** Das vierte Objekt
+kommt neben `func`, `extended` und `extended2`; `Y()` und `P()` brauchen ihr `compile = TRUE`,
+weil der Reverse-Pfad keinen interpretierten Rückfall hat. `sweep` reist dann so, wie `hessian`
+schon reist: vom Aufrufer gesagt, von jedem Knoten unverändert weitergegeben, und nur vom
+Objective am Ende ausgewertet.
+
+**Die eine strukturelle Änderung an der Kompositionsalgebra ist zweiphasig, nicht einphasig.** Ein
+`*`-Knoten lässt sich nicht in einer Rekursion rückwärts fahren: `p2` muss ausgewertet sein, bevor
+`p1` überhaupt laufen kann, und darf erst differenziert werden, nachdem `p1` es wurde. Also
+`.fwdNode` auf dem Hinweg mit einem expliziten Band und `.bwdNode` auf dem Rückweg. Das Band hält
+die Vorwärtswerte jedes Knotens, was ein Rückwärtslauf ohnehin braucht, also wird nichts doppelt
+gerechnet.
+
+**Ein Kotangens ist an jedem Knoten dasselbe Paar**: `out` auf der Matrix, die eine Vorhersage oder
+eine Beobachtung trägt, `pars` auf den Parametern, die sie durchreicht. Die zweite Hälfte ist es,
+die den Baum zu einem Graphen macht statt zu einer Kette — eine Beobachtungsfunktion liest die
+Parameter der Vorhersage genauso wie ihre Werte — und beide Hälften addieren sich.
+
+**Der Seed ist nicht der Residuenvektor, und der Plan hat recht behalten.** Sigma trägt theta
+ebenfalls, also seedet eine Datenzeile zwei Dinge, und das zweite reist durch das Fehlermodell
+zurück und landet ein zweites Mal auf der Vorhersage. Statt das in R ein zweites Mal herzuleiten,
+ist der Kernel umgebaut: jede Zeile jedes Zweigs, ALOQ wie BLOQ, reduziert sich auf
+`grad = A*dwr + B*dw0 + C*dlogs`, und die Seeds sind das, was dabei herauskommt, wenn die
+Kettenregel einen Schritt früher aufhört. Ein Satz Koeffizienten, also können die beiden nicht
+auseinanderdriften. Dieselbe Bewegung wie `wrms_state` in Stufe 4b.
+
+**Wo der Rückwärtslauf aufhört und warum.** `Pimpl` und `Pequil` bekommen ihren Kotangens aus der
+Matrix, die sie ohnehin bauen, transponiert. Das ist kein Abkürzen: teuer am Vorwärtsmodus ist,
+dass seine Breite `n_theta` ist, und `n_theta` sitzt in der äußeren Kette; die Breite einer
+geschachtelten Transformation ist ihr eigener Parametersatz und wächst nicht mit. Also geht die
+Trajektorie rückwärts und das Teilproblem vorwärts, und die Kosten des Ganzen sind weiter
+unabhängig von `n_theta`. `Xf` bekommt gar keinen — es *ist* die Vorhersage ohne Ableitungen, und
+die Fehlermeldung sagt das jetzt, statt auf `odemodel(reverse = TRUE)` zu zeigen.
+
+**Der Vergleich ist auch hier nicht scharf, und aus demselben Grund wie in Stufe 6.** Ein
+Sensitivitätslauf trägt `n_theta` Tangentenspalten, und seine Fehlernorm nimmt das Maximum über
+alle; er schrittet also feiner als ein reiner Wertlauf, und die beiden Modi differenzieren zwei
+Diskretisierungen, jede exakt. Auf dem Zerfallsmodell fällt der Abstand von 7.7e-3 bei
+`tol = 1e-4` auf 9.6e-10 bei `1e-12`.
+
+**Ein Befund, der nicht am Adjoint lag.** Der `Pequil`-Test stand zuerst bei 1.3e-4. Der
+Rückwärtspfad löst den geschachtelten Fixpunkt zweimal, einmal für den Wert und einmal für die
+Jacobi, und jeder Lauf landet innerhalb von `roottol`. Der Abstand ist der des Teilproblems, und
+die Antwort war, das Teilproblem zu verschärfen, nicht die Toleranz zu lockern.
+
+**Offen:** ein Reverse-Lauf integriert die Zustände zweimal, einmal für die Werte und einmal im
+Sweep, weil ein Seed erst existiert, wenn die Kette darüber abgelaufen ist. Der Ausweg ist ein
+`solveODE`, das seine Checkpoints zwischen dem Wertaufruf und dem Seed-Aufruf behält, also eine
+Frage der Schnittstelle und keine der Korrektheit.
+
+Jede Schicht bekommt neben ihrer Vorwärtsform eine Rückwärtsform:
 
 - `normL2` erzeugt den Seed. Er ist nicht der Residuenvektor: das Fehlermodell hängt selbst von
   theta ab, `src/residual_kernel.cpp:144-158` koppelt über
