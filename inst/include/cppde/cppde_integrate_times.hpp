@@ -79,6 +79,7 @@ size_t integrate_times_dense(
    DtEstimator dt_est = DtEstimator(),
    undeduced_t<std::function<bool(const State&, const Time&)>> termination = nullptr,
    std::function<void()> step_obs = nullptr,
+   undeduced_t<std::function<void(const event_note<State>&)>> event_obs = nullptr,
    cppde::dense_output_stepper_tag = cppde::dense_output_stepper_tag())
 {
  // Pin BLAS to one thread for this solve, see cppde_blas_threads.hpp. The
@@ -90,6 +91,7 @@ size_t integrate_times_dense(
  if (termination) eng.set_termination(std::move(termination));
  // The reverse mode's checkpoint collector; see cppde_reverse_trajectory.hpp.
  if (step_obs) eng.set_step_observer(std::move(step_obs));
+ if (event_obs) eng.set_event_observer(std::move(event_obs));
  try {
    size_t steps = eng.process_dense(x, times, dt, obs, checker, root_tol, max_trigger_root);
    transfer_stepper_diagnostics(stepper, checker);

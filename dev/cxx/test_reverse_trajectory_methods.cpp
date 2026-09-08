@@ -7,9 +7,12 @@
 // the rescale it applied. The reference then replays that sequence under dual
 // rather than adapting again, which under sensitivities would take other steps.
 //
-// What the seed lands on is the trajectory start's carry, which is the state for
-// a one-step method and the whole Nordsieck history for a multistep one, plus
-// the parameters. That is the map the two sides differentiate.
+// What the seed lands on is the trajectory start: the initial state and the
+// parameters, for every method. A multistep run builds its Nordsieck history
+// out of that state through initialize(), so the reference builds it the same
+// way and the reverse sweep collapses the history's cotangent back onto the
+// state. That is the map dMod2 asks for, and the map the two sides
+// differentiate here.
 //
 // Covered: bdf, adams, rb4 and tsit5, each on an adaptive run with observations
 // interpolated inside the steps, seeded one carry slot at a time and with a
@@ -204,26 +207,18 @@ static void forward_sens(const store_of<S>& store, std::size_t n_carry,
   const auto& cp0 = store.step(0);
   std::vector<D> x(NX), xout(NX), xerr(NX), x_interp(NX);
 
+  for (std::size_t i = 0; i < NX; ++i) {
+    scale[i] = std::max(std::fabs(cp0.start_state()[i]), 1e-2);
+    x[i] = D(cp0.start_state()[i]);
+    x[i].diff(static_cast<unsigned>(i));
+    x[i].d(static_cast<unsigned>(i)) = scale[i];
+  }
   if constexpr (multistep) {
+    // The history the run started from, built the way the run built it.
+    std::vector<D> f0(NX);
+    sys.first(x, f0, D(cp0.t));
+    st.initialize(x, D(cp0.t), f0, D(cp0.carry.h));
     st.load_carry(cp0.carry, NX);
-    for (int j = 0; j <= cp0.carry.q; ++j) {
-      auto& slot = st.zn_mut(j);
-      for (std::size_t i = 0; i < NX; ++i) {
-        const std::size_t k = static_cast<std::size_t>(j) * NX + i;
-        scale[k] = std::max(std::fabs(cp0.zn[k]), 1e-2);
-        slot[i] = D(cp0.zn[k]);
-        slot[i].diff(static_cast<unsigned>(k));
-        slot[i].d(static_cast<unsigned>(k)) = scale[k];
-      }
-    }
-    for (std::size_t i = 0; i < NX; ++i) x[i] = st.zn_mut(0)[i];
-  } else {
-    for (std::size_t i = 0; i < NX; ++i) {
-      scale[i] = std::max(std::fabs(cp0.x[i]), 1e-2);
-      x[i] = D(cp0.x[i]);
-      x[i].diff(static_cast<unsigned>(i));
-      x[i].d(static_cast<unsigned>(i)) = scale[i];
-    }
   }
 
   S_obs.assign(store.n_obs() * NX * nd, 0.0);
@@ -292,14 +287,12 @@ static void replay_values(const store_of<S>& store, std::vector<double>& x_obs,
 
   const auto& cp0 = store.step(0);
   std::vector<double> x(NX), xout(NX), xerr(NX), xi(NX);
+  for (std::size_t i = 0; i < NX; ++i) x[i] = cp0.start_state()[i];
   if constexpr (multistep) {
+    std::vector<double> f0(NX);
+    sys.first(x, f0, cp0.t);
+    st.initialize(x, cp0.t, f0, cp0.carry.h);
     st.load_carry(cp0.carry, NX);
-    for (int j = 0; j <= cp0.carry.q; ++j)
-      for (std::size_t i = 0; i < NX; ++i)
-        st.zn_mut(j)[i] = cp0.zn[static_cast<std::size_t>(j) * NX + i];
-    for (std::size_t i = 0; i < NX; ++i) x[i] = st.zn_mut(0)[i];
-  } else {
-    for (std::size_t i = 0; i < NX; ++i) x[i] = cp0.x[i];
   }
 
   x_obs.assign(store.n_obs() * NX, 0.0);
@@ -351,10 +344,8 @@ static void run_method(const char* name, double tol)
   std::vector<double> x_run;
   forward_value<S>(store, x_run);
 
-  constexpr bool multistep = cppde::reverse::has_step_snapshot<S>::value;
-  std::size_t n_carry = NX;
-  if constexpr (multistep)
-    n_carry = static_cast<std::size_t>(store.step(0).carry.q + 1) * NX;
+  // One map for every method: the initial state and the parameters.
+  const std::size_t n_carry = NX;
   const unsigned nd = static_cast<unsigned>(n_carry + NP);
 
   std::vector<double> S_obs, x_ref;
@@ -364,7 +355,7 @@ static void run_method(const char* name, double tol)
 
   std::printf("%-8s steps %3zu  observations %zu  carry %zu\n",
               name, store.n_steps(), store.n_obs(), n_carry);
-  if constexpr (multistep) {
+  if constexpr (cppde::reverse::has_step_snapshot<S>::value) {
     // The carry a step hands on has to be the carry the next one reads, or the
     // cotangents are seeded onto the wrong slots and nothing says so.
     std::size_t bad = 0;
@@ -419,8 +410,8 @@ static void run_method(const char* name, double tol)
                 std::string(name) + " replayed value " + std::to_string(o * NX + i), tol);
     out.assign(nd, 0.0);
     for (std::size_t i = 0; i < NX; ++i) out[i] = rev.wx0()[i];
-    for (std::size_t i = 0; i < rev.whistory0().size() && NX + i < n_carry; ++i)
-      out[NX + i] = rev.whistory0()[i];
+    check(rev.whistory0().empty(),
+          std::string(name) + " the start's history cotangent is collapsed");
     for (std::size_t j = 0; j < NP; ++j) out[n_carry + j] = rev.wp()[j];
   };
 

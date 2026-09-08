@@ -6,7 +6,8 @@
 #   dev/cxx/run.sh --against F  diff this build's output against F
 #
 # A leading --codual, --reverse-step, --reverse-step-rb4,
-# --reverse-step-multistep or --reverse-trajectory selects a reverse-AD harness.
+# --reverse-step-multistep, --reverse-trajectory, --reverse-trajectory-methods
+# or --reverse-events selects a reverse-AD harness.
 #
 # The output is the assertion: two revisions that compute the same thing must
 # produce byte-identical output.
@@ -45,6 +46,11 @@ case "${1:-}" in
   --reverse-trajectory)
     SRC="$REPO/dev/cxx/test_reverse_trajectory.cpp"
     OUT=${TMPDIR:-/tmp}/cppde_reverse_trajectory
+    shift
+    ;;
+  --reverse-events)
+    SRC="$REPO/dev/cxx/test_reverse_events.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_reverse_events
     shift
     ;;
 esac

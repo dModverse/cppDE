@@ -36,8 +36,10 @@
 #include <cstddef>
 #include <vector>
 
+#include <cppde/cppde_event_engine.hpp>
 #include <cppde/cppde_onestep_controller.hpp>
 #include <cppde/cppde_reverse_step.hpp>
+#include <cppde/cppde_saltation.hpp>
 
 namespace cppde {
 namespace reverse {
@@ -81,6 +83,38 @@ struct control_params {
 };
 
 // ============================================================================
+//  event_record<T>
+//
+//  One intervention between two steps, as the reverse mode needs it: which
+//  events fired, the state on both sides of the jump, and the size the stepper
+//  was restarted with.
+//
+//  Which events fired and when the root sat is a control decision and is read
+//  back, not decided again. What is replayed is the arithmetic: the saltation
+//  sandwich for a root event, the reset for a fixed one, and the restart, which
+//  for a multistep method rebuilds the whole Nordsieck history out of the
+//  post-jump state and so is the only thing the carry then depends on.
+// ============================================================================
+
+template<class T>
+struct event_record {
+  static constexpr std::size_t npos = static_cast<std::size_t>(-1);
+
+  std::size_t after_step = 0;    // accepted steps before it
+  double      t          = 0.0;  // where the jump sits
+  double      t_before   = 0.0;  // where the state entering it was read
+  bool        root       = false;
+  bool        restart    = false;
+  double      dt_restart = 0.0;
+
+  std::vector<T> x_before, x_after;
+  std::vector<cppde::detail::TriggeredEvent> triggered;
+  // Root conditions a fixed jump switched on, in the order the engine applied
+  // them on the event surface. Empty unless a model has both kinds.
+  std::vector<std::size_t> switched;
+};
+
+// ============================================================================
 //  trajectory_store<Stepper, T>
 //
 //  What the forward run leaves behind. Filled through two calls, both cheap
@@ -102,9 +136,14 @@ public:
   struct observation {
     double      t;
     std::size_t step;   // accepted steps before it; 0 is the trajectory start
+    // The event whose post-jump state this is, rather than an interpolation
+    // inside the step above. npos for every ordinary observation.
+    std::size_t event = event_record<T>::npos;
   };
 
-  void clear() { m_steps.clear(); m_controls.clear(); m_obs.clear(); }
+  void clear() {
+    m_steps.clear(); m_controls.clear(); m_obs.clear(); m_events.clear();
+  }
 
   void reserve(std::size_t n_steps, std::size_t n_obs) {
     m_steps.reserve(n_steps);
@@ -130,7 +169,24 @@ public:
     m_controls.push_back(cs);
   }
 
-  void observe(double t) { m_obs.push_back(observation{t, m_steps.size()}); }
+  void observe(double t) {
+    m_obs.push_back(observation{t, m_steps.size(), event_record<T>::npos});
+  }
+
+  void push_event(const event_record<T>& e) { m_events.push_back(e); }
+  event_record<T>& last_event() { return m_events.back(); }
+  observation&     obs_mut(std::size_t i) { return m_obs[i]; }
+
+  std::size_t n_events() const { return m_events.size(); }
+  const event_record<T>& event(std::size_t i) const { return m_events[i]; }
+
+  // The intervention a step is entered through, npos where the step reads the
+  // one before it directly. Linear over a list that is empty on most models.
+  std::size_t event_before(std::size_t step) const {
+    for (std::size_t i = 0; i < m_events.size(); ++i)
+      if (m_events[i].after_step == step) return i;
+    return event_record<T>::npos;
+  }
 
   std::size_t n_steps() const { return m_steps.size(); }
   std::size_t n_obs()   const { return m_obs.size(); }
@@ -152,6 +208,7 @@ private:
   std::vector<checkpoint_type> m_steps;
   std::vector<control_state>   m_controls;
   std::vector<observation>     m_obs;
+  std::vector<event_record<T>> m_events;
   control_params               m_params;
 };
 
@@ -164,8 +221,8 @@ private:
 //  with, and the first step's is handed in at construction.
 //
 //  An event restart resets the controller between two firings, so the carried
-//  state would be wrong across one. That is stage 5, where the restart cuts the
-//  chain anyway.
+//  state would be wrong across one; the event record carries the size the
+//  stepper was restarted with instead, and the chain is cut there.
 // ============================================================================
 
 template<class DenseStepper, class Stepper, class T = double>
@@ -185,6 +242,14 @@ public:
           [this](double t, double h) { this->snapshot(t, h); });
       st.controlled_stepper().stepper().set_history_log(&m_hlog);
     }
+  }
+
+  // The engine's event observer. Handed to integrate_times_dense beside the
+  // step one; both write into the same store.
+  std::function<void(const cppde::detail::event_note<
+                       typename DenseStepper::state_type>&)>
+  event_observer() {
+    return [this](const auto& e) { this->on_event(e); };
   }
 
   void operator()() {
@@ -243,6 +308,55 @@ private:
     }
   }
 
+public:
+  // One intervention. The post-jump state is observed at the same time the jump
+  // sits at, before or after this note depending on which site fired it, so the
+  // marking runs in both directions: backwards over the observations already
+  // standing at that time, forwards through m_open_event. A root event also
+  // observes the state just before the jump, at t minus a whisker, which is why
+  // the backward scan stops on the first time that differs.
+  template<class Note>
+  void on_event(const Note& e) {
+    event_record<T> r;
+    r.after_step = m_store.n_steps();
+    r.t          = e.t;
+    r.t_before   = e.t_before;
+    r.root       = e.root;
+    r.restart    = e.restart;
+    r.dt_restart = e.dt_restart;
+    if (e.x_before) copy_state(*e.x_before, r.x_before);
+    if (e.x_after)  copy_state(*e.x_after,  r.x_after);
+    if (e.triggered) r.triggered = *e.triggered;
+    if (e.switched)  r.switched  = *e.switched;
+    m_store.push_event(r);
+
+    const std::size_t idx = m_store.n_events() - 1;
+    for (std::size_t i = m_store.n_obs(); i-- > 0;) {
+      if (m_store.obs(i).t != e.t) break;
+      m_store.obs_mut(i).event = idx;
+    }
+    m_open_event = idx;
+    m_open_t     = e.t;
+  }
+
+  // Called by the caller's observer wrapper for every observation, so a
+  // post-jump observation recorded after its note is marked too. The first one
+  // at another time closes the window.
+  void mark_observation() {
+    if (m_open_event == event_record<T>::npos) return;
+    const std::size_t i = m_store.n_obs() - 1;
+    if (m_store.obs(i).t == m_open_t) m_store.obs_mut(i).event = m_open_event;
+    else                              m_open_event = event_record<T>::npos;
+  }
+
+  template<class State>
+  static void copy_state(const State& in, std::vector<T>& out) {
+    out.resize(in.size());
+    for (std::size_t i = 0; i < in.size(); ++i)
+      out[i] = static_cast<T>(ad_traits::scalar_value(in[i]));
+  }
+
+private:
   void snapshot(double t, double h) {
     if constexpr (snapshot_family) {
       auto& st = m_st.controlled_stepper().stepper();
@@ -258,6 +372,8 @@ private:
   control_state                 m_next;
   history_log                   m_hlog;
   int                           m_rejected_seen = 0;
+  std::size_t                   m_open_event = event_record<T>::npos;
+  double                        m_open_t     = 0.0;
 };
 
 // ============================================================================
@@ -285,9 +401,24 @@ public:
   using store_type    = trajectory_store<Stepper, T>;
   using recorder_type = step_recorder<Stepper, T>;
   using rev_type      = codual<T>;
+  using rev_state     = std::vector<rev_type>;
 
-  // An explicit method asks for no equation solver, so the four-argument form
-  // hands in one that is never called.
+  // The events a model carries, rebuilt on the reverse scalar type. A jump's
+  // value and, in dMod2, its time depend on the parameters, so they are built
+  // from the step's own codual parameter copies and their cotangents land on wp
+  // like the right-hand side's.
+  struct event_set {
+    std::vector<cppde::detail::FixedEvent<rev_state, rev_type>> fixed;
+    std::vector<cppde::detail::RootEvent<rev_state, rev_type>>  root;
+  };
+
+  // A model without events hands in this, and no event replay ever runs.
+  struct no_events {
+    event_set operator()(const rev_state&) const { return event_set{}; }
+  };
+
+  // An explicit method asks for no equation solver, so the shorter forms hand
+  // in one that is never called.
   struct no_solver {
     void forward(std::vector<T>&)    {}
     void transposed(std::vector<T>&) {}
@@ -305,6 +436,15 @@ public:
   void sweep(const store_type& store, const std::vector<T>& params,
              MakeSys make_sys, const std::vector<T>& seeds, Solver& solver)
   {
+    no_events none;
+    sweep(store, params, make_sys, none, seeds, solver);
+  }
+
+  template<class MakeSys, class MakeEvents, class Solver>
+  void sweep(const store_type& store, const std::vector<T>& params,
+             MakeSys make_sys, MakeEvents make_events,
+             const std::vector<T>& seeds, Solver& solver)
+  {
     const std::size_t n_x = store.n_states();
     const std::size_t n_p = params.size();
 
@@ -314,6 +454,8 @@ public:
     m_wt.assign(store.n_steps(), T());
     m_wdt.assign(store.n_steps(), T());
     m_max_nodes = 0;
+    m_pending.clear();
+    m_pending_interp = false;
     m_x_obs.assign(store.n_obs() * n_x, T());
 
     std::size_t next_obs = store.n_obs();
@@ -337,9 +479,11 @@ public:
                                       dt_next, t_next, err_old_next);
 
       // Observations inside this step, seeded through the dense output. They
-      // are recorded on the step's own tape, so one sweep carries both.
+      // are recorded on the step's own tape, so one sweep carries both. One
+      // that an event produced is not an interpolation and is seeded there.
       while (next_obs > 0 && store.obs(next_obs - 1).step == k + 1) {
         --next_obs;
+        if (store.obs(next_obs).event != event_record<T>::npos) continue;
         m_rec.interpolate(clamp_to_step(store.step(k), store.obs(next_obs).t),
                           x_interp);
         const T* w = seeds.data() + next_obs * n_x;
@@ -349,10 +493,18 @@ public:
         }
       }
 
-      // What the later step handed back: its carry, which is the step end for a
-      // one-step method and the whole Nordsieck history for the multistepper,
-      // and the three the control law carries on top of it.
-      m_rec.seed_carry(m_wx, m_whist);
+      // What the later step handed back. Ordinarily that is its carry, read off
+      // this step's end; across an intervention it is a cotangent the event
+      // replay put on a point inside this step, and the carry is not read at
+      // all, because the restart threw it away.
+      if (m_pending_interp) {
+        m_rec.interpolate(clamp_to_step(store.step(k), m_pending_t), x_interp);
+        for (std::size_t i = 0; i < x_interp.size() && i < m_pending.size(); ++i)
+          x_interp[i].seed(m_pending[i]);
+        m_pending_interp = false;
+      } else {
+        m_rec.seed_carry(m_wx, m_whist);
+      }
       if (chained) {
         dt_next.seed(w_dt_in);
         t_next.seed(w_t);
@@ -375,11 +527,24 @@ public:
 
       const std::size_t used = m_rec.tape().size();
       if (used > m_max_nodes) m_max_nodes = used;
+
+      // The boundary this step was entered through. For a multistep method the
+      // carry there was built by initialize() out of one state, at the run's
+      // start and again after every event, so the cotangent of the whole
+      // Nordsieck array reduces to a cotangent of that state. An intervention
+      // then carries it back across the jump.
+      const std::size_t ei = store.event_before(k);
+      if (ei != event_record<T>::npos || k == 0) {
+        const event_record<T>* e =
+            (ei != event_record<T>::npos) ? &store.event(ei) : nullptr;
+        replay_boundary(store, k, ei, e, params, make_sys, make_events, seeds);
+      }
     }
 
     // Whatever was observed before the first step is the initial state itself.
     while (next_obs > 0) {
       --next_obs;
+      if (store.obs(next_obs).event != event_record<T>::npos) continue;
       const T* w = seeds.data() + next_obs * n_x;
       for (std::size_t i = 0; i < n_x; ++i) m_wx[i] += w[i];
     }
@@ -486,6 +651,143 @@ private:
     err_old_next = cppde::max(rev_type(T(0.01)), err);
   }
 
+
+  // ------------------------------------------------------------------------
+  //  The boundary a step was entered through, backwards.
+  //
+  //  Two maps, in the order the forward run applied them and so swept in
+  //  reverse: the restart, which for a multistep method builds the whole
+  //  Nordsieck history out of one state and therefore collapses the carry's
+  //  cotangent onto that state, and the jump, which carries it back across the
+  //  discontinuity. Both go on a tape of their own, rewound after; together
+  //  they are smaller than one step.
+  //
+  //  Where there is no event and the step is not the first, nothing runs: the
+  //  carry chains straight into the step before.
+  // ------------------------------------------------------------------------
+  template<class MakeSys, class MakeEvents>
+  void replay_boundary(const store_type& store, std::size_t k, std::size_t ei,
+                       const event_record<T>* e, const std::vector<T>& params,
+                       MakeSys make_sys, MakeEvents make_events,
+                       const std::vector<T>& seeds)
+  {
+    constexpr bool multistep = has_step_snapshot<Stepper>::value;
+    const std::size_t n_x = store.n_states();
+    const std::size_t n_p = params.size();
+    const bool has_jump   = (e != nullptr);
+    if constexpr (!multistep) { if (!has_jump) return; }
+
+    codual_tape<T>& tp = codual_tape_for<T>();
+    tp.rewind();
+
+    std::vector<rev_type> p(n_p);
+    for (std::size_t j = 0; j < n_p; ++j) {
+      p[j] = rev_type(params[j]);
+      p[j].independent();
+    }
+    auto sys = make_sys(p);
+
+    // The state the restart reads, which is the state the jump ends on where
+    // there is one and the step's own start where there is not.
+    std::vector<rev_type> xb, xa(n_x);
+    if (has_jump) {
+      auto ev = make_events(p);
+      xb.assign(n_x, rev_type());
+      for (std::size_t i = 0; i < n_x; ++i) {
+        xb[i] = rev_type(e->x_before[i]);
+        xb[i].independent();
+      }
+      xa = xb;
+      apply_jump(xa, xb, *e, sys, ev);
+    } else {
+      const T* x0 = store.step(k).start_state();
+      for (std::size_t i = 0; i < n_x; ++i) {
+        xa[i] = rev_type(x0[i]);
+        xa[i].independent();
+      }
+    }
+
+    // The restart. Its time and size are what the forward run used: the first
+    // checkpoint's own at the trajectory start, the size the engine
+    // re-estimated after an event, both control decisions.
+    if constexpr (multistep) {
+      const double t_r  = has_jump ? e->t : store.step(k).t;
+      const double dt_r = (has_jump && e->restart) ? e->dt_restart
+                                                   : store.step(k).carry.h;
+      auto& rst = m_rec.stepper();
+      std::vector<rev_type> f0(n_x);
+      sys.first(xa, f0, rev_type(t_r));
+      rst.initialize(xa, rev_type(t_r), f0, rev_type(dt_r));
+      // Slot by slot, the state part off wx and the rest off whistory, which is
+      // how the checkpoint above registered them.
+      const std::size_t n_slot = 1 + (n_x ? m_whist.size() / n_x : 0);
+      for (std::size_t j = 0; j < n_slot; ++j) {
+        const auto& slot = rst.zn(static_cast<int>(j));
+        for (std::size_t i = 0; i < n_x; ++i) {
+          const std::size_t idx = j * n_x + i;
+          slot[i].seed(idx < n_x ? m_wx[i] : m_whist[idx - n_x]);
+        }
+      }
+    } else {
+      for (std::size_t i = 0; i < n_x && i < m_wx.size(); ++i) xa[i].seed(m_wx[i]);
+    }
+
+    // Observations the jump produced. They are values, not interpolations, so
+    // nothing above has seeded them.
+    if (has_jump) {
+      for (std::size_t o = 0; o < store.n_obs(); ++o) {
+        if (store.obs(o).event != ei) continue;
+        for (std::size_t i = 0; i < n_x; ++i) {
+          m_x_obs[o * n_x + i] = xa[i].x();
+          xa[i].seed(seeds[o * n_x + i]);
+        }
+      }
+    }
+
+    tp.reverse();
+
+    m_wx.assign(n_x, T());
+    if (has_jump) {
+      for (std::size_t i = 0; i < n_x; ++i) m_wx[i] = xb[i].adjoint();
+      // The state entering the jump was read off the dense output of the step
+      // below it, so that is where its cotangent goes. At the run's own start
+      // there is no such step and it is the initial state's.
+      m_pending_interp = (e->after_step > 0);
+      m_pending_t      = e->t_before;
+      m_pending        = m_wx;
+    } else {
+      for (std::size_t i = 0; i < n_x; ++i) m_wx[i] = xa[i].adjoint();
+    }
+    m_whist.clear();
+    m_rec.accumulate(p, m_wp);
+
+    const std::size_t used = tp.size();
+    if (used > m_max_nodes) m_max_nodes = used;
+  }
+
+  // The reset itself, on the reverse scalar type. Which events fired is read
+  // back; what they did is replayed through the very functions the forward run
+  // called, so the two cannot drift apart.
+  template<class RSys, class Events>
+  static void apply_jump(std::vector<rev_type>& x,
+                         const std::vector<rev_type>& x_before,
+                         const event_record<T>& e, RSys& sys, Events& ev)
+  {
+    if (e.root) {
+      cppde::detail::saltation_root_analytical_batch(
+          x, x_before, rev_type(e.t), sys, ev.root, e.triggered);
+    } else {
+      // Root conditions the jump switched on belong on the same surface, which
+      // is what the engine's at_surface hook does forwards.
+      auto at_surface = [&](std::vector<rev_type>& xs, const rev_type& ts) {
+        for (std::size_t i : e.switched)
+          cppde::detail::apply_event_action(xs, xs, ts, ev.root[i]);
+      };
+      cppde::detail::apply_fixed_events_at_time(x, rev_type(e.t), ev.fixed,
+                                                sys, at_surface);
+    }
+  }
+
   // The controller's error norm on the replayed attempt, floored the way
   // try_step floors it before it reaches the control law.
   rev_type step_error(const control_params& par) const {
@@ -508,6 +810,11 @@ private:
 
   recorder_type  m_rec;
   std::vector<T> m_wx, m_whist, m_wp, m_wt, m_wdt, m_x_obs;
+  // What an intervention handed back: a cotangent on a point inside the step
+  // below it rather than on that step's carry.
+  std::vector<T> m_pending;
+  double         m_pending_t = 0.0;
+  bool           m_pending_interp = false;
   std::size_t    m_max_nodes = 0;
   bool           m_control_chain = true;
 };

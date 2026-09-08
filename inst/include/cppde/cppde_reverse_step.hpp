@@ -96,6 +96,10 @@ struct onestep_checkpoint {
 
   std::size_t n() const { return x.size(); }
 
+  // The state the step starts from, which for a one-step method is the whole
+  // carry. Flat so both families answer the same question the same way.
+  const T* start_state() const { return x.data(); }
+
   template<class Value>
   void capture(const stepper_type& /*st*/, const std::vector<Value>& x_in,
                double t_in, double dt_in)
@@ -187,6 +191,9 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern, Resiz
   bool        ops_recorded = false;
 
   std::size_t n() const { return n_states; }
+
+  // Nordsieck slot 0, which is the state the step starts from.
+  const T* start_state() const { return zn.data(); }
 
   // The slots beyond the state, whose cotangents the previous step receives on
   // its own carry out.

@@ -912,18 +912,52 @@ gefunden wurde, in der Reihenfolge, in der es auffiel:
 
 ### Stufe 5. Events und Wurzeln
 
-Transponierte Saltation. `cppde_saltation.hpp` hat die Vorwärtsvariante inklusive
-`compute_dt_star` mit IFT und Korrektur zweiter Ordnung; der Rückwärtsfall ist deren
-Transponierte. Der Neustart nach einem Ereignis verwirft die Nordsieck-Historie
-(`restart_from_order1`, `cppde_multistepper.hpp:1504-1518`), was den Rückwärtslauf an dieser
-Stelle abschneidet und die Buchführung vereinfacht.
+**Stand 2026-09-08: steht.** Test `dev/cxx/test_reverse_events.cpp` über
+`dev/cxx/run.sh --reverse-events`, ein fester Reset und ein wurzelgetriggerter auf demselben Lauf,
+auf `bdf` bei 1e-6 und auf `tsit5` bei 1e-9, jede Beobachtung einzeln geseedet und alle zusammen.
+
+**Es gibt keine transponierte Saltation, und das ist der Punkt.** Der Plan hat sie als eigene
+Herleitung vorgesehen. `cppde_saltation.hpp` ist aber über den Skalartyp templatisiert und
+verzweigt nur auf `std::is_arithmetic_v<value_type>`, also nimmt `codual` denselben AD-Zweig wie
+`dual`. Der Rückwärtslauf spielt die Vorwärtsfunktion ab, statt eine zweite danebenzustellen; damit
+können die beiden Richtungen nicht auseinanderdriften, was bei zwei Herleitungen die eigentliche
+Gefahr gewesen wäre. Auch der IFT-Quotient trägt sich von selbst: `g_val` bekommt seinen Wert
+abgezogen und behält nur die Ableitung, und der Knoten für `-g/ġ` schreibt dann genau die Partiale
+`-1/ġ`, weil die nach `ġ` mit dem Wert null wegfällt. Die Korrektur zweiter Ordnung trägt in
+beiden Richtungen erster Ordnung nichts bei, aus demselben Grund.
+
+**Ein Ereignis ist zwei Abbildungen zwischen zwei Schritten**, und beide werden abgespielt:
+
+1. **Der Sprung.** Der Reset, über die Unstetigkeit getragen. Welche Ereignisse gefeuert haben und
+   wo die Wurzel lag, sind Kontrollentscheidungen und werden aus dem `event_record` gelesen, nicht
+   neu getroffen. Sein Kotangens landet auf der Dense-Output-Auswertung des Schritts davor, also
+   dort, wo der Vorwärtslauf den Zustand vor dem Sprung gelesen hat.
+2. **Der Neustart.** `init_stepper_after_event` baut die Nordsieck-Historie komplett aus dem
+   Zustand nach dem Sprung neu auf. Rückwärts heißt das, der Kotangens des ganzen Arrays fällt auf
+   den eines einzelnen Zustands zusammen. Das ist dieselbe Maschinerie wie am Trajektorienanfang,
+   und das war eine Lücke: bis hierher hat der Rückwärtslauf `whistory0()` als eigene Richtung
+   herausgegeben, was für einen Test mit Nordsieck-Seeds aufgeht, aber nicht das ist, was die
+   R-Schicht braucht. Jetzt gibt `wx0()` den Kotangens des **Anfangszustands** und `whistory0()`
+   ist leer.
+
+**Getragen wird das von einem Protokoll wie in Stufe 4.** `EventEngine` bekommt
+`set_event_observer`, der an allen vier Sprungstellen des Dense-Loops feuert und den Zustand
+beidseits mitgibt; der Sammler legt daraus ein `event_record` an und markiert die Beobachtung, die
+der Sprung erzeugt hat, denn die ist ein Wert und keine Interpolation.
 
 Nur der `process_dense`-Pfad wird unterstützt. `localize_root_controlled`
 (`cppde_event_engine.hpp:600-627`) re-integriert innerhalb der Lokalisierung und mutiert dabei
 den Stepper; das ist rückwärts nicht sinnvoll zu rekonstruieren. Für Modelle mit Wurzelereignissen
-und `useDenseOutput = FALSE` erhebt der Reverse-Modus einen Fehler statt still falsch zu rechnen.
+und `useDenseOutput = FALSE` erhebt der Reverse-Modus einen Fehler statt still falsch zu rechnen;
+das ist in Stufe 6 zu setzen, wo die Option lebt.
 
-Test: gegen die Vorwärtssensitivitäten auf den Ereignismodellen aus `test-ode-methods.R`.
+`equilibrate` braucht nichts davon: es ist eine Termination und kein Ereignis, die Trajektorie hört
+einfach auf. Ein terminales Wurzelereignis ebenso, es ändert den Zustand nicht.
+
+Ein Befund am Rande, der für den Vorwärtsmodus genauso gilt: **die Referenz muss den FSAL-Stage
+nach einem Ereignis wegwerfen.** Der Treiber tut das über `reset_after_event`; ein Testtreiber, der
+die Schrittfolge selbst nachfährt, nicht, und dann trägt `k1` eine Ableitung von vor dem Sprung in
+den Schritt danach. Das waren 1e-7 und hat wie ein Adjoint-Fehler ausgesehen.
 
 ### Stufe 6. Die Naht
 
