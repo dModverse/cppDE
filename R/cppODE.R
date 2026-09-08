@@ -248,14 +248,22 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   if (verbose) message("Generating ODE and Jacobian code...")
 
-  # Single Python call generates everything
-  if (deriv2) {
-    numType <- "AD2"  # F<F<double>>
-  } else if (deriv) {
-    numType <- "AD"   # F<double>
-  } else {
-    numType <- "double"
-  }
+  # The scalar the model body is written in, spelled out. It carries what the
+  # codegen needs to know about it -- how many derivative layers, and whether
+  # they live in the dual arena -- rather than being recognised by name. A name
+  # the codegen did not know once passed straight through every AD branch and
+  # emitted std::exp on a tape type.
+  numType <- if (deriv2) sprintf("cppde::dual2nd<double, %d>", nStack_width)
+             else if (deriv) sprintf("cppde::dual<double, %d>", nStack_width)
+             else "double"
+  numLevel <- if (deriv2) 2L else if (deriv) 1L else 0L
+  numArena <- deriv || deriv2
+
+  # The reverse body's own type. A codual carries a tape index rather than a
+  # tangent, so it has one derivative layer and no arena to bound.
+  revType  <- "cppde::codual<double>"
+  revLevel <- 1L
+  revArena <- FALSE
 
   # Auto-selected sparse without KLU -> dense. An explicit sparse = TRUE
   # is left alone and reaches compile().
@@ -268,6 +276,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     rhs_dict = as.list(setNames(rhs, variables)),
     params_list = params,
     num_type = numType,
+    ad_level = numLevel,
+    arena = numArena,
     fixed_states = fixed_initials,
     fixed_params = fixed_params,
     forcings_list = forcings,
@@ -288,7 +298,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     rev_result <- codegen$generate_ode_cpp(
       rhs_dict = as.list(setNames(rhs, variables)),
       params_list = params,
-      num_type = "AD",
+      num_type = revType,
+      ad_level = revLevel,
+      arena = revArena,
       fixed_states = fixed_initials,
       fixed_params = fixed_params,
       forcings_list = forcings,
@@ -323,6 +335,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       params_list = params,
       n_states = n_variables,
       num_type = numType,
+      ad_level = numLevel,
+      arena = numArena,
       forcings_list = forcings,
       rhs_dict = as.list(setNames(rhs, variables))
     )
@@ -335,7 +349,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         states_list = variables,
         params_list = params,
         n_states = n_variables,
-        num_type = "AD",
+        num_type = revType,
+        ad_level = revLevel,
+        arena = revArena,
         forcings_list = forcings,
         rhs_dict = as.list(setNames(rhs, variables))
       )
@@ -361,6 +377,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       params_list = params,
       n_states = n_variables,
       num_type = numType,
+      ad_level = numLevel,
+      arena = numArena,
       forcings_list = forcings
     )
 
@@ -371,7 +389,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # --- Generate forcing initialization code ---
   forcing_init_code <- paste(codegen$generate_forcing_init_code(n_forcings, numType), collapse = "\n")
   rev_forcing_init_code <- if (is_reverse)
-    paste(codegen$generate_forcing_init_code(n_forcings, "AD"), collapse = "\n") else ""
+    paste(codegen$generate_forcing_init_code(n_forcings, revType), collapse = "\n") else ""
 
 
   # --- C++ includes ---
@@ -390,18 +408,12 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   )
 
   # --- Using declarations ---
-  # N is nStack_width, so the AD type is cppde::dual<double, N>, arena-allocated
-  # at N = 0; deriv2 uses cppde::dual2nd<double, N> with the same layout.
-  if (deriv2) {
+  # No scalar alias: the emitted code spells cppde::dual<double, N> and
+  # cppde::codual<double> out, so nothing downstream has to know what a
+  # three-letter name stands for.
+  if (deriv2 || deriv) {
     usings <- c(
-      "using namespace cppde;",
-      sprintf("using AD = cppde::dual<double, %d>;", nStack_width),
-      sprintf("using AD2 = cppde::dual2nd<double, %d>;", nStack_width)
-    )
-  } else if (deriv) {
-    usings <- c(
-      "using namespace cppde;",
-      sprintf("using AD = cppde::dual<double, %d>;", nStack_width)
+      "using namespace cppde;"
     )
   } else {
     usings <- c(
@@ -856,30 +868,35 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   # make_stepper_type() errors on a method name that is not multistep, so the
   # stepper type strings are built lazily, only for is_multistep(method).
+  # The two AD scalars the steppers may be instantiated on, spelled out for the
+  # same reason the model body is.
+  ad1 <- sprintf("cppde::dual<double, %d>", nStack_width)
+  ad2 <- sprintf("cppde::dual2nd<double, %d>", nStack_width)
+
   ms_double <- ms_AD <- ms_AD2 <- NULL
   if (use_sparse) {
     rb4_double <- "rosenbrock4<double, sparse_lu_tag>"
-    rb4_AD     <- "rosenbrock4<AD, sparse_lu_tag>"
-    rb4_AD2    <- "rosenbrock4<AD2, sparse_lu_tag>"
+    rb4_AD     <- sprintf("rosenbrock4<%s, sparse_lu_tag>", ad1)
+    rb4_AD2    <- sprintf("rosenbrock4<%s, sparse_lu_tag>", ad2)
     if (is_multistep(method)) {
       ms_double <- make_stepper_type("double", "sparse_lu_tag")
-      ms_AD     <- make_stepper_type("AD",     "sparse_lu_tag")
-      ms_AD2    <- make_stepper_type("AD2",    "sparse_lu_tag")
+      ms_AD     <- make_stepper_type(ad1,      "sparse_lu_tag")
+      ms_AD2    <- make_stepper_type(ad2,      "sparse_lu_tag")
     }
   } else {
     rb4_double <- "rosenbrock4<double>"
-    rb4_AD     <- "rosenbrock4<AD>"
-    rb4_AD2    <- "rosenbrock4<AD2>"
+    rb4_AD     <- sprintf("rosenbrock4<%s>", ad1)
+    rb4_AD2    <- sprintf("rosenbrock4<%s>", ad2)
     if (is_multistep(method)) {
       ms_double <- make_stepper_type("double", "cppde::dense_lu_tag")
-      ms_AD     <- make_stepper_type("AD",     "cppde::dense_lu_tag")
-      ms_AD2    <- make_stepper_type("AD2",    "cppde::dense_lu_tag")
+      ms_AD     <- make_stepper_type(ad1,      "cppde::dense_lu_tag")
+      ms_AD2    <- make_stepper_type(ad2,      "cppde::dense_lu_tag")
     }
   }
   # Tsit5 stepper types (no Jacobian pattern, explicit method)
   tsit5_double <- "cppde::tsit5<double>"
-  tsit5_AD     <- "cppde::tsit5<AD>"
-  tsit5_AD2    <- "cppde::tsit5<AD2>"
+  tsit5_AD     <- sprintf("cppde::tsit5<%s>", ad1)
+  tsit5_AD2    <- sprintf("cppde::tsit5<%s>", ad2)
 
   # The value type the reverse pass integrates in is double, so its stepper
   # type is the plain one whatever the forward emission picks.
@@ -1226,8 +1243,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "",
       "  // Forcings on the reverse type. Their nodes are numbers, so this is a",
       "  // second reader over the same data, not a second interpolation.",
-      "  std::vector<cppde::PchipForcing<rev_::AD> > _rev_forcings(n_forcings);",
-      "  std::vector<const cppde::PchipForcing<rev_::AD>*> _rev_F(n_forcings);",
+      "  std::vector<cppde::PchipForcing<cppde::codual<double> > > _rev_forcings(n_forcings);",
+      "  std::vector<const cppde::PchipForcing<cppde::codual<double> >*> _rev_F(n_forcings);",
       "  for (int fi = 0; fi < n_forcings; ++fi) {",
       "    const int n_points = args.flen[fi];",
       "    std::vector<double> ft(args.ftimes[fi], args.ftimes[fi] + n_points);",
@@ -1419,9 +1436,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "// The same model on the tape type. The backward pass instantiates it once",
     "// per step and throws the tape away again, so nothing here outlives a step.",
     "namespace rev_ {",
-    "using AD = cppde::codual<double>;",
     rev_ode_code, "", rev_jac_code,
-    event_builder("AD", rev_event_code),
+    event_builder(revType, rev_event_code),
     "}") else character(0)
 
   cpp_text <- c(

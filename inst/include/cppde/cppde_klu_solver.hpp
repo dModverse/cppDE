@@ -26,6 +26,8 @@
 #include <vector>
 #include <stdexcept>
 #include <cstdio>
+#include <cmath>
+#include <limits>
 
 // Compile-time KLU settings (set by codegen via -D flags).
 // Defaults match KLU's own defaults (BTF on, AMD ordering).
@@ -95,6 +97,14 @@ public:
     m_has_numeric = false;
   }
 
+  // Below this reciprocal pivot growth a reused pivot order is not worth
+  // trusting. eps^(2/3) is the threshold SUNDIALS uses for the same decision.
+  static double rgrowth_floor() {
+    static const double f =
+      std::pow(std::numeric_limits<double>::epsilon(), 2.0 / 3.0);
+    return f;
+  }
+
   // ------------------------------------------------------------------
   //  Factorize: analyze (if needed) + factor/refactor
   // ------------------------------------------------------------------
@@ -124,11 +134,29 @@ public:
                      KLUAMD == 0 ? "AMD" : "COLAMD");
 #endif
     } else {
-      // Fast path: reuse symbolic analysis + numeric structure
+      // Fast path: reuse symbolic analysis + numeric structure.
       int ok = klu_refactor(const_cast<int*>(Ap),
                             const_cast<int*>(Ai),
                             const_cast<double*>(Ax),
                             m_symbolic, m_numeric, &m_common);
+      // klu_refactor keeps the pivot order the first factorisation chose. That
+      // is what makes it fast and what makes it unsafe on its own: it reports
+      // success even when the reused order has become numerically hopeless for
+      // these values, which on a stiff model it does as soon as gamma moves far.
+      //
+      // A Newton corrector forgives that, being an iteration that converges on
+      // the equation rather than on the matrix. The reverse mode does not: it
+      // uses the solve once and directly, and a bad factorisation goes straight
+      // into the gradient. Bachmann is where that showed, four orders of
+      // magnitude on the stiff modes while the dense path was exact.
+      //
+      // So the pivot growth decides, as SUNDIALS' own KLU interface does it.
+      if (ok) {
+        klu_rgrowth(const_cast<int*>(Ap), const_cast<int*>(Ai),
+                    const_cast<double*>(Ax), m_symbolic, m_numeric, &m_common);
+        // Written so a NaN falls through to the full factorisation.
+        if (!(m_common.rgrowth > rgrowth_floor())) ok = 0;
+      }
       if (!ok) {
         // Fallback: full re-factor
         free_numeric();

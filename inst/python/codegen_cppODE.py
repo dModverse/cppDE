@@ -149,6 +149,52 @@ def _safe_sympify(expr_str, local_symbols=None):
         )
     except (SyntaxError, TokenError) as e:
         raise parse_error(expr_str, e) from None
+class ScalarType(str):
+    """The C++ scalar a generated model is written in.
+
+    A str, so every f-string in this file keeps emitting the type name and
+    nothing has to change to spell `cppde::dual<double, 0>` where it used to
+    spell `AD`. What the generator needs to know about the type travels with it
+    instead of being read off the name:
+
+      ad_level  0 for a plain double, 1 for one derivative layer, 2 for two.
+                Decides whether std::exp becomes cppde::exp and how many .val()
+                calls peel a scalar out.
+      arena     whether those layers allocate in cppde::dual_arena, so the
+                right-hand side needs a scope. True for dual, false for codual,
+                which carries a tape index and allocates nothing.
+
+    Matching the name is what this replaces, and it is not a stylistic
+    preference: a third type name once passed every `num_type in ("AD", "AD2")`
+    test unnoticed and the model emitted std::exp on a tape type.
+
+    The generator entry points take the two properties as their own arguments
+    and build this here. They cannot take the object itself: reticulate
+    converts a str subclass to a plain R character on the way out, and the
+    properties would not survive the round trip.
+    """
+
+    def __new__(cls, name, ad_level=0, arena=False):
+        obj = super().__new__(cls, name)
+        obj.ad_level = int(ad_level)
+        obj.arena = bool(arena)
+        return obj
+
+
+def _ad_level(num_type):
+    """How many derivative layers the scalar carries.
+
+    A plain string still answers, so a caller that has not been updated keeps
+    working -- but it answers 0, which is the safe direction: it emits std::
+    rather than silently mis-parsing an AD type.
+    """
+    return getattr(num_type, "ad_level", 0)
+
+
+def _uses_arena(num_type):
+    return getattr(num_type, "arena", False)
+
+
 def _ensure_double_literals(cpp_code):
     """Convert integer literals to double literals in C++ code."""
     sci_pattern = r'(\d+\.?\d*[eE][+-]?\d+)'
@@ -376,7 +422,7 @@ def _to_cpp(expr, states, params, n_states, num_type, forcings=None, use_initial
     cpp_code = _MATH_MACRO_PATTERN.sub(lambda m: _MATH_MACRO_MAP[m.group(0)], cpp_code)
     
     # Single-pass std:: -> {prefix}:: replacement for AD types (precompiled regex)
-    if num_type in ("AD", "AD2"):
+    if _ad_level(num_type) > 0:
         cpp_code = _AD_FN_PATTERN.sub(lambda m: f'{_AD_PREFIX}::{m.group(1)}', cpp_code)
     
     cpp_code = _WHITESPACE_PATTERN.sub("", cpp_code)
@@ -391,13 +437,14 @@ def _to_cpp(expr, states, params, n_states, num_type, forcings=None, use_initial
 def generate_ode_cpp(
     rhs_dict,
     params_list,
-    num_type="AD",
+    num_type="double",
     fixed_states=None,
     fixed_params=None,
     forcings_list=None,
     sparse=None,
     skip_jacobian=False,
-):
+    ad_level=0,
+    arena=False):
     """
     Generate C++ code for ODE system and Jacobian.
 
@@ -421,6 +468,9 @@ def generate_ode_cpp(
     dict with keys: "ode_code", "jac_code", "jac_matrix", "time_derivs",
                     "states", "params", "forcings"
     """
+    # The scalar's properties are stated by the caller, not read off its
+    # name; see ScalarType.
+    num_type = ScalarType(num_type, ad_level, arena)
     # Normalize inputs
     if fixed_states is None:
         fixed_states = []
@@ -963,12 +1013,12 @@ def _arena_scope_lines(num_type):
     (CSE locals, ET assignment buffers) bumps the thread-local arena;
     the scope rolls back to baseline when the RHS functor returns.
 
-    Only safe for num_type == "AD" (single-level dual<double, N>): in that
+    Only safe for a single-level dual<double, N>: in that
     mode dxdt is slab-bound (is_dynamic_dual<dual<double, N>> = true), so
     write-to-slab uses the COPY-into-bound-buffer branch of move-assign,
     not the STEAL branch. Arena rollback then frees only CSE temps.
 
-    NOT safe for num_type == "AD2" (nested dual<dual<double, N>, N>): the
+    NOT safe for the nested dual<dual<double, N>, N>: the
     nested predicate is_dynamic_dual<dual<dual<double,N>,N>> is FALSE,
     so dxdt is NOT slab-bound. dxdt[i].tan_ starts at nullptr; an ET
     assignment from a temporary STEALS the rvalue's arena pointer. After
@@ -977,8 +1027,10 @@ def _arena_scope_lines(num_type):
     only: working-set growth is bounded by total RHS calls × per-RHS
     temps, but no per-call scope is safe.
 
-    Non-AD (num_type == "double"): no arena involvement, no scope needed."""
-    if num_type == "AD":
+    A plain double has no arena to bound, and neither has a tape type: a codual
+    carries an index, not a tangent, and allocates nothing here. Both say so
+    through ScalarType.arena rather than through their name."""
+    if _uses_arena(num_type) and _ad_level(num_type) == 1:
         return ["    cppde::dual_arena::scope _rhs_arena_scope;"]
     return []
 
@@ -1192,7 +1244,7 @@ def _try_template_dedup(odes_list, states_list, params_list, n_states, num_type,
             return str(int(sympy_expr)) + ".0"
         cpp = printer.doprint(sympy_expr).replace("\n", " ")
         cpp = _MATH_MACRO_PATTERN.sub(lambda m: _MATH_MACRO_MAP[m.group(0)], cpp)
-        if num_type in ("AD", "AD2"):
+        if _ad_level(num_type) > 0:
             cpp = _AD_FN_PATTERN.sub(lambda m: f'{_AD_PREFIX}::{m.group(1)}', cpp)
         return cpp
 
@@ -1333,7 +1385,7 @@ def _try_template_dedup(odes_list, states_list, params_list, n_states, num_type,
 # Forcing initialization code generation
 # =====================================================================
 
-def generate_forcing_init_code(n_forcings, num_type="AD"):
+def generate_forcing_init_code(n_forcings, num_type=None):
     """Generate C++ code to initialize PchipForcing objects from R raw data."""
     return [
         "",
@@ -1560,9 +1612,10 @@ def _generate_root_gradient_lambdas(root_expr, states_list, params_list,
 
         # .val() extracts the scalar from an AD type, const-correct: none for double,
         # one level for dual, two for dual2nd.
-        if num_type == "AD2":
+        lvl = _ad_level(num_type)
+        if lvl >= 2:
             xtr = lambda expr: f"({expr}).val().val()"
-        elif num_type == "AD":
+        elif lvl == 1:
             xtr = lambda expr: f"({expr}).val()"
         else:
             xtr = lambda expr: expr
@@ -1649,7 +1702,9 @@ def fixed_event_time_exprs(events_df, states_list, params_list, n_states,
 
 
 def generate_event_code(events_df, states_list, params_list, n_states,
-                        num_type="AD", forcings_list=None, rhs_dict=None):
+                        num_type="double", forcings_list=None, rhs_dict=None,
+    ad_level=0,
+    arena=False):
     """
     Generate C++ initialization lines for fixed-time and root events.
 
@@ -1675,6 +1730,9 @@ def generate_event_code(events_df, states_list, params_list, n_states,
         When provided, enables analytical G_tt computation for the
         second-order IFT correction.
     """
+    # The scalar's properties are stated by the caller, not read off its
+    # name; see ScalarType.
+    num_type = ScalarType(num_type, ad_level, arena)
     if forcings_list is None:
         forcings_list = []
     if states_list is None:
@@ -1866,7 +1924,9 @@ def generate_event_code(events_df, states_list, params_list, n_states,
 # =====================================================================
 
 def generate_rootfunc_code(rootfunc, states_list, params_list, n_states,
-                           num_type="AD", forcings_list=None):
+                           num_type="double", forcings_list=None,
+    ad_level=0,
+    arena=False):
     """
     Generate C++ code for root function based termination.
     
@@ -1874,6 +1934,9 @@ def generate_rootfunc_code(rootfunc, states_list, params_list, n_states,
     1. rootfunc = "equilibrate": steady-state detection
     2. rootfunc = list of expressions: stop when any crosses zero
     """
+    # The scalar's properties are stated by the caller, not read off its
+    # name; see ScalarType.
+    num_type = ScalarType(num_type, ad_level, arena)
     if forcings_list is None:
         forcings_list = []
     

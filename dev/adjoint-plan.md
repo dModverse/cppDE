@@ -977,13 +977,20 @@ Skalartyp nach Dingen fragt, die ein `double` nicht beantwortet — `.val()` in 
 `G_tt`-Korrektur ist die Stelle, an der es auffällt. Die Ereignisse liegen dafür in einer
 `build_events`-Funktion je Typ statt inline in `solve_impl`.
 
-**Der zweite Rumpf wird unter dem Namen `AD` generiert, nicht unter einem eigenen.** Der Codegen
-erkennt genau `"AD"` und `"AD2"` als AD-Typen und hängt daran mehr, als der Name vermuten lässt:
-`std::exp` wird zu `cppde::exp`, `.val()` bekommt seine Tiefe, der Arena-Scope wird gesetzt. Ein
-dritter Name ging still an allem davon vorbei — das Modell emittierte `std::exp(codual<double>)`
-und übersetzte nicht. Aufgefallen ist es erst an Boehm, also am ersten Modell mit einer
-Exponentialfunktion in der rechten Seite; die Toy-Modelle der Testsuite haben keine. Welcher Typ
-`AD` ist, entscheidet jetzt die Namespace-Alias, nicht der Codegen.
+**Der Codegen erkennt keine Typnamen mehr.** Er hat `"AD"` und `"AD2"` per Zeichenkettenvergleich
+erkannt und daran mehr gehängt, als der Name vermuten lässt: `std::exp` wird zu `cppde::exp`,
+`.val()` bekommt seine Tiefe, der Arena-Scope wird gesetzt. Ein dritter Name ging still an allem
+davon vorbei, und das Modell emittierte `std::exp(codual<double>)`. Aufgefallen ist es erst an
+Boehm, dem ersten Modell mit einer Exponentialfunktion in der rechten Seite; die Toy-Modelle der
+Suite haben keine.
+
+Die Eigenschaften stehen jetzt beim Aufruf: `ad_level` und `arena` gehen als eigene Argumente an
+`generate_ode_cpp`, `generate_event_code` und `generate_rootfunc_code`, und der emittierte Code
+schreibt `cppde::dual<double, N>`, `cppde::dual2nd<double, N>` und `cppde::codual<double>` aus.
+Die `using AD`-Aliase entfallen. Nebenbei fällt damit auch der Arena-Scope aus dem Reverse-Rumpf,
+wo er nichts zu begrenzen hatte: ein `codual` trägt einen Bandindex und alloziert dort nichts.
+Als Vorgabe steht `num_type = "double"` statt `"AD"`, damit ein Aufrufer, der nichts sagt, laut
+falsch liegt statt leise.
 
 **Der Sammler hängt im Produktionstreiber**, nicht in einem zweiten. Der Beobachter des Modells
 meldet jede Beobachtung an den Store, `integrate_times_dense` bekommt die beiden Haken hinten
@@ -1044,9 +1051,23 @@ bringen, dann über die Umbenennung entscheiden.
 
 `cvode()` bleibt in dieser Stufe unberührt; sein Reverse-Modus ist Stufe 8.
 
-**Der Sparse-Pfad ist gefahren.** Boehm ist ein KLU-Modell (8x8, 67 Prozent dünn), und der
-transponierte Solve über `klu_tsolve` stimmt dort mit dem Vorwärtsmodus auf 7.5e-6 überein, was
-bei `rtol = 1e-10` genau der Diskretisierungsabstand ist.
+**Der Sparse-Pfad ist gefahren, und er war kaputt.** Boehm ist ein KLU-Modell (8x8, 67 Prozent
+dünn) und stimmt auf 7.5e-6; Bachmann (25x25) lag um vier Größenordnungen daneben, während derselbe
+Lauf mit dichter Jacobi exakt war. Die Primitive war es nicht: `klu_tsolve` gegen eine dichte
+Referenz auf einer unsymmetrischen Matrix stimmt auf 1e-12, `dev/cxx/test_sparse_transpose.cpp`.
+
+Der Fehler saß in `klu_refactor`. Es behält die Pivotordnung der ersten Faktorisierung — das macht
+es schnell und für sich genommen unsicher, denn es meldet Erfolg auch dann, wenn diese Ordnung für
+die neuen Werte hoffnungslos geworden ist, und auf einem steifen Modell wird sie das, sobald
+`gamma` weit wandert. **Ein Newton-Korrektor verzeiht das**, weil er auf die Gleichung konvergiert
+und nicht auf die Matrix; deshalb ist es in Jahren Vorwärtsbetrieb nie aufgefallen. **Der
+Rückwärtslauf verzeiht es nicht**: er benutzt den Solve einmal und direkt, und eine schlechte
+Faktorisierung geht unverändert in den Gradienten. Jetzt entscheidet das reziproke Pivotwachstum,
+wie SUNDIALS' eigene KLU-Anbindung es entscheidet.
+
+Das ist der zweite Befund der Art an einem Tag: der Reverse-Modus ist ein Konsument, der keine
+Iteration zwischen sich und die lineare Algebra stellt, und findet damit Dinge, die der
+Vorwärtsmodus strukturell überdeckt.
 
 ### Stufe 7. Die Kette in dMod2
 
@@ -1229,6 +1250,49 @@ schärferes Orakel.
   gewachsen ist. Jede Stufe trägt deshalb ihren Anteil der Fläche mit, statt sie am Ende
   nachzureichen; die Kombinationsmatrix gehört von Stufe 3b an in die Tests und nicht in eine
   Schlussstufe.
+
+## Festlegung 1 steht in Frage, und die eigenen Messungen sprechen dagegen
+
+**Stand 2026-09-09.** Der Plan legt fest, dass der Adjoint durch die vollständige Schrittweiten-
+und Ordnungssteuerung geht. Eine Literaturrecherche an diesem Tag legt nahe, dass das die falsche
+Vorgabe ist, und die eigenen Zahlen des Plans sagen dasselbe.
+
+**Was die Literatur sagt.** Wer den Schrittweitenregler und den Fehlerschätzer mitdifferenziert,
+erzeugt *spurious*, unphysikalische Adjoint-Ableitungen der Zeitschritte; das diskrete
+Adjoint-Modell wird dadurch **inkonsistent zur Adjoint-ODE** und liefert falsche Ableitungen. Die
+empfohlene Behandlung ist, diese Beiträge herauszurechnen, nicht sie hinzuzufügen. `jaxdae` (2026)
+friert aus demselben Grund das akzeptierte Schrittgitter ein und hält den Regler ausdrücklich aus
+der Kotangenten-Propagation heraus. Nachzulesen bei
+
+- Approximation of weak adjoints by reverse automatic differentiation of BDF methods,
+  arXiv:1109.3061 — was diskrete Adjoints von BDF bei variabler Ordnung und Schrittweite
+  überhaupt approximieren;
+- PETSc TSAdjoint, arXiv:1912.07696;
+- jaxdae, arXiv:2607.23202.
+
+**Was die eigenen Messungen sagen.** Stufe 0 hat am 2026-09-07 geschlossen: `e_h(theta)` ist
+stückweise glatt mit Sprüngen an den Umschaltpunkten, die Kennzahl ist Sprunghöhe geteilt durch
+`dtheta` und **keine Ableitung**; die Folgerung dort war bereits "`h` dual bleibt draußen,
+dauerhaft, weil es nichts misst". Stufe 4b hat den getapten Term dann gemessen: `O(tol)`, mit
+`rtol` fallend, also die theta-Ableitung des Diskretisierungsfehlers. Beides passt genau zu dem,
+was die Literatur als unphysikalisch bezeichnet.
+
+**Was daraus folgt, und was noch nicht.** Der eingefrorene Pfad, `control_chain(false)`, ist
+danach nicht das Orakel, sondern der richtige Auslieferungsstand, und dass der Multistepper die
+Kette nicht hat, ist kein Rückstand, sondern die Vorgabe. Zu klären bleibt:
+
+1. Ob die zitierte Inkonsistenz auf diese Kette hier zutrifft oder auf eine andere Konstruktion.
+   Die Quellen sind bislang nur über Suchzusammenfassungen gelesen.
+2. Ob `control_chain(true)` als Vorgabe der Einschrittverfahren bleiben soll. Solange (1) offen
+   ist, bleibt der Schalter, aber die Vorgabe gehört auf den eingefrorenen Pfad, sobald (1)
+   beantwortet ist.
+3. Die Kette für den Multistepper wird **nicht** gebaut, bis (1) beantwortet ist. Sie war der
+   schwerste offene Posten des Plans und ist möglicherweise einer, der gar nicht gebaut werden
+   soll.
+
+Was der Plan an dieser Stelle richtig gemacht hat, ist die Messung: die Festlegung wurde nicht
+geglaubt, sondern nachgerechnet, und die Zahl steht seit Stufe 0 im Dokument. Was er falsch gemacht
+hat, ist, die Festlegung trotz der Zahl stehenzulassen.
 
 ## Noch zu untersuchen
 

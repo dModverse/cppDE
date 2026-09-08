@@ -7,7 +7,7 @@
 #
 # A leading --codual, --reverse-step, --reverse-step-rb4,
 # --reverse-step-multistep, --reverse-trajectory, --reverse-trajectory-methods
-# or --reverse-events selects a reverse-AD harness.
+# --reverse-events or --sparse-transpose selects a reverse-AD harness.
 #
 # The output is the assertion: two revisions that compute the same thing must
 # produce byte-identical output.
@@ -53,6 +53,15 @@ case "${1:-}" in
     OUT=${TMPDIR:-/tmp}/cppde_reverse_events
     shift
     ;;
+  --sparse-transpose)
+    SRC="$REPO/dev/cxx/test_sparse_transpose.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_sparse_transpose
+    # KLU comes from the install-time probe, so the harness links what a
+    # generated sparse model links. An uninstalled package leaves it empty and
+    # the test reports itself skipped rather than failing to build.
+    KLU=$(Rscript -e 'cfg <- try(get("cvodeConfig", envir = asNamespace("cppDE")), silent = TRUE); if (!inherits(cfg, "try-error") && isTRUE(cfg$klu_available)) cat("-DKLU", cfg$klu_cflags, cfg$klu_libs)' 2>/dev/null || true)
+    shift
+    ;;
 esac
 RINC=$(Rscript -e 'cat(R.home("include"))')
 # Windows keeps no import libraries under R.home("lib"); bin/<arch> holds the
@@ -72,7 +81,7 @@ for f in "$RLIB"/libRlapack.* "$RLIB"/Rlapack.*; do
 done
 
 # -O2 matches how generated models are built.
-$CXX $STD -O2 -DNDEBUG -Wall -Wextra $INC -o "$OUT" "$SRC" $LIBS
+$CXX $STD -O2 -DNDEBUG -Wall -Wextra $INC ${KLU:-} -o "$OUT" "$SRC" $LIBS
 
 # Windows resolves the DLLs off PATH, which needs the POSIX spelling of RLIB.
 case $(uname -s) in
@@ -102,7 +111,7 @@ esac
 # -O1, not -O0: CPPDE_ET_INLINE is always_inline, which gcc can refuse to
 # honour at -O0. Skipped where the sanitizer runtimes are not installed.
 if $CXX $STD -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
-        $INC -o "$OUT.asan" "$SRC" $LIBS 2>/dev/null; then
+        $INC ${KLU:-} -o "$OUT.asan" "$SRC" $LIBS 2>/dev/null; then
   ASAN_OPTIONS=detect_stack_use_after_scope=1 "$OUT.asan" > /dev/null
   echo "asan/ubsan clean"
 else
