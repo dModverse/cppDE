@@ -24,6 +24,7 @@
 #include <cppde/cppde_codual_tape.hpp>
 #include <cppde/cppde_scalar_ops.hpp>
 
+#include <cstddef>
 #include <type_traits>
 
 namespace cppde {
@@ -34,7 +35,7 @@ public:
   using value_type = T;
   using tape_type  = codual_tape<T>;
 
-  static constexpr unsigned none = tape_type::none;
+  static constexpr std::size_t none = tape_type::none;
 
   // -- constructors -----------------------------------------------------------
   codual() : val_(), slot_(none) {}
@@ -43,7 +44,7 @@ public:
            std::enable_if_t<std::is_convertible_v<U, T>, int> = 0>
   codual(const U& v) : val_(static_cast<T>(v)), slot_(none) {}
 
-  codual(const T& v, unsigned slot) : val_(v), slot_(slot) {}
+  codual(const T& v, std::size_t slot) : val_(v), slot_(slot) {}
 
   // A copy names the same tape node: the value was recorded once and copying it
   // creates no new dependence.
@@ -81,9 +82,12 @@ public:
   const T& val() const { return val_; }   // .x() alias
   T&       val()       { return val_; }
 
-  unsigned slot()   const { return slot_; }
-  void     set_slot(unsigned s) { slot_ = s; }
-  bool     depend() const { return slot_ != none; }
+  std::size_t slot()     const { return slot_; }
+  void        set_slot(std::size_t s) { slot_ = s; }
+
+  // Live rather than merely set: a slot from a tape that has been rewound names
+  // nothing, and reads as a constant.
+  bool depend() const { return codual_tape_for<T>().live(slot_); }
 
   // -- tape interaction -------------------------------------------------------
 
@@ -99,14 +103,11 @@ public:
 
   // Valid only after codual_tape<T>::reverse(). A value with no dependence has
   // a zero derivative by construction.
-  T adjoint() const {
-    if (slot_ == none) return T();
-    return codual_tape_for<T>().adjoint(slot_);
-  }
+  T adjoint() const { return codual_tape_for<T>().adjoint(slot_); }
 
 private:
-  T        val_;
-  unsigned slot_;
+  T           val_;
+  std::size_t slot_;
 };
 
 // value_of for the reverse type: peel to the innermost scalar, one spelling

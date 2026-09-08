@@ -33,8 +33,9 @@ namespace detail {
 // case analysis in one place.
 template<class T>
 inline codual<T> codual_unary(const T& value, const codual<T>& a, const T& fa) {
-  if (!a.depend()) return codual<T>(value, codual<T>::none);
-  return codual<T>(value, codual_tape_for<T>().record(a.slot(), fa));
+  codual_tape<T>& tp = codual_tape_for<T>();
+  if (!tp.live(a.slot())) return codual<T>(value, codual<T>::none);
+  return codual<T>(value, tp.record(a.slot(), fa));
 }
 
 template<class T>
@@ -42,10 +43,10 @@ inline codual<T> codual_binary(const T& value,
                                const codual<T>& a, const T& fa,
                                const codual<T>& b, const T& fb) {
   codual_tape<T>& tp = codual_tape_for<T>();
-  if (a.depend() && b.depend())
-    return codual<T>(value, tp.record(a.slot(), fa, b.slot(), fb));
-  if (a.depend()) return codual<T>(value, tp.record(a.slot(), fa));
-  if (b.depend()) return codual<T>(value, tp.record(b.slot(), fb));
+  const bool la = tp.live(a.slot()), lb = tp.live(b.slot());
+  if (la && lb) return codual<T>(value, tp.record(a.slot(), fa, b.slot(), fb));
+  if (la)       return codual<T>(value, tp.record(a.slot(), fa));
+  if (lb)       return codual<T>(value, tp.record(b.slot(), fb));
   return codual<T>(value, codual<T>::none);
 }
 
