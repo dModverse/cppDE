@@ -5,11 +5,11 @@
 #' optional first- and second-order derivatives. There is no time
 #' integration; the principal use cases are observation maps for
 #' likelihood-based inference and reparametrisation Jacobians for
-#' [solveODE()]. Both `derivMode = "dual"` and `derivMode = "symbolic"`
-#' support `deriv` and `deriv2`, and both expose the same `func` / `jac`
-#' / `hess` / `evaluate` API. The chain rule is available through the
-#' optional seed arguments `dX`, `dP`, `dX2`, and `dP2`. See
-#' `vignette("Methods", package = "cppDE")` for the two computational
+#' [solveODE()]. `derivMode` selects which derivative products are built;
+#' `"forward"` and `"symbolic"` both support `deriv` and `deriv2` and expose
+#' the same `func` / `jac` / `hess` / `evaluate` API. The chain rule is
+#' available through the optional seed arguments `dX`, `dP`, `dX2`, and `dP2`.
+#' See `vignette("Methods", package = "cppDE")` for the two computational
 #' paths and the pass-through convention for unmodelled inputs.
 #'
 #' @param eqns Named character vector or list of algebraic expressions.
@@ -33,14 +33,20 @@
 #' @param deriv Logical. Generate first-order derivative entry points.
 #' @param deriv2 Logical. Generate Hessian entry points; implies
 #'   `deriv = TRUE`.
-#' @param derivMode One of `"dual"` (default) or `"symbolic"`. Selects
-#'   the computational path: forward-mode AD on `cppde::dual` (single-
-#'   or nested-dual) versus analytic SymPy-derived Jacobian/Hessian
-#'   contracted via BLAS. Both modes deliver `jac`, `hess`, and
-#'   `evaluate` with the same signatures.
+#' @param derivMode Which derivative products to build. More than one may be
+#'   named, and the default `c("forward", "reverse")` builds both.
+#'   * `"forward"`: forward-mode AD on `cppde::dual`, delivering `jac`,
+#'     `hess` and `evaluate`.
+#'   * `"reverse"`: the vector-Jacobian product `vjp`, a second
+#'     instantiation of the body over `cppde::codual`. Naming one direction
+#'     alone omits the other's entries, and its compile time with them.
+#'   * `"symbolic"`: an analytic SymPy-derived Jacobian and Hessian
+#'     contracted via BLAS, in place of forward AD. It is a backend for the
+#'     forward direction rather than a direction of its own, so it cannot be
+#'     combined with the other two; there is no symbolic `vjp`.
 #'
 #' @return A list with components `func`, `jac`, `hess`, `evaluate` and,
-#'   in `derivMode = "dual"`, `vjp` (`NULL` when not generated). `vjp(vars,
+#'   under `derivMode = "reverse"`, `vjp` (`NULL` when not generated). `vjp(vars,
 #'   params, w)` is the reverse counterpart of `evaluate`: it contracts the
 #'   Jacobian with a cotangent `w` of the outputs, at a cost independent of the
 #'   number of upstream parameters, and returns `y`, `wx` and `wp`. `w` is
@@ -49,22 +55,29 @@
 #'   path has no interpreted fallback and needs `compile = TRUE`. Carries
 #'   attributes
 #'   `equations`, `variables`, `parameters`, `fixed`, `modelname`,
-#'   `srcfile`, `derivMode`, and (for `derivMode = "symbolic"`)
+#'   `srcfile`, `derivMode`, and (under `derivMode = "symbolic"`)
 #'   `jacobian.symb`, `hessian.symb`.
 #'
 #' @seealso [compile()] for compilation; [derivSymb()] for symbolic
 #'   differentiation; [cppODE()] and [cvode()] for ODE integration;
 #'   `vignette("Methods", package = "cppDE")`.
 #' @export
-funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parameters = NULL,
+cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parameters = NULL,
                    fixed = NULL, modelname = NULL, outdir = tempdir(), compile = FALSE,
                    verbose = FALSE, convenient = TRUE, deriv = TRUE, deriv2 = FALSE,
-                   derivMode = c("dual", "symbolic")) {
+                   derivMode = c("forward", "reverse")) {
 
-  derivMode <- match.arg(derivMode)
+  derivMode <- matchDerivMode(derivMode, c("forward", "reverse", "symbolic"))
   if (deriv2 && !deriv) { warning("deriv2 requires deriv. Setting deriv = TRUE."); deriv <- TRUE }
   emit_deriv <- deriv || deriv2
-  use_ad     <- emit_deriv && derivMode == "dual"
+  symbolic   <- "symbolic" %in% derivMode
+  use_ad     <- emit_deriv && "forward" %in% derivMode
+  use_vjp    <- emit_deriv && "reverse" %in% derivMode
+  ## Second order is a forward-mode facility. Asking for it with only the
+  ## reverse direction would silently return no Hessian.
+  if (deriv2 && !use_ad && !symbolic)
+    stop("deriv2 = TRUE has no reverse counterpart; add \"forward\" or ",
+         "\"symbolic\" to derivMode.", call. = FALSE)
 
   # The symbol arguments name the same symbols as the equations and are checked
   # with them.
@@ -80,7 +93,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
   # --- Symbolic derivatives (only in symbolic mode) ---
   sym_jac <- sym_hess <- NULL
-  if (emit_deriv && derivMode == "symbolic") {
+  if (emit_deriv && symbolic) {
     ds <- derivSymb(eqns, deriv2 = deriv2, real = TRUE, fixed = fixed, verbose = verbose)
     sym_jac <- ds$jacobian; sym_hess <- ds$hessian
   }
@@ -104,14 +117,14 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   if (!fallback_ok) warning("R fallback unavailable. Please compile.")
 
   # --- C++ codegen ---
-  codegen <- get_codegen_funCpp_py()
+  codegen <- get_codegen_cppFUN_py()
   toList <- function(mat) if (is.null(mat)) NULL else setNames(lapply(seq_len(nrow(mat)), function(i) as.list(as.character(mat[i,]))), rownames(mat))
   toHess <- function(hl) if (is.null(hl)) NULL else setNames(lapply(hl, function(H) lapply(seq_len(nrow(H)), function(i) as.list(as.character(H[i,])))), names(hl))
   cpp_file <- file.path(outdir, paste0(modelname, ".cpp"))
   if (file.exists(cpp_file)) message("Overwriting: ", normalizePath(cpp_file, "/", FALSE))
   codegen$generate_fun_cpp(exprs = setNames(as.list(eqns), outnames), variables = as.list(variables),
                            parameters = as.list(parameters), jacobian = toList(sym_jac), hessian = toHess(sym_hess),
-                           ad = use_ad, deriv2 = deriv2,
+                           ad = use_ad, deriv2 = deriv2, vjp = use_vjp,
                            modelname = modelname, outdir = normalizePath(outdir, "/", FALSE), version = as.character(utils::packageVersion("cppDE")))
 
   # --- Instance state and thin wrappers ---
@@ -119,20 +132,23 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   ## this environment, so a per-condition instance costs data, not code.
   st <- list2env(list(innames = innames, parameters = parameters,
                       outnames = outnames, modelname = modelname,
-                      diff_syms = diff_syms, use_ad = use_ad,
+                      diff_syms = diff_syms, use_ad = use_ad, use_vjp = use_vjp,
                       parsed_exprs = parsed_exprs, parsed_jac = parsed_jac,
                       parsed_hess = parsed_hess),
                  parent = emptyenv())
 
   fun_impl      <- function(...) .fun_impl(st, ...)
-  jac_impl      <- if (deriv)      function(...) .jac_impl(st, ...)
-  hess_impl     <- if (deriv2)     function(...) .hess_impl(st, ...)
-  evaluate_impl <- if (emit_deriv) function(...) .evaluate_impl(st, ...)
-  evaluateBatch_impl <- if (emit_deriv) function(...) .evaluateBatch_impl(st, ...)
-  vjp_impl      <- if (emit_deriv && use_ad) function(...) .vjp_impl(st, ...)
+  ## The forward entries need either backend; the reverse one is its own build
+  ## product, so a "forward"-only object carries no vjp and pays no codual body.
+  fwd           <- emit_deriv && (use_ad || symbolic)
+  jac_impl      <- if (deriv  && fwd) function(...) .jac_impl(st, ...)
+  hess_impl     <- if (deriv2 && fwd) function(...) .hess_impl(st, ...)
+  evaluate_impl <- if (fwd)     function(...) .evaluate_impl(st, ...)
+  evaluateBatch_impl <- if (fwd) function(...) .evaluateBatch_impl(st, ...)
+  vjp_impl      <- if (use_vjp) function(...) .vjp_impl(st, ...)
 
   # --- Output ---
-  ## Installed with keep.source, funCpp's body carries srcrefs, so the wrappers
+  ## Installed with keep.source, cppFUN's body carries srcrefs, so the wrappers
   ## built here would hand the caller a copy each.
   .stripSource(environment())
   outfn <- list(
@@ -432,7 +448,7 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   sym <- .nativeSym(funsym)
   if (is.null(sym))
     stop("Reverse entry '", funsym, "' is not loaded. The reverse path has no ",
-         "interpreted fallback, so the model needs funCpp(compile = TRUE).",
+         "interpreted fallback, so the model needs cppFUN(compile = TRUE).",
          call. = FALSE)
   out <- .cSym(sym,
             x        = as.double(M),
@@ -960,4 +976,23 @@ funCpp <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
     impl(M, p, dX, dP, dX2, dP2, deriv2, attach.input, fixed)
   }
+}
+
+
+#' Algebraic Functions in C++ (deprecated spelling)
+#'
+#' @description
+#' The former name of [cppFUN()], kept so existing scripts keep running. It
+#' passes everything through unchanged and warns once per session.
+#'
+#' @param ... Passed to [cppFUN()].
+#' @return Whatever [cppFUN()] returns.
+#' @seealso [cppFUN()]
+#' @export
+funCpp <- function(...) {
+  .Deprecated("cppFUN", package = "cppDE",
+              msg = paste("'funCpp' is now 'cppFUN', for symmetry with",
+                          "cppODE(). The old name still works and will be",
+                          "removed in a later release."))
+  cppFUN(...)
 }

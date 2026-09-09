@@ -68,21 +68,21 @@ test_that("select carries value, gradient and Hessian on both branches", {
   dP  <- diag(2); dimnames(dP) <- list(nms, nms)
   dP2 <- array(0, c(2, 2, 2), dimnames = list(nms, nms, nms))
 
-  out <- lapply(c(dual = "dual", symbolic = "symbolic"), function(mode) {
+  out <- lapply(c(forward = "forward", symbolic = "symbolic"), function(mode) {
     # The R fallback cannot parse a piecewise; only the compiled path is used.
     f <- suppressWarnings(
-      funCpp(expr, parameters = nms, deriv = TRUE, deriv2 = TRUE,
+      cppFUN(expr, parameters = nms, deriv = TRUE, deriv2 = TRUE,
              derivMode = mode, compile = TRUE,
              modelname = paste0("pw_d2_", mode)))
     lapply(c(0.5, 2), function(a)
       f$evaluate(a = a, b = 3, dP = dP, dP2 = dP2, deriv2 = TRUE))
   })
 
-  for (i in seq_along(out$dual)) {
-    expect_equal(unname(out$dual[[i]]$y),   unname(out$symbolic[[i]]$y))
-    expect_equal(unname(out$dual[[i]]$dy),  unname(out$symbolic[[i]]$dy),
+  for (i in seq_along(out$forward)) {
+    expect_equal(unname(out$forward[[i]]$y),   unname(out$symbolic[[i]]$y))
+    expect_equal(unname(out$forward[[i]]$dy),  unname(out$symbolic[[i]]$dy),
                  tolerance = 1e-10)
-    expect_equal(unname(out$dual[[i]]$d2y), unname(out$symbolic[[i]]$d2y),
+    expect_equal(unname(out$forward[[i]]$d2y), unname(out$symbolic[[i]]$d2y),
                  tolerance = 1e-10)
   }
 })

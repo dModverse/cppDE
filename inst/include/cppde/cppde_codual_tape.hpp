@@ -25,6 +25,7 @@
 #define CPPDE_CODUAL_TAPE_HPP
 
 #include <cstddef>
+#include <type_traits>
 #include <vector>
 
 namespace cppde {
@@ -40,9 +41,9 @@ class codual_tape {
 public:
   using value_type = T;
 
-  // Slot of a value that carries no dependence. Operations against it skip the
-  // corresponding accumulation instead of adding a zero.
-  static constexpr std::size_t none = static_cast<std::size_t>(-1);
+  // Slot of a value that carries no dependence. Zero and never issued, so it
+  // is older than every tape and live() needs no separate test for it.
+  static constexpr std::size_t none = 0;
 
   struct node {
     unsigned a, b;   // operand positions in this tape, `nolocal` when absent
@@ -53,8 +54,14 @@ public:
 
   // Whether a slot belongs to the tape as it stands. Everything older is a
   // constant, which is what makes a reused buffer safe without clearing it.
-  bool live(std::size_t slot) const {
-    return slot != none && slot >= base_ && slot - base_ < nodes_.size();
+  // One comparison suffices: slots are issued monotonically and base_ only
+  // advances, so everything from before the last rewind is below it.
+  bool live(std::size_t slot) const { return slot >= base_; }
+
+  // The slot's position in this tape, or `nolocal` when it is older. Public so
+  // the operators can resolve an operand once and pass it to record_local().
+  unsigned local(std::size_t slot) const {
+    return slot >= base_ ? static_cast<unsigned>(slot - base_) : nolocal;
   }
 
   // -- recording --------------------------------------------------------------
@@ -71,6 +78,14 @@ public:
 
   std::size_t record(std::size_t a, const T& pa, std::size_t b, const T& pb) {
     nodes_.push_back(node{local(a), local(b), pa, pb});
+    return base_ + nodes_.size() - 1u;
+  }
+
+  // For a caller that resolved its operands already, which the operators must
+  // to decide whether to record at all; resolving twice dominated the path. A
+  // partial on a `nolocal` operand is stored and never read.
+  std::size_t record_local(unsigned a, const T& pa, unsigned b, const T& pb) {
+    nodes_.push_back(node{a, b, pa, pb});
     return base_ + nodes_.size() - 1u;
   }
 
@@ -102,7 +117,12 @@ public:
     if (hi > nodes_.size()) hi = nodes_.size();
     for (std::size_t i = hi; i-- > lo;) {
       const T& w = adj_[i];
-      if (w == T()) continue;
+      // Skipping a zero adjoint is only sound where == means identically zero.
+      // A nested AD scalar compares its value alone (cppde_dual_math.hpp), so a
+      // zero value with a live tangent would drop out unsigned.
+      if constexpr (std::is_arithmetic<T>::value) {
+        if (w == T()) continue;
+      }
       const node& n = nodes_[i];
       if (n.a != nolocal) adj_[n.a] = adj_[n.a] + n.pa * w;
       if (n.b != nolocal) adj_[n.b] = adj_[n.b] + n.pb * w;
@@ -138,16 +158,16 @@ public:
   };
 
 private:
-  unsigned local(std::size_t slot) const {
-    return live(slot) ? static_cast<unsigned>(slot - base_) : nolocal;
-  }
+
 
   std::vector<node> nodes_;
   std::vector<T>    adj_;
-  std::size_t       base_ = 0;
+  // One, not zero: it makes `none` a slot no tape can ever own.
+  std::size_t       base_ = 1;
 };
 
-// The tape every codual<T> in this thread records onto.
+// The tape every codual<T> in this thread records onto. The lookup measures
+// 0.66 ns; moving the pointer to namespace scope does not improve it.
 template<class T>
 inline codual_tape<T>& codual_tape_for() {
   thread_local codual_tape<T>* p = nullptr;

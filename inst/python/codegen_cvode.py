@@ -55,6 +55,8 @@ def generate_cvode_cpp(
     modelname,
     outdir,
     deriv=False,
+    reverse=False,
+    asa_checkpoints=200,
     fixed_states=None,
     fixed_params=None,
     sparse=None,
@@ -434,6 +436,39 @@ def generate_cvode_cpp(
         for (i, d_expr) in df_dp_by_pk[pk]:
             df_dp_entries.append((i, pk, d_expr))
 
+    # --- Adjoint (stage 8 of dev/adjoint-plan.md) ---
+    #
+    # lambda' = -J(x,p)' lambda and the quadrature q' = -(df/dp)' lambda are
+    # transposes of data the forward path already builds, so nothing new is
+    # differentiated here; only the index order changes.
+    #
+    # Events are refused rather than approximated. CVODES integrates the adjoint
+    # as its own ODE over checkpointed forward states, and a jump in the state
+    # is a jump in the adjoint that ASA has no way to be told about. The native
+    # reverse mode replays the jump instead, which is why it carries events and
+    # this does not.
+    if reverse:
+        if events or rootfunc is not None:
+            raise ValueError(
+                "sweep = 'reverse' on the CVODE backend does not support events "
+                "or a rootfunc: CVODES integrates the adjoint over checkpointed "
+                "states and cannot be told about a jump. Use the native backend, "
+                "which replays the jump.")
+    adj_rhs_lines = [f"    lamdot[{j}] = 0.0;" for j in range(n_states)]
+    for i, j, e in jac_nnz:
+        # lamdot_j -= (df_i/dx_j) * lam_i: the transpose of the forward
+        # multiply, with the sign the adjoint equation carries.
+        adj_rhs_lines.append(f"    lamdot[{j}] -= ({cpp_of(e)}) * lam[{i}];")
+    adj_rhs_body = "\n".join(adj_rhs_lines)
+
+    # The quadrature runs over the flat parameter block, so its index is the
+    # same NEQ + pk the forward reparametrisation uses.
+    adj_quad_lines = [f"    qdot[{k}] = 0.0;" for k in range(n_params)]
+    for pk in sorted(df_dp_by_pk.keys()):
+        for (i, d_expr) in df_dp_by_pk[pk]:
+            adj_quad_lines.append(f"    qdot[{pk}] -= ({cpp_of(d_expr)}) * lam[{i}];")
+    adj_quad_body = "\n".join(adj_quad_lines)
+
     # --- Assemble source ---
     src = _render_source(
         modelname=modelname, version=version,
@@ -444,6 +479,10 @@ def generate_cvode_cpp(
         nnz_total=nnz_total,
         jac_times_yS_body=jac_times_yS_body,
         df_dp_entries=df_dp_entries,
+        reverse=reverse,
+        adj_rhs_body=adj_rhs_body,
+        adj_quad_body=adj_quad_body,
+        asa_checkpoints=int(asa_checkpoints),
         cv_method=cv_method,
         deriv=deriv,
         use_sparse=use_sparse,
@@ -493,6 +532,7 @@ def _render_source(
     ode_body, jac_body_dense, jac_body_sparse, nnz_total,
     jac_times_yS_body,
     cv_method, deriv, use_sparse,
+    reverse=False, adj_rhs_body="", adj_quad_body="", asa_checkpoints=200,
     use_lapack=False,
     klu_settings=None,
     n_forcings=0,
@@ -1312,6 +1352,17 @@ static std::vector<RootEvent> build_root_events(const double* params,
         cv_finish_block = ""
 
     # --- Main integration loop body ---
+    # Under ASA the forward pass has to leave checkpoints behind, which is
+    # what CVodeF does that CVode does not. Defined before the loop templates,
+    # which interpolate it; ncheck counts checkpoints and is not read.
+    if reverse:
+        cv_fwd_call = ("    int ncheck_ = 0;\n"
+                       "    int flag = CVodeF(cvode_mem, times[k], y, &tret, "
+                       "CV_NORMAL, &ncheck_);")
+    else:
+        cv_fwd_call = ("    int flag = CVode(cvode_mem, times[k], y, &tret, "
+                       "CV_NORMAL);")
+
     if has_events:
         if has_time_events:
             time_interleave_block = f"""    // Time-event interleave: integrate to each event time, apply, reinit.
@@ -1483,7 +1534,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
 #else
   for (int k = 1; k < n_times; ++k) {{
     sunrealtype tret;
-    int flag = CVode(cvode_mem, times[k], y, &tret, CV_NORMAL);
+{cv_fwd_call}
     if (flag < 0) {{
       return_code = flag;
       char buf[160];
@@ -1509,6 +1560,223 @@ static std::vector<RootEvent> build_root_events(const double* params,
   }}
 #endif
 """
+
+    # --- ASA: allocation before the forward pass, sweep after it -------------
+    #
+    # The forward pass stores checkpoints; the backward one integrates
+    # lambda' = -J'lambda from T to t0 with the quadrature q' = -(df/dp)'lambda
+    # riding along, and stops at every observation time to add that row of the
+    # seed. Those additions are what makes the objective's cotangent enter: J
+    # is a sum over observation times, so lambda jumps by W_o at each one.
+    #
+    # One backward solve per seed column. Unlike the native reverse mode, which
+    # sweeps one tape per column over a shared checkpoint store, CVODES has to
+    # re-integrate; the checkpoints are shared, the trajectory is not.
+    if reverse:
+        asa_init_block = """
+  // --- adjoint sensitivity analysis: checkpoint allocation ---
+  // CV_HERMITE matches the forward method's own dense output. 200 steps between
+  // checkpoints is SUNDIALS' own example default and trades memory for repeated
+  // forward re-integration during the sweep.
+  if (args.seed == nullptr) {
+    cleanup();
+    return res.fail(cppde::RC_ILL_INPUT,
+                    "a model compiled with sweep = reverse needs a seed");
+  }
+  if (CVodeAdjInit(cvode_mem, ASA_CHECKPOINTS, CV_POLYNOMIAL) < 0) {
+    cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeAdjInit failed");
+  }
+"""
+        asa_sweep_block = """
+  // --- the backward sweep ---
+  //
+  // What comes out is indexed like a forward sens1ini seed: state rows first,
+  // then parameters. lambda(t0) is the state half and the quadrature the
+  // parameter half, the same split the native reverse mode reports.
+  if (return_code == 0) {
+    const int n_seed = args.n_seed_cols;
+    const int n_out_b = (int)out_t.size();
+    if (args.n_seed_rows != n_out_b) {
+      char m[192];
+      std::snprintf(m, sizeof(m),
+                    "seed has %d rows but the run produced %d output rows",
+                    args.n_seed_rows, n_out_b);
+      cleanup(); return res.fail(cppde::RC_ILL_INPUT, m);
+    }
+    if (args.n_seed_states != NEQ) {
+      cleanup(); return res.fail(cppde::RC_ILL_INPUT,
+                                 "seed has the wrong state count");
+    }
+
+    const int n_phi_rows = NEQ + NPAR_ADJ;
+    res.n_adj_rows = n_phi_rows;
+    res.n_adj_cols = n_seed;
+    res.adjoint.assign((size_t)n_phi_rows * n_seed, 0.0);
+
+    int indexB = -1;
+    N_Vector yB = N_VNew_Serial(NEQ, ctx);
+    N_Vector qB = N_VNew_Serial(NPAR_ADJ > 0 ? NPAR_ADJ : 1, ctx);
+    SUNMatrix       AB  = nullptr;
+    SUNLinearSolver LSB = nullptr;
+    auto cleanupB = [&]() {
+      if (LSB) { SUNLinSolFree(LSB); LSB = nullptr; }
+      if (AB)  { SUNMatDestroy(AB);  AB = nullptr; }
+      if (qB)  { N_VDestroy(qB); qB = nullptr; }
+      if (yB)  { N_VDestroy(yB); yB = nullptr; }
+    };
+    if (!yB || !qB) {
+      cleanupB(); cleanup();
+      return res.fail(cppde::RC_NO_MALLOC, "N_VNew_Serial (adjoint) failed");
+    }
+
+    for (int c = 0; c < n_seed && return_code == 0; ++c) {
+      // lambda at T is the seed row for the final observation; every earlier
+      // row is added when the sweep reaches its time.
+      {
+        double* lam = N_VGetArrayPointer(yB);
+        for (int i = 0; i < NEQ; ++i)
+          lam[i] = args.seed[(n_out_b - 1) + (size_t)n_out_b * i +
+                             (size_t)n_out_b * NEQ * c];
+      }
+      { double* q = N_VGetArrayPointer(qB);
+        for (int k = 0; k < NPAR_ADJ; ++k) q[k] = 0.0; }
+
+      if (indexB < 0) {
+        if (CVodeCreateB(cvode_mem, CV_BDF, &indexB) < 0 ||
+            CVodeInitB(cvode_mem, indexB, adj_rhs_fn, out_t.back(), yB) < 0 ||
+            CVodeSStolerancesB(cvode_mem, indexB, reltol, abstol) < 0 ||
+            CVodeSetUserDataB(cvode_mem, indexB, &ud) < 0) {
+          return_code = cppde::RC_LINIT_FAIL;
+          solver_msg = "adjoint initialisation failed";
+          break;
+        }
+        // The backward problem gets the caller's own step budget. Otherwise it
+        // keeps the CVODES default of 500, which a stiff model reaches long
+        // before t0 and reports as an integration failure rather than as a
+        // step limit.
+        CVodeSetMaxNumStepsB(cvode_mem, indexB, maxsteps);
+        AB  = SUNDenseMatrix(NEQ, NEQ, ctx);
+        LSB = SUNLinSol_Dense(yB, AB, ctx);
+        if (!AB || !LSB ||
+            CVodeSetLinearSolverB(cvode_mem, indexB, LSB, AB) < 0) {
+          return_code = cppde::RC_LINIT_FAIL;
+          solver_msg = "adjoint linear solver failed";
+          break;
+        }
+        if (NPAR_ADJ > 0) {
+          if (CVodeQuadInitB(cvode_mem, indexB, adj_quad_fn, qB) < 0 ||
+              CVodeQuadSStolerancesB(cvode_mem, indexB, reltol, abstol) < 0) {
+            return_code = cppde::RC_LINIT_FAIL;
+            solver_msg = "adjoint quadrature failed";
+            break;
+          }
+          // The quadrature carries the whole parameter half of the answer, so
+          // it belongs in the error test rather than riding along uncontrolled.
+          CVodeSetQuadErrConB(cvode_mem, indexB, SUNTRUE);
+        }
+      } else {
+        // Every further column reuses the one backward problem. CVodeB advances
+        // every backward problem that exists, so a second one would leave the
+        // first to be driven past its own start time.
+        if (CVodeReInitB(cvode_mem, indexB, out_t.back(), yB) < 0) {
+          return_code = cppde::RC_UNRECOGNIZED_ERR;
+          solver_msg = "CVodeReInitB failed between seed columns"; break;
+        }
+        if (NPAR_ADJ > 0 && CVodeQuadReInitB(cvode_mem, indexB, qB) < 0) {
+          return_code = cppde::RC_UNRECOGNIZED_ERR;
+          solver_msg = "CVodeQuadReInitB failed between seed columns"; break;
+        }
+      }
+
+      // Backwards over the output grid, adding each seed row on arrival. The
+      // last row is already in lambda; the first is added after the sweep, at
+      // t0, where there is nothing left to integrate.
+      for (int k = n_out_b - 2; k >= 0 && return_code == 0; --k) {
+        int fb = CVodeB(cvode_mem, out_t[k], CV_NORMAL);
+        if (fb < 0) {
+          return_code = fb; solver_msg = "CVodeB failed"; break;
+        }
+        sunrealtype tB;
+        if (CVodeGetB(cvode_mem, indexB, &tB, yB) < 0) {
+          return_code = cppde::RC_UNRECOGNIZED_ERR;
+          solver_msg = "CVodeGetB failed"; break;
+        }
+        double* lam = N_VGetArrayPointer(yB);
+        bool jumped = false;
+        for (int i = 0; i < NEQ; ++i) {
+          const double w = args.seed[k + (size_t)n_out_b * i +
+                                     (size_t)n_out_b * NEQ * c];
+          if (w != 0.0) { lam[i] += w; jumped = true; }
+        }
+        // A seeded jump is a new initial condition for what remains, and
+        // CVODES has to be told rather than left to interpolate across it.
+        // Only where there is a jump: a re-init restarts the backward method at
+        // order one, so doing it at every output time would cost accuracy for
+        // nothing on the times the objective does not observe.
+        if (jumped && k > 0) {
+          // The quadrature keeps its own Nordsieck history, and a state re-init
+          // leaves that history describing an interval the state no longer
+          // follows. Reading the accumulated value out and handing it straight
+          // back restarts the history without losing what it has integrated.
+          if (NPAR_ADJ > 0) {
+            sunrealtype tq_;
+            if (CVodeGetQuadB(cvode_mem, indexB, &tq_, qB) < 0) {
+              return_code = cppde::RC_UNRECOGNIZED_ERR;
+              solver_msg = "CVodeGetQuadB failed at a seeded jump"; break;
+            }
+          }
+          if (CVodeReInitB(cvode_mem, indexB, out_t[k], yB) < 0) {
+            return_code = cppde::RC_UNRECOGNIZED_ERR;
+            solver_msg = "CVodeReInitB failed"; break;
+          }
+          if (NPAR_ADJ > 0 && CVodeQuadReInitB(cvode_mem, indexB, qB) < 0) {
+            return_code = cppde::RC_UNRECOGNIZED_ERR;
+            solver_msg = "CVodeQuadReInitB failed"; break;
+          }
+        }
+      }
+      if (return_code != 0) break;
+
+      if (NPAR_ADJ > 0) {
+        sunrealtype tq;
+        if (CVodeGetQuadB(cvode_mem, indexB, &tq, qB) < 0) {
+          return_code = cppde::RC_UNRECOGNIZED_ERR;
+          solver_msg = "CVodeGetQuadB failed"; break;
+        }
+      }
+
+      {
+        const double* lam = N_VGetArrayPointer(yB);
+        const double* q   = N_VGetArrayPointer(qB);
+        for (int i = 0; i < NEQ; ++i)
+          res.adjoint[i + (size_t)n_phi_rows * c] = lam[i];
+        // CVODES integrates the backward quadrature from T down to t0 with
+        // xi(T) = 0, so xi(t0) = -int_{t0}^{T} fQB dt. fQB is written with the
+        // adjoint equation's own minus sign, and the two cancel: what comes
+        // back is already int lambda' (df/dp) dt.
+        for (int k = 0; k < NPAR_ADJ; ++k)
+          res.adjoint[(NEQ + k) + (size_t)n_phi_rows * c] = q[k];
+      }
+
+    }
+    cleanupB();
+  }
+"""
+    else:
+        asa_init_block = ""
+        asa_sweep_block = ""
+
+    # A seed reaches the adjoint under reverse and means nothing otherwise, so
+    # each direction refuses the other rather than ignoring the argument.
+    if reverse:
+        seed_guard = (
+            '  if (a.seed == nullptr)\n'
+            '    Rf_error("a model compiled with sweep = reverse needs a seed");')
+    else:
+        seed_guard = (
+            '  if (a.seed != nullptr)\n'
+            '    Rf_error("this cvode model was compiled with sweep = forward; '
+            'recompile with sweep = reverse");')
 
     # Linear-solver setup
     if use_sparse:
@@ -1639,6 +1907,65 @@ static int sens_rhs1_fn(int Ns, sunrealtype t,
 }}
 """
 
+    # --- Adjoint entry points, emitted only under reverse ---
+    if reverse:
+        adj_decl = (
+            "static int adj_rhs_fn(sunrealtype t, N_Vector y, N_Vector yB,\n"
+            "                      N_Vector yBdot, void* ud_vp);\n"
+            "static int adj_quad_fn(sunrealtype t, N_Vector y, N_Vector yB,\n"
+            "                       N_Vector qBdot, void* ud_vp);")
+        adj_impl = f"""
+// ---- Adjoint right-hand side: lambda' = -J(x,p)' lambda ----
+//
+// The transpose of the forward sensitivity multiply, over the same Jacobian
+// entries. CVODES supplies the forward state y by interpolating its own
+// checkpoints, which is what makes the two discretisations differ: the states
+// the adjoint sees here are not bit-for-bit the ones the forward run stepped
+// through, as they are in the native reverse mode's replay.
+static int adj_rhs_fn(sunrealtype t, N_Vector y, N_Vector yB,
+                      N_Vector yBdot, void* ud_vp) {{
+  (void)t;
+  try {{
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  const double* params = ud->params.data();
+  const double* x      = N_VGetArrayPointer(y);
+  const double* lam    = N_VGetArrayPointer(yB);
+  double*       lamdot = N_VGetArrayPointer(yBdot);
+  (void)x; (void)params;
+{forcing_local}
+{adj_rhs_body}
+  return 0;
+  }} catch (...) {{
+    return -1;
+  }}
+}}
+
+// ---- Adjoint quadrature: q' = -(df/dp)' lambda ----
+//
+// Integrated backwards from T to t0, so what it accumulates is the parameter
+// half of the gradient. The state half needs no quadrature: it is lambda(t0).
+static int adj_quad_fn(sunrealtype t, N_Vector y, N_Vector yB,
+                       N_Vector qBdot, void* ud_vp) {{
+  (void)t;
+  try {{
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  const double* params = ud->params.data();
+  const double* x    = N_VGetArrayPointer(y);
+  const double* lam  = N_VGetArrayPointer(yB);
+  double*       qdot = N_VGetArrayPointer(qBdot);
+  (void)x; (void)params;
+{forcing_local}
+{adj_quad_body}
+  return 0;
+  }} catch (...) {{
+    return -1;
+  }}
+}}
+"""
+    else:
+        adj_decl = ""
+        adj_impl = ""
+
     return f"""/** Code auto-generated by cppDE {version} (CVODE backend) **/
 
 #define R_NO_REMAP
@@ -1667,6 +1994,14 @@ namespace {{
 
 constexpr int NEQ    = {n_states};
 constexpr int NPARMS = {n_global};           // n_states + n_params (flat layout)
+// Rows the adjoint quadrature carries: the dynamic parameters. The state half
+// of the answer is lambda(t0) and needs no quadrature.
+constexpr int NPAR_ADJ = NPARMS - NEQ;
+// Accepted forward steps between checkpoints. The adjoint reads the forward
+// state by interpolating between them, so this trades memory for how well it
+// sees the trajectory it is differentiating, the one error source the
+// adjoint's own tolerance does not control.
+constexpr int ASA_CHECKPOINTS = {asa_checkpoints};
 
 struct UserData {{
   std::vector<double> params;               // length NPARMS
@@ -1675,6 +2010,7 @@ struct UserData {{
 static int rhs_fn(sunrealtype t, N_Vector y, N_Vector ydot, void* ud_vp);
 {jac_decl}
 {sens_decl}
+{adj_decl}
 {rootfunc_decl}
 
 // ---- RHS ----
@@ -1697,6 +2033,7 @@ static int rhs_fn(sunrealtype t, N_Vector y, N_Vector ydot, void* ud_vp) {{
 }}
 {jac_impl}
 {sens_impl}
+{adj_impl}
 {rootfunc_impl}
 {event_struct}
 
@@ -1899,6 +2236,7 @@ try {{
 {rootfunc_init_block}
   // --- sensitivities ---
 {sens_init_block}
+{asa_init_block}
 
   // --- write t0 row ---
   out_t.push_back(t0);
@@ -1948,6 +2286,7 @@ try {{
 
 {event_builder_block}{event_apply_lambda}{do_cvode_step_lambda}{event_pre_t0_block}{main_loop_body}
 
+{asa_sweep_block}
   // --- diagnostics ---
   long n_steps = 0, n_fe = 0, n_je = 0, n_etf = 0, n_setups = 0;
   int  last_order = 0;
@@ -2017,8 +2356,7 @@ extern "C" SEXP solve_{modelname}(
       abstolSEXP, reltolSEXP, maxprogressSEXP, maxstepsSEXP, hiniSEXP,
       root_tolSEXP, maxrootSEXP, forcingTimesSEXP, forcingValuesSEXP, seedSEXP);
   // Nothing is protected yet, so the longjmp is safe here.
-  if (a.seed != nullptr)
-    Rf_error("the cvode backend has no reverse mode; compile with cppODE()");
+{seed_guard}
   return cppde::rbatch::solve_one(a, NEQ, {deriv_flag}, false, &solve_impl, dimnamesSEXP);
 }}
 

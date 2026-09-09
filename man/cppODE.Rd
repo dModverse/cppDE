@@ -158,6 +158,6 @@ res$sens2[10, "A", , ]     # second order sensitivities of A(time[10])
 }
 \seealso{
 \code{\link[=solveODE]{solveODE()}} for integration; \code{\link[=cvode]{cvode()}} for the
-SUNDIALS-backed alternative; \code{\link[=funCpp]{funCpp()}} for algebraic functions;
+SUNDIALS-backed alternative; \code{\link[=cppFUN]{cppFUN()}} for algebraic functions;
 \code{vignette("Methods", package = "cppDE")} for behaviour.
 }

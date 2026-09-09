@@ -375,7 +375,6 @@ static void run_method(const char* name, double tol)
   auto sweep_with = [&](const std::vector<double>& seeds, std::vector<double>& out) {
     cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
     cppde::reverse::trajectory_recorder<S, double> rev;
-    rev.control_chain(false);
     rev.sweep(store, pv,
               [](const std::vector<codual<double>>& pc) {
                 return make_system<codual<double>>(pc);

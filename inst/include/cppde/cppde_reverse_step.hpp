@@ -7,10 +7,12 @@
  sweep turns a cotangent on x_out into cotangents on all four. Tape and replay
  live one step at a time, so the memory bound is a step, not a trajectory.
 
- h is a tape independent, not a constant. The controller derives it from the
- previous step's error estimate, so the adjoint runs through the step-size and
- order control rather than around it; xerr is recorded for the same reason and
- is what the trajectory sweep seeds the control law through.
+ h and t are registered as tape independents so the step's dependence on them
+ is available, but the controller itself is not replayed: the size is read off
+ the checkpoint and the grid is a constant. That is Bock's internal numerical
+ differentiation, and dev/adjoint-plan.md says why the alternative is not the
+ wanted quantity. What the cotangent of h is good for is diagnosis, not the
+ chain rule.
 
  Replay rather than hand-written adjoint equations: the sweep must differentiate
  the stepper's own arithmetic, which no codegen emits.
@@ -34,6 +36,7 @@
 #include <cppde/cppde_codual_math.hpp>
 #include <cppde/cppde_lu.hpp>
 #include <cppde/cppde_multistepper.hpp>
+#include <cppde/cppde_profiler.hpp>
 #include <cppde/cppde_rosenbrock4.hpp>
 #include <cppde/cppde_tsit5.hpp>
 
@@ -76,6 +79,16 @@ namespace reverse {
 // ============================================================================
 
 template<class Stepper, class T> struct step_checkpoint;
+
+// Whether a stepper scales its embedded estimate into a local error. The
+// multistepper's xerr is the raw correction and the error is that times tq[2],
+// so steps of different order are otherwise not comparable.
+template<class S, class = void>
+struct has_error_constant : std::false_type {};
+
+template<class S>
+struct has_error_constant<S, std::void_t<decltype(std::declval<const S&>().error_constant())>>
+: std::true_type {};
 
 // ----------------------------------------------------------------------------
 //  tsit5: an explicit one-step method carries nothing across a step boundary.
@@ -310,23 +323,35 @@ public:
   explicit equation_solver(JacFunc& jac) : m_jac(&jac) {}
 
   void prepare(const std::vector<T>& x, T t, T inv_gamma_dt, T res_scale = T(1)) {
+    auto _tp = m_prof.timer(cppde::prof_cat::rev_prepare);
     m_lu.resize(x);
     m_lu.call_jacobian(*m_jac, const_cast<std::vector<T>&>(x), t);
     m_lu.factorize_W(x.size(), inv_gamma_dt);
     m_scale = res_scale;
   }
 
-  void forward(std::vector<T>& b) { m_lu.solve(b); }
+  void forward(std::vector<T>& b) {
+    auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
+    m_lu.solve(b);
+  }
 
   void transposed(std::vector<T>& b) {
+    auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
     m_lu.solve_transposed(b);
     if (m_scale != T(1)) for (T& v : b) v /= m_scale;
+  }
+
+  // Per-category timings to stderr: the per-step Jacobian and factorisation
+  // against the transposed solves. Compiled away without CPPDE_PROFILE.
+  void report_profile() const {
+    m_prof.report("cppDE reverse linear algebra");
   }
 
 private:
   JacFunc*             m_jac;
   cppde::lu_W<T, Sparse> m_lu;
   T                    m_scale = T(1);
+  cppde::profiler      m_prof;
 };
 
 // ============================================================================
@@ -483,6 +508,7 @@ public:
     cp.load(m_stepper, m_x, m_history);
     m_t  = rev_type(static_cast<T>(cp.t));
     m_dt = rev_type(dt_in);
+    m_out_is_solution = false;
     if (m_tape_stepsize) { m_t.independent(); m_dt.independent(); }
     const std::size_t n = m_x.size();
     m_xout.assign(n, rev_type());
@@ -560,6 +586,7 @@ public:
 
     m_dt_used = dt;
     m_tend    = m_t + dt;
+    take_error_scale();
     close_step(m_cp_finish, sys);
   }
 
@@ -579,6 +606,9 @@ public:
     // step size, and the equation's matrix belongs to the step that was taken.
     m_impl_gamma = static_cast<T>(m_stepper.gamma());
     m_impl_t_new = m_t.x() + static_cast<T>(m_stepper.h());
+    // The step end is this equation's solution, so its cotangent is read at the
+    // solve point rather than after the sweep. See sweep().
+    m_out_is_solution = true;
     m_xout.assign(n, rev_type());
     m_xerr.assign(n, rev_type());
     m_stepper.replay_outputs(m_implicit.back().y, m_xout, m_xerr);
@@ -587,6 +617,7 @@ public:
 
     m_dt_used = dt;
     m_tend    = m_t + dt;
+    take_error_scale();
     close_step(m_cp_finish, sys);
   }
 
@@ -650,11 +681,21 @@ public:
       tape().reverse(hi, sp.mark);
       m_solve_buf.assign(sp.y.size(), T());
       for (std::size_t i = 0; i < sp.y.size(); ++i) m_solve_buf[i] = sp.y[i].adjoint();
+      // lambda at the step end, for a corrector method. Complete here and
+      // nowhere later: the segment below the mark drives y's adjoint to zero,
+      // which is what makes the implicit function theorem exact.
+      if (m_out_is_solution && k + 1 == m_n_implicit) m_wout = m_solve_buf;
       m_solve_fn(m_solve_ctx, m_solve_buf);
       for (std::size_t i = 0; i < sp.res.size(); ++i) sp.res[i].seed(-m_solve_buf[i]);
       hi = sp.mark;
     }
     tape().reverse(hi, 0);
+    // Otherwise the step end is m_xout, whose nodes sit above every mark, so
+    // nothing below consumes its cotangent.
+    if (!m_out_is_solution) {
+      m_wout.assign(m_xout.size(), T());
+      for (std::size_t i = 0; i < m_xout.size(); ++i) m_wout[i] = m_xout[i].adjoint();
+    }
     m_wx.assign(m_x.size(), T());
     for (std::size_t i = 0; i < m_x.size(); ++i) m_wx[i] = m_x[i].adjoint();
     m_whistory.assign(m_history.size(), T());
@@ -670,6 +711,14 @@ public:
   const std::vector<T>& whistory()  const { return m_whistory; }
   const T&              wt()        const { return m_wt; }
   const T&              wdt()       const { return m_wdt; }
+
+  // Cotangent of the step end. Not always readable off xout(): a corrector's
+  // output is the solved-for value, whose adjoint the sweep zeroes. After sweep().
+  const std::vector<T>& wout()      const { return m_wout; }
+
+  // What xerr() must be multiplied by to be the local error. One for a one-step
+  // method, tq[2] for the multistepper.
+  const T&              error_scale() const { return m_err_scale; }
 
   // out += cotangents of v. Parameters are shared across steps, so their
   // cotangent is a sum over the trajectory.
@@ -722,6 +771,17 @@ private:
   rev_type               m_t, m_dt, m_dt_used, m_tend;
   std::vector<T>         m_wx, m_whistory;
   T                      m_wt{}, m_wdt{};
+  std::vector<T>         m_wout;
+  T                      m_err_scale = T(1);
+  bool                   m_out_is_solution = false;
+
+  void take_error_scale() {
+    if constexpr (has_error_constant<rev_stepper>::value)
+      m_err_scale = static_cast<T>(
+          ad_traits::scalar_value(m_stepper.error_constant()));
+    else
+      m_err_scale = T(1);
+  }
   bool                   m_tape_stepsize = true;
 };
 

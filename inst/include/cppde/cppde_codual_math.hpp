@@ -54,11 +54,14 @@ inline codual<T> codual_binary(const T& value,
                                const codual<T>& a, const T& fa,
                                const codual<T>& b, const T& fb) {
   codual_tape<T>& tp = codual_tape_for<T>();
-  const bool la = tp.live(a.slot()), lb = tp.live(b.slot());
-  if (la && lb) return codual<T>(value, tp.record(a.slot(), fa, b.slot(), fb));
-  if (la)       return codual<T>(value, tp.record(a.slot(), fa));
-  if (lb)       return codual<T>(value, tp.record(b.slot(), fb));
-  return codual<T>(value, codual<T>::none);
+  // Resolved once and handed to the tape, rather than tested here and resolved
+  // again inside record(). One node covers all three live combinations: a dead
+  // operand is `nolocal`, and the sweep skips it.
+  const unsigned la = tp.local(a.slot());
+  const unsigned lb = tp.local(b.slot());
+  if (la == codual_tape<T>::nolocal && lb == codual_tape<T>::nolocal)
+    return codual<T>(value, codual<T>::none);
+  return codual<T>(value, tp.record_local(la, fa, lb, fb));
 }
 
 }  // namespace detail

@@ -16,16 +16,16 @@
  is on the tape with the step that carries it. An observation before the first
  step reaches the initial state directly.
 
- The step-size chain, dt_{k+1} = Ctrl(err_k), is on the tape as well. A step
- reads four things from the one before it, not one: the state, the time, the
- size the controller offered, and the PI memory err_old. The attempts the
- controller threw away are replayed too, because they are what turned the
- offered size into the size the step took.
+ The step grid is the forward run's and is not differentiated. A step reads one
+ thing from the one before it, the state; the size it took is a constant read
+ off its checkpoint. This is Bock's internal numerical differentiation: the
+ nominal run adapts freely, and the derivative is taken of the scheme that run
+ actually applied.
 
- control_chain(false) drops the last three and keeps only the state. That is the
- frozen path: it computes exactly what the forward sensitivities compute, which
- makes it the oracle, and the difference between the two settings is the
- step-size term itself.
+ Differentiating the controller instead puts spurious derivatives of the time
+ steps on the tape, which make the discrete adjoint inconsistent with the
+ adjoint ODE. cppDE did that behind a switch until 2026-09-09; the term was
+ measured at O(tol) and the switch is gone. See dev/adjoint-plan.md.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -38,49 +38,12 @@
 
 #include <cppde/cppde_event_engine.hpp>
 #include <cppde/cppde_onestep_controller.hpp>
+#include <cppde/cppde_profiler.hpp>
 #include <cppde/cppde_reverse_step.hpp>
 #include <cppde/cppde_saltation.hpp>
 
 namespace cppde {
 namespace reverse {
-
-// ============================================================================
-//  The controller state a step is entered with, and the constants of its law.
-//
-//  Everything the PI controller reads that an earlier step wrote. dt_in is not
-//  the checkpoint's size: attempts thrown away shrink it on the way, and how
-//  many is `rejected`. Their sizes are not stored because the replay derives
-//  them, which is the same reason the checkpoint holds no stage values.
-//
-//  This is the one-step law. The multistepper controls order as well and gets
-//  its own pair with stage 3b.
-// ============================================================================
-
-struct control_state {
-  double   dt_in      = 0.0;
-  double   err_old    = 1.0;
-  bool     first_step = false;   // no usable err_old
-  unsigned rejected   = 0;       // attempts before the accepted one
-};
-
-struct control_params {
-  double atol = 1e-6, rtol = 1e-6;
-  double alpha = 0.0, beta = 0.0, safety = 0.9;
-  double min_factor = 0.2, max_factor = 5.0;
-  double order = 4.0;            // error order of the embedded pair
-
-  // Reads them off a live one-step controller, so the replay cannot drift from
-  // the settings the forward run used.
-  template<class Controller>
-  static control_params of(const Controller& c) {
-    control_params p;
-    p.atol = c.atol();   p.rtol = c.rtol();
-    p.alpha = c.alpha(); p.beta = c.beta(); p.safety = c.safety();
-    p.min_factor = c.min_factor(); p.max_factor = c.max_factor();
-    p.order = static_cast<double>(Controller::order);
-    return p;
-  }
-};
 
 // ============================================================================
 //  event_record<T>
@@ -142,32 +105,29 @@ public:
   };
 
   void clear() {
-    m_steps.clear(); m_controls.clear(); m_obs.clear(); m_events.clear();
+    m_steps.clear(); m_obs.clear(); m_events.clear();
   }
 
   void reserve(std::size_t n_steps, std::size_t n_obs) {
     m_steps.reserve(n_steps);
-    m_controls.reserve(n_steps);
     m_obs.reserve(n_obs);
   }
 
-  // No default control state: an unset dt_in would replay the step at size zero
-  // once the chain is on, and silently. step_collector is the caller.
   template<class Value>
   void capture(const Stepper& st, const std::vector<Value>& x,
-               double t, double dt, const control_state& cs)
+               double t, double dt)
   {
+    auto _tp = m_prof.timer(cppde::prof_cat::rev_checkpoint);
     m_steps.emplace_back();
     m_steps.back().capture(st, x, t, dt);
-    m_controls.push_back(cs);
   }
+
+  // Where the store's own time went. Empty and free unless CPPDE_PROFILE.
+  const cppde::profiler& prof() const { return m_prof; }
 
   // A checkpoint the collector filled itself, for a family whose carry cannot be
   // read off the stepper after the step.
-  void push(const checkpoint_type& cp, const control_state& cs) {
-    m_steps.push_back(cp);
-    m_controls.push_back(cs);
-  }
+  void push(const checkpoint_type& cp) { m_steps.push_back(cp); }
 
   // The post-jump state is observed at the time the jump sits at, before or
   // after the event note depending on which site fired it, so the marking runs
@@ -216,33 +176,24 @@ public:
   // The collector fills a checkpoint's tail record only once the step after it
   // has been accepted, which is when the operations in between are complete.
   checkpoint_type&       step_mut(std::size_t k)       { return m_steps[k]; }
-  const control_state&   control(std::size_t k) const { return m_controls[k]; }
   const observation&     obs(std::size_t i)     const { return m_obs[i]; }
-
-  control_params&       params()       { return m_params; }
-  const control_params& params() const { return m_params; }
 
 private:
   std::vector<checkpoint_type> m_steps;
-  std::vector<control_state>   m_controls;
   std::vector<observation>     m_obs;
   std::vector<event_record<T>> m_events;
   std::size_t                  m_open_event = event_record<T>::npos;
   double                       m_open_t     = 0.0;
-  control_params               m_params;
+  cppde::profiler              m_prof;
 };
 
 // ============================================================================
 //  step_collector
 //
 //  The step observer the dense driver calls, and the only place that knows how
-//  to read a live stepper. It carries the controller state forward by one step:
-//  what the controller holds after an accepted step is what the next one enters
-//  with, and the first step's is handed in at construction.
-//
-//  An event restart resets the controller between two firings, so the carried
-//  state would be wrong across one; the event record carries the size the
-//  stepper was restarted with instead, and the chain is cut there.
+//  to read a live stepper. The controller's own state is not recorded: the grid
+//  it produced is a constant to the reverse pass, so only the step and what it
+//  ended on matter.
 // ============================================================================
 
 template<class DenseStepper, class Stepper, class T = double>
@@ -251,13 +202,8 @@ public:
   step_collector(trajectory_store<Stepper, T>& store, DenseStepper& st, double dt0)
     : m_store(store), m_st(st)
   {
-    if constexpr (!snapshot_family) {
-      m_next.dt_in      = dt0;
-      m_next.err_old    = 1.0;
-      m_next.first_step = true;
-      m_store.params() = control_params::of(st.controlled_stepper());
-    } else {
-      (void)dt0;
+    (void)dt0;   // kept for call-site compatibility; the grid needs no seed
+    if constexpr (snapshot_family) {
       st.controlled_stepper().stepper().set_step_snapshot(
           [this](double t, double h) { this->snapshot(t, h); });
       st.controlled_stepper().stepper().set_history_log(&m_hlog);
@@ -281,27 +227,15 @@ public:
       m_pending.y.assign(m_st.current_state().begin(), m_st.current_state().end());
       m_pending.q_next = ctl.stepper().current_order();
       m_pending.eta    = static_cast<double>(ctl.stepper().hscale()) / m_pending.dt;
-      control_state cs;
-      cs.rejected = static_cast<unsigned>(ctl.n_rejected() - m_rejected_seen);
-      m_rejected_seen = ctl.n_rejected();
       hand_over_history();
-      m_store.push(m_pending, cs);
+      m_store.push(m_pending);
       return;
     } else {
-      const double t0 = m_st.previous_time();
-
-      control_state cs = m_next;
-      cs.rejected = static_cast<unsigned>(ctl.n_rejected() - m_rejected_seen);
-      m_rejected_seen = ctl.n_rejected();
-
       // dt_old() and not current_time() - previous_time(): the controller
       // advances t by dt, and fl(t + dt) - t is not dt. The replay has to step
       // the size the forward run stepped, not a rounded version of it.
-      m_store.capture(ctl.stepper(), m_st.previous_state(), t0, ctl.dt_old(), cs);
-
-      m_next.dt_in      = m_st.current_time_step();
-      m_next.err_old    = ctl.last_error();
-      m_next.first_step = ctl.first_step();
+      m_store.capture(ctl.stepper(), m_st.previous_state(),
+                      m_st.previous_time(), ctl.dt_old());
     }
   }
 
@@ -367,9 +301,7 @@ private:
   trajectory_store<Stepper, T>& m_store;
   DenseStepper&                 m_st;
   typename trajectory_store<Stepper, T>::checkpoint_type m_pending;
-  control_state                 m_next;
   history_log                   m_hlog;
-  int                           m_rejected_seen = 0;
 };
 
 // ============================================================================
@@ -458,6 +390,8 @@ public:
     m_wp.assign(n_p, T());
     m_wt.assign(store.n_steps(), T());
     m_wdt.assign(store.n_steps(), T());
+    m_lam.assign(m_trace_lambda ? store.n_steps() * n_x : 0u, T());
+    m_eta.assign(m_trace_lambda ? store.n_steps() : 0u, T());
     m_max_nodes = 0;
     m_pending.clear();
     m_pending_interp = false;
@@ -465,9 +399,6 @@ public:
 
     std::size_t next_obs = store.n_obs();
     std::vector<rev_type> p, x_interp;
-
-    // What the step after this one hands back through the control law.
-    T w_dt_in = T(), w_t = T(), w_err_old = T();
 
     for (std::size_t k = store.n_steps(); k-- > 0;) {
       m_rec.begin();
@@ -477,11 +408,8 @@ public:
       m_rec.independent(p);
 
       auto sys = make_sys(p);
-      const control_state& cs = store.control(k);
-
-      rev_type err_old, dt_next, t_next, err_old_next;
-      const bool chained = replay_one(sys, store, k, cs, solver, err_old,
-                                      dt_next, t_next, err_old_next);
+      { auto _tp = m_prof.timer(cppde::prof_cat::rev_replay);
+        replay_one(sys, store, k, solver); }
 
       // Observations inside this step, seeded through the dense output. They
       // are recorded on the step's own tape, so one sweep carries both. One
@@ -489,6 +417,7 @@ public:
       while (next_obs > 0 && store.obs(next_obs - 1).step == k + 1) {
         --next_obs;
         if (store.obs(next_obs).event != event_record<T>::npos) continue;
+        auto _tp = m_prof.timer(cppde::prof_cat::rev_interp);
         m_rec.interpolate(clamp_to_step(store.step(k), store.obs(next_obs).t),
                           x_interp);
         const T* w = seeds.data() + next_obs * n_x;
@@ -510,17 +439,8 @@ public:
       } else {
         m_rec.seed_carry(m_wx, m_whist);
       }
-      if (chained) {
-        dt_next.seed(w_dt_in);
-        t_next.seed(w_t);
-        err_old_next.seed(w_err_old);
-      }
-      m_rec.sweep();
-      if (chained) {
-        w_dt_in   = m_rec.wdt();
-        w_t       = m_rec.wt();
-        w_err_old = err_old.adjoint();
-      }
+      { auto _tp = m_prof.timer(cppde::prof_cat::rev_sweep);
+        m_rec.sweep(); }
 
       // Parameters are shared by every step, so their cotangent is a sum. The
       // copies inside the system name the same tape slots as p.
@@ -529,6 +449,19 @@ public:
       m_wdt[k] = m_rec.wdt();
       m_wx     = m_rec.wx();
       m_whist  = m_rec.whistory();
+      if (m_trace_lambda) {
+        for (std::size_t i = 0; i < n_x && i < m_wx.size(); ++i)
+          m_lam[k * n_x + i] = m_wx[i];
+        // The refinement indicator: lambda at the step end against the step's
+        // own error estimate. wout() and not xout().adjoint(), whose adjoint the
+        // sweep zeroes for a corrector method.
+        T e = T();
+        const std::vector<T>& lo = m_rec.wout();
+        const std::vector<rev_type>& xe = m_rec.xerr();
+        for (std::size_t i = 0; i < xe.size() && i < lo.size(); ++i)
+          e += lo[i] * xe[i].x();
+        m_eta[k] = e * m_rec.error_scale();
+      }
 
       const std::size_t used = m_rec.tape().size();
       if (used > m_max_nodes) m_max_nodes = used;
@@ -555,11 +488,6 @@ public:
     }
   }
 
-  // Whether the step-size chain across step boundaries goes on the tape. On is
-  // the shipped state; off drops it and computes what the forward sensitivities
-  // compute, which is the oracle.
-  void control_chain(bool on) { m_control_chain = on; }
-
   const std::vector<T>& wx0() const { return m_wx; }
   const std::vector<T>& wp()  const { return m_wp; }
 
@@ -572,10 +500,21 @@ public:
   // elsewhere, and nothing else in the sweep would say so.
   const std::vector<T>& replayed_obs() const { return m_x_obs; }
 
-  // Per step, the cotangents the control law carries: the step's own time and
-  // the size it was entered with.
+  // Per step, the cotangents of its own time and of the size it was entered
+  // with. Diagnostic: not chained through the control law, see replay_one.
   const std::vector<T>& wt()  const { return m_wt; }
   const std::vector<T>& wdt() const { return m_wdt; }
+
+  // lambda on the forward run's grid, [n_steps, n_states] row-major, row k the
+  // state cotangent at step k's start. Off by default: it is another store's
+  // worth of doubles and only the diagnostics read it.
+  void trace_lambda(bool on) { m_trace_lambda = on; }
+  const std::vector<T>& lambda() const { return m_lam; }
+
+  // Per step, lambda^T e_k. This and not |dJ/dh_k| h_k is the refinement
+  // indicator: wdt() is the transport derivative, lambda^T f, and is the size of
+  // J rather than the size of the error.
+  const std::vector<T>& eta() const { return m_eta; }
 
   // The largest tape any single step needed. The bound is a step, not a
   // trajectory: begin() rewinds before each replay and keeps the capacity, so
@@ -586,12 +525,14 @@ public:
 
 private:
   // Dispatches the step onto the shape its method has: an implicit corrector,
-  // a set of linear stage solves, or neither. Returns whether the control law
-  // went on the tape with it, which only the explicit one-step path does today.
+  // a set of linear stage solves, or neither.
+  //
+  // The controller stays off the tape in every shape. h_k is held at what the
+  // forward run stepped and seeded nowhere, which is Bock's IND: differentiate
+  // the scheme the adaptive decisions produced, not the decisions.
   template<class RSys, class Solver>
-  bool replay_one(RSys& sys, const store_type& store, std::size_t k,
-                  const control_state& cs, Solver& solver, rev_type& err_old,
-                  rev_type& dt_next, rev_type& t_next, rev_type& err_old_next)
+  void replay_one(RSys& sys, const store_type& store, std::size_t k,
+                  Solver& solver)
   {
     using rstep = typename recorder_type::rev_stepper;
     const auto& cp = store.step(k);
@@ -601,7 +542,6 @@ private:
       solver.prepare(cp.x, static_cast<T>(cp.t),
                      m_rec.stepper().replay_inv_gamma_dt(cp.dt));
       m_rec.attempt_staged(sys, m_rec.dt_in(), solver);
-      return false;
     } else if constexpr (has_corrector_replay<rstep>::value) {
       m_rec.load(cp, static_cast<T>(cp.dt));
       m_rec.attempt_implicit(sys, m_rec.dt_in(), cp.y, solver);
@@ -609,53 +549,10 @@ private:
       // solution is gamma times the matrix the solver factorised.
       const T gamma = m_rec.implicit_gamma();
       solver.prepare(cp.y, m_rec.implicit_t_new(), T(1) / gamma, gamma);
-      return false;
-    } else if (m_control_chain) {
-      replay_controlled(sys, store, k, cs, err_old, dt_next, t_next,
-                        err_old_next);
-      return true;
     } else {
       m_rec.record(sys, cp);
-      return false;
     }
   }
-
-  // One step with its control law on the tape: the attempts the controller threw
-  // away, the accepted one, and the three values the next step reads. The law is
-  // onestep_controller's, called through the same functions it calls itself.
-  template<class RSys>
-  void replay_controlled(RSys& sys, const store_type& store, std::size_t k,
-                         const control_state& cs, rev_type& err_old,
-                         rev_type& dt_next, rev_type& t_next,
-                         rev_type& err_old_next)
-  {
-    const control_params& par = store.params();
-
-    m_rec.load(store.step(k), static_cast<T>(cs.dt_in));
-    err_old = rev_type(static_cast<T>(cs.err_old));
-    err_old.independent();
-
-    rev_type dt = m_rec.dt_in();
-    for (unsigned j = 0; j < cs.rejected; ++j) {
-      m_rec.attempt(sys, dt);
-      dt = dt * onestep_detail::reject_factor(step_error(par), par.order,
-                                              par.safety, par.min_factor);
-    }
-    m_rec.attempt(sys, dt);
-
-    const rev_type err = step_error(par);
-    // pi_form and cap_at_one are what update_stepsize reads off m_first_step and
-    // m_last_rejected: a step with a thrown-away attempt behind it has the flag.
-    const rev_type factor = onestep_detail::accept_factor(
-        err, err_old, !(cs.first_step || cs.rejected > 0), cs.rejected > 0,
-        par.order, par.alpha, par.beta, par.safety, par.min_factor,
-        par.max_factor);
-
-    t_next       = m_rec.t_end();
-    dt_next      = m_rec.dt_used() * factor;
-    err_old_next = cppde::max(rev_type(T(0.01)), err);
-  }
-
 
   // ------------------------------------------------------------------------
   //  The boundary a step was entered through, backwards.
@@ -793,15 +690,6 @@ private:
     }
   }
 
-  // The controller's error norm on the replayed attempt, floored the way
-  // try_step floors it before it reaches the control law.
-  rev_type step_error(const control_params& par) const {
-    const rev_type e = onestep_detail::wrms_state(
-        m_rec.xout(), m_rec.xin(), m_rec.xerr(), par.atol, par.rtol,
-        [](const rev_type& v) { return v; });
-    return cppde::max(e, T(1e-15));
-  }
-
   // The forward loop observes a time before the step bracket at the bracket
   // start instead, which happens after an event restart. Clamping reproduces
   // that branch; inside the bracket, which is every other case, it does nothing.
@@ -814,14 +702,23 @@ private:
   }
 
   recorder_type  m_rec;
-  std::vector<T> m_wx, m_whist, m_wp, m_wt, m_wdt, m_x_obs;
+  std::vector<T> m_wx, m_whist, m_wp, m_wt, m_wdt, m_x_obs, m_lam, m_eta;
   // What an intervention handed back: a cotangent on a point inside the step
   // below it rather than on that step's carry.
   std::vector<T> m_pending;
   double         m_pending_t = 0.0;
   bool           m_pending_interp = false;
   std::size_t    m_max_nodes = 0;
-  bool           m_control_chain = true;
+  bool           m_trace_lambda = false;
+  cppde::profiler m_prof;
+
+public:
+  // Per-category timings of the sweep and of the store, to stderr. Compiled
+  // away without CPPDE_PROFILE.
+  void report_profile(const store_type& store) const {
+    m_prof.report("cppDE reverse sweep");
+    store.prof().report("cppDE reverse checkpoints");
+  }
 };
 
 }  // namespace reverse

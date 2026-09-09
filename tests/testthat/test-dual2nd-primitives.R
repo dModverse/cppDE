@@ -1,5 +1,5 @@
 # Unit tests for cppde::dual2nd math primitives. One primitive per model,
-# asserted equal between derivMode "dual" and "symbolic": independent code
+# asserted equal between derivMode "forward" and "symbolic": independent code
 # paths, with the symbolic one as the trusted oracle.
 
 skip_on_cran()
@@ -20,8 +20,8 @@ name_of <- function(expr) {
 # Helper: run both modes and return (y, dy, d2y) arrays.
 run_modes <- function(expr, parameters, x_vals, dP, dP2 = NULL) {
   out <- list()
-  for (mode in c("dual", "symbolic")) {
-    f <- funCpp(expr, parameters = parameters,
+  for (mode in c("forward", "symbolic")) {
+    f <- cppFUN(expr, parameters = parameters,
                 deriv = TRUE, deriv2 = TRUE, derivMode = mode,
                 compile = TRUE,
                 modelname = paste0("d2prim_", mode, "_", name_of(expr)))
@@ -34,11 +34,11 @@ run_modes <- function(expr, parameters, x_vals, dP, dP2 = NULL) {
   out
 }
 
-# Helper: assert dual and symbolic agree on all three derivative levels.
+# Helper: assert forward AD and symbolic agree on all three derivative levels.
 expect_modes_agree <- function(out, tol_y = 1e-12, tol_dy = 1e-10, tol_d2y = 1e-10) {
-  expect_equal(unname(out$dual$y),   unname(out$symbolic$y),   tolerance = tol_y)
-  expect_equal(unname(out$dual$dy),  unname(out$symbolic$dy),  tolerance = tol_dy)
-  expect_equal(unname(out$dual$d2y), unname(out$symbolic$d2y), tolerance = tol_d2y)
+  expect_equal(unname(out$forward$y),   unname(out$symbolic$y),   tolerance = tol_y)
+  expect_equal(unname(out$forward$dy),  unname(out$symbolic$dy),  tolerance = tol_dy)
+  expect_equal(unname(out$forward$d2y), unname(out$symbolic$d2y), tolerance = tol_d2y)
 }
 
 # Identity Phi(theta) = theta seed: dP = I, dP2 = 0. Each parameter is its
@@ -143,7 +143,7 @@ test_that("dual2nd output is Hessian-symmetric (mirror via dd_raw)", {
   s <- identity_seeds(c("a", "b", "c"))
   out <- run_modes(c(y = "a*b + b*c + a*c"), parameters = c("a", "b", "c"),
                    x_vals = list(a = 1, b = 2, c = 3), dP = s$dP, dP2 = s$dP2)
-  d2y <- out$dual$d2y
+  d2y <- out$forward$d2y
   for (i in seq_len(dim(d2y)[3]))
     for (j in seq_len(dim(d2y)[4]))
       expect_equal(d2y[, , i, j], d2y[, , j, i])

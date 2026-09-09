@@ -7,7 +7,8 @@
 #
 # A leading --codual, --reverse-step, --reverse-step-rb4,
 # --reverse-step-multistep, --reverse-trajectory, --reverse-trajectory-methods
-# --reverse-events or --sparse-transpose selects a reverse-AD harness.
+# --reverse-events, --err-weights or --sparse-transpose selects a reverse-AD
+# harness.
 #
 # The output is the assertion: two revisions that compute the same thing must
 # produce byte-identical output.
@@ -51,6 +52,11 @@ case "${1:-}" in
   --reverse-events)
     SRC="$REPO/dev/cxx/test_reverse_events.cpp"
     OUT=${TMPDIR:-/tmp}/cppde_reverse_events
+    shift
+    ;;
+  --err-weights)
+    SRC="$REPO/dev/cxx/test_err_weights.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_err_weights
     shift
     ;;
   --sparse-transpose)

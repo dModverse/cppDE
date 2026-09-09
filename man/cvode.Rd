@@ -14,6 +14,8 @@ cvode(
   modelname = NULL,
   outdir = tempdir(),
   deriv = FALSE,
+  sweep = c("forward", "reverse"),
+  asaCheckpoints = 200L,
   sparse = NULL,
   method = c("bdf", "adams"),
   includeTimeZero = TRUE,
@@ -45,6 +47,20 @@ and exported C symbols. A random identifier is used when \code{NULL}.}
 \code{tempdir()}.}
 
 \item{deriv}{Logical. Compute first-order parameter sensitivities.}
+
+\item{sweep}{Direction the derivatives are taken in. \code{"forward"} (default)
+is the CVODES staggered forward sensitivity solver, driven by \code{deriv}.
+\code{"reverse"} is CVODES adjoint sensitivity analysis: the forward pass
+stores checkpoints, and one backward solve per seed column integrates
+\eqn{\lambda' = -J^T \lambda} with the quadrature
+\eqn{-(\partial f/\partial p)^T \lambda} riding along. It needs
+\code{deriv = FALSE}, and refuses \code{events} and \code{rootfunc}: CVODES integrates
+the adjoint over checkpointed states and cannot be told about a jump.}
+
+\item{asaCheckpoints}{Accepted forward steps between checkpoints under
+\code{sweep = "reverse"}. The adjoint interpolates the forward state between
+them, so fewer steps means less interpolation error and more memory.
+Ignored under \code{sweep = "forward"}.}
 
 \item{sparse}{Logical or \code{NULL}. \code{NULL} auto-selects sparse vs.
 dense LU from the Jacobian sparsity; \code{TRUE} forces sparse, \code{FALSE}
@@ -82,7 +98,9 @@ selection guidance are described in
 }
 \details{
 Available methods are \code{"bdf"} (default) and \code{"adams"}. Sensitivities
-are first-order forward only; \code{deriv2} is not supported. Events,
+are first-order forward only; \code{deriv2} is not supported.
+\code{sweep = "reverse"} compiles the CVODES adjoint instead, returning
+\verb{$adjoint} the way the native backend's reverse mode does. Events,
 forcings, \code{rootfunc}, and \code{fixed} behave as in \code{\link[=cppODE]{cppODE()}}.
 
 SUNDIALS (>= 6.0) must be available at install time; otherwise
@@ -106,6 +124,6 @@ Nonlinear and Differential/Algebraic Equation Solvers.
 \emph{ACM Transactions on Mathematical Software} \strong{31}(3), 363-396.
 }
 \seealso{
-\code{\link[=cppODE]{cppODE()}}, \code{\link[=solveODE]{solveODE()}}, \code{\link[=funCpp]{funCpp()}};
+\code{\link[=cppODE]{cppODE()}}, \code{\link[=solveODE]{solveODE()}}, \code{\link[=cppFUN]{cppFUN()}};
 \code{vignette("Methods", package = "cppDE")}.
 }

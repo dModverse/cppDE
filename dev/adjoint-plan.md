@@ -379,6 +379,465 @@ Rundungsniveau geprüft und nicht auf Solvertoleranz, und das gilt für jede sei
 Das ist eine schärfere Aussage als jeder heutige dMod2-Gradiententest: `test-normL2.R:449` und `:481`
 prüfen gegen `numDeriv::grad` bei Toleranz 1e-3.
 
+## Arbeitsstand 2026-09-09
+
+Stufen 0 bis 9 stehen. Die Nummerierung unten ist die Restliste vom Vortag; erledigt sind
+inzwischen 1, 2, 3, 4, 6, 8 und 9, dazu die nicht geplanten 11 (`derivMode`), 12 (Stufe 9 Punkte 3
+bis 6), 13 (CVODES ASA) und 14 (drei Funde aus der Bachmann-Messung).
+
+**Offen bleibt 10**, der Zug auf master. Zwei Dinge warten bewusst auf eine Messung statt auf Zeit:
+die dMod2-Hälfte von Stufe 9 Punkt 5, und die Verdrahtung des Stores aus Posten 5 durch dMod2s
+Kette.
+
+**Erledigt am 2026-09-09.**
+
+**1. Die Steuerungskette ist raus.** `control_state`, `control_params`, die Store- und
+Collector-Anteile, `replay_controlled()`, `step_error()`, der `control_chain()`-Setter und
+`m_control_chain` sind fort; `replay_one()` gibt `void` zurück und nimmt weder `cs` noch die vier
+Rückgabekanäle. `m_wdt` und `wdt()` sind ausdrücklich geblieben. Die drei C++-Harnesse sind
+mitgezogen: `test_reverse_events.cpp` und `test_reverse_trajectory_methods.cpp` verlieren nur den
+`control_chain(false)`-Aufruf, `test_reverse_trajectory.cpp` verliert seinen Kettenvergleich und
+misst stattdessen den Reverse-Sweep gegen die Dual-Referenz auf **demselben** Gitter, über vier
+Dekaden `rtol`. Ergebnis, alle Abweichungen auf Rundungsniveau:
+
+    rtol       steps    deviation
+    1e-06      9        8.049e-16
+    1e-08      21       2.442e-15
+    1e-10      51       6.661e-16
+    1e-12      128      1.554e-15
+
+Die Schrittfolge ändert sich dabei vollständig, was diesen Lauf von einer Wiederholung des ersten
+unterscheidet. Alle sechs Harnesse (`codual`, `reverse_step`, `_rb4`, `_multistep`,
+`reverse_trajectory`, `_methods`, `reverse_events`) melden `OK`.
+
+Kein NEWS-Eintrag: `control_chain` war C++-intern und nie ausgeliefert, und der zweite Punkt unter
+`# cppDE (development version)` beschreibt das Verhalten bereits richtig. Was doch stale war, sind
+die Kommentare in `cppde_onestep_controller.hpp`: der Kopf über der Fehlernorm und die Zeile über
+`wrms_state` versprachen beide, die Norm lande im Replay auf dem Tape.
+
+**2. Beide Pakete neu installiert und beide Suiten gefahren.** `R CMD INSTALL`, cppDE zuerst,
+`packageDescription("cppDE")$Built` danach geprüft und nach dem dMod2-Install noch einmal.
+cppDE: `FAIL 0 | WARN 0 | SKIP 5 | PASS 610`, dieselbe Zahl wie vor dem Umbau.
+
+**3a. Das Messgerät steht.** `solveODE(..., seed = W, adjointGrid = TRUE)` gibt jetzt
+`$adjointGrid` heraus: `time`, `h`, `wt`, `wdt`, `eta` und `lambda`. Getragen wird der Schalter als
+**Attribut der Saat**, nicht als sechzehntes Positionsargument, denn die `.Call`-Signatur steckt in
+jedem schon übersetzten Modell. Ohne Saat bedeutet er nichts, und ohne ihn kostet er nichts.
+
+Beim Bau ist ein Irrtum des Plans aufgefallen und in Stufe 9 berichtigt: **`wdt` ist nicht der
+Indikator.** `m_dt` wird im Replay unabhängig gesetzt und bei festem Gitter danach abgelesen, also
+ist `dJ/dh_k ~ lambda' f` die *Transportableitung*, von der Größe von J und nicht von der des
+Fehlers. Der richtige Indikator ist der dual gewichtete Residuenterm `eta_k = lambda_{k+1}' e_k`,
+und beide Hälften lagen im Sweep schon vor: `m_rec.xerr()` und, nach dem Sweep,
+`m_rec.xout()[i].adjoint()`. Er ist als `eta()` dazugekommen und kostet `n_x` Multiplikationen pro
+Schritt.
+
+Noch **nicht** verdrahtet: der Batch-Pfad. `solveODEBatch()` und `prepareBatch()` reichen
+`adjointGrid` nicht durch. Für die Messung reicht `solveODE()`; der Batch kommt mit Stufe 9 Punkt 5,
+wo dMod2 die Gewichte ohnehin hineinreichen muss.
+
+**3b. Die Messung ist gefahren, `dev/lambda-indicator.R`.** Ergebnis und Zahlen in Stufe 9. Kurz:
+`eta` trägt auf allen vier Verfahren, und `wdt` ist wie vermutet die Transportableitung.
+
+Die Messung hat dabei zwei echte Fehler im Reverse-Pfad gefunden, beide behoben:
+
+- **`xout().adjoint()` ist nach dem Sweep nicht lambda am Schrittende, sobald das Schrittende die
+  Lösung einer Gleichung ist.** Bei einem Korrektorverfahren trägt das Segment unter der Marke das
+  Residuum in `y` zurück und treibt dessen Adjungierten auf null, und genau das macht die IFT exakt
+  statt zu einer Näherung der Iteration. Der Wert steht nur *im* Sweep, am Lösepunkt, vor dem
+  transponierten Solve. Neu ist `wout()`, das ihn dort abgreift, und ein `m_out_is_solution`, das
+  `load()` auf `false` und `attempt_implicit()` auf `true` setzt. Für `tsit5` und `rb4` ändert sich
+  nichts: deren `m_xout` liegt über jeder Marke, und `rb4` ist implizit mit Stufenlösungen und war
+  nie betroffen: die Trennlinie ist Einschritt gegen Multistep, nicht explizit gegen implizit.
+- **`xerr()` ist beim Multistepper die rohe Korrektur, nicht der lokale Fehler.** Der ist
+  `acor * tq[2]`, und `tq[2]` hängt von der Ordnung ab, also sind Schritte verschiedener Ordnung
+  ohne den Faktor nicht vergleichbar. Neu ist `error_scale()`, über ein
+  `has_error_constant`-Erkennungsmerkmal aus `error_constant()` des Steppers gezogen und sonst eins.
+
+Vorher und nachher, dasselbe Modell, dieselbe Saat, `max |eta|`:
+
+    tsit5   1.4e-07  ->  1.4e-07     (unverändert, war nie betroffen)
+    rb4     3.3e-07  ->  3.3e-07     (unverändert)
+    bdf     1.1e-20  ->  1.7e-05     (war Rundungsrauschen)
+    adams   7.8e-21  ->  2.0e-05     (war Rundungsrauschen)
+
+Alle sieben C++-Harnesse danach `OK`. Der Kopfkommentar von `cppde_reverse_step.hpp` war nach dem
+Kettenausbau stale und sagt jetzt, wozu der Kotangens von `h` noch gut ist: Diagnose, nicht
+Kettenregel.
+
+**11. `reverse` heisst jetzt `derivMode`, im ganzen dModverse.** Simons Ansage am 2026-09-09, mit
+sauberem Bruch statt Aliasnamen: `reverse = TRUE` und `derivMode = "dual"` sind fort, nicht
+veraltet. Eine Vokabel für alles: `"forward"`, `"reverse"`, `"symbolic"`, und mehrere davon dürfen
+zugleich genannt werden.
+
+| | vorher | nachher | Vorgabe |
+|---|---|---|---|
+| `odemodel()` | `reverse = FALSE` | `derivMode` | `"forward"` |
+| `Y()`, `Pexpl()`, `cppFUN()` | `derivMode = c("dual","symbolic")` | dasselbe Argument, neue Werte | `c("forward","reverse")` |
+| `importPEtab()` | `reverse = FALSE` | `derivMode` | `"forward"` |
+| `normL2()` | `sweep = c("forward","reverse")` | **unverändert** | `"forward"` |
+
+Zwei Entscheidungen dahinter, beide bewusst:
+
+- **Die Vorgaben sind verschieden, und das ist kein Versehen.** `odemodel()` baut für `"reverse"`
+  ein *viertes* Objekt und kostet Bauzeit, also bleibt es aus, wie `reverse = FALSE` es war.
+  `cppFUN()` lieferte unter `"dual"` schon immer Jacobi *und* vjp aus einem Lauf, also bleibt beides
+  an, damit sich nichts still ändert. Jede Vorgabe hält ihren eigenen Stand.
+- **`normL2(sweep=)` bleibt `sweep`.** Es ist eine Entscheidung *pro Aufruf*, keine Baueigenschaft.
+  Hiesse es auch `derivMode`, läse es sich wie eine. Die Werte sind ohnehin dieselben, und das ist
+  der Teil der Vereinheitlichung, der zählt.
+
+Nebenbei sind die beiden Richtungen in `cppFUN()` **wirklich getrennt worden**, nicht nur
+umbenannt: `"forward"` allein lässt den vjp weg, `"reverse"` allein die Jacobi. Der vjp instanziiert
+den Ausdruckskörper ein zweites Mal über `codual`, ist also echte Übersetzungszeit, die ein reiner
+Vorwärtsnutzer nicht zahlen soll. Dafür hat der Generator ein eigenes `vjp`-Flag neben `ad`
+bekommen. `"symbolic"` ist mit keinem der beiden kombinierbar und sagt das auch: es ist ein Backend
+für die Vorwärts-Jacobi, keine Richtung, und einen symbolischen vjp gibt es nicht.
+
+**12. Stufe 9 Punkte 3 bis 6 stehen.** `cppde_err_weights.hpp` ist neu: lambda von einem früheren
+Sweep, linear interpoliert in plain `double`, mit harten Segmentgrenzen an den Stellen, wo lambda
+springt, mit `gradtol` und einer Untergrenze für Gewichte. Gefunden wird es über eine Senke wie die
+des Step-Trace, also thread-lokal und pro Solve, weil ein Batch mehrere Läufe nebeneinander fährt.
+
+Der Term steht in **beiden** Reglern: im Einschrittregler als dritter Fall neben Wert und
+Sensitivitätsspalten, im Multistepper im Fehlertest, dort gegen `acor * tq[2]` statt gegen `acor`,
+weil Schritte verschiedener Ordnung sonst nicht vergleichbar sind. Nach R durchgereicht als
+`solveODE(..., errWeights = list(time, lambda, breaks, gradtol, floor))`, wieder als Attribut der
+Saat statt als weiteres Positionsargument.
+
+**Die tragende Eigenschaft ist gemessen, nicht behauptet:**
+
+    gradtol = 1e6    95 Schritte, Gitter bitgleich mit dem ungewichteten Lauf
+    gradtol = 1e-6   95 Schritte
+    gradtol = 1e-9   96665 Schritte
+
+Ein lockeres `gradtol` lässt das Gitter **exakt** unverändert, geprüft mit `expect_identical` auf den
+Schrittweiten, nicht `expect_equal`. Damit ist belegt, dass der Term nur unter dem `max` wirkt und
+ein falsches Gewicht Zeit kosten kann und nie Genauigkeit. Getestet auf allen vier Verfahren.
+
+**Bewusst nicht gebaut: die dMod2-Hälfte von Punkt 5**, also der `objfn`, der lambda der vorigen
+Iteration hält und weiterreicht. Nicht aus Zeitmangel, sondern weil die Messung, die das
+rechtfertigen würde, noch fehlt. Belegt ist bisher zweierlei: dass `eta` den Fehler richtig *rankt*
+(Posten 3b) und dass die Gewichtung das Gitter nur verfeinern kann (oben). **Nicht belegt ist, dass
+sie sich lohnt**, also dass ein gewichteter Lauf eine gegebene Gradientengenauigkeit mit *weniger*
+Gesamtschritten erreicht als schlicht ein kleineres `rtol`. Ohne diese Zahl wäre die Verdrahtung in
+den Optimierer neue API-Fläche für einen unbewiesenen Gewinn, und die Vorgabe müsste ohnehin
+zunächst „aus" sein.
+
+Zu messen wäre: bei fester Zielgenauigkeit des Gradienten die Gesamtschrittzahl von (a) `rtol`
+verschärfen gegen (b) `gradtol` verschärfen, auf Bachmann und einem Ereignismodell. Fällt (b)
+deutlich günstiger aus, ist die Verdrahtung fällig und einfach; fällt sie gleich aus, ist der ganze
+Mechanismus ein Diagnosewerkzeug und kein Regler, und das gehört dann so in die Dokumentation.
+
+**13. Stufe 8 steht: CVODES ASA.** `cvode(..., sweep = "reverse")` erzeugt die Adjungierten-Rechte-
+Seite `lambda' = -J' lambda` und die Quadratur `-(df/dp)' lambda`, beides Transponierte der Daten,
+die der Vorwärtspfad ohnehin baut. Der Vorwärtslauf geht über `CVodeF`, der Rückwärtslauf über
+`CVodeB` mit einer Saat-Addition an jeder Beobachtungszeit. In dMod2 hängt es an
+`odemodel(backend = "Sundials", derivMode = c("forward", "reverse"))` und läuft durch dieselbe
+Kette wie der native Modus.
+
+**Ereignisse werden abgelehnt, nicht genähert.** CVODES integriert den Adjungierten über
+gecheckpointete Zustände und hat keinen Weg, von einem Sprung zu erfahren; der native Modus spielt
+den Sprung nach. Das ist der Grund, warum ASA kein Orakel ist und auch keines werden kann.
+
+**Drei Fehler auf dem Weg, alle gemessen statt geraten**, und jeder einzelne wäre als „ASA ist eben
+eine andere Diskretisierung" durchgegangen, wenn ich der Erwartung statt der Messung geglaubt hätte:
+
+1. *Vorzeichen der Quadratur.* CVODES integriert die Rückwärtsquadratur von T nach t0 mit
+   `xi(T) = 0`, liefert also `-int_{t0}^{T}`. Zusammen mit dem Minus der Adjungierten-Gleichung
+   heben sich beide auf, und das Ergebnis ist direkt zu übernehmen.
+2. *Neuinitialisierung bei Nullsprung.* Ich rief `CVodeReInitB` an **jeder** Ausgabezeit. Jeder
+   Neustart setzt das Rückwärtsverfahren auf Ordnung eins zurück, und über 25 Zeiten summierte sich
+   das zu 4 Prozent Fehler. Nur noch bei echtem Sprung: Fehler von `4e-2` auf `5e-8`.
+3. *Quadratur-Historie beim Sprung.* Die Quadratur führt ihre eigene Nordsieck-Historie, und ein
+   Zustands-Neustart lässt sie ein Intervall beschreiben, dem der Zustand nicht mehr folgt. Wert
+   auslesen und unverändert zurückgeben (`CVodeGetQuadB`, `CVodeQuadReInitB`) baut die Historie neu
+   auf, ohne das Integrierte zu verlieren: Fehler von `1.8e-2` auf `3.8e-10`.
+
+Dazu ein vierter, den erst zwei Saatspalten zeigten: `CVodeB` treibt **jedes** existierende
+Rückwärtsproblem. Eines pro Spalte anzulegen lässt die fertigen über ihre eigene Startzeit hinaus
+laufen. Jetzt gibt es genau eines, und jede weitere Spalte re-initialisiert es.
+
+Stand danach, Vorwärts gegen beide Adjungierte auf einem Zerfallsmodell mit Rückreaktion:
+
+    rel. Abweichung nativer Reverse gegen Forward   6.19e-09
+    rel. Abweichung CVODES ASA   gegen Forward      1.63e-09
+
+**14. Drei Funde, die erst die Bachmann-Messung hervorgebracht hat.** Alle drei hätte man ohne die
+Messung nicht gesehen, und zwei sind älter als diese Arbeit.
+
+- **Ein PEtab-Prior-Term hat `hessian = FALSE` ignoriert** (`.petab_prior_objective`). Das Argument
+  fiel in `...` und wurde nie gelesen, also gab der Term eine Null-Hesse an einen Aufrufer zurück,
+  der keine wollte. Unter `sweep = "reverse"`, wo es gar keine geben kann, sah die Zielfunktion damit
+  so aus, als hätte sie eine, und genau das ist die Kennzahl, an der ein Aufrufer prüft, ob die
+  Richtung überhaupt angekommen ist. Der Bug ist älter als der Reverse-Modus und traf auch
+  `hessian = FALSE` im Vorwärtsmodus, nur ohne sichtbare Folge. Behoben, mit Test.
+- **`importPEtab()` kennt keinen Sundials-Backend**, `match.arg(backend, c("deSolve", "cppDE"))`.
+  Das Vergleichsskript baut das ASA-Modell deshalb aus den zurückgegebenen Reaktionen und hängt es in
+  dieselbe Kette; alles außer Integrator und Richtung bleibt das der Einlese. Ob der Importer den
+  dritten Backend bekommen soll, ist eine eigene Entscheidung und steht hier nur als Notiz.
+- **Das Rückwärtsproblem bekam kein Schrittbudget.** `CVodeSetMaxNumStepsB` fehlte, also galt die
+  CVODES-Vorgabe von 500, die ein steifes Modell lange vor `t0` erreicht. Gemeldet wurde das als
+  Integrationsfehler und nicht als Grenze, las sich also wie ein Fehler im Adjungierten. Jetzt
+  bekommt es das Budget des Aufrufers.
+
+**15. Der Codual-Pfad ist 2,1-mal schneller.** Auf Simons Ansage hin gemessen statt geraten, mit
+`dev/cxx/bench_codual.cpp`, das Recording, Sweep, reinen Tape-Schreibvorgang und Thread-Local-Zugriff
+getrennt ausweist.
+
+**Der Befund war eine einzige Sache:** `live()` wurde **viermal je Binäroperation** ausgewertet:
+zweimal in `codual_binary`, um über das Aufzeichnen zu entscheiden, und dann noch einmal je Operand
+in `record()` über `local()`. Jede Auswertung waren drei Vergleiche.
+
+- `live()` ist jetzt **ein** Vergleich. Der Sentinel `none` ist von `SIZE_MAX` auf `0` gewandert und
+  `base_` startet bei eins, also ist `none` älter als jedes Tape, das je existiert, und
+  `slot >= base_` deckt beide Fälle. Die dritte Vergleichung war ohnehin redundant: Slots werden
+  monoton vergeben, also liegt alles vor dem letzten Rewind unter `base_`.
+- `record_local()` nimmt die schon aufgelösten Operanden entgegen. Ein Knoten deckt jetzt alle drei
+  Lebendigkeits-Kombinationen ab statt drei Zweige; ein toter Operand ist `nolocal`, und der Sweep
+  überspringt ihn.
+
+| je Tape-Knoten | vorher | nachher |
+|---|---|---|
+| Recording, alles inklusive | 9,27 ns | **3,08 ns** |
+| davon Tape-Schreibvorgang | 1,88 | 1,03 |
+| davon Thread-Local-Zugriff | 0,66 | 0,66 |
+| Rückwärts-Sweep | 1,47 | 1,37 |
+
+Der ganze Pfad fällt von 167-mal auf 79-mal einer Double-Auswertung. **Auf Solverebene schlägt unser
+Reverse damit CVODES ASA**, Robertson 0,00218 s gegen 0,00300 s; vorher lag ASA vorn.
+
+**Verworfen, weil die Messung es nicht hergab:** das Thread-Local auf Namensraumebene zu ziehen, um
+den Wächter der funktionslokalen Variante zu sparen. 3,16 auf 3,04 ist Rauschen. Die gemessenen
+0,66 ns stehen jetzt als Notiz im Header, damit es niemand ein zweites Mal versucht.
+
+**Und die Einordnung, die dazugehört:** auf *Kettenebene* bringt das wenig: Bachmanns `factor_rev`
+fällt nur von 5,75 auf 5,48. Der Reverse-Pfad ist dort nicht Codual-gebunden, sondern hängt am
+doppelten Zustandslauf und am R-seitigen Kettenaufwand. Das macht Posten 5 zum nächsten Hebel und
+nicht weitere Mikrooptimierung am Tape.
+
+**16. Der Vergleich mit ASA, richtig gemessen, und zwei zurückgenommene Behauptungen.**
+
+**Berichtigung 1: „wir sind genauer als ASA" war falsch.** Gemessen war „Abstand zum
+Vorwärtsgradienten bei derselben Toleranz". Das ist keine Genauigkeit, sondern **Ähnlichkeit der
+Diskretisierung**: unser Reverse differenziert nahezu das, was der Vorwärtsmodus integriert, ASA
+etwas anderes. Der Maßstab begünstigt uns per Konstruktion.
+
+Gegen eine *gemeinsame enge Referenz* auf Robertson, abstol 1e-10 / reltol 1e-8:
+
+    discrete adjoint              1.52e-05
+    ASA, 400 Schritte/Checkpoint  1.27e-06
+    ASA, 200                      1.58e-06
+    ASA,  50                      1.45e-06
+    ASA,  10                      1.04e-06
+
+**ASA ist dort rund zehnmal genauer als wir**, und die Checkpoint-Dichte ist nicht die Ursache: von
+400 auf 10 ändert sich fast nichts. Auf Bachmann sieht es umgekehrt aus (31,7 gegen 48,0 gegen eine
+Referenz bei 1e-12), aber dort sind alle drei Zahlen von `log10(x + 1e-15)` aufgebläht und taugen
+nicht zum Ranking. **Eine allgemeine Aussage über Genauigkeit gibt es damit nicht**, und keine sollte
+behauptet werden.
+
+Nebenbei entstanden: `cvode(..., asaCheckpoints = )` als echtes Argument statt einer fest
+verdrahteten 200. Es ist der Speicher-gegen-Genauigkeit-Regler, den CVODES dafür vorsieht, und die
+Messung oben brauchte ihn.
+
+**Berichtigung 2: „unser Vorwärtslauf braucht zwei- bis dreieinhalbmal so viele Schritte wie CVODE"
+war ein Ablesefehler.** Die Zahl kam aus `diagnostics()` eines *ASA*-Laufs, dessen Zähler nach
+`CVodeF` nichts Vergleichbares meldet. Sauber gemessen sind die Schrittzahlen gleich:
+
+| Modell | wir, NDF | wir, BDF | CVODE BDF |
+|---|---|---|---|
+| decay | 319 | 319 | 314 |
+| robertson | 654 | 781 | 652 |
+
+NDF tut also, was es soll, und der Stepper ist kein Hebel.
+
+**Was bleibt, zur Geschwindigkeit.** Auf *Solverebene* sind wir schon schneller, bei gleicher
+Schrittzahl:
+
+| Modell | t_ours | t_asa | Verhältnis |
+|---|---|---|---|
+| decay | 0,00087 | 0,00130 | 0,67 |
+| robertson | 0,00213 | 0,00267 | 0,80 |
+
+Auf *Kettenebene* auf Bachmann ist ASA 1,9-mal schneller (0,203 gegen 0,380 s). **Dieser Abstand ist
+nicht lokalisiert.** Er liegt nicht an der Schrittzahl und nicht am Tape. Zwei Kandidaten, beide
+ungemessen: unser Replay löst je Schritt transponiert über KLU, während ASAs Rückwärtsproblem eine
+dichte 25x25-Zerlegung fährt, und bei dieser Größe kann dicht schneller sein; und ASAs Rückwärtslauf
+wählt seine eigene Schrittzahl, die bei glattem lambda unter der Vorwärtszahl liegen kann, während
+wir jeden Vorwärtsschritt nachspielen müssen. **Zu messen wären die Schrittzahlen je Bedingung und
+die des Rückwärtslaufs**, bevor irgendetwas daran optimiert wird.
+
+**Offen, in dieser Reihenfolge.**
+
+**4. Reverse gegen Forward messen, über `rtol`.** *Vereinfacht auf Simons Ansage am 2026-09-09:
+keine numerische Ableitung eines Wertlaufs als dritte Instanz, sondern schlicht der Reverse-Gradient
+gegen den Vorwärtsgradienten.* Was `tests/testthat/test-reverse.R` als Zusicherung prüft, ist als
+*Messung* aufzutragen: die Abweichung über `rtol`. Erwartet wird ein Abstand, der mit der Toleranz
+fällt, weil die beiden auf verschiedenen Gittern rechnen und die Lücke `O(tol)` ist. Ein Sockel, der
+nicht fällt, wäre ein Kanal, der in einem der beiden Pfade fehlt, und das ist der Befund, auf den
+die Messung aus ist.
+
+**Gefahren am 2026-09-09**, `dMod2/inst/examples/example_AdjointComparison.R` auf Bachmann:
+
+| rtol | Wertlücke | schlechtste rel. Gradientenlücke | 1 - cos |
+|---|---|---|---|
+| 1e-06 | 5.55e-05 | 153.2 | 1.44e-01 |
+| 1e-08 | 1.12e-06 | 8.94 | 2.20e-03 |
+| 1e-10 | 1.10e-09 | 0.156 | 6.48e-08 |
+| 1e-12 | 7.10e-12 | 0.024 | 1.08e-11 |
+
+Über vier Stufen fällt der Gradientenabstand um 6418. **Kein Sockel**, also kein fehlender Kanal in
+einem der beiden Pfade, sondern die Diskretisierung. Das war die Frage.
+
+Die tragende Spalte ist `1 - cos`, der Winkel zwischen den beiden Gradienten: von `1.4e-01` auf
+`1.1e-11`, sie werden also parallel. Eine Liniensuche spürt den Winkel und nicht die Länge. Die
+Spalte daneben ist bei lockerer Toleranz absurd groß, und das ist **Bachmann und nicht der
+Adjungierte**: das Modell beobachtet `log10(CIS + 1e-15)`, und ein Epsilon unterhalb dessen, was
+doppelte Genauigkeit auflöst, multipliziert jedes Restrauschen mit fünfzehn Dekaden. Derselbe Befund
+steht in `example_ReverseAD.R` Abschnitt 5b.
+
+**Und die Wandzeit, dieselbe Messung, 113 Parameter, `rtol = atol = 1e-8`:**
+
+| | Sekunden je Gradient | in Wertläufen |
+|---|---|---|
+| Wertlauf | 0,047 | 1 |
+| Vorwärts-Sensitivitäten | 0,47 | 10 |
+| unser Reverse | 0,405 | 8,6 |
+| CVODES ASA | 0,20 | 4,3 |
+
+**Das ist ernüchternd und gehört genau so aufgeschrieben.** Der eigene Adjungierte ist bei 113
+Parametern nur **1,16-mal** schneller als der Vorwärtsmodus, und **CVODES ASA ist doppelt so schnell
+wie er.** Zwei Gründe, beide bekannt und beide nicht schicksalhaft:
+
+1. *Der Vorwärtsmodus ist besser, als die Theorie unterstellt.* `factor_fwd` ist 10 und nicht 113:
+   dMod2 bündelt die Bedingungen, und die Sensitivitätsspalten laufen im selben Solve mit. Der
+   Kreuzungspunkt liegt also viel weiter rechts, als „Kosten wachsen mit `n_theta`" nahelegt.
+2. *Wir integrieren die Zustände zweimal.* `factor_rev` ist 8,6, wo zwei Zustandsläufe plus Sweep
+   etwa 3 erwarten ließen. ASA integriert einmal vorwärts und einmal rückwärts und landet bei 4,3.
+   **Damit ist Posten 5, der doppelte Wertelauf, von einer Aufräumarbeit zur eigentlichen
+   Optimierung geworden**, und die Messung sagt, wieviel sie wert ist.
+
+Bei der Genauigkeit ist es umgekehrt, schlechteste relative Gradientenabweichung vom Vorwärtsmodus
+bei `1e-8`:
+
+    unser Reverse   8,94
+    CVODES ASA     48
+    die beiden Adjungierten gegeneinander   35,7
+
+ASA liegt fünfmal weiter weg, und das ist erwartbar: es interpoliert die Vorwärtszustände aus
+Checkpoints, eine Näherung, die das schrittweise Replay nicht hat. Die absoluten Zahlen sind wieder
+von Bachmanns `log10(x + 1e-15)` aufgeblasen; das Verhältnis ist die Aussage. **ASA ist schneller
+und ungenauer, unser Reverse langsamer und genauer**, und keiner von beiden ist ein Orakel für den
+anderen.
+
+**5. Erledigt am 2026-09-09: der doppelte Wertelauf.** Gebaut wie entworfen, mit einem Zusatz, den
+der Entwurf nicht hatte und der die Sicherheit trägt.
+
+`solveODE(..., keepStore = TRUE)` gibt die Checkpoints als `$store` heraus, `solveODE(..., store =)`
+nimmt sie zurück und integriert nichts mehr. Ein `SEXP`-Feld hin und zurück in
+`solve_args`/`solve_result`, ein pro Modell emittierter Finalizer, weil der Store-Typ über den
+Stepper vom Modell abhängt, und ein `rev_state_wrap`, das die Modell-Übersetzungseinheit den
+externen Zeiger bauen lässt; nur dort ist der Typ bekannt.
+
+**Die beiden Argumente hängen an `times`, nicht an der Saat.** Der Aufruf, der einen Store *macht*,
+hat keine Saat: er läuft für die Werte allein. Deshalb darf ein Reverse-Modell jetzt ohne Saat
+gefahren werden, wenn `keepStore` gesetzt ist, und sweept dann nichts.
+
+**Der Fingerabdruck ist kein Zusatz, sondern die Sicherheit.** Der Store trägt die Zeiten und
+Parameter des Laufs, aus dem er stammt, und ein an anderer Stelle zurückgereichter Store ist ein
+Fehler statt einer stillen Wiederverwendung. Ohne das gäbe er einen Gradienten an einem Punkt aus,
+gemeldet an einem anderen, und nichts weiter unten könnte das bemerken.
+
+**Was es bringt, auf Robertson gemessen:**
+
+| | Sekunden | in Wertläufen |
+|---|---|---|
+| Wertlauf | 0,00037 | 1,00 |
+| Wertlauf, der den Store behält | 0,00050 | 1,36 |
+| Saatlauf, der selbst integriert | 0,00213 | 5,82 |
+| Saatlauf, der den Store nutzt | 0,00173 | 4,73 |
+
+Das Paar: 0,00250 getrennt, 0,00223 gemeinsam, also **11 Prozent gespart, nicht die Hälfte.** Ein
+früherer Messwert von 67 Prozent war Rauschen unter der Uhrauflösung und ist verworfen.
+
+**Warum nur elf:** die Checkpoint-Aufnahme kostet den Wertlauf 36 Prozent, holt also ein Drittel der
+Ersparnis zurück. Der Grund ist eine Allokation je Schritt: jeder Checkpoint hält seinen eigenen
+`std::vector` für den Zustand. Ein gepoolter Zustandsspeicher, ein flaches Feld über alle Schritte,
+wäre der nächste Schritt; er ist nicht gemacht und steht hier als benannte Möglichkeit, nicht als
+Vermutung.
+
+**Nicht verdrahtet: dMod2s Kette.** `Xs.cppDE` ruft den Wertlauf über das Wertmodell und den
+Saatlauf über das Reverse-Modell, also müsste der Wertlauf erst auf das Reverse-Modell umgestellt
+und der Store durch das Tape der Kompositionsalgebra gefädelt werden. Das ist eine eigene Änderung
+in `R/classes.R` und war in Posten 5 nicht enthalten; ohne sie ist der Gewinn auf `solveODE()`
+beschränkt.
+
+**6. Erledigt am 2026-09-09: `dev/methods/Methods.Rmd` hat jetzt einen Reverse-Abschnitt.**
+Abschnitt 2.9, *Reverse-mode sensitivities: the discrete adjoint*, zwischen der Saltationsmatrix und
+der Methodenwahl, weil er die Saltation voraussetzt. Sechs Unterabschnitte: die Kontraktion, die der
+Modus überhaupt berechnet; `codual` und das Tape; Checkpoint pro Schritt und Replay mit der
+Begründung, warum das Tape einen Schritt breit bleibt; die IFT-Abkürzung für den Korrektor samt der
+Bemerkung, warum der Reverse-Modus die lineare Algebra härter fordert als ein Newton-Korrektor;
+Ereignisse rückwärts; das eingefrorene Gitter als IND mit dem Sprungargument gegen die
+Steuerungskette; und die `O(tol)`-Lücke zum Vorwärtsmodus mitsamt der Konsistenzaussage. Die
+Übersicht und die Einstiegspunkt-Tabelle haben eine Zeile dazubekommen.
+
+`dev/render-methods.R` ist gelaufen, `vignettes/Methods.pdf` ist neu (200 KiB), das LaTeX-Log meldet
+keine undefinierten Verweise, und `pdftotext` findet den Abschnitt im Inhaltsverzeichnis.
+`devtools::build_vignettes()` wurde **nicht** aufgerufen, denn das verschiebt die PDF nach `doc/` und
+löscht die einzige Kopie.
+
+**7. Erledigt am 2026-09-09: der Benchmark ist gültig gefahren.** Die alten Zahlen waren wegen des
+`sweep`-Fehlers nichtig; diese sind es nicht, und die Probe-Sicherung, die bei einer Hesse aus einem
+Reverse-Aufruf abbricht, hat unterwegs den Prior-Fehler aus Posten 14 gefunden.
+
+Über die Zahl der geschätzten Parameter, Bachmann, alles relativ zu einem Wertlauf:
+
+| n_theta | Vorwärts | Reverse | Faktor |
+|---|---|---|---|
+| 10 | 3,28 | 6,08 | 0,54 |
+| 25 | 5,75 | 6,00 | 0,96 |
+| 50 | 6,32 | 6,08 | 1,04 |
+| 75 | 6,76 | 6,03 | 1,12 |
+| 113 | 7,23 | 5,83 | 1,24 |
+
+**Die Form stimmt: `factor_rev` ist flach, `factor_grad` steigt.** Genau das war die Behauptung, und
+sie ist jetzt gemessen. Der Kreuzungspunkt liegt zwischen 25 und 50 Parametern.
+
+**Der Betrag ist bescheidener als die Theorie verspricht**, und das ist die ehrlichere Nachricht:
+`factor_grad` steigt von 3,3 auf 7,2, wo „Kosten wachsen mit `n_theta`" von 10 auf 113 erwarten
+ließe. dMod2 bündelt die Bedingungen, und die Sensitivitätsspalten laufen im selben Solve mit; der
+Vorwärtsmodus ist also viel besser, als das Lehrbuchargument unterstellt. Boehm mit 9 Parametern
+liegt bei 0,52; dort ist der Adjungierte schlicht die falsche Wahl, und das gehört so
+dokumentiert.
+
+**8. Erledigt am 2026-09-09: Stufe 8, CVODES ASA.** Gebaut, gemessen und in dMod2 eingehängt; die
+Einzelheiten und die drei Fehler, die die Messung gefunden hat, stehen oben unter 13. Das
+Vergleichsskript ist `dMod2/inst/examples/example_AdjointComparison.R`, auf Bachmann.
+
+**9. Erledigt am 2026-09-09: der latente Fehler in `codual_tape::reverse()`.** Die Sprungoptimierung
+`if (w == T()) continue;` verließ sich auf ein `operator==`, das bei einem geschachtelten `T` nur
+den Wert vergleicht (`cppde_dual_math.hpp:570`); ein Knoten mit adjungiertem Wert null und
+lebendigem Tangenten wäre lautlos herausgefallen. Sie steht jetzt unter
+`if constexpr (std::is_arithmetic<T>::value)`: für `double` unverändert und gratis, für jeden
+anderen Typ gar nicht mehr. Das ist richtig statt bloß richtiger, denn es ersetzt eine Vermutung über
+`operator==` durch eine Eigenschaft, die der Compiler prüft. Alle sieben C++-Harnesse danach `OK`.
+
+**10. Vor dem Zug auf master.** `R CMD check` lokal in der Form, die CI fährt, für beide Pakete:
+cppDE über `dev/check-like-ci.R`, dMod2 mit `error_on = "warning"`, `--no-manual`,
+`--ignore-vignettes`. Und offen zu halten: bis wann `funCpp()` als veralteter Aliasname
+mitgeschleppt wird. Versionsnummern, der cppDE-Floor in dMod2s `DESCRIPTION` und die
+NEWS-Überschriften macht Simon, nicht der Assistent.
+
+**Nicht eigenmächtig:** keine Versions-Bumps in `DESCRIPTION` (auch nicht der cppDE-Floor in dMod2),
+nichts committen oder pushen. Simon macht beides beim Zug auf master.
+
+**Installieren nur mit `R CMD INSTALL`.** `devtools::install()` in dMod2 ruft
+`pak::local_install_deps()`, das über `Remotes: dModverse/cppDE` die lokale Devel-cppDE mit der
+GitHub-Version überschreibt. Danach `packageDescription("cppDE")$Built` prüfen; `* DONE` beweist
+nichts.
+
 ## Stufen
 
 Jede Stufe endet auf einem Test, der ohne die folgende Stufe läuft.
@@ -496,7 +955,9 @@ sind dann die Vorlage.
 
 Die algebraische Schicht zuerst, weil dort kein Zeitintegrationsproblem sitzt und weil sie die
 Konventionen für alles Weitere festlegt. Der Name ist `funCpp`, nicht `cppFUN`; die von Simon
-erwogene Umbenennung ist offen und gehört nicht in diesen Plan.
+erwogene Umbenennung ist offen und gehört nicht in diesen Plan. *Nachtrag 2026-09-09: sie ist
+seither erfolgt, `funCpp()` ist ein veralteter Aliasname. Alle Dateinamen unten sind entsprechend
+zu lesen.*
 
 `codegen_funCpp.py` emittiert `<model>_vjp` und `<model>_vjp_c`, die `w' J` bilden. Der bestehende
 `_eval_ad`-Pfad bleibt unverändert. `R/funCpp.R` bekommt den passenden Einstieg als weiteres
@@ -973,7 +1434,7 @@ Wurzeln, Forcings, der Batch-Einstieg und die Fehlermeldungen.
 **Der Reverse-Modus ist ein viertes Objekt, und der Modellrumpf steht darin zweimal.** Einmal in
 `double`, was der Vorwärtslauf integriert, und einmal in `namespace rev_` auf `cppde::codual`, was
 der Rückwärtslauf abspielt. Zwei Generierungen statt eines Templates, weil der emittierte Code den
-Skalartyp nach Dingen fragt, die ein `double` nicht beantwortet — `.val()` in der
+Skalartyp nach Dingen fragt, die ein `double` nicht beantwortet; `.val()` in der
 `G_tt`-Korrektur ist die Stelle, an der es auffällt. Die Ereignisse liegen dafür in einer
 `build_events`-Funktion je Typ statt inline in `solve_impl`.
 
@@ -1056,7 +1517,7 @@ dünn) und stimmt auf 7.5e-6; Bachmann (25x25) lag um vier Größenordnungen dan
 Lauf mit dichter Jacobi exakt war. Die Primitive war es nicht: `klu_tsolve` gegen eine dichte
 Referenz auf einer unsymmetrischen Matrix stimmt auf 1e-12, `dev/cxx/test_sparse_transpose.cpp`.
 
-Der Fehler saß in `klu_refactor`. Es behält die Pivotordnung der ersten Faktorisierung — das macht
+Der Fehler saß in `klu_refactor`. Es behält die Pivotordnung der ersten Faktorisierung, und das macht
 es schnell und für sich genommen unsicher, denn es meldet Erfolg auch dann, wenn diese Ordnung für
 die neuen Werte hoffnungslos geworden ist, und auf einem steifen Modell wird sie das, sobald
 `gamma` weit wandert. **Ein Newton-Korrektor verzeiht das**, weil er auf die Gleichung konvergiert
@@ -1091,8 +1552,8 @@ gerechnet.
 
 **Ein Kotangens ist an jedem Knoten dasselbe Paar**: `out` auf der Matrix, die eine Vorhersage oder
 eine Beobachtung trägt, `pars` auf den Parametern, die sie durchreicht. Die zweite Hälfte ist es,
-die den Baum zu einem Graphen macht statt zu einer Kette — eine Beobachtungsfunktion liest die
-Parameter der Vorhersage genauso wie ihre Werte — und beide Hälften addieren sich.
+die den Baum zu einem Graphen macht statt zu einer Kette: eine Beobachtungsfunktion liest die
+Parameter der Vorhersage genauso wie ihre Werte, und beide Hälften addieren sich.
 
 **Der Seed ist nicht der Residuenvektor, und der Plan hat recht behalten.** Sigma trägt theta
 ebenfalls, also seedet eine Datenzeile zwei Dinge, und das zweite reist durch das Fehlermodell
@@ -1107,7 +1568,7 @@ Matrix, die sie ohnehin bauen, transponiert. Das ist kein Abkürzen: teuer am Vo
 dass seine Breite `n_theta` ist, und `n_theta` sitzt in der äußeren Kette; die Breite einer
 geschachtelten Transformation ist ihr eigener Parametersatz und wächst nicht mit. Also geht die
 Trajektorie rückwärts und das Teilproblem vorwärts, und die Kosten des Ganzen sind weiter
-unabhängig von `n_theta`. `Xf` bekommt gar keinen — es *ist* die Vorhersage ohne Ableitungen, und
+unabhängig von `n_theta`. `Xf` bekommt gar keinen, denn es *ist* die Vorhersage ohne Ableitungen, und
 die Fehlermeldung sagt das jetzt, statt auf `odemodel(reverse = TRUE)` zu zeigen.
 
 **Der Vergleich ist auch hier nicht scharf, und aus demselben Grund wie in Stufe 6.** Ein
@@ -1125,6 +1586,20 @@ die Antwort war, das Teilproblem zu verschärfen, nicht die Toleranz zu lockern.
 Sweep, weil ein Seed erst existiert, wenn die Kette darüber abgelaufen ist. Der Ausweg ist ein
 `solveODE`, das seine Checkpoints zwischen dem Wertaufruf und dem Seed-Aufruf behält, also eine
 Frage der Schnittstelle und keine der Korrektheit.
+
+*Entwurf, 2026-09-09.* Nicht über einen Cache mit Eingabeschlüssel. Der Schlüssel müsste Zeiten,
+Parameter, Forcings, Events und jede Toleranz erfassen, wäre in der Batch-Schleife pro Bedingung
+zu halten und bei jeder neuen Solve-Option still falsch. Stattdessen trägt R die Identität: der
+Wertaufruf gibt `_rev_store` als `externalptr` mit modelleigenem Finalizer heraus, der Seed-Aufruf
+reicht ihn zurück und springt direkt in den Sweep. Kein Hash, keine Veraltung, und die Lebensdauer
+hängt am GC statt an einer statischen Variable. Der Wertaufruf des Reverse-Modells baut den Store
+ohnehin und wirft ihn heute nur weg (`R/cppODE.R:1099-1109`, Sweep bei `:1269`).
+
+Zu bauen: ein `SEXP`-Feld hin und zurück in `solve_args`/`solve_result`
+(`inst/include/cppde/cppde_r_batch.hpp`), ein pro Modell emittierter Finalizer, weil der
+Store-Typ über `denseStepper` vom Modell abhängt, und im Batch-Pfad eine Liste von Zeigern statt
+eines einzelnen. Kostet Spitzenspeicher in Höhe eines Checkpoint-Satzes pro lebender Bedingung;
+das ist der Preis dafür, die Integration nicht zweimal zu fahren.
 
 Jede Schicht bekommt neben ihrer Vorwärtsform eine Rückwärtsform:
 
@@ -1188,12 +1663,233 @@ Was der Vergleich liefert:
 Die Messung aus Punkt 3 gehört mit der aus Stufe 0 in dieselbe Auswertung: beide betreffen die
 Frage, wie viel Gradientenkonsistenz auf dieser Modellklasse überhaupt wert ist.
 
+### Stufe 9. Die Schrittweite lambda-gewichtet
+
+**Der Anlass.** Ein Gitter, das nur nach dem Zustandsfehler gewählt wurde, muss für den Adjoint
+nicht gut genug sein. Lambda löst rückwärts `lambda' = -J^T lambda`; wo das stark anwächst, ist der
+Beitrag eines Schritts zum Gradientenfehler groß, auch wenn sein Zustandsfehler klein ist. Die
+Ordnung erbt der Gradient vom Zustand, die Konstante nicht.
+
+Im Vorwärtsmodus löst das die Fehlernorm, die über die Sensitivitätsspalten maximiert. Rückwärts
+geht das nicht: lambda existiert während des Vorwärtslaufs bei Schritt `k` noch nicht, weil es von
+jedem Schritt danach abhängt. Das ist Kausalität, keine Implementierungslücke. Über *Lauf*grenzen
+hinweg ist es aber verfügbar.
+
+**Die Konstruktion: maximieren, nicht ersetzen.**
+
+    err = max( err_state , err_lambda )
+
+Dieselbe Form, die der Dual-Pfad schon hat (`cppde_onestep_controller.hpp:251-270`): ein `max` kann
+den Schritt nur verkleinern. Damit ist das Gitter **mindestens** so fein, wie `atol`/`rtol` es
+verlangen, und feiner dort, wo lambda es verlangt. Die Trajektorie bleibt also auf `tol` genau; der
+Einwand, sie wäre danach nur noch für J genau, ist durch die Form erledigt, und es darf die Vorgabe
+sein statt opt-in.
+
+Der zweite Ertrag derselben Form: **ein falsches lambda kann nur Zeit kosten, nie Genauigkeit.** Zu
+groß geschätzt heißt unnötig kleine Schritte, zu klein heißt, der Zustandsterm greift. Die Güte des
+Schätzers ist damit eine Effizienz- und keine Korrektheitsfrage, und das ist der Grund, warum das
+Schema mit einem geschätzten lambda überhaupt vertretbar ist.
+
+**`gradtol` neben `atol`/`rtol`.** Ohne eigene Toleranz auf J sind die beiden Terme nicht
+vergleichbar, und ein großes Lambda ließe den Lambda-Term immer dominieren; das wäre nur global
+schärfer gestellt. `err_lambda` wird daran normiert: der Beitrag dieses Schritts zum
+Gradientenfehler soll unter `gradtol` liegen.
+
+**Zwei Durchgänge, dasselbe theta.** Der Unterschied ist ausschließlich die Fehlernorm.
+
+| | theta | Fehlernorm | was davon bleibt |
+|---|---|---|---|
+| Durchgang 1 | theta | `err_state` | **nur lambda_1** |
+| Durchgang 2 | dasselbe theta | `max(err_state, err_lambda)` | Wert *und* Gradient |
+
+Durchgang 1 ist ein Kundschafter: integrieren, Residuen bilden, seeden, sweepen, und von allem nur
+lambda als Gewicht behalten. Ausgeliefert wird das Paar aus Durchgang 2, in sich konsistent, weil
+beide Hälften von dessen Gitter stammen.
+
+**Im Optimierer entfällt Durchgang 1.** Bei Iteration `i` dient lambda aus `i-1` als Gewicht; theta
+liegt dicht beieinander. Das drückt den Preis von über 2x auf etwa 1x, und ohne diese
+Wiederverwendung wäre das Schema zu teuer, weil Durchgang 2 per Konstruktion das feinere Gitter hat.
+
+**Das Gewicht bleibt außerhalb des Tapes.** Lambda geht als Reglereingabe hinein, und der Regler
+wird nicht differenziert. Kein `dual`, kein `codual`, plain `double`.
+
+**Die Interpolation: linear, nicht PCHIP.** Durchgang 2 setzt seine Schritte an andere Zeiten als
+Durchgang 1, lambda muss also dazwischen ausgewertet werden. Entschieden gegen `PchipForcing`, aus
+drei Gründen: es ist AD-fähig gebaut, weil eine Forcing aufs Tape gehört, und genau das soll das
+Gewicht nicht; lambda **springt** an Beobachtungszeiten, wo geseedet wird, und an Ereignissen, ein
+Interpolant über den ganzen Bereich würde die Sprünge verschmieren; und die Formerhaltung, die PCHIP
+wertvoll macht, zahlt sich bei einer Gewichtsgröße nicht aus, weil Überschwinger durch das `max` nur
+Zeit kosten. Also linear in plain `double`, eigener kleiner Helfer, mit harten Segmentgrenzen an
+Beobachtungs- und Ereigniszeiten. Das Gitter von Durchgang 1 ist dicht und lambda dazwischen glatt.
+
+**Der Indikator liegt schon herum, aber es ist nicht der, den dieser Abschnitt zuerst genannt
+hat. Berichtigt 2026-09-09 beim Bau des Messgeräts.**
+
+`m_wdt[k] = m_rec.wdt()` ist der Kotangens der Schrittweite, also `dJ/dh_k`, und `wdt()` gibt ihn
+heraus. Nur ist das **nicht** die Fehlergröße. Im Replay wird `m_dt` unabhängig gesetzt
+(`cppde_reverse_step.hpp:486`), und der Sweep liest `m_dt.adjoint()` bei festgehaltenem `x_k`, `t_k`
+und festgehaltenem Gitter danach. Damit ist
+
+    dJ/dh_k = (dJ/dx_{k+1}) * (dPhi/dh) ~ lambda_{k+1}' f(x_k, t_k)
+
+die **Transportableitung**: wieviel J sich bewegt, wenn der Schritt mehr Zeit überdeckt. Sie ist von
+der Größenordnung von J selbst, nicht von der des Fehlers, und `|dJ/dh_k| * h_k` summiert über die
+Schritte ungefähr zu J. Als Verfeinerungsindikator wäre sie unbrauchbar: sie würde dort verdichten,
+wo die Lösung sich schnell ändert, und genau das tut `atol`/`rtol` schon.
+
+**Die richtige Größe ist der dual gewichtete Residuenterm**
+
+    eta_k = lambda_{k+1}' e_k
+
+mit `e_k` dem eingebetteten Fehlerschätzer des Schritts, also dem, den der Regler ohnehin bildet. Das
+ist `O(tol)` pro Schritt, und die Summe schätzt den Fehler in J. Beide Hälften liegen im Sweep
+bereits vor: `m_rec.xerr()` ist der Schätzer als Codual, und `m_rec.xout()[i].adjoint()` ist nach
+dem Sweep das vollständige lambda am Schrittende, mitsamt der Saat, die interpolierte Beobachtungen
+dort hinterlassen haben. Das Skalarprodukt kostet `n_x` Multiplikationen pro Schritt und ist seit
+dem 2026-09-09 als `eta()` da.
+
+`wdt()` bleibt trotzdem erhalten, aus zwei Gründen: es ist die Zahl, die `control_chain` benutzt
+hat (falsch, weil durch das Reglergesetz *verkettet*, als wäre `h` eine differenzierbare Funktion
+von theta), und es ist der Gegenprüfwert. Wenn `wdt` wirklich lambda'f ist, dann wächst
+`sum |wdt_k| h_k / Fehler` um eine Dekade je Dekade Toleranz, während `sum |eta_k| / Fehler` flach
+bleibt. `dev/lambda-indicator.R` misst genau diese beiden Verhältnisse nebeneinander, damit der
+Irrtum sichtbar wird statt geglaubt.
+
+**Was zuerst gemessen werden muss.** `eta` ist eine Schätzung erster Ordnung: sie wertet lambda am
+diskreten statt am wahren Zustand aus, der Rest ist `O(e) ~ O(tol)` relativ zum führenden Term. Für
+die Adaption braucht man davon nur die **Rangfolge** der Schritte, nicht den Betrag, eine viel
+schwächere Anforderung als eine Schranke. Trotzdem nicht glauben, sondern messen: `eta` gegen den
+tatsächlichen Gradientenfehler, beides über `rtol`. Parallel über Dekaden heißt, die erste Ordnung
+trägt; Aufspreizen bei lockerer Toleranz heißt, der Rest zählt.
+
+Dazu die Konzentration: `eta` ist nur brauchbar, wenn es über die Trajektorie **ungleich** verteilt
+ist. Ein Indikator, dessen schlechtestes Zehntel der Schritte ein Zehntel der Summe trägt, ist flach
+und hat nichts zu steuern, auch wenn er in der Summe stimmt. `dev/lambda-indicator.R` gibt beides
+aus, für `eta` und für `wdt*h` nebeneinander, auf einem steifen Modell, einem Wurzelereignismodell
+und dem Zerfalls-Spielzeug als Kontrolle.
+
+Wo der Rest **nicht** klein anzunehmen ist: bei Wurzelereignissen mit flachem Schnitt, weil dort
+eine winzige Zustandsstörung die Ereignisreihenfolge kippt und die Abbildung unstetig wird, denn die
+DWR-Restterm-Resultate kommen aus dem glatten Rahmen; und bei steifen Modellen mit Lambda-Spitzen.
+Also zuerst auf einem Ereignismodell und auf Bachmann messen, nicht auf den Zerfalls-Spielzeugen.
+
+**Was nicht geht: nachträglich einzelne Stellen verdichten.** Verfeinert man Schritt `k` im
+Nachhinein, ändert sich `x_{k+1}` und damit alles danach. Zusammenflicken, also den verfeinerten Schritt
+aufzeichnen, die alte Trajektorie danach behalten, zerstört genau die Eigenschaft, die den
+diskreten Adjoint trägt: exakte Ableitung *der tatsächlich angewandten* Abbildung zu sein. Man hätte
+wieder ein Paar, das nicht zusammengehört. Echt nachträglich-lokal ist nur, was der Regler ohnehin
+tut: einen Schritt verwerfen und kleiner wiederholen, nur eben ohne lambda zu kennen.
+
+Damit entfällt auch die Fixgitter-Maschinerie, die ein früherer Entwurf hier vorsah. Beide
+Durchgänge sind gewöhnliche adaptive Läufe; zu bauen ist ein Term in der Fehlernorm und ein Weg,
+lambda hineinzureichen. Kein Gittergenerator, keine vorgegebene Schrittfolge.
+
+**Das Ergebnis der Messung, 2026-09-09.** `dev/lambda-indicator.R`, vier Dekaden `rtol`, drei
+Modelle. Verhältnisse, nicht Beträge: ein Indikator, der eine Größe schätzt, hält sein Verhältnis zu
+ihr über die Dekaden flach, welchen Vorfaktor er auch hat.
+
+| Modell | Verfahren | `eta`/`errJ` | `eta`/`errG` | `(wdt*h)`/`errG` | schlechtestes Zehntel |
+|---|---|---|---|---|---|
+| decay | tsit5 | **1,27** | 4,8 | 6830 | 28 % |
+| rooted | tsit5 + Wurzel | **4,31** | 2,63 | 28200 | 32 % |
+| robertson | bdf, steif | **5,04** | 10,6 | n/a | 38 % |
+
+Gelesen wird die Tabelle spaltenweise als *Spreizung über vier Dekaden `rtol`*, nicht als Betrag: 1
+hieße, das Verhältnis ist über die Dekaden konstant. Der `wdt`-Wert fehlt bei Robertson, weil `wdt`
+auf dem Multistep-Pfad strukturell null ist, siehe unten.
+
+Vier Befunde.
+
+1. **`eta` trägt, auf allen dreien.** Das Verhältnis zu `errJ` ist über vier Dekaden flach, und auf
+   den beiden Einschrittmodellen stimmt auch der Betrag bis auf einen Faktor von wenigen. Damit ist
+   die erste Ordnung belegt, und zwar auch auf dem Wurzelereignismodell und im steifen Fall, den
+   beiden Stellen, wo der Plan sie in Frage gestellt hat. Auf Robertson bleibt ein Vorfaktor von
+   etwa 200: `sum |eta_k|` summiert Beträge, und über 227 Schritte mit Vorzeichenwechseln
+   überschätzt das den Fehler. Für eine Rangfolge ist das gleichgültig; für eine Schranke wäre es
+   das nicht.
+2. **`eta` schätzt `errJ`, nicht `errG`.** Der dual gewichtete Residuenterm mit `lambda = dJ/dx`
+   schätzt den Fehler im *Funktional* `J = sum W x`, nicht den im Gradienten; dafür bräuchte es
+   einen Adjungierten zweiter Ordnung. Was die Messung dazu sagen kann und sagt: beide fallen
+   gemeinsam, das Verhältnis `eta/errG` spreizt nur um 4,8 beziehungsweise 2,63. **Für Stufe 9
+   genügt das**, weil dort nur die Rangfolge gebraucht wird und ein `max` einen Fehlschätzer
+   ohnehin nur Zeit kosten kann.
+3. **`wdt` ist bestätigt die Transportableitung.** `(wdt*h)/errG` wächst um etwa eine Dekade je
+   Dekade Toleranz, über vier Dekaden also um vier Größenordnungen. Der Zähler fällt nicht, der
+   Nenner schon. Als Indikator unbrauchbar, wie oben berichtigt.
+4. **Es gibt etwas zu steuern.** Das schlechteste Zehntel der Schritte trägt 28 bis 32 Prozent von
+   `sum |eta|`, auf Robertson 71 Prozent. Ein flacher Indikator läge bei 10 Prozent. Am stärksten
+   konzentriert ist er im steifen Fall, also dort, wo Stufe 9 am meisten verspricht.
+
+**Zwei Fehler, die die Messung gefunden hat, beide behoben.** Der erste Durchgang gab auf `bdf` und
+`adams` ein `eta` von `1e-20`, also Rauschen, während `tsit5` und `rb4` lieferten. Die Trennlinie
+war Einschritt gegen Multistep, nicht explizit gegen implizit; `rb4` ist implizit mit
+Stufenlösungen und war nie betroffen.
+
+1. **Lambda am Schrittende steht nach dem Sweep nicht mehr da, wenn das Schrittende eine Lösung
+   ist.** `xout()` benennt bei einem Korrektorverfahren denselben Tape-Platz wie `sp.y`, und das
+   Segment unter der Marke trägt das Residuum dorthin zurück und treibt den Adjungierten auf null.
+   Das ist kein Fehler, sondern genau, was die IFT exakt macht. Der Wert existiert nur *im* Sweep,
+   am Lösepunkt, vor dem transponierten Solve. `wout()` greift ihn dort ab.
+2. **`xerr()` ist beim Multistepper `acor`, nicht der lokale Fehler.** Der ist `acor * tq[2]`, und
+   `tq[2]` hängt von der Ordnung ab. Ohne den Faktor sind Schritte verschiedener Ordnung nicht
+   vergleichbar, was für eine Rangfolge tödlich ist. `error_scale()` liefert ihn.
+
+Was **nicht** repariert wurde, weil es richtig ist: `wt` und `wdt` bleiben auf dem Multistep-Pfad
+null. `replay_residual` skalarisiert `t` und `dt` in seiner ersten Zeile
+(`cppde_multistepper.hpp:1306-1307`), also stehen beide nie auf dem Tape. Das Gitter wird nicht
+differenziert, das ist die Festlegung. Es heißt nur, dass der ursprünglich vorgeschlagene Indikator
+dort nicht einmal existiert hätte, ein dritter Grund gegen ihn.
+
+**Zu bauen, in dieser Reihenfolge.**
+
+1. ~~`wdt()` und lambda nach R durchreichen.~~ Erledigt 2026-09-09: `$adjointGrid` mit `time`, `h`,
+   `wt`, `wdt`, `eta` und `lambda`, geschaltet über ein Attribut der Saat. Noch nicht im Batch-Pfad.
+2. ~~Die Messung fahren.~~ Erledigt, Ergebnis oben.
+3. `err_lambda` in `cppde_onestep_controller.hpp` als dritter Term neben Wert und Sensitivitäten,
+   mit `gradtol`, und derselbe Term im Multistepper. Der Indikator liegt jetzt auf allen vier
+   Verfahren vor, also ist hier nichts mehr vorzuschalten.
+4. Der lineare Lambda-Interpolant mit Segmentgrenzen, plain `double`.
+5. `solveODE(..., errWeights = ...)` als Argument, damit ein Aufruf eine reine Funktion bleibt und
+   nicht von einem internen Zwischenspeicher abhängt. dMod2s `objfn` hält lambda der vorigen
+   Iteration und reicht es weiter; der Zustand liegt dort, wo die Iteration ohnehin lebt.
+6. Die Untergrenze für Gewichte: lambda ist die *linearisierte* Wirkung, ein heruntergewichteter
+   Zustand könnte nichtlinear wegdriften. Kein Gewicht unter einen Bruchteil des Maximums. Durch das
+   `max` ist das eine Vorsichts- und keine Notwendigkeitsmaßnahme.
+
 ## Verifikation
 
-Das Orakel ist durchgehend der Vorwärtsmodus, gegen den eingefrorenen Reverse-Pfad gestellt. Die
-beiden berechnen dieselbe Größe aus entgegengesetzter Richtung, also gilt Rundungstoleranz und
-nicht Solvertoleranz. Kein Test ruht auf finiten Differenzen, außer den bereits vorhandenen, und
-keiner ruht auf ASA.
+Der Vorwärtsmodus ist durchgehend der **Kreuzvergleich**, gegen den Reverse-Pfad gestellt. Die
+beiden berechnen dieselbe Größe aus entgegengesetzter Richtung, und zwei unabhängige
+Implementierungen bleiben der beste Fehlerfinder, den wir haben. Kein Test ruht auf finiten
+Differenzen, außer den bereits vorhandenen, und keiner ruht auf ASA.
+
+**Berichtigt 2026-09-10: er ist nicht das Orakel im Sinne der richtigeren Antwort.** Nach Bocks
+IND-Prinzip sitzt das Ableitungsschema auf dem Gitter des *nominalen* Laufs. Der Reverse-Modus tut
+das: sein Vorwärtslauf instanziiert den Stepper auf `double` (`R/cppODE.R`, `rev_stepper_type`),
+der Regler sieht also nur den Zustandsfehler. Der Dual-Modus tut es nicht: `error()` maximiert bei
+AD-Typen über die Sensitivitätsspalten (`cppde_onestep_controller.hpp:255-270`) und wählt sein
+Gitter aus Wert *und* Tangenten. Nach diesem Maßstab ist der Vorwärtsmodus der Abweichler.
+
+Drei Folgerungen, die vorher andersherum im Dokument standen:
+
+1. Der Reverse-Gradient gehört zu der Trajektorie, die ein reiner Wertlauf liefert; der
+   Dual-Gradient gehört zu einer feineren, die niemand zu sehen bekommt.
+2. Die `O(tol)`-Lücke zwischen beiden ist überwiegend dem Vorwärtsmodus zuzuschreiben, nicht dem
+   Reverse-Modus. Die frühere symmetrische Formulierung, beide differenzierten eben zwei
+   Diskretisierungen, ist richtig, aber unvollständig: eine der beiden ist die, zu der der
+   ausgegebene Wert gehört.
+3. `trust()` braucht das *Paar*: ein Trust-Region-Schritt vergleicht vorhergesagte mit tatsächlicher
+   Reduktion, und ein inkonsistentes Paar erzeugt dort Rauschen, das wie ein schlechtes Modell
+   aussieht.
+
+Die Sensitivitäten bleiben trotzdem in der Fehlernorm des Vorwärtsmodus. Sie werden mitintegriert,
+ihre Fehler akkumulieren, und ohne Kontrolle bekommt man genau das, wovor CVODES mit
+`CVodeSetSensErrCon` warnt. Der Preis, Wert und Gradient auf verschiedenen Gittern, ist der
+kleinere. Entschieden am 2026-09-10, gegen einen früheren Vorschlag, sie herauszunehmen.
+
+Was daraus als **Test** fehlt, steht im Arbeitsstand: beide Gradienten gegen die numerische
+Ableitung eines reinen Wertlaufs. Der heutige Reverse-Test misst gegen `fwd$sens1`, also gegen den
+Abweichler.
 
 Vorlagen, alle vorhanden, alle nach demselben Muster "zwei Wege, dieselbe Zahl":
 
@@ -1251,7 +1947,7 @@ schärferes Orakel.
   nachzureichen; die Kombinationsmatrix gehört von Stufe 3b an in die Tests und nicht in eine
   Schlussstufe.
 
-## Festlegung 1 steht in Frage, und die eigenen Messungen sprechen dagegen
+## Festlegung 1 ist gefallen: die Steuerungskette wird nicht differenziert
 
 **Stand 2026-09-09.** Der Plan legt fest, dass der Adjoint durch die vollständige Schrittweiten-
 und Ordnungssteuerung geht. Eine Literaturrecherche an diesem Tag legt nahe, dass das die falsche
@@ -1265,7 +1961,7 @@ friert aus demselben Grund das akzeptierte Schrittgitter ein und hält den Regle
 der Kotangenten-Propagation heraus. Nachzulesen bei
 
 - Approximation of weak adjoints by reverse automatic differentiation of BDF methods,
-  arXiv:1109.3061 — was diskrete Adjoints von BDF bei variabler Ordnung und Schrittweite
+  arXiv:1109.3061, was diskrete Adjoints von BDF bei variabler Ordnung und Schrittweite
   überhaupt approximieren;
 - PETSc TSAdjoint, arXiv:1912.07696;
 - jaxdae, arXiv:2607.23202.
@@ -1294,16 +1990,61 @@ Was der Plan an dieser Stelle richtig gemacht hat, ist die Messung: die Festlegu
 geglaubt, sondern nachgerechnet, und die Zahl steht seit Stufe 0 im Dokument. Was er falsch gemacht
 hat, ist, die Festlegung trotz der Zahl stehenzulassen.
 
+**Nachtrag am Code, 2026-09-09: die beiden Modi sind hier nicht einig.** Nachgesehen, statt
+angenommen:
+
+- *Forward.* `dt` ist formal `value_type`, bekommt aber nie einen Tangenten. `error()` gibt
+  `double` zurück (`cppde_onestep_controller.hpp:243`) und skalarisiert die Zustände beim Aufruf
+  (`:251-253`); fortgeschrieben wird mit `dt *= factor` bei `double`-`factor` (`:468`, `:488`),
+  und `m_dt_old` ist `double` (`:543`). Ein Nulltangent bleibt null. Der Vorwärtspfad macht es
+  also bereits so, wie die Literatur es empfiehlt.
+- *Davon zu trennen:* die Tangenten gehen sehr wohl in die **Schrittwahl** ein, weil `error()`
+  bei AD-Typen über die Sensitivitätsspalten maximiert (`:255-270`). Das ist kein spuriöser
+  Term, sondern eine andere Diskretisierung, und es ist die Ursache der O(tol)-Lücke zwischen
+  Wert und Gradient. Mit demselben Griff ist beides nicht zu beheben.
+- *Reverse.* `m_control_chain` steht auf `true` (`cppde_reverse_trajectory.hpp:824`), und kein
+  R-Code setzt es um. Der ausgelieferte Reverse-Pfad der Einschrittverfahren tapet den Regler
+  also, während der Vorwärtspfad ihn skalarisiert.
+
+Damit beantworten die beiden Modi um genau den in Stufe 4b gemessenen Term verschiedene Fragen.
+Das ist unabhängig von der Literaturfrage falsch: der Reverse-Modus soll die Ableitung dessen
+liefern, was der Vorwärtsmodus liefert. Prüfbar ohne die Papers: die Übereinstimmung in
+`tests/testthat/test-reverse.R:51` muss durch den Ausbau besser werden, nicht schlechter. Dass der
+Multistepper die Kette nie hatte, macht ihn zum zufällig schon konsistenten Fall.
+
+**Entschieden 2026-09-10: die Kette wird ersatzlos entfernt, nicht nur abgeschaltet.** Ein Schalter,
+den man nie einschalten darf, ist schlechter als kein Schalter, und das Getape des Reglers ist genau
+die Tape-Aufblähung, die dieser Plan vermeiden soll, denn es speichert die verworfenen Versuche mit.
+
+Das entscheidende Argument ist dabei nicht die Literatur, sondern die eigene Messung aus Stufe 0:
+`h(theta)` ist **stückweise glatt mit Sprüngen**, nicht stückweise konstant, und beim theta-Sweep hat
+sich die Kennzahl verdoppelt, als die Sweep-Dichte verdoppelt wurde. Das ist die Signatur von
+Sprunghöhe geteilt durch dtheta, also: **die Sprünge dominieren den Gittereffekt, nicht der glatte
+Anteil.** AD sieht aber nur den glatten Anteil. `control_chain(true)` liefert daher
+
+    wahrer Gradient + glatter Teil des Gittereffekts - (Sprungteil, der fehlt und der größere ist)
+
+und damit eine dritte Größe, die niemandes Frage beantwortet: nicht die Ableitung der wahren Lösung,
+dort gehört der Zusatz nicht hin, und nicht die Ableitung dessen, was das Programm ausgibt, dafür
+fehlt der dominante Teil.
+
+Zu betonen, weil es leicht verwechselt wird: **es ist technisch nicht unmöglich.** Es hat gerechnet,
+und der glatte Anteil ist eine korrekte Ableitung. Es ist nur nicht die gesuchte Größe. Wer den
+Gittereffekt wirklich wollte, müsste an die Sprünge heran, und das kann kein Tape; dazu bräuchte es
+einen geglätteten Regler, feste Schrittweite oder einen stochastischen Schätzer, also ein anderes
+Verfahren.
+
+`m_wdt` und `wdt()` bleiben ausdrücklich erhalten. `dJ/dh_k` ist als *Diagnose* in Ordnung und wird
+in Stufe 9 zum Gitterindikator; falsch war allein, die Zahl durch das Reglergesetz zu verketten.
+
 ## Noch zu untersuchen
 
-- **Was die Steuerungskette in Wandzeit kostet, und ob sie das wert ist.** Stufe 4b hat sie gebaut,
-  wie Festlegung 1 es verlangt, und dabei zwei Zahlen geliefert, die vorher nur behauptet waren: der
-  Term ist `O(tol)`, aber bei `rtol = 1e-9` liegt er bei 3e-5 relativ zum Gradienten, und ein
-  Schritt mit verworfenen Versuchen tapet drei Runge-Kutta-Schritte statt einem. Beides steht der
-  Festlegung nicht entgegen, denn die volle Kette ist die exakte Ableitung dessen, was der Solver
-  gerechnet hat, und der eingefrorene Pfad ist es nicht. Aber wenn der Bench aus Stufe 7 zeigt, dass
-  die Kette spürbar kostet, ist die Abwägung eine gemessene und keine prinzipielle. Zu messen mit
-  Stufe 7, nicht vorher.
+- **Erledigt: was die Steuerungskette kostet.** Die Frage hat sich aufgelöst, weil die Kette
+  entfernt wird. Ihre Zahlen bleiben als Messwert stehen: der Term ist `O(tol)`, bei `rtol = 1e-9`
+  3e-5 relativ zum Gradienten, und ein Schritt mit verworfenen Versuchen tapete drei
+  Runge-Kutta-Schritte statt einem. Die Begründung des Ausbaus steht im Abschnitt zu Festlegung 1;
+  sie ist nicht die Wandzeit, sondern dass der getapte Term keine vollständige Ableitung von
+  irgendetwas ist.
 - **Ein symbolisches `t` in den Saltationskorrekturen, und was es vorwärts kosten würde.**
   `cppde_saltation.hpp` leitet die Ereigniszeit heute von Hand her: `compute_dt_star` löst die
   Wurzelbedingung per IFT und trägt eine Korrektur zweiter Ordnung nach. Seit Stufe 3a kann der
@@ -1317,7 +2058,7 @@ hat, ist, die Festlegung trotz der Zahl stehenzulassen.
      handgeschriebene Formeln durch AD-Arithmetik, und das ist nicht automatisch der billigere Weg.
   3. Falls es sich lohnt: sind `t` und `dt` dual im **Normalfall** verkraftbar? Heute stehen sie
      bewusst draußen, weil `dt` vorwärts ohnehin keine Tangente bekommt, die Nulltangente also durch
-     jede Stage-AXPY liefe. Ob das messbar ist, ist offen — die Stage-AXPYs sind BLAS-gestützt und
+     jede Stage-AXPY liefe. Ob das messbar ist, ist offen: die Stage-AXPYs sind BLAS-gestützt und
      der Zuschlag ist eine Spalte auf `n_theta`, es kann also gut sein, dass es im Rauschen liegt.
      Zu messen auf einem Modell ohne Ereignisse, sonst zahlt man den Preis für einen Nutzen, den
      nur die Ereignismodelle haben. Wenn es nichts kostet, entfällt die Fallunterscheidung in
@@ -1331,7 +2072,19 @@ hat, ist, die Festlegung trotz der Zahl stehenzulassen.
 - ASA nicht als Verifikationsorakel, nur als Vergleich und Benchmark. Der Grund steht in Stufe 8.
 - Keine zweite Ordnung. Forward-over-reverse ist der nächste Schritt und braucht den verifizierten
   Adjoint erster Ordnung als Fundament; das heutige `deriv2` ist dann das Orakel auf kleinen
-  Modellen. Wenn es soweit ist, heißt zweite Ordnung hier die **volle Matrix aus `n_theta` Seeds**
+  Modellen.
+
+  *Vorarbeit vom 2026-09-10, damit sie nicht verlorengeht.* Die Typmaschinerie trägt es bereits:
+  `codual<T>` ist auf `T` templatisiert, `codual_tape<T>::node` hält die Partialen als `T`, `adj_`
+  ist `std::vector<T>`, und der Sweep rechnet `adj_[n.a] + n.pa * w` durchgehend in `T`.
+  `codual<dual<double,N>>` ist damit vorgesehen, nur nie instanziiert. **Eine Falle steht im Weg**,
+  und sie erzeugt eine fast richtige Hesse: `codual_tape::reverse()` überspringt Knoten mit
+  `if (w == T()) continue;`, und `operator==(dual,dual)` vergleicht nur den Wert
+  (`cppde_dual_math.hpp:570`). Ein Knoten mit adjungiertem Wert null und nicht verschwindendem
+  Tangenten fiele lautlos heraus. Die Sprung-Optimierung braucht dafür ein echtes Ist-Null-Prädikat.
+  Weiter zu klären: die linearen Solves mit dual-wertiger Iterationsmatrix, wo KLU nur `double`
+  kann; ein dritter Modellrumpf im Codegen, was nach dem `ad_level`/`arena`-Umbau ein Parameter ist;
+  Tape-Speicher mal `(N+1)` pro Schritt; und statisches `N` wegen der Arena-Lebensdauer. Wenn es soweit ist, heißt zweite Ordnung hier die **volle Matrix aus `n_theta` Seeds**
   und kein matrixfreies Krylov-Teilproblem: der Optimierer-Plan schließt Steihaug-Toint und GLTR
   strukturell aus, weil ein schlaffes Spektrum keinen effektiven Rang hat und die Krylov-Zahl damit
   auf der Parameterzahl landet. Beides zusammen ist widerspruchsfrei, denn `n_theta`

@@ -21,7 +21,11 @@ solveODE(
   maxroot = 1L,
   onFailure = c("stop", "warn", "silent"),
   traceFile = NULL,
-  seed = NULL
+  seed = NULL,
+  adjointGrid = FALSE,
+  errWeights = NULL,
+  keepStore = FALSE,
+  store = NULL
 )
 }
 \arguments{
@@ -113,6 +117,28 @@ at times it was not asked for, so that count is not \code{length(times)} in
 general. What comes back is \verb{w' * dx/dtheta} summed over times and states,
 one column per seed column. Supplying it to a forward model is an error, as
 is leaving it out on a reverse one.}
+
+\item{adjointGrid}{Whether the sweep also reports the grid it ran on, as
+\verb{$adjointGrid}. \code{FALSE} by default; requires a \code{seed}. Costs one
+\verb{[n_steps, n_states, n_seed]} array, so it is a diagnostic.}
+
+\item{errWeights}{Optional lambda from an earlier sweep, used as a
+step-size weight. A list with \code{time} (ascending, length \code{n}), \code{lambda}
+(\verb{[n, n_states]}), and optionally \code{breaks} (indices into \code{time} the
+interpolant must not span), \code{gradtol} (default \code{1e-6}) and \code{floor}
+(smallest weight as a fraction of the largest, default \code{0}). The
+controller then takes the maximum of its own error norm and
+\eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
+finer than \code{abstol} and \code{reltol} ask, never coarser. Requires a \code{seed}.}
+
+\item{keepStore}{Whether a reverse solve returns its checkpoints as
+\verb{$store}, for a later solve to reuse through \code{store}. The \code{seed} may then
+be omitted, which runs the model for its values alone.}
+
+\item{store}{The \verb{$store} of an earlier solve of the same model at the same
+\code{times} and \code{parms}. The solve integrates nothing and goes straight to the
+sweep. A store from a different point is an error, not a silent reuse. It
+may be reused any number of times and is freed with its last reference.}
 }
 \value{
 A named list with components \code{time}, \code{variable}, \code{diagnostics}, and,
@@ -128,6 +154,17 @@ The \code{diagnostics} element is a list of solver statistics (see
 \code{\link[=diagnostics]{diagnostics()}}). When the model was compiled with \code{stepTrace = TRUE},
 an additional \verb{$trace} \code{data.frame} with per-step diagnostics is
 attached.
+
+With \code{adjointGrid = TRUE} a reverse solve also carries \verb{$adjointGrid}, a
+list of \code{time} and \code{h}, the start and length of each accepted step;
+\code{wt}, \code{wdt} and \code{eta}, one column per seed, being
+\eqn{\partial J/\partial t_k}, \eqn{\partial J/\partial h_k} and
+\eqn{\lambda^T e_k}; and \code{lambda}, \verb{[n_steps, n_states, n_seed]}, the
+adjoint state at each step's start. \code{eta} estimates the step's share of the
+error in the objective; \code{wdt} is the transport derivative and is the size of
+the objective rather than of its error.
+With \code{keepStore = TRUE} it carries \verb{$store}, an external pointer to the
+checkpoints, for a later solve to take through \code{store}.
 }
 \description{
 Numerically integrates a compiled ODE model created by \code{\link[=cppODE]{cppODE()}} (or

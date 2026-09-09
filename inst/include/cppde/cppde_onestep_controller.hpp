@@ -43,6 +43,7 @@
 #include <cppde/cppde_ad_traits.hpp>
 #include <cppde/cppde_dual_slab.hpp>
 #include <cppde/cppde_profiler.hpp>
+#include <cppde/cppde_err_weights.hpp>
 #include <cppde/cppde_step_trace.hpp>
 
 namespace cppde {
@@ -71,13 +72,13 @@ struct has_jacobian_api<S, std::void_t<decltype(std::declval<const S&>().has_val
 // ----------------------------------------------------------------------------
 //  The error norm and the control law, written on the value type.
 //
-//  The reverse replay has to differentiate exactly what the forward run did, so
-//  both call these rather than each spelling the formulas out. Written with the
-//  cppde:: math names, which resolve for a plain double and for codual alike.
+//  Templated and spelled with the cppde:: math names so one statement of each
+//  formula serves every value type the forward run instantiates. The reverse
+//  replay does not call them: the grid is read off the checkpoints and the
+//  controller stays off the tape.
 //
-//  wrms_state takes an accessor because the two sides read a value differently:
-//  forward scalarises an AD number down to its value, the reverse replay keeps
-//  the codual so the norm lands on the tape.
+//  wrms_state takes an accessor because an AD number has to be scalarised down
+//  to its value before it enters the norm.
 // ----------------------------------------------------------------------------
 
 template<class V, class Get>
@@ -239,7 +240,10 @@ public:
   //  derivative loop compiles out.
   // ====================================================================
 
-  double error(const state_type& x, const state_type& xold, const state_type& xerr)
+  // t_end is where the step lands, which is where the lambda weight is read.
+  // Defaulted so a caller that sets no weights need not know about them.
+  double error(const state_type& x, const state_type& xold, const state_type& xerr,
+               double t_end = 0.0)
   {
     auto _tp = m_prof.timer(cppde::prof_cat::error_norm);
     using controller_detail::scalar_value;
@@ -247,7 +251,8 @@ public:
     const size_t n = x.size();
     if (n == 0) return 0.0;
 
-    // The value half, the one the reverse replay also computes.
+    // The value half. Stage 9 adds a lambda-weighted term beside the
+    // sensitivity one below, under the same max.
     double max_norm = onestep_detail::wrms_state(
         x, xold, xerr, m_atol, m_rtol,
         [](const value_type& v) { return scalar_value(v); });
@@ -273,6 +278,13 @@ public:
         if (sens_norm > max_norm) max_norm = sens_norm;
       }
     }
+
+    // The goal-oriented term, stage 9: |lambda(t)' e| / gradtol, this step's
+    // share of the error in the objective. Zero unless a sweep left weights,
+    // and under the same max, so it can only make a step smaller.
+    const double lam_norm = ::cppde::detail::weighted_error(
+        xerr, t_end, [](const value_type& v) { return scalar_value(v); });
+    if (lam_norm > max_norm) max_norm = lam_norm;
     return max_norm;
   }
 
@@ -313,7 +325,9 @@ public:
     jacobian_hint hint = compute_hint();
 
     m_stepper.do_step(sys, x, t, xout, dt, m_xerr.m_v, hint);
-    double err = error(xout, x, m_xerr.m_v);
+    double err = error(xout, x, m_xerr.m_v,
+                       controller_detail::scalar_value(t) +
+                       controller_detail::scalar_value(dt));
 
     // Prevent division by zero
     err = std::max(err, 1e-15);

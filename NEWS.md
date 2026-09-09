@@ -1,3 +1,76 @@
+# cppDE (development version)
+
+* A reverse gradient can integrate the states once instead of twice. It needs
+  two solves at the same parameter, one for the values the seed is built from
+  and one for the sweep. `solveODE(..., keepStore = TRUE)` now returns the
+  checkpoints of the first as `$store`, which the second takes through
+  `store = `. A store handed back at a different point is an error rather than a
+  silent reuse. Worth about a tenth of a reverse gradient on a stiff model; the
+  checkpoint capture the first solve now pays takes back part of it.
+* The reverse mode's tape records about three times faster. Liveness was tested
+  four times per binary operation: twice to decide whether to record, twice
+  again inside the recording. Each test was three comparisons. It is now
+  one comparison, evaluated once. Recording fell from 9.3 to 3.1 nanoseconds per
+  tape node, and a reverse step from 167 to 79 times a plain evaluation of the
+  same right-hand side.
+* The CVODE backend takes derivatives backwards too. `cvode(..., sweep =
+  "reverse")` compiles CVODES adjoint sensitivity analysis: the forward pass
+  stores checkpoints and one backward solve per seed column integrates the
+  adjoint equation with the parameter quadrature riding along. It answers the
+  same `solveODE(..., seed = W)` interface and returns the same `$adjoint`. It
+  refuses events and `rootfunc`, which the native backend carries, because
+  CVODES integrates the adjoint over checkpointed states and has no way to be
+  told about a jump. Two independent implementations of the same mathematics
+  are the point: neither is an oracle for the other, but a systematic error in
+  one would show.
+* The step-size controller can be weighted by the adjoint. `solveODE(..., seed
+  = W, errWeights = list(time = , lambda = ))` adds a term to the error norm
+  under the same maximum the sensitivity columns already use, so the grid stays
+  at least as fine as `abstol` and `reltol` ask and is finer only where the
+  adjoint says a step carries objective error. A weight that is wrong therefore
+  costs time and never accuracy, which is what makes an estimate from an
+  earlier run at a nearby parameter usable. Both controllers carry it.
+* A reverse solve can report the grid it swept. `solveODE(..., seed = W,
+  adjointGrid = TRUE)` returns `$adjointGrid` with the step times and sizes, the
+  cotangents of both, the adjoint state per step, and `eta`, the dual-weighted
+  residual that says how much of the objective's error each step carries. The
+  flag rides on the seed rather than on a new argument, so no compiled model
+  needs rebuilding.
+* Derivatives can be taken backwards. `cppODE(..., sweep = "reverse")` compiles a
+  fourth object beside the value, first- and second-order ones: it integrates the
+  states in plain `double`, keeps a checkpoint per accepted step, and replays each
+  step under a new reverse-mode scalar to sweep one tape backwards.
+  `solveODE(..., seed = W)` hands it a cotangent of the trajectory and gets back
+  `$adjoint`, one row per state and parameter, at a cost that does not grow with
+  the number of parameters. All four methods carry it, with events, root events,
+  forcings, the batch entry and the sparse solver.
+* The reverse mode's answer belongs to the trajectory a value-only solve produces,
+  so a value and its gradient are consistent with each other. Forward
+  sensitivities adapt on a finer step sequence, because the error norm takes the
+  maximum over every tangent column, so their gradient belongs to a different
+  discretisation than the value they are reported with. The two agree to O(tol).
+* `cppFUN(derivMode = )` names derivative *directions* rather than a backend, and
+  more than one may be asked for. `"dual"` is gone; it becomes `"forward"` for
+  the Jacobian, `"reverse"` for the vector-Jacobian product, or both. The two are
+  now built independently: the reverse entry instantiates the expression body a
+  second time over `cppde::codual`, so a caller that only multiplies by the
+  Jacobian no longer compiles it. `"symbolic"` is unchanged and, being a backend
+  for the forward Jacobian rather than a direction, cannot be combined with
+  either.
+* `funCpp()` is now `cppFUN()`, for symmetry with `cppODE()`. The old name still
+  works and warns.
+* A sparse Jacobian's reused pivot order is checked. `klu_refactor` keeps the
+  ordering the first factorisation chose and reports success even where it has
+  become numerically hopeless; a Newton corrector converges anyway, so nothing
+  forward ever noticed, while a reverse solve uses the result once and directly
+  and was four orders of magnitude out on a stiff model. The reciprocal pivot
+  growth now decides whether to refactor fully.
+* The code generator no longer recognises scalar types by name. What it needs to
+  know about the type, how many derivative layers and whether they live in the
+  arena, is stated by the caller, and the generated code spells
+  `cppde::dual<double, N>` and `cppde::codual<double>` out. A name it did not
+  recognise used to pass silently through every AD branch.
+
 # cppDE 0.9.4
 
 * A threaded BLAS no longer deadlocks a forked worker. Its worker threads do not

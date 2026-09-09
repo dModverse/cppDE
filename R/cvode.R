@@ -9,7 +9,9 @@
 #' `vignette("Methods", package = "cppDE")`.
 #'
 #' Available methods are `"bdf"` (default) and `"adams"`. Sensitivities
-#' are first-order forward only; `deriv2` is not supported. Events,
+#' are first-order forward only; `deriv2` is not supported.
+#' `sweep = "reverse"` compiles the CVODES adjoint instead, returning
+#' `$adjoint` the way the native backend's reverse mode does. Events,
 #' forcings, `rootfunc`, and `fixed` behave as in [cppODE()].
 #'
 #' SUNDIALS (>= 6.0) must be available at install time; otherwise
@@ -30,6 +32,18 @@
 #' @param includeTimeZero Logical. Ensure that `0` is part of the integration
 #'   times, as [cppODE()] does. Both backends then return the same output grid.
 #' @param method One of `"bdf"` (default) or `"adams"`.
+#' @param asaCheckpoints Accepted forward steps between checkpoints under
+#'   `sweep = "reverse"`. The adjoint interpolates the forward state between
+#'   them, so fewer steps means less interpolation error and more memory.
+#'   Ignored under `sweep = "forward"`.
+#' @param sweep Direction the derivatives are taken in. `"forward"` (default)
+#'   is the CVODES staggered forward sensitivity solver, driven by `deriv`.
+#'   `"reverse"` is CVODES adjoint sensitivity analysis: the forward pass
+#'   stores checkpoints, and one backward solve per seed column integrates
+#'   \eqn{\lambda' = -J^T \lambda} with the quadrature
+#'   \eqn{-(\partial f/\partial p)^T \lambda} riding along. It needs
+#'   `deriv = FALSE`, and refuses `events` and `rootfunc`: CVODES integrates
+#'   the adjoint over checkpointed states and cannot be told about a jump.
 #' @param stepTrace Logical. Compile to record per-step diagnostics
 #'   (returned as `$trace` from [solveODE()]). Without `events` or
 #'   `rootfunc` the integrator is driven in `CV_ONE_STEP` mode and one row
@@ -49,12 +63,14 @@
 #' Nonlinear and Differential/Algebraic Equation Solvers.
 #' \emph{ACM Transactions on Mathematical Software} \strong{31}(3), 363-396.
 #'
-#' @seealso [cppODE()], [solveODE()], [funCpp()];
+#' @seealso [cppODE()], [solveODE()], [cppFUN()];
 #'   `vignette("Methods", package = "cppDE")`.
 #' @export
 cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = NULL,
                   compile = TRUE, modelname = NULL, outdir = tempdir(),
                   deriv = FALSE,
+                  sweep = c("forward", "reverse"),
+                  asaCheckpoints = 200L,
                   sparse = NULL,
                   method = c("bdf", "adams"),
                   includeTimeZero = TRUE,
@@ -62,6 +78,16 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
                   verbose = FALSE) {
 
   method <- match.arg(method)
+  sweep  <- match.arg(sweep)
+  is_reverse <- identical(sweep, "reverse")
+  # The two directions are separate compilations, as they are on the native
+  # backend: the direction decides what the generated code is.
+  if (is_reverse && deriv)
+    stop("sweep = \"reverse\" carries no forward sensitivities; use ",
+         "deriv = FALSE.", call. = FALSE)
+  asaCheckpoints <- as.integer(asaCheckpoints)[1]
+  if (is.na(asaCheckpoints) || asaCheckpoints < 1L)
+    stop("'asaCheckpoints' must be a positive integer", call. = FALSE)
 
   # --- Availability check (populated by configure at install time) ---
   if (!isTRUE(cvodeConfig$available)) {
@@ -197,6 +223,8 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
     modelname = modelname,
     outdir = normalizePath(outdir, winslash = "/", mustWork = FALSE),
     deriv = deriv,
+    reverse = is_reverse,
+    asa_checkpoints = asaCheckpoints,
     fixed_states = fixed_initials,
     fixed_params = fixed_params,
     sparse = sparse_for_codegen,
@@ -236,6 +264,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   attr(modelname, "jacobian")    <- list(f.x = jac_matrix_R, f.time = unlist(res$time_derivs))
   attr(modelname, "deriv")       <- isTRUE(deriv)
   attr(modelname, "deriv2")      <- FALSE
+  attr(modelname, "sweep")       <- sweep
   # CVODE always uses runtime-sized sensitivity slots (CVodeSensInit1 allocates
   # Ns_active vectors at solve time), so it's effectively heap AD from the
   # compile-time-width perspective.

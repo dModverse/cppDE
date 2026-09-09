@@ -62,6 +62,13 @@ enum class prof_cat : unsigned {
   newton_overhead,  // Newton loop overhead (residual formation, updates, excl. f_eval/lu_solve/error_norm)
   w_build,          // W = (1/γh)I - J  matrix construction (copy + diagonal add)
   step_overhead,    // Everything else in do_step / try_step not covered above
+  // --- reverse mode ---------------------------------------------------------
+  rev_checkpoint,   // Capturing one checkpoint per accepted forward step
+  rev_replay,       // Re-executing one step under codual (tape recording)
+  rev_sweep,        // The backward pass over that step's tape
+  rev_prepare,      // Jacobian + factorisation for the step's transposed solve
+  rev_solve,        // The transposed solve itself
+  rev_interp,       // Dense output recorded for an observation inside a step
   COUNT             // sentinel: number of categories
 };
 
@@ -82,6 +89,12 @@ inline const char* prof_cat_name(prof_cat c) {
     case prof_cat::newton_overhead: return "newton_overhead";
     case prof_cat::w_build:         return "w_build";
     case prof_cat::step_overhead:   return "step_overhead";
+    case prof_cat::rev_checkpoint:  return "rev_checkpoint";
+    case prof_cat::rev_replay:      return "rev_replay";
+    case prof_cat::rev_sweep:       return "rev_sweep";
+    case prof_cat::rev_prepare:     return "rev_prepare";
+    case prof_cat::rev_solve:       return "rev_solve";
+    case prof_cat::rev_interp:      return "rev_interp";
     default:                        return "unknown";
   }
 }

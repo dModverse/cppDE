@@ -69,12 +69,12 @@ test_that("CVODE deriv = TRUE with zero parameters seeds initial-state sens", {
                exp(-tvec), tolerance = 1e-8)
 })
 
-# -- funCpp: literal-only equations (no variables, no parameters) -------------
+# -- cppFUN: literal-only equations (no variables, no parameters) -------------
 
-test_that("funCpp accepts literal-only equations", {
+test_that("cppFUN accepts literal-only equations", {
   # convenient = FALSE so we can pass an explicit (n_obs, 0) matrix; the
   # convenient wrapper has no way to express n_obs when there are no vars.
-  obj <- funCpp(c(y = "5"), compile = TRUE, modelname = "noparm_fun_lit",
+  obj <- cppFUN(c(y = "5"), compile = TRUE, modelname = "noparm_fun_lit",
                 convenient = FALSE)
 
   expect_equal(attr(obj, "variables"), character(0))
@@ -86,11 +86,11 @@ test_that("funCpp accepts literal-only equations", {
   expect_equal(as.numeric(res[, "y"]), rep(5, 3))
 })
 
-# -- funCpp: state variables only, no parameters -------------------------------
+# -- cppFUN: state variables only, no parameters -------------------------------
 
-test_that("funCpp dual mode evaluates with zero parameters", {
-  obj <- funCpp(c(y = "2*x + 3"), compile = TRUE,
-                modelname = "noparm_fun_dual", derivMode = "dual")
+test_that("cppFUN dual mode evaluates with zero parameters", {
+  obj <- cppFUN(c(y = "2*x + 3"), compile = TRUE,
+                modelname = "noparm_fun_dual", derivMode = "forward")
 
   expect_equal(attr(obj, "variables"), "x")
   expect_null(attr(obj, "parameters"))
@@ -115,10 +115,10 @@ test_that("funCpp dual mode evaluates with zero parameters", {
   expect_equal(as.numeric(ev$dy[, "y", "x"]),   rep(2, n_obs))
 })
 
-test_that("funCpp dual mode supports deriv2 with zero parameters", {
-  obj <- funCpp(c(y = "x^2 + 3*x"), compile = TRUE,
+test_that("cppFUN dual mode supports deriv2 with zero parameters", {
+  obj <- cppFUN(c(y = "x^2 + 3*x"), compile = TRUE,
                 modelname = "noparm_fun_dual_d2",
-                derivMode = "dual", deriv2 = TRUE)
+                derivMode = "forward", deriv2 = TRUE)
 
   # raw hess (identity seed) at x = c(1, 2)
   hess <- obj$hess(x = c(1, 2))
@@ -134,8 +134,8 @@ test_that("funCpp dual mode supports deriv2 with zero parameters", {
   expect_equal(hess, hess2)
 })
 
-test_that("funCpp symbolic mode produces correct jac/hess with zero parameters", {
-  obj <- funCpp(c(y = "x^2 + 3*x"), compile = TRUE,
+test_that("cppFUN symbolic mode produces correct jac/hess with zero parameters", {
+  obj <- cppFUN(c(y = "x^2 + 3*x"), compile = TRUE,
                 modelname = "noparm_fun_sym",
                 derivMode = "symbolic", deriv2 = TRUE)
 

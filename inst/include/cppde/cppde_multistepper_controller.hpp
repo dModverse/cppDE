@@ -43,6 +43,7 @@
 #include <cassert>
 #include <type_traits>
 #include <utility>
+#include <cppde/cppde_err_weights.hpp>
 #include <cppde/cppde_multistepper.hpp>
 #include <cppde/cppde_utils.hpp>
 #include <cppde/cppde_dual_slab.hpp>
@@ -261,6 +262,23 @@ public:
       //  Error test
       // ============================================================
       double dsm = m_stepper.error_norm();
+
+      // The goal-oriented term, stage 9. The local error is acor times the
+      // order's error constant, and the weight contracts against that: steps of
+      // different order are otherwise not comparable. A max, so it only refines.
+      {
+        const double tq2 = static_cast<double>(
+            ndf_detail::scalar_value(m_stepper.error_constant()));
+        const double t_new_d = static_cast<double>(
+            ndf_detail::scalar_value(t)) +
+            static_cast<double>(ndf_detail::scalar_value(m_stepper.h()));
+        const double lam = ::cppde::detail::weighted_error(
+            m_stepper.acor(), t_new_d,
+            [tq2](const value_type& v) {
+              return ndf_detail::scalar_value(v) * tq2;
+            });
+        if (lam > dsm) dsm = lam;
+      }
 
       if (dsm <= 1.0) {
         // === Step accepted: break out of retry loop ===

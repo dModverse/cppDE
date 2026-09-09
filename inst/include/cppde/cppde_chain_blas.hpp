@@ -1,5 +1,5 @@
 /*
- BLAS-3 chain rule contraction for the symbolic-mode funCpp() back-end.
+ BLAS-3 chain rule contraction for the symbolic-mode cppFUN() back-end.
 
  Two inline helpers:
 

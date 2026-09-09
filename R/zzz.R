@@ -124,16 +124,16 @@ get_codegen_cppODE_py <- function() {
 #' @keywords internal
 #' @importFrom reticulate import_from_path
 #' @noRd
-get_codegen_funCpp_py <- function() {
-  if (!exists("codegen_funCpp", envir = .cppde_py_cache, inherits = FALSE)) {
-    .cppde_py_cache$codegen_funCpp <-
+get_codegen_cppFUN_py <- function() {
+  if (!exists("codegen_cppFUN", envir = .cppde_py_cache, inherits = FALSE)) {
+    .cppde_py_cache$codegen_cppFUN <-
       reticulate::import_from_path(
-        "codegen_funCpp",
+        "codegen_cppFUN",
         path = system.file("python", package = "cppDE"),
         delay_load = TRUE
       )
   }
-  .cppde_py_cache$codegen_funCpp
+  .cppde_py_cache$codegen_cppFUN
 }
 
 #' @keywords internal

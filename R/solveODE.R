@@ -1,3 +1,46 @@
+# lambda from an earlier sweep, checked into the shape the C++ side reads.
+# Anything wrong is an error here rather than a silently dropped weighting: a
+# weight that quietly fails to arrive looks exactly like one that did nothing.
+.checkErrWeights <- function(w, n_states) {
+  if (!is.list(w)) stop("'errWeights' must be a list", call. = FALSE)
+  need <- c("time", "lambda")
+  miss <- setdiff(need, names(w))
+  if (length(miss))
+    stop("'errWeights' is missing: ", paste(miss, collapse = ", "), call. = FALSE)
+
+  tt <- as.double(w$time)
+  if (!length(tt) || anyNA(tt))
+    stop("'errWeights$time' must be a non-empty numeric vector", call. = FALSE)
+  if (is.unsorted(tt))
+    stop("'errWeights$time' must be ascending", call. = FALSE)
+
+  lam <- w$lambda
+  if (length(dim(lam)) == 3L && dim(lam)[3] == 1L) dim(lam) <- dim(lam)[1:2]
+  lam <- as.matrix(lam)
+  if (nrow(lam) != length(tt))
+    stop("'errWeights$lambda' has ", nrow(lam), " rows but 'time' has ",
+         length(tt), call. = FALSE)
+  if (ncol(lam) != n_states)
+    stop("'errWeights$lambda' has ", ncol(lam), " columns but the model has ",
+         n_states, " states", call. = FALSE)
+  storage.mode(lam) <- "double"
+
+  ## Indices into `time` the interpolant must not span, because lambda jumps
+  ## there: an observation the objective seeds, or an event reset.
+  br <- if (is.null(w$breaks)) integer(0) else as.integer(w$breaks)
+  if (length(br) && (anyNA(br) || any(br < 1L) || any(br > length(tt))))
+    stop("'errWeights$breaks' must index 'time'", call. = FALSE)
+
+  g <- if (is.null(w$gradtol)) 1e-6 else as.double(w$gradtol)[1]
+  if (!is.finite(g) || g <= 0)
+    stop("'errWeights$gradtol' must be positive", call. = FALSE)
+  f <- if (is.null(w$floor)) 0 else as.double(w$floor)[1]
+  if (!is.finite(f) || f < 0 || f >= 1)
+    stop("'errWeights$floor' must be in [0, 1)", call. = FALSE)
+
+  list(time = tt, lambda = lam, breaks = br, gradtol = g, floor = f)
+}
+
 # Marshal one condition into the 15 positional .Call arguments.  Shared by
 # solveODE() and solveODEBatch() so both see identical validation.
 .odeCallArgs <- function(model, times, parms,
@@ -6,7 +49,8 @@
                          abstol = 1e-6, reltol = 1e-6,
                          maxattemps = 50L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
-                         seed = NULL) {
+                         seed = NULL, adjointGrid = FALSE,
+                         errWeights = NULL, keepStore = FALSE, store = NULL) {
 
   ## --- Unpack model attributes ---
   stopifnot(is.character(model), length(model) == 1L)
@@ -43,8 +87,11 @@
   is_reverse <- identical(attr(model, "sweep"), "reverse")
   if (!is.null(seed) && !is_reverse)
     stop("'seed' supplied but the model was not compiled with sweep = \"reverse\"")
-  if (is.null(seed) && is_reverse)
-    stop("a model compiled with sweep = \"reverse\" needs a 'seed'")
+  ## A seedless reverse call is the value half of the pair: it integrates,
+  ## fills the store and sweeps nothing.
+  if (is.null(seed) && is_reverse && !isTRUE(keepStore))
+    stop("a model compiled with sweep = \"reverse\" needs a 'seed', or ",
+         "keepStore = TRUE to run it for its values alone")
   if (!is.null(seed)) {
     if (!is.numeric(seed)) stop("'seed' must be numeric")
     d <- dim(seed)
@@ -54,7 +101,18 @@
     if (d[2] != n_states)
       stop("'seed' has ", d[2], " state columns, the model has ", n_states)
     storage.mode(seed) <- "double"
+    ## Attributes rather than further positional arguments: they mean nothing
+    ## where a seed is absent, and the .Call signature is frozen into every
+    ## model already compiled.
+    if (isTRUE(adjointGrid)) attr(seed, "adjointGrid") <- TRUE
+    if (!is.null(errWeights))
+      attr(seed, "errWeights") <- .checkErrWeights(errWeights, n_states)
+
   }
+  if (!is.null(errWeights) && is.null(seed))
+    stop("'errWeights' weights a reverse solve's step size and needs a 'seed'",
+         call. = FALSE)
+
 
   is_2d_sens1 <- !is.null(sens1ini) &&
     (is.matrix(sens1ini) ||
@@ -313,6 +371,20 @@
     stop("'times' must be a non-empty finite numeric vector")
   times <- as.double(times)
 
+  ## The store rides on `times`: the call that makes one has no seed.
+  if (isTRUE(keepStore)) {
+    if (!is_reverse)
+      stop("'keepStore' belongs to a model compiled with sweep = \"reverse\"",
+           call. = FALSE)
+    attr(times, "keepStore") <- TRUE
+  }
+  if (!is.null(store)) {
+    if (!inherits(store, "externalptr"))
+      stop("'store' must be the `store` element of an earlier solve",
+           call. = FALSE)
+    attr(times, "store") <- store
+  }
+
   ## --- parms ---
   if (!is.numeric(parms) || is.null(names(parms)))
     stop("'parms' must be a named numeric vector")
@@ -395,6 +467,18 @@
   ## indexes the same way a forward sens1ini seeds.
   if (!is.null(result$adjoint) && is.null(dimnames(result$adjoint)))
     dimnames(result$adjoint) <- list(prep$theta_names, prep$seed_names)
+  ## The sweep's own grid. lambda is [step, state, seed]; wt and wdt carry one
+  ## column per seed, so they name the way the adjoint's columns do.
+  if (!is.null(result$adjointGrid)) {
+    g <- result$adjointGrid
+    if (is.null(dimnames(g$lambda)))
+      dimnames(g$lambda) <- list(step = NULL, variable = prep$variables,
+                                 seed = prep$seed_names)
+    if (is.null(dimnames(g$wt)))  dimnames(g$wt)  <- list(NULL, prep$seed_names)
+    if (is.null(dimnames(g$wdt))) dimnames(g$wdt) <- list(NULL, prep$seed_names)
+    if (is.null(dimnames(g$eta))) dimnames(g$eta) <- list(NULL, prep$seed_names)
+    result$adjointGrid <- g
+  }
 
   diag <- result$diagnostics
   if (!is.null(diag)) {
@@ -599,6 +683,24 @@
 #'   general. What comes back is `w' * dx/dtheta` summed over times and states,
 #'   one column per seed column. Supplying it to a forward model is an error, as
 #'   is leaving it out on a reverse one.
+#' @param errWeights Optional lambda from an earlier sweep, used as a
+#'   step-size weight. A list with `time` (ascending, length `n`), `lambda`
+#'   (`[n, n_states]`), and optionally `breaks` (indices into `time` the
+#'   interpolant must not span), `gradtol` (default `1e-6`) and `floor`
+#'   (smallest weight as a fraction of the largest, default `0`). The
+#'   controller then takes the maximum of its own error norm and
+#'   \eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
+#'   finer than `abstol` and `reltol` ask, never coarser. Requires a `seed`.
+#' @param keepStore Whether a reverse solve returns its checkpoints as
+#'   `$store`, for a later solve to reuse through `store`. The `seed` may then
+#'   be omitted, which runs the model for its values alone.
+#' @param store The `$store` of an earlier solve of the same model at the same
+#'   `times` and `parms`. The solve integrates nothing and goes straight to the
+#'   sweep. A store from a different point is an error, not a silent reuse. It
+#'   may be reused any number of times and is freed with its last reference.
+#' @param adjointGrid Whether the sweep also reports the grid it ran on, as
+#'   `$adjointGrid`. `FALSE` by default; requires a `seed`. Costs one
+#'   `[n_steps, n_states, n_seed]` array, so it is a diagnostic.
 #'
 #' @return
 #' A named list with components `time`, `variable`, `diagnostics`, and,
@@ -615,6 +717,18 @@
 #' an additional `$trace` `data.frame` with per-step diagnostics is
 #' attached.
 #'
+#' With `adjointGrid = TRUE` a reverse solve also carries `$adjointGrid`, a
+#' list of `time` and `h`, the start and length of each accepted step;
+#' `wt`, `wdt` and `eta`, one column per seed, being
+#' \eqn{\partial J/\partial t_k}, \eqn{\partial J/\partial h_k} and
+#' \eqn{\lambda^T e_k}; and `lambda`, `[n_steps, n_states, n_seed]`, the
+#' adjoint state at each step's start. `eta` estimates the step's share of the
+#' error in the objective; `wdt` is the transport derivative and is the size of
+#' the objective rather than of its error.
+
+#' With `keepStore = TRUE` it carries `$store`, an external pointer to the
+#' checkpoints, for a later solve to take through `store`.
+#'
 #' @seealso [cppODE()] and [cvode()] for model compilation;
 #'   [diagnostics()] for printing solver statistics.
 #'
@@ -626,13 +740,14 @@ solveODE <- function(model, times, parms,
                      maxattemps = 50L, maxsteps = 1e6L,
                      hini = 0, roottol = 1e-6, maxroot = 1L,
                      onFailure = c("stop", "warn", "silent"),
-                     traceFile = NULL, seed = NULL) {
+                     traceFile = NULL, seed = NULL, adjointGrid = FALSE,
+                     errWeights = NULL, keepStore = FALSE, store = NULL) {
 
   onFailure <- match.arg(onFailure)
 
   prep <- .odeCallArgs(model, times, parms, sens1ini, sens2ini, fixed, forcings,
                        abstol, reltol, maxattemps, maxsteps, hini, roottol, maxroot,
-                       seed)
+                       seed, adjointGrid, errWeights, keepStore, store)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model)))
   if (is.null(SYM)) stop("Model not loaded. Run compile() first.", call. = FALSE)

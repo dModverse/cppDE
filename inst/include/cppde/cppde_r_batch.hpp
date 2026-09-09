@@ -37,6 +37,7 @@
 #endif
 
 #include <cppde/cppde_blas_threads.hpp>
+#include <cppde/cppde_err_weights.hpp>
 #include <cppde/cppde_return_codes.hpp>
 #include <cppde/cppde_step_trace.hpp>
 
@@ -56,6 +57,17 @@ struct solve_args {
   // because a root event observes twice more than it was asked to.
   const double* seed     = nullptr;
   int n_seed_rows = 0, n_seed_states = 0, n_seed_cols = 0;
+  // Whether the sweep also reports the grid it ran on. An attribute of the seed
+  // rather than a sixteenth argument, which every compiled model would need.
+  bool adj_trace = false;
+  // A gradient needs two solves at one theta: values, then the sweep. The first
+  // hands its checkpoints out, the second takes them back and integrates
+  // nothing. Opaque here: only the model knows the store's type.
+  void* store_in  = nullptr;
+  bool  want_store = false;
+  // lambda from an earlier sweep, read back as a step-size weight. Empty is the
+  // shipped state and costs nothing. See cppde_err_weights.hpp.
+  cppde::err_weights weights;
   double abstol = 1e-6, reltol = 1e-6, hini = 0.0, root_tol = 1e-6;
   int maxprogress = 50, maxsteps = 1000000, maxroot = 1;
   std::vector<const double*> ftimes, fvalues;
@@ -70,6 +82,18 @@ struct solve_result {
   // through `acquire`: it is one small matrix, not a per-step array.
   std::vector<double> adjoint;
   int n_adj_rows = 0, n_adj_cols = 0;
+  // The grid the sweep ran on and what the adjoint says about it. Filled only
+  // under args.adj_trace: lambda alone is n_steps * n_states doubles.
+  //   step_t, step_h  [n_adj_steps]
+  //   wt, wdt         [n_adj_steps, n_adj_cols]   dJ/dt_k and dJ/dh_k
+  //   eta             [n_adj_steps, n_adj_cols]   lambda^T e_k
+  //   lambda          [n_adj_steps, n_states, n_adj_cols]
+  std::vector<double> step_t, step_h, wt, wdt, eta, lambda;
+  int n_adj_steps = 0, n_adj_states = 0;
+  // Set only under args.want_store. `wrap_store` is emitted by the model, the
+  // only place the store's type is known; phase C calls it on the main thread.
+  void* store_out = nullptr;
+  SEXP (*wrap_store)(void*) = nullptr;
   int n_out = 0, n_sens = 0;
   int return_code = RC_SUCCESS;
   std::string message;
@@ -211,6 +235,57 @@ inline void run_batch(int K, int nthreads, Fn&& fn) {
 // ---------------------------------------------------------------------------
 //  Phase A: SEXP -> solve_args
 // ---------------------------------------------------------------------------
+// The weights as R hands them: list(time, lambda, breaks, gradtol, floor).
+// Anything malformed leaves the object empty rather than half-filled, so a
+// mistake upstream costs the weighting and never the answer.
+inline void read_err_weights(SEXP wl, cppde::err_weights& out) {
+  out.clear();
+  if (Rf_isNull(wl) || TYPEOF(wl) != VECSXP) return;
+
+  SEXP nms = Rf_getAttrib(wl, R_NamesSymbol);
+  if (Rf_isNull(nms)) return;
+  auto elt = [&](const char* want) -> SEXP {
+    for (int i = 0; i < Rf_length(nms); ++i)
+      if (std::strcmp(CHAR(STRING_ELT(nms, i)), want) == 0)
+        return VECTOR_ELT(wl, i);
+    return R_NilValue;
+  };
+
+  SEXP tS = elt("time"), lS = elt("lambda");
+  if (Rf_isNull(tS) || Rf_isNull(lS)) return;
+  const int nt = Rf_length(tS);
+  const int nl = Rf_length(lS);
+  if (nt <= 0 || nl <= 0 || nl % nt != 0) return;
+  const std::size_t n_x = static_cast<std::size_t>(nl / nt);
+
+  // R hands lambda column-major, [n_t, n_x]; err_weights wants it row-major by
+  // sample, so this is a transpose and not a copy.
+  std::vector<double> t(REAL(tS), REAL(tS) + nt);
+  std::vector<double> lam(static_cast<std::size_t>(nl));
+  const double* src = REAL(lS);
+  for (int i = 0; i < nt; ++i)
+    for (std::size_t j = 0; j < n_x; ++j)
+      lam[static_cast<std::size_t>(i) * n_x + j] =
+          src[static_cast<std::size_t>(i) + static_cast<std::size_t>(nt) * j];
+
+  std::vector<std::size_t> breaks;
+  SEXP bS = elt("breaks");
+  if (!Rf_isNull(bS)) {
+    SEXP bI = PROTECT(Rf_coerceVector(bS, INTSXP));
+    for (int i = 0; i < Rf_length(bI); ++i) {
+      const int v = INTEGER(bI)[i];
+      if (v >= 1 && v <= nt) breaks.push_back(static_cast<std::size_t>(v - 1));
+    }
+    UNPROTECT(1);
+  }
+
+  out.set(std::move(t), std::move(lam), n_x, std::move(breaks));
+  SEXP gS = elt("gradtol");
+  if (!Rf_isNull(gS) && Rf_length(gS) >= 1) out.gradtol(Rf_asReal(gS));
+  SEXP fS = elt("floor");
+  if (!Rf_isNull(fS) && Rf_length(fS) >= 1) out.floor(Rf_asReal(fS));
+}
+
 inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
                                   SEXP sens1iniSEXP, SEXP sens2iniSEXP,
                                   SEXP fixedSEXP, SEXP abstolSEXP,
@@ -244,6 +319,19 @@ inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
     a.n_seed_rows   = nd >= 1 ? INTEGER(d)[0] : Rf_length(seedSEXP);
     a.n_seed_states = nd >= 2 ? INTEGER(d)[1] : 1;
     a.n_seed_cols   = nd >= 3 ? INTEGER(d)[2] : 1;
+    SEXP tr = Rf_getAttrib(seedSEXP, Rf_install("adjointGrid"));
+    a.adj_trace = (!Rf_isNull(tr) && Rf_asLogical(tr) == TRUE);
+    read_err_weights(Rf_getAttrib(seedSEXP, Rf_install("errWeights")), a.weights);
+  }
+
+  // On `times` rather than on the seed: the call that *makes* a store has no
+  // seed, and it is the one whose integration the seeded call then skips.
+  {
+    SEXP ws = Rf_getAttrib(timesSEXP, Rf_install("keepStore"));
+    a.want_store = (!Rf_isNull(ws) && Rf_asLogical(ws) == TRUE);
+    SEXP st = Rf_getAttrib(timesSEXP, Rf_install("store"));
+    if (!Rf_isNull(st) && TYPEOF(st) == EXTPTRSXP)
+      a.store_in = R_ExternalPtrAddr(st);
   }
 
   a.abstol      = REAL(abstolSEXP)[0];
@@ -359,13 +447,65 @@ inline SEXP build_trace(const ndf_detail::TraceBuffer& tb) {
   return lst;
 }
 
+// list(time, h, wt, wdt, eta, lambda): the grid the sweep ran on and what the
+// adjoint says about each step. eta is the refinement indicator; wdt is the
+// transport derivative and is the size of J, not of its error.
+inline SEXP build_adjoint_grid(const solve_result& r) {
+  const int ns = r.n_adj_steps, nc = r.n_adj_cols, nx = r.n_adj_states;
+  SEXP ans   = PROTECT(Rf_allocVector(VECSXP, 6));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 6));
+  const char* nm[6] = {"time", "h", "wt", "wdt", "eta", "lambda"};
+  for (int i = 0; i < 6; ++i) SET_STRING_ELT(names, i, Rf_mkChar(nm[i]));
+  Rf_setAttrib(ans, R_NamesSymbol, names);
+  UNPROTECT(1);
+
+  SEXP tv = PROTECT(Rf_allocVector(REALSXP, ns));
+  if (ns) std::memcpy(REAL(tv), r.step_t.data(), sizeof(double) * (size_t)ns);
+  SET_VECTOR_ELT(ans, 0, tv);
+  UNPROTECT(1);
+
+  SEXP hv = PROTECT(Rf_allocVector(REALSXP, ns));
+  if (ns) std::memcpy(REAL(hv), r.step_h.data(), sizeof(double) * (size_t)ns);
+  SET_VECTOR_ELT(ans, 1, hv);
+  UNPROTECT(1);
+
+  SEXP wtm = PROTECT(Rf_allocMatrix(REALSXP, ns, nc));
+  if (!r.wt.empty()) std::memcpy(REAL(wtm), r.wt.data(), sizeof(double) * r.wt.size());
+  SET_VECTOR_ELT(ans, 2, wtm);
+  UNPROTECT(1);
+
+  SEXP wdm = PROTECT(Rf_allocMatrix(REALSXP, ns, nc));
+  if (!r.wdt.empty()) std::memcpy(REAL(wdm), r.wdt.data(), sizeof(double) * r.wdt.size());
+  SET_VECTOR_ELT(ans, 3, wdm);
+  UNPROTECT(1);
+
+  SEXP em = PROTECT(Rf_allocMatrix(REALSXP, ns, nc));
+  if (!r.eta.empty()) std::memcpy(REAL(em), r.eta.data(), sizeof(double) * r.eta.size());
+  SET_VECTOR_ELT(ans, 4, em);
+  UNPROTECT(1);
+
+  SEXP d = PROTECT(Rf_allocVector(INTSXP, 3));
+  INTEGER(d)[0] = ns; INTEGER(d)[1] = nx; INTEGER(d)[2] = nc;
+  SEXP lm = PROTECT(Rf_allocArray(REALSXP, d));
+  if (!r.lambda.empty())
+    std::memcpy(REAL(lm), r.lambda.data(), sizeof(double) * r.lambda.size());
+  SET_VECTOR_ELT(ans, 5, lm);
+  UNPROTECT(2);
+
+  UNPROTECT(1);
+  return ans;
+}
+
 // Build list(time, variable, [sens1], [sens2], diagnostics, trace).
 inline SEXP build_result_sexp(const solve_result& r, int n_variables,
                               bool deriv, bool deriv2) {
   const int n_out  = r.n_out;
   const int n_sens = r.n_sens;
   const bool adj   = (r.n_adj_cols > 0);
-  const int n_el   = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + (adj ? 1 : 0) + 1;
+  const bool grid  = adj && r.n_adj_steps > 0;
+  const bool keep  = (r.store_out != nullptr && r.wrap_store != nullptr);
+  const int n_el   = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + (adj ? 1 : 0)
+                       + (grid ? 1 : 0) + (keep ? 1 : 0) + 1;
 
   SEXP ans   = PROTECT(Rf_allocVector(VECSXP, n_el));
   SEXP names = PROTECT(Rf_allocVector(STRSXP, n_el));
@@ -375,6 +515,8 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
   if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("sens1"));
   if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("sens2"));
   if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint"));
+  if (grid)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjointGrid"));
+  if (keep)   SET_STRING_ELT(names, slot++, Rf_mkChar("store"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("trace"));
   Rf_setAttrib(ans, R_NamesSymbol, names);
@@ -413,6 +555,18 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
     SEXP am = PROTECT(Rf_allocMatrix(REALSXP, r.n_adj_rows, r.n_adj_cols));
     std::memcpy(REAL(am), r.adjoint.data(), sizeof(double) * r.adjoint.size());
     SET_VECTOR_ELT(ans, slot++, am);
+    UNPROTECT(1);
+  }
+  if (grid) {
+    SEXP g = PROTECT(build_adjoint_grid(r));
+    SET_VECTOR_ELT(ans, slot++, g);
+    UNPROTECT(1);
+  }
+  if (keep) {
+    // The model builds it: only there is the store's type known, and with it
+    // the finalizer that has to run when R drops the last reference.
+    SEXP sp = PROTECT(r.wrap_store(r.store_out));
+    SET_VECTOR_ELT(ans, slot++, sp);
     UNPROTECT(1);
   }
 
@@ -556,8 +710,11 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
     }
   }
 
-  const bool adj = (r.n_adj_cols > 0);
-  const int n_el = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + (adj ? 1 : 0) + 1;
+  const bool adj  = (r.n_adj_cols > 0);
+  const bool grid = adj && r.n_adj_steps > 0;
+  const bool keep = (r.store_out != nullptr && r.wrap_store != nullptr);
+  const int n_el = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + (adj ? 1 : 0)
+                     + (grid ? 1 : 0) + (keep ? 1 : 0) + 1;
   SEXP ans   = PROTECT(Rf_allocVector(VECSXP, n_el));
   SEXP names = PROTECT(Rf_allocVector(STRSXP, n_el));
   int slot = 0;
@@ -566,6 +723,8 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
   if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("sens1"));
   if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("sens2"));
   if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint"));
+  if (grid)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjointGrid"));
+  if (keep)   SET_STRING_ELT(names, slot++, Rf_mkChar("store"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("trace"));
   Rf_setAttrib(ans, R_NamesSymbol, names);
@@ -581,6 +740,14 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
     SEXP am = PROTECT(Rf_allocMatrix(REALSXP, r.n_adj_rows, r.n_adj_cols)); ++extra;
     std::memcpy(REAL(am), r.adjoint.data(), sizeof(double) * r.adjoint.size());
     SET_VECTOR_ELT(ans, slot++, am);
+  }
+  if (grid) {
+    SEXP g = PROTECT(build_adjoint_grid(r)); ++extra;
+    SET_VECTOR_ELT(ans, slot++, g);
+  }
+  if (keep) {
+    SEXP sp = PROTECT(r.wrap_store(r.store_out)); ++extra;
+    SET_VECTOR_ELT(ans, slot++, sp);
   }
 
   SEXP diag = PROTECT(build_diagnostics(r));

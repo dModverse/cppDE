@@ -1,5 +1,5 @@
 ## =================================================================
-## funCpp: compile a multivariate function with analytic Jacobian
+## cppFUN: compile a multivariate function with analytic Jacobian
 ## =================================================================
 
 ## Two use cases: observables mapping internal states to observed quantities,
@@ -18,7 +18,7 @@ observables <- c(
   obs2 = "log2(x3) + offset2"
 )
 
-f_obs <- funCpp(
+f_obs <- cppFUN(
   observables,
   variables  = c("x1", "x2", "x3"),
   parameters = c("scale1", "offset1", "offset2"),
@@ -47,7 +47,7 @@ cat("\nSymbolic Jacobian:\n");                 print(attr(f_obs, "jacobian.symb"
 ## Jacobian chains analytically into any downstream sensitivity.
 trafo <- c(TCA_cell = "10^TCA_CELL")
 
-f_trafo <- funCpp(
+f_trafo <- cppFUN(
   trafo,
   variables  = NULL,
   parameters = "TCA_CELL",

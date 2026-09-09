@@ -1,8 +1,8 @@
 \dontrun{
-# funCpp() makes use of the Python module 'sympy'
+# cppFUN() makes use of the Python module 'sympy'
 eqns <- c(A = "k_p * (k2 + k_d) / (k1*k_d)", B = "k_p/k_d")
 
-f <- funCpp(eqns,
+f <- cppFUN(eqns,
             parameters = c("k_p", "k1", "k2", "k_d"),
             deriv      = TRUE,
             deriv2     = TRUE,
