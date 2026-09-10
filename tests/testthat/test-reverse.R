@@ -180,8 +180,11 @@ test_that("adjointGrid reports the grid the sweep ran on", {
   expect_gte(sum(G$h), times[length(times)] - times[1])
   expect_lt(sum(G$h), 1.5 * (times[length(times)] - times[1]))
 
-  # Turning the trace on must not move the answer.
-  expect_identical(rv$adjoint, plain$adjoint)
+  # Turning the trace on must not move the answer. Not bit for bit while the
+  # trace lives only on the taped sweep: asking for the grid picks that path,
+  # and the written one sums the same terms in another order. The two have to
+  # meet again when the tape goes.
+  expect_equal(rv$adjoint, plain$adjoint, tolerance = 1e-12)
   expect_equal(diagnostics(rv)$accepted, diagnostics(plain)$accepted)
 })
 

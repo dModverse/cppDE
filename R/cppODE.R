@@ -425,7 +425,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "#include <cstdio>",
     "#include <string>",
     "#include <cppde/cppde.hpp>",
-    "#include <cppde/cppde_r_batch.hpp>"
+    "#include <cppde/cppde_r_batch.hpp>",
+    if (is_reverse) "#include <cppde/cppde_adjoint_step.hpp>" else NULL
   )
 
   # --- Using declarations ---
@@ -1249,6 +1250,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
 
+  # A written step adjoint replaces the tape where it is complete: the
+  # multistep family, and no intervention, whose boundary map is stage 4.
+  use_written <- is_reverse && is_multistep(method) &&
+    is.null(events) && is.null(rootfunc)
+
   # --- The backward sweep ---
   # One per seed column. The map differentiated is (x0, theta) -> the observed
   # trajectory, so what comes back indexes exactly as a forward sens1ini seeds:
@@ -1336,6 +1342,26 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "    }",
       "  }",
       sprintf("  std::vector<double> _seed_col((size_t)n_out * %d);", n_variables),
+      # The written adjoint, where it applies. It carries no lambda trace yet,
+      # so a caller asking for the grid still gets the taped sweep.
+      if (use_written) c(
+        sprintf("  if (!args.adj_trace) {"),
+        sprintf("    cppde::adjoint::closed_multistep_trajectory<%s> _cl;", rev_stepper_type),
+        "    adjoint_terms _adj(_theta, F);",
+        "    for (int c = 0; c < n_seed; ++c) {",
+        "      for (int o = 0; o < n_out; ++o)",
+        sprintf("        for (int i = 0; i < %d; ++i)", n_variables),
+        sprintf("          _seed_col[(size_t)o * %d + i] =", n_variables),
+        sprintf("              args.seed[o + (size_t)n_out * (i + (size_t)%d * c)];", n_variables),
+        "      _cl.sweep(_rev_store, (size_t)n_phi_rows, _seed_col.data(),",
+        "                _adj, _rev_solver);",
+        sprintf("      for (int i = 0; i < %d; ++i)", n_variables),
+        "        res.adjoint[i + (size_t)n_phi_rows * c] = _cl.wx0()[i] + _cl.wp()[i];",
+        sprintf("      for (int j = %d; j < n_phi_rows; ++j)", n_variables),
+        "        res.adjoint[j + (size_t)n_phi_rows * c] = _cl.wp()[j];",
+        "    }",
+        "    return res.return_code;",
+        "  }") else character(0),
       "  for (int c = 0; c < n_seed; ++c) {",
       "    for (int o = 0; o < n_out; ++o)",
       sprintf("      for (int i = 0; i < %d; ++i)", n_variables),

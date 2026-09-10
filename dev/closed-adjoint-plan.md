@@ -378,6 +378,16 @@ ein zweites Mal über `codual`. Ersetzt durch eine erzeugte Kontraktion `w' ∂f
 
 ### Stufe 7. Umschalten und löschen
 
+**Vorbedingung, aus 3d gelernt:** die Lambda-Spur (`adjointGrid`, `wt`, `wdt`,
+`eta`) hängt heute am Tape. Solange sie dort hängt, wählt der Schalter die
+Implementierung, und zwei Wege, die dasselbe rechnen, tun es in verschiedener
+Reihenfolge. `test-reverse.R:184` verlangte Bitgleichheit und steht jetzt auf
+1e-12, mit dem Grund im Kommentar. Bevor das Tape gelöscht wird, muss die Spur
+im geschriebenen Pfad stehen: `lambda` ist der Kotangens am Schrittende, den
+`apply_multistep_adjoint_pre` schon herausgibt, `eta` braucht zusätzlich `acor`,
+das aus `y` und der ersten Zeile von `A` folgt.
+
+
 `cppde_codual.hpp`, `cppde_codual_math.hpp`, `cppde_codual_tape.hpp` entfallen. Mit ihnen
 entfällt die **zweite Erzeugung des Modellrumpfs**: `R/cppODE.R:296-312` und `:346-359`
 rufen den Generator heute ein zweites Mal mit `num_type = "cppde::codual<double>"`; der
