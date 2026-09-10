@@ -30,8 +30,11 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <algorithm>
+#include <type_traits>
 
 #include <cppde/cppde.hpp>
+#include <cppde/cppde_adjoint_step.hpp>
 
 using cppde::codual;
 using cppde::dual;
@@ -82,6 +85,29 @@ struct jacobian {
     dfdt[0] = V(0.0);
     dfdt[1] = V(0.0);
     dfdt[2] = -p[2] * x[1] * x[1] * cppde::sin(t);
+  }
+};
+
+// What the generator emits beside the model for a reverse build.
+struct adjoint_terms {
+  std::vector<double> p;
+
+  void jac_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                 const double& t, std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[0] = (-p[0]) * lam[0] + (p[0]) * lam[1];
+    out[1] = (p[1] * x[2]) * lam[0]
+           + (-p[1] * x[2] - 2.0 * p[2] * x[1]) * lam[1]
+           + (2.0 * p[2] * x[1] * std::cos(t)) * lam[2];
+    out[2] = (p[1] * x[1]) * lam[0] + (-p[1] * x[1]) * lam[1];
+  }
+
+  void dfdp_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                  const double& t, std::vector<double>& out) const {
+    out.assign(NX + NP, 0.0);
+    out[NX + 0] = (-x[0]) * lam[0] + (x[0]) * lam[1];
+    out[NX + 1] = (x[1] * x[2]) * lam[0] + (-x[1] * x[2]) * lam[1];
+    out[NX + 2] = (-x[1] * x[1]) * lam[1] + (x[1] * x[1] * std::cos(t)) * lam[2];
   }
 };
 
@@ -414,9 +440,32 @@ static void run_method(const char* name, double tol)
     for (std::size_t j = 0; j < NP; ++j) out[n_carry + j] = rev.wp()[j];
   };
 
+  // The written trajectory adjoint, for the multistep family. It walks the same
+  // store without a tape; an explicit method has no Nordsieck carry and comes
+  // with its own path.
+  constexpr bool multistep_here = cppde::reverse::has_step_snapshot<S>::value;
+  // Generic, so its body is instantiated at the call and not at the
+  // definition: an explicit method has no Nordsieck checkpoint to read.
+  auto sweep_closed = [&](const std::vector<double>& seeds,
+                          std::vector<double>& out, auto) {
+    cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
+    cppde::adjoint::closed_multistep_trajectory<S> tr;
+    adjoint_terms adj{pv};
+    tr.sweep(store, NX + NP, seeds.data(), adj, solver);
+    out.assign(nd, 0.0);
+    for (std::size_t i = 0; i < NX; ++i) out[i] = tr.wx0()[i];
+    check(tr.whistory0().empty() ||
+          std::all_of(tr.whistory0().begin(), tr.whistory0().end(),
+                      [](double v) { return v == 0.0; }),
+          std::string(name) + " the written start's history cotangent is collapsed");
+    for (std::size_t j = 0; j < NP; ++j) out[n_carry + j] = tr.wp()[NX + j];
+  };
+
   auto compare = [&](const char* what, const std::vector<double>& seeds) {
     std::vector<double> got;
     sweep_with(seeds, got);
+    std::vector<double> gotc;
+    if constexpr (multistep_here) sweep_closed(seeds, gotc, std::true_type{});
     for (unsigned d = 0; d < nd; ++d) {
       double wS = 0.0;
       for (std::size_t o = 0; o < store.n_obs(); ++o)
@@ -425,6 +474,8 @@ static void run_method(const char* name, double tol)
       const std::string tag = (d < n_carry) ? "  dz" + std::to_string(d)
                                             : "  dp" + std::to_string(d - n_carry);
       close(wS, got[d], std::string(name) + " " + what + tag, tol);
+      if constexpr (multistep_here)
+        close(wS, gotc[d], std::string(name) + " written " + what + tag, tol);
     }
   };
 
