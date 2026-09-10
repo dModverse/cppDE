@@ -444,7 +444,8 @@ def generate_ode_cpp(
     sparse=None,
     skip_jacobian=False,
     ad_level=0,
-    arena=False):
+    arena=False,
+    emit_contractions=False):
     """
     Generate C++ code for ODE system and Jacobian.
 
@@ -525,7 +526,8 @@ def generate_ode_cpp(
     # canonical form, are parsed and differentiated once per distinct form, and
     # expand per instance: O(n_templates) sp.diff calls instead of O(n_states).
     dedup_result = None
-    if n_states > 64 and not forcings_list and not skip_jacobian:
+    if n_states > 64 and not forcings_list and not skip_jacobian \
+            and not emit_contractions:
         dedup_result = _try_template_dedup(
             odes_list, states_list, params_list, n_states, num_type,
             forcings_list, t
@@ -571,7 +573,7 @@ def generate_ode_cpp(
             )
 
         # Compute time derivatives
-        time_derivs = [sp.diff(expr, t) for expr in exprs]
+        time_derivs = [_replace_dirac_delta(sp.diff(expr, t)) for expr in exprs]
 
         # Generate ODE + Jacobian code (plain, no CSE)
         ode_cpp_lines = _generate_ode_code_plain(
@@ -580,6 +582,26 @@ def generate_ode_cpp(
         jac_cpp_lines = _generate_jac_code_plain(
             jac_matrix, time_derivs, exprs, forcing_syms, forcings_list,
             states_list, params_list, n_states, num_type
+        )
+
+    # The two contractions a written step adjoint asks for. Derived from the
+    # same expressions the Jacobian came from, so nothing is parsed twice.
+    adj_cpp_lines = []
+    if emit_contractions:
+        if skip_jacobian:
+            # An explicit method emits no Jacobian and does not need one to
+            # integrate, but its step adjoint contracts J' lambda all the same.
+            # Derived here for the contraction alone; the emitted Jacobian stays
+            # the stub.
+            states_syms_list = [states_syms[st] for st in states_list]
+            jac_matrix = _compute_ode_jacobian_serial(
+                exprs, states_syms_list, set(states_syms_list)
+            )
+        param_syms_list = [params_syms[p] for p in params_list]
+        dfdp_nnz = _compute_ode_dfdp(exprs, param_syms_list, set(param_syms_list))
+        adj_cpp_lines = _generate_contraction_code(
+            jac_matrix, dfdp_nnz, states_list, params_list, n_states, num_type,
+            forcings_list
         )
 
     # Sparsity analysis: decide dense vs sparse
@@ -893,6 +915,7 @@ def generate_ode_cpp(
     return {
         "ode_code": "\n".join(ode_cpp_lines),
         "jac_code": jac_code,
+        "adj_code": "\n".join(adj_cpp_lines),
         "jac_nnz_rows": jac_nnz_rows,
         "jac_nnz_cols": jac_nnz_cols,
         "jac_nnz_exprs": jac_nnz_exprs,
@@ -915,7 +938,7 @@ def _compute_ode_jac_row(expr, states_syms_list, states_syms_set):
     row = []
     for s in states_syms_list:
         if s in free:
-            row.append(sp.diff(expr, s))
+            row.append(_replace_dirac_delta(sp.diff(expr, s)))
         else:
             row.append(sp.Integer(0))
     return row
@@ -936,11 +959,142 @@ def _compute_ode_jacobian_serial(exprs, states_syms_list, states_syms_set):
         row = []
         for s in states_syms_list:
             if s in free:
-                row.append(sp.diff(expr, s))
+                row.append(_replace_dirac_delta(sp.diff(expr, s)))
             else:
                 row.append(sp.Integer(0))
         jac_matrix.append(row)
     return jac_matrix
+def _replace_dirac_delta(expr):
+    """DiracDelta has no printer, and it is what d/dx Heaviside(x) returns.
+
+    A discrete model cannot mean an impulse of infinite height, so the discrete
+    reading is the one that is emitted: one at the switching point, zero either
+    side. codegen_cppFUN.py takes the same expression the same way.
+    """
+    if expr == 0:
+        return expr
+
+    def to_piecewise(d):
+        arg = d.args[0]
+        return sp.Piecewise((sp.Float(1.0), sp.Eq(arg, 0)), (sp.Float(0.0), True))
+
+    return expr.replace(lambda e: isinstance(e, sp.DiracDelta), to_piecewise)
+
+
+def _compute_ode_dfdp(exprs, param_syms_list, param_syms_set):
+    """df/dp for every parameter, sparsity-aware, as (state, slot, expr).
+
+    The same shape the Jacobian is derived in, and the same skip: a parameter
+    absent from an expression contributes nothing and is not differentiated.
+    """
+    out = []
+    for i, expr in enumerate(exprs):
+        free = expr.free_symbols & param_syms_set
+        if not free:
+            continue
+        for k, sym in enumerate(param_syms_list):
+            if sym in free:
+                d = _replace_dirac_delta(sp.diff(expr, sym))
+                if d != 0:
+                    out.append((i, k, d))
+    return out
+
+
+def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
+                               n_states, num_type, forcings_list):
+    """The two contractions a written step adjoint asks the model for.
+
+    `jac_t_vec` is J' lambda over the states, `dfdp_t_vec` is (df/dp)' lambda
+    over the flat parameter vector, whose first n_states slots belong to the
+    initial values and stay zero. Both are grouped by output slot, so a slot is
+    written once rather than accumulated into.
+    """
+    zero = sp.Integer(0)
+    n_params = len(params_list)
+    n_phi = n_states + n_params
+
+    lines = [
+        "// The contractions a reverse step needs from the model.",
+        "struct adjoint_terms {",
+        f"  std::vector<{num_type}> params;",
+        f"  std::vector<const cppde::PchipForcing<{num_type}>*> F;",
+        "",
+        f"  adjoint_terms(const std::vector<{num_type}>& p_,",
+        f"                const std::vector<const cppde::PchipForcing<{num_type}>*>& F_)",
+        "    : params(p_), F(F_) {}",
+        "",
+    ]
+
+    # --- J' lambda, grouped by state column -------------------------------
+    by_col = {}
+    if jac_matrix is not None:
+        for i in range(n_states):
+            for j in range(n_states):
+                e = jac_matrix[i][j]
+                if e != zero and e != 0:
+                    by_col.setdefault(j, []).append((i, e))
+
+    lines += [
+        f"  void jac_t_vec(const std::vector<{num_type}>& x,",
+        f"                 const std::vector<{num_type}>& lam,",
+        f"                 const {num_type}& t,",
+        f"                 std::vector<{num_type}>& out) const {{",
+        "    (void)x; (void)t;",
+    ]
+    lines += _arena_scope_lines(num_type)
+    flat = [e for j in sorted(by_col) for _, e in by_col[j]]
+    cse_temps, simplified = _cse_temps(flat, prefix="_cse_at")
+    lines += _emit_cse_temps(cse_temps, states_list, params_list, n_states,
+                             num_type, forcings_list)
+    pos = 0
+    for j in range(n_states):
+        if j not in by_col:
+            lines.append(f"    out[{j}] = {num_type}(0.0);")
+            continue
+        terms = []
+        for (i, _) in by_col[j]:
+            cpp = _to_cpp(simplified[pos], states_list, params_list, n_states,
+                          num_type, forcings_list)
+            terms.append(f"({cpp})*lam[{i}]")
+            pos += 1
+        lines.append(f"    out[{j}] = " + " + ".join(terms) + ";")
+    lines += ["  }", ""]
+
+    # --- (df/dp)' lambda, grouped by parameter slot ------------------------
+    by_par = {}
+    for (i, k, e) in dfdp_nnz:
+        by_par.setdefault(k, []).append((i, e))
+
+    lines += [
+        f"  void dfdp_t_vec(const std::vector<{num_type}>& x,",
+        f"                  const std::vector<{num_type}>& lam,",
+        f"                  const {num_type}& t,",
+        f"                  std::vector<{num_type}>& out) const {{",
+        "    (void)x; (void)t;",
+        f"    for (std::size_t i = 0; i < {n_states}u; ++i) out[i] = {num_type}(0.0);",
+    ]
+    lines += _arena_scope_lines(num_type)
+    flat = [e for k in sorted(by_par) for _, e in by_par[k]]
+    cse_temps, simplified = _cse_temps(flat, prefix="_cse_pt")
+    lines += _emit_cse_temps(cse_temps, states_list, params_list, n_states,
+                             num_type, forcings_list)
+    pos = 0
+    for k in range(n_params):
+        slot = n_states + k
+        if k not in by_par:
+            lines.append(f"    out[{slot}] = {num_type}(0.0);")
+            continue
+        terms = []
+        for (i, _) in by_par[k]:
+            cpp = _to_cpp(simplified[pos], states_list, params_list, n_states,
+                          num_type, forcings_list)
+            terms.append(f"({cpp})*lam[{i}]")
+            pos += 1
+        lines.append(f"    out[{slot}] = " + " + ".join(terms) + ";")
+    lines += ["  }", "};", f"// adjoint_terms writes {n_phi} slots"]
+    return lines
+
+
 def _generate_noop_jacobian(n_states, num_type):
     """Generate a no-op Jacobian struct for explicit methods (tsit5, adams).
 
@@ -1114,13 +1268,19 @@ def _generate_jac_code_plain(jac_matrix, time_derivs, exprs, forcing_syms, forci
     # those into _cse_t* temps materialised once per call.
     jac_exprs = [e for _, _, e in jac_entries_plain]
     jac_temps, jac_simplified = _cse_temps(jac_exprs, prefix='_cse_jt')
+    # The forcing list has to reach the printer here as well: a forcing that
+    # appears multiplicatively survives differentiation and lands in an entry
+    # of df/dx, where an empty list prints it as a bare identifier that no
+    # generated file declares. Only additive forcings vanish from df/dx, which
+    # is why every example carried one.
     jac_cpp_lines += _emit_cse_temps(
-        jac_temps, states_list, params_list, n_states, num_type, []
+        jac_temps, states_list, params_list, n_states, num_type, forcings_list
     )
 
     # fill NEGATED entries
     for (i, j, _), e in zip(jac_entries_plain, jac_simplified):
-        cpp = _to_cpp(e, states_list, params_list, n_states, num_type, [])
+        cpp = _to_cpp(e, states_list, params_list, n_states, num_type,
+                      forcings_list)
         neg_cpp = _negate_cpp_expr(cpp)
         jac_cpp_lines.append(f"    J({i},{j}) = {neg_cpp};")
 

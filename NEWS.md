@@ -1,5 +1,24 @@
 # cppDE (development version)
 
+* **Bug fix.** A forcing that multiplies a state produced a source that did not
+  compile. The Jacobian entries were printed without the forcing list, so a
+  forcing surviving differentiation came out as a bare identifier that nothing
+  declares. Only an additive forcing vanishes from `df/dx`, which is why every
+  example and every test carried one.
+* `Heaviside` can be differentiated. Its derivative is `DiracDelta`, which no
+  printer knows, so the ODE generator gave up on any model that used it. A
+  discrete model cannot mean an impulse of infinite height, so it is emitted as
+  one at the switching point and zero either side, the way `cppFUN()` has always
+  taken it.
+* A model built with `derivMode = "reverse"` also emits the two contractions a
+  written step adjoint asks for, `J' lambda` and `(df/dp)' lambda`, in plain
+  `double`. They replace what the tape derives per step. Internal for now: the
+  step adjoints that call them are still being written.
+* `cppODE(method = "rb4", sparse = TRUE, derivMode = "reverse")` says no rather
+  than failing in the compiler. The Rosenbrock replay builds its own dense
+  Jacobian and forms the residual over every entry, so a sparse model has no
+  backward path there. Every other combination of method, linear algebra and
+  direction stands.
 * **Bug fix.** A CVODES adjoint solved through `solveODEBatch()` returned no
   `$adjoint` and reported success. The batch sizes its results before the solve
   where the output grid is fixed by `times`, and that skeleton has no slot for

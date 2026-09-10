@@ -359,3 +359,36 @@ test_that("a Python keyword as a symbol name is rejected", {
                       modelname = "py_kw_forcing"),
                "'global'")
 })
+
+test_that("a forcing that multiplies a state reaches the Jacobian", {
+  # The Jacobian entries were printed without the forcing list, so a forcing
+  # surviving differentiation came out as a bare identifier and the model did
+  # not compile. Only additive forcings vanish from df/dx, which is why every
+  # example carried one.
+  u <- data.frame(time = c(0, 0.5, 1, 2), value = c(0.4, 1.1, 0.7, 1.5))
+  mod <- cppODE(c(A = "-k1 * A * u + k2 * B",
+                  B = "k1 * A * u - k2 * B"),
+                forcings = "u", modelname = "forcing_in_jac")
+
+  tt   <- seq(0, 2, 0.25)
+  pars <- c(A = 1, B = 0, k1 = 0.8, k2 = 0.3)
+  res  <- solveODE(mod, tt, pars, forcings = list(u = u),
+                   abstol = 1e-10, reltol = 1e-10)
+
+  # Central differences over every parameter, which is what the Jacobian
+  # feeds through the sensitivity equations.
+  fd <- vapply(names(pars), function(nm) {
+    h <- 1e-6 * max(abs(pars[[nm]]), 1)
+    pp <- pm <- pars; pp[nm] <- pp[nm] + h; pm[nm] <- pm[nm] - h
+    a <- solveODE(mod, tt, pp, forcings = list(u = u), abstol = 1e-12, reltol = 1e-12)
+    b <- solveODE(mod, tt, pm, forcings = list(u = u), abstol = 1e-12, reltol = 1e-12)
+    (a$variable - b$variable) / (2 * h)
+  }, matrix(0, length(tt), 2L))
+
+  # Loose because the reference is a difference of two adaptive solves, which
+  # take their own grids and leave O(tol/h) behind. It is four decades tighter
+  # than the error a missing forcing term would produce, which is the point.
+  for (k in seq_along(pars))
+    expect_equal(unname(res$sens1[, , k]), unname(fd[, , k]), tolerance = 1e-3,
+                 info = names(pars)[k])
+})

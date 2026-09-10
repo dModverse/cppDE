@@ -141,3 +141,18 @@ test_that("an expression that does not parse names itself", {
   expect_error(cppODE(c(A = long), modelname = "pw_unparseable", compile = FALSE),
                "cannot parse expression")
 })
+
+test_that("Heaviside survives differentiation", {
+  # d/dx Heaviside(x) is DiracDelta, which no printer knows. A discrete model
+  # cannot mean an impulse of infinite height, so it is emitted as one at the
+  # switching point and zero either side, the way cppFUN already takes it.
+  mod <- cppODE(c(A = "-k * A * Heaviside(A - 0.5)", B = "k * A"),
+                modelname = "heaviside_jac")
+  tt <- seq(0, 2, 0.5)
+  res <- solveODE(mod, tt, c(A = 1, B = 0, k = 0.7),
+                  abstol = 1e-10, reltol = 1e-10)
+
+  # The decay switches off at 0.5 and the state holds there.
+  expect_equal(unname(res$variable[nrow(res$variable), 1]), 0.5, tolerance = 1e-3)
+  expect_false(anyNA(res$sens1))
+})
