@@ -450,7 +450,7 @@ def generate_cvode_cpp(
     if reverse:
         if events or rootfunc is not None:
             raise ValueError(
-                "sweep = 'reverse' on the CVODE backend does not support events "
+                "derivMode = 'reverse' on the CVODE backend does not support events "
                 "or a rootfunc: CVODES integrates the adjoint over checkpointed "
                 "states and cannot be told about a jump. Use the native backend, "
                 "which replays the jump.")
@@ -1309,7 +1309,11 @@ static std::vector<RootEvent> build_root_events(const double* params,
     # --- Zero-copy sink: the batch entry can size the results before the solve
     # when nothing dynamic adds points. A time event adds a row unless its time is
     # already requested, and those times are per-condition; roots stay dynamic.
-    cv_fixed_grid = (len(root_events) == 0 and rootfunc_mode == "none")
+    # Under ASA the result carries an adjoint the pre-allocated skeleton has no
+    # slot for, and the skeleton is fixed before the solve runs. The native
+    # emitter declines the sink for the same reason.
+    cv_fixed_grid = (len(root_events) == 0 and rootfunc_mode == "none"
+                     and not reverse)
     n_cv_ev = len(time_events) if cv_fixed_grid else 0
     if cv_fixed_grid:
         _lines = "".join(
@@ -1581,7 +1585,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
   if (args.seed == nullptr) {
     cleanup();
     return res.fail(cppde::RC_ILL_INPUT,
-                    "a model compiled with sweep = reverse needs a seed");
+                    "a model compiled with derivMode = reverse needs a seed");
   }
   if (CVodeAdjInit(cvode_mem, ASA_CHECKPOINTS, CV_POLYNOMIAL) < 0) {
     cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeAdjInit failed");
@@ -1771,12 +1775,12 @@ static std::vector<RootEvent> build_root_events(const double* params,
     if reverse:
         seed_guard = (
             '  if (a.seed == nullptr)\n'
-            '    Rf_error("a model compiled with sweep = reverse needs a seed");')
+            '    Rf_error("a model compiled with derivMode = reverse needs a seed");')
     else:
         seed_guard = (
             '  if (a.seed != nullptr)\n'
-            '    Rf_error("this cvode model was compiled with sweep = forward; '
-            'recompile with sweep = reverse");')
+            '    Rf_error("this cvode model was compiled with derivMode = forward; '
+            'recompile with derivMode = reverse");')
 
     # Linear-solver setup
     if use_sparse:

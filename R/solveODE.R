@@ -84,13 +84,13 @@
   ## --- Reverse mode: which direction the model was built for ---
   ## The mode is stamped on the model, not passed per call, exactly as `deriv`
   ## is: it decides which code was emitted and cannot be chosen afterwards.
-  is_reverse <- identical(attr(model, "sweep"), "reverse")
+  is_reverse <- identical(attr(model, "derivMode"), "reverse")
   if (!is.null(seed) && !is_reverse)
-    stop("'seed' supplied but the model was not compiled with sweep = \"reverse\"")
+    stop("'seed' supplied but the model was not compiled with derivMode = \"reverse\"")
   ## A seedless reverse call is the value half of the pair: it integrates,
   ## fills the store and sweeps nothing.
   if (is.null(seed) && is_reverse && !isTRUE(keepStore))
-    stop("a model compiled with sweep = \"reverse\" needs a 'seed', or ",
+    stop("a model compiled with derivMode = \"reverse\" needs a 'seed', or ",
          "keepStore = TRUE to run it for its values alone")
   if (!is.null(seed)) {
     if (!is.numeric(seed)) stop("'seed' must be numeric")
@@ -104,9 +104,21 @@
     ## Attributes rather than further positional arguments: they mean nothing
     ## where a seed is absent, and the .Call signature is frozen into every
     ## model already compiled.
-    if (isTRUE(adjointGrid)) attr(seed, "adjointGrid") <- TRUE
-    if (!is.null(errWeights))
+    ## Both belong to the native reverse pass. CVODES integrates the adjoint
+    ## as its own ODE under its own controller, so neither the grid nor a
+    ## weight on it exists there; saying so beats dropping them in silence.
+    if (isTRUE(adjointGrid)) {
+      if (is_cvode)
+        stop("'adjointGrid' is not available on the CVODE backend: the sweep ",
+             "is CVODES' own backward solve and reports no grid.", call. = FALSE)
+      attr(seed, "adjointGrid") <- TRUE
+    }
+    if (!is.null(errWeights)) {
+      if (is_cvode)
+        stop("'errWeights' is not available on the CVODE backend: the backward ",
+             "solve runs under CVODES' own step-size control.", call. = FALSE)
       attr(seed, "errWeights") <- .checkErrWeights(errWeights, n_states)
+    }
 
   }
   if (!is.null(errWeights) && is.null(seed))
@@ -372,12 +384,19 @@
   times <- as.double(times)
 
   ## The store rides on `times`: the call that makes one has no seed.
-  if (isTRUE(keepStore)) {
+  ## CVODES keeps its checkpoints inside the solver and hands out no handle on
+  ## them, so the pair of solves is a native-backend arrangement.
+  if (isTRUE(keepStore) || !is.null(store)) {
+    what <- if (isTRUE(keepStore)) "keepStore" else "store"
     if (!is_reverse)
-      stop("'keepStore' belongs to a model compiled with sweep = \"reverse\"",
+      stop("'", what, "' belongs to a model compiled with derivMode = \"reverse\"",
            call. = FALSE)
-    attr(times, "keepStore") <- TRUE
+    if (is_cvode)
+      stop("'", what, "' is not available on the CVODE backend: CVODES holds ",
+           "its checkpoints itself. Use cppODE() for a pair of solves that ",
+           "share one integration.", call. = FALSE)
   }
+  if (isTRUE(keepStore)) attr(times, "keepStore") <- TRUE
   if (!is.null(store)) {
     if (!inherits(store, "externalptr"))
       stop("'store' must be the `store` element of an earlier solve",
@@ -676,7 +695,7 @@
 #'   that case).
 #'
 #' @param seed Reverse-mode seed, for a model compiled with
-#'   `cppODE(..., sweep = "reverse")` and required by one. A
+#'   `cppODE(..., derivMode = "reverse")` and required by one. A
 #'   `[n_out, n_states]` matrix or an `[n_out, n_states, n_seed]` array, whose
 #'   first dimension is the solve's own output row count: a root event observes
 #'   at times it was not asked for, so that count is not `length(times)` in
@@ -684,7 +703,7 @@
 #'   one column per seed column. Supplying it to a forward model is an error, as
 #'   is leaving it out on a reverse one.
 #' @param errWeights Optional lambda from an earlier sweep, used as a
-#'   step-size weight. A list with `time` (ascending, length `n`), `lambda`
+#'   step-size weight. Native backend only. A list with `time` (ascending, length `n`), `lambda`
 #'   (`[n, n_states]`), and optionally `breaks` (indices into `time` the
 #'   interpolant must not span), `gradtol` (default `1e-6`) and `floor`
 #'   (smallest weight as a fraction of the largest, default `0`). The
@@ -693,20 +712,22 @@
 #'   finer than `abstol` and `reltol` ask, never coarser. Requires a `seed`.
 #' @param keepStore Whether a reverse solve returns its checkpoints as
 #'   `$store`, for a later solve to reuse through `store`. The `seed` may then
-#'   be omitted, which runs the model for its values alone.
+#'   be omitted, which runs the model for its values alone. Native backend
+#'   only: CVODES holds its checkpoints itself.
 #' @param store The `$store` of an earlier solve of the same model at the same
 #'   `times` and `parms`. The solve integrates nothing and goes straight to the
 #'   sweep. A store from a different point is an error, not a silent reuse. It
 #'   may be reused any number of times and is freed with its last reference.
 #' @param adjointGrid Whether the sweep also reports the grid it ran on, as
-#'   `$adjointGrid`. `FALSE` by default; requires a `seed`. Costs one
+#'   `$adjointGrid`. `FALSE` by default; requires a `seed` and the native
+#'   backend. Costs one
 #'   `[n_steps, n_states, n_seed]` array, so it is a diagnostic.
 #'
 #' @return
 #' A named list with components `time`, `variable`, `diagnostics`, and,
 #' when `attr(model, "deriv")` is `TRUE`, `sens1`, plus `sens2` when
 #' `attr(model, "deriv2")` is `TRUE`. A model compiled with
-#' `sweep = "reverse"` carries neither, and returns `adjoint` instead:
+#' `derivMode = "reverse"` carries neither, and returns `adjoint` instead:
 #' `[n_states + n_params, n_seed]`, indexed exactly as a forward `sens1ini`
 #' seeds. Output arrays are time-first:
 #' `variable` is `[n_t, n_x]`, `sens1` is `[n_t, n_x, n_s]`, and
@@ -823,12 +844,14 @@ solveODEBatch <- function(model, conditions,
                           cores = NULL,
                           traceFile = NULL,
                           onFailure = c("stop", "warn", "silent"),
-                          seed = NULL) {
+                          seed = NULL, adjointGrid = FALSE,
+                          errWeights = NULL, keepStore = FALSE, store = NULL) {
 
   onFailure <- match.arg(onFailure)
   preps <- .batchPreps(model, conditions, times, parms, sens1ini, sens2ini,
                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                       hini, roottol, maxroot, seed)
+                       hini, roottol, maxroot, seed, adjointGrid, errWeights,
+                       keepStore, store)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   .batchRun(model, preps, SYM, .batchDimnames(preps, SYM), names(conditions),
@@ -852,7 +875,8 @@ solveODEBatch <- function(model, conditions,
 # and prepareBatch().
 .batchPreps <- function(model, conditions, times, parms, sens1ini, sens2ini,
                         fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                        hini, roottol, maxroot, seed = NULL) {
+                        hini, roottol, maxroot, seed = NULL, adjointGrid = FALSE,
+                        errWeights = NULL, keepStore = FALSE, store = NULL) {
 
   if (!is.list(conditions) || !length(conditions))
     stop("'conditions' must be a non-empty list", call. = FALSE)
@@ -861,7 +885,8 @@ solveODEBatch <- function(model, conditions,
 
   known <- c("times", "parms", "sens1ini", "sens2ini", "fixed", "forcings",
              "abstol", "reltol", "maxattemps", "maxsteps", "hini", "roottol",
-             "maxroot", "seed")
+             "maxroot", "seed", "adjointGrid", "errWeights", "keepStore",
+             "store")
   bad <- setdiff(unlist(lapply(conditions, names)), known)
   if (length(bad))
     stop("unknown per-condition argument(s): ", paste(unique(bad), collapse = ", "),
@@ -872,7 +897,8 @@ solveODEBatch <- function(model, conditions,
                  sens2ini = sens2ini, fixed = fixed, forcings = forcings,
                  abstol = abstol, reltol = reltol, maxattemps = maxattemps,
                  maxsteps = maxsteps, hini = hini, roottol = roottol,
-                 maxroot = maxroot, seed = seed)
+                 maxroot = maxroot, seed = seed, adjointGrid = adjointGrid,
+                 errWeights = errWeights, keepStore = keepStore, store = store)
 
   lapply(seq_along(conditions), function(i) {
     a <- utils::modifyList(shared, conditions[[i]])
@@ -881,7 +907,8 @@ solveODEBatch <- function(model, conditions,
            "batch-wide", call. = FALSE)
     .odeCallArgs(model, a$times, a$parms, a$sens1ini, a$sens2ini, a$fixed,
                  a$forcings, a$abstol, a$reltol, a$maxattemps, a$maxsteps,
-                 a$hini, a$roottol, a$maxroot, a$seed)
+                 a$hini, a$roottol, a$maxroot, a$seed, a$adjointGrid,
+                 a$errWeights, a$keepStore, a$store)
   })
 }
 
@@ -991,11 +1018,13 @@ prepareBatch <- function(model, conditions,
                          abstol = 1e-6, reltol = 1e-6,
                          maxattemps = 50L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
-                         seed = NULL) {
+                         seed = NULL, adjointGrid = FALSE,
+                         errWeights = NULL, keepStore = FALSE, store = NULL) {
 
   preps <- .batchPreps(model, conditions, times, parms, sens1ini, sens2ini,
                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                       hini, roottol, maxroot, seed)
+                       hini, roottol, maxroot, seed, adjointGrid, errWeights,
+                       keepStore, store)
 
   sym <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   structure(list(
@@ -1014,19 +1043,27 @@ prepareBatch <- function(model, conditions,
 #'
 #' @description
 #' Re-solves the conditions of a [prepareBatch()] handle with new numbers.
-#' Only `parms`, `sens1ini` and `sens2ini` may change; anything else needs a
-#' fresh handle.
+#' Only `parms`, `sens1ini`, `sens2ini`, `seed` and `errWeights` may change;
+#' anything else needs a fresh handle.
 #'
 #' @param handle A `"cppDEbatch"` object from [prepareBatch()].
 #' @param parms List of named numeric vectors, one per condition, or `NULL` to
 #'   reuse the prepared values.
 #' @param sens1ini,sens2ini Lists of sensitivity initial values, one per
 #'   condition, or `NULL` to reuse. Shapes must match the prepared ones.
+#' @param seed List of reverse-mode seeds, one per condition, or `NULL` to
+#'   reuse. A new objective seeds a new cotangent at every iteration while its
+#'   shape stays put, which is what makes a prepared handle usable in reverse
+#'   mode. Shapes must match the prepared ones.
+#' @param errWeights List of weightings for the step-size controller, one per
+#'   condition, or `NULL` to keep the prepared ones. Each is the `errWeights`
+#'   list of [solveODE()], typically lambda from the previous iteration.
 #' @param cores,traceFile,onFailure As in [solveODEBatch()].
 #' @return A list of [solveODE()] results, named as the prepared conditions.
 #' @seealso [prepareBatch()]
 #' @export
 solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
+                       seed = NULL, errWeights = NULL,
                        cores = NULL, traceFile = NULL,
                        onFailure = c("stop", "warn", "silent")) {
 
@@ -1044,7 +1081,9 @@ solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
     x
   }
   parms <- chk(parms, "parms"); sens1ini <- chk(sens1ini, "sens1ini")
-  sens2ini <- chk(sens2ini, "sens2ini")
+  sens2ini <- chk(sens2ini, "sens2ini"); seed <- chk(seed, "seed")
+  errWeights <- chk(errWeights, "errWeights")
+  n_states <- length(attr(handle$model, "variables"))
 
   for (k in seq_len(K)) {
     if (!is.null(parms)) {
@@ -1069,6 +1108,30 @@ solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
     }
     if (!is.null(sens2ini) && !is.null(sens2ini[[k]]))
       preps[[k]]$call_args[[4L]] <- sens2ini[[k]]
+    # The seed carries the grid flag and the step-size weights as attributes,
+    # so a replacement takes the prepared ones over unless new weights are
+    # given below.
+    if (!is.null(seed) && !is.null(seed[[k]])) {
+      sk  <- seed[[k]]
+      old <- preps[[k]]$call_args[[15L]]
+      if (is.null(old))
+        stop("condition ", k, ": the handle was prepared without a 'seed'; ",
+             "call prepareBatch() again.", call. = FALSE)
+      if (!is.numeric(sk) || !identical(dim(sk), dim(old)))
+        stop("condition ", k, ": seed shape changed; call prepareBatch() again.",
+             call. = FALSE)
+      storage.mode(sk) <- "double"
+      attributes(sk) <- attributes(old)
+      preps[[k]]$call_args[[15L]] <- sk
+    }
+    if (!is.null(errWeights) && !is.null(errWeights[[k]])) {
+      sk <- preps[[k]]$call_args[[15L]]
+      if (is.null(sk))
+        stop("condition ", k, ": 'errWeights' weights a reverse solve's step ",
+             "size and needs a 'seed'.", call. = FALSE)
+      attr(sk, "errWeights") <- .checkErrWeights(errWeights[[k]], n_states)
+      preps[[k]]$call_args[[15L]] <- sk
+    }
   }
 
   .batchRun(handle$model, preps, handle$sym, handle$dn, handle$names,

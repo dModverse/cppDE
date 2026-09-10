@@ -51,7 +51,7 @@
 #'   `"rb4"`, or `"tsit5"`.
 #' @param useNDF Logical. Use Klopfenstein-Shampine NDF coefficients in
 #'   the BDF corrector. Applies to `method = "bdf"`; ignored otherwise.
-#' @param sweep Direction the derivatives are taken in. `"forward"`, the
+#' @param derivMode Direction the derivatives are taken in. `"forward"`, the
 #'   default, propagates tangents alongside the states, which is what `deriv`
 #'   and `deriv2` build. `"reverse"` compiles a different object: the states are
 #'   integrated in plain `double` and the derivatives come out of one backward
@@ -68,7 +68,7 @@
 #' @return The compiled model name (character) carrying the attributes
 #'   required by [solveODE()]: `equations`, `srcfile`, `variables`,
 #'   `parameters`, `forcings`, `events`, `rootfunc`, `fixed`, `jacobian`
-#'   (with components `f.x` and `f.time`), `deriv`, `deriv2`, `sweep`,
+#'   (with components `f.x` and `f.time`), `deriv`, `deriv2`, `derivMode`,
 #'   `nStack`, `sparse`, `method`, `useNDF`, `dimNames`, `compileArgs`,
 #'   `backend`.
 #'
@@ -86,18 +86,18 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
                    sparse = NULL,
                    method = c("bdf", "adams", "rb4", "tsit5"),
                    useNDF = TRUE,
-                   sweep = c("forward", "reverse"),
+                   derivMode = c("forward", "reverse"),
                    profile = FALSE, stepTrace = FALSE, verbose = FALSE) {
 
   # --- Validate arguments ---
-  sweep <- match.arg(sweep)
-  is_reverse <- identical(sweep, "reverse")
+  derivMode <- match.arg(derivMode)
+  is_reverse <- identical(derivMode, "reverse")
   if (is_reverse) {
     # A reverse model integrates in plain double and gets its derivatives from
     # one backward sweep, so it carries no forward tangents at all. Second
     # order is forward-over-reverse and is not this object.
     if (deriv2)
-      stop("sweep = \"reverse\" has no second order yet; use deriv2 = FALSE.",
+      stop("derivMode = \"reverse\" has no second order yet; use deriv2 = FALSE.",
            call. = FALSE)
     deriv  <- FALSE
     deriv2 <- FALSE
@@ -118,7 +118,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # loop steps in place and clips to the next output time, where a checkpoint
   # would need the state before the step rather than after it.
   if (is_reverse && !useDenseOutput) {
-    warning("'useDenseOutput = FALSE' is ignored under sweep = \"reverse\"; ",
+    warning("'useDenseOutput = FALSE' is ignored under derivMode = \"reverse\"; ",
             "the reverse pass checkpoints in the dense loop", call. = FALSE)
     useDenseOutput <- TRUE
   }
@@ -1269,7 +1269,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "  if (args.seed == nullptr) {",
       "    if (args.want_store) return res.return_code;",
       "    return res.fail(cppde::RC_ILL_INPUT,",
-      "                    \"a model compiled with sweep = reverse needs a seed\");",
+      "                    \"a model compiled with derivMode = reverse needs a seed\");",
       "  }",
       "  if (args.n_seed_rows != n_out) {",
       "    char _m[192];",
@@ -1583,7 +1583,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   attr(modelname, "jacobian")      <- list(f.x = jac_matrix_R, f.time = time_derivs_str)
   attr(modelname, "deriv")         <- deriv
   attr(modelname, "deriv2")        <- deriv2
-  attr(modelname, "sweep")         <- sweep
+  attr(modelname, "derivMode")     <- derivMode
   attr(modelname, "nStack")        <- if (is_heap) Inf else as.numeric(nStack_width)
   attr(modelname, "sparse")        <- use_sparse
   attr(modelname, "method")        <- method

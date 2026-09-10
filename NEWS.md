@@ -1,5 +1,19 @@
 # cppDE (development version)
 
+* **Bug fix.** A CVODES adjoint solved through `solveODEBatch()` returned no
+  `$adjoint` and reported success. The batch sizes its results before the solve
+  where the output grid is fixed by `times`, and that skeleton has no slot for
+  an adjoint whose width is only known afterwards; the native backend declines
+  the same shortcut under `derivMode = "reverse"` and the CVODE emitter did
+  not. A caller reading `$adjoint` saw `NULL`, which reads as a zero gradient
+  rather than as a failure.
+* The batch entry points carry the whole reverse mode. `solveODEBatch()` and
+  `prepareBatch()` accept `adjointGrid`, `errWeights`, `keepStore` and `store`
+  beside `seed`, batch-wide or per condition, so the checkpoint reuse and the
+  weighted controller reach a batch of conditions and not only `solveODE()`.
+  `solveBatch()` takes a new `seed` and new `errWeights` on a prepared handle:
+  both change with every objective evaluation while their shapes do not, which
+  is what makes a prepared batch usable in reverse mode at all.
 * A reverse gradient can integrate the states once instead of twice. It needs
   two solves at the same parameter, one for the values the seed is built from
   and one for the sweep. `solveODE(..., keepStore = TRUE)` now returns the
@@ -13,7 +27,7 @@
   one comparison, evaluated once. Recording fell from 9.3 to 3.1 nanoseconds per
   tape node, and a reverse step from 167 to 79 times a plain evaluation of the
   same right-hand side.
-* The CVODE backend takes derivatives backwards too. `cvode(..., sweep =
+* The CVODE backend takes derivatives backwards too. `cvode(..., derivMode =
   "reverse")` compiles CVODES adjoint sensitivity analysis: the forward pass
   stores checkpoints and one backward solve per seed column integrates the
   adjoint equation with the parameter quadrature riding along. It answers the
@@ -36,7 +50,7 @@
   residual that says how much of the objective's error each step carries. The
   flag rides on the seed rather than on a new argument, so no compiled model
   needs rebuilding.
-* Derivatives can be taken backwards. `cppODE(..., sweep = "reverse")` compiles a
+* Derivatives can be taken backwards. `cppODE(..., derivMode = "reverse")` compiles a
   fourth object beside the value, first- and second-order ones: it integrates the
   states in plain `double`, keeps a checkpoint per accepted step, and replays each
   step under a new reverse-mode scalar to sweep one tape backwards.
@@ -57,8 +71,8 @@
   Jacobian no longer compiles it. `"symbolic"` is unchanged and, being a backend
   for the forward Jacobian rather than a direction, cannot be combined with
   either.
-* `funCpp()` is now `cppFUN()`, for symmetry with `cppODE()`. The old name still
-  works and warns.
+* `funCpp()` is now `cppFUN()`, for symmetry with `cppODE()`. The old name is
+  gone rather than deprecated, the package never having been released under it.
 * A sparse Jacobian's reused pivot order is checked. `klu_refactor` keeps the
   ordering the first factorisation chose and reports success even where it has
   become numerically hopeless; a Newton corrector converges anyway, so nothing

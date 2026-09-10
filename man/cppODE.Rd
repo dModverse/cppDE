@@ -21,7 +21,7 @@ cppODE(
   sparse = NULL,
   method = c("bdf", "adams", "rb4", "tsit5"),
   useNDF = TRUE,
-  sweep = c("forward", "reverse"),
+  derivMode = c("forward", "reverse"),
   profile = FALSE,
   stepTrace = FALSE,
   verbose = FALSE
@@ -81,7 +81,7 @@ forces dense. Sparse LU requires KLU at install time.}
 \item{useNDF}{Logical. Use Klopfenstein-Shampine NDF coefficients in
 the BDF corrector. Applies to \code{method = "bdf"}; ignored otherwise.}
 
-\item{sweep}{Direction the derivatives are taken in. \code{"forward"}, the
+\item{derivMode}{Direction the derivatives are taken in. \code{"forward"}, the
 default, propagates tangents alongside the states, which is what \code{deriv}
 and \code{deriv2} build. \code{"reverse"} compiles a different object: the states are
 integrated in plain \code{double} and the derivatives come out of one backward
@@ -102,7 +102,7 @@ returned as \verb{$trace} from \code{\link[=solveODE]{solveODE()}}.}
 The compiled model name (character) carrying the attributes
 required by \code{\link[=solveODE]{solveODE()}}: \code{equations}, \code{srcfile}, \code{variables},
 \code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed}, \code{jacobian}
-(with components \code{f.x} and \code{f.time}), \code{deriv}, \code{deriv2}, \code{sweep},
+(with components \code{f.x} and \code{f.time}), \code{deriv}, \code{deriv2}, \code{derivMode},
 \code{nStack}, \code{sparse}, \code{method}, \code{useNDF}, \code{dimNames}, \code{compileArgs},
 \code{backend}.
 }

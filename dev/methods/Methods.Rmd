@@ -1095,7 +1095,7 @@ costs $M$ times the value alone. When the quantity of interest is a
 single scalar $J$, a likelihood or a residual sum of squares, the
 transpose of that computation delivers the whole gradient at a cost
 independent of $M$. cppDE emits this second differentiation mode
-under \verb|cppODE(..., sweep = "reverse")|.
+under \verb|cppODE(..., derivMode = "reverse")|.
 
 The quantity computed is a directional contraction rather than the
 sensitivity matrix. Given a cotangent $W \in \mathbb{R}^{n_t \times n_x}$
@@ -1260,7 +1260,7 @@ solved for its value alone. The reverse mode's forward pass carries
 no tangents, so its grid is the value-only grid.
 
 The consequence is a consistency property that is worth stating
-explicitly. Under \verb|sweep = "reverse"| the returned value and the
+explicitly. Under \verb|derivMode = "reverse"| the returned value and the
 returned gradient belong to the same trajectory: the gradient is the
 exact derivative of the number that was reported. Under forward
 sensitivities they do not, the value being reported from a grid that

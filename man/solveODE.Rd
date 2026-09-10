@@ -110,7 +110,7 @@ for models compiled without trace support (\verb{$trace} is \code{NULL} in
 that case).}
 
 \item{seed}{Reverse-mode seed, for a model compiled with
-\code{cppODE(..., sweep = "reverse")} and required by one. A
+\code{cppODE(..., derivMode = "reverse")} and required by one. A
 \verb{[n_out, n_states]} matrix or an \verb{[n_out, n_states, n_seed]} array, whose
 first dimension is the solve's own output row count: a root event observes
 at times it was not asked for, so that count is not \code{length(times)} in
@@ -119,11 +119,12 @@ one column per seed column. Supplying it to a forward model is an error, as
 is leaving it out on a reverse one.}
 
 \item{adjointGrid}{Whether the sweep also reports the grid it ran on, as
-\verb{$adjointGrid}. \code{FALSE} by default; requires a \code{seed}. Costs one
+\verb{$adjointGrid}. \code{FALSE} by default; requires a \code{seed} and the native
+backend. Costs one
 \verb{[n_steps, n_states, n_seed]} array, so it is a diagnostic.}
 
 \item{errWeights}{Optional lambda from an earlier sweep, used as a
-step-size weight. A list with \code{time} (ascending, length \code{n}), \code{lambda}
+step-size weight. Native backend only. A list with \code{time} (ascending, length \code{n}), \code{lambda}
 (\verb{[n, n_states]}), and optionally \code{breaks} (indices into \code{time} the
 interpolant must not span), \code{gradtol} (default \code{1e-6}) and \code{floor}
 (smallest weight as a fraction of the largest, default \code{0}). The
@@ -133,7 +134,8 @@ finer than \code{abstol} and \code{reltol} ask, never coarser. Requires a \code{
 
 \item{keepStore}{Whether a reverse solve returns its checkpoints as
 \verb{$store}, for a later solve to reuse through \code{store}. The \code{seed} may then
-be omitted, which runs the model for its values alone.}
+be omitted, which runs the model for its values alone. Native backend
+only: CVODES holds its checkpoints itself.}
 
 \item{store}{The \verb{$store} of an earlier solve of the same model at the same
 \code{times} and \code{parms}. The solve integrates nothing and goes straight to the
@@ -144,7 +146,7 @@ may be reused any number of times and is freed with its last reference.}
 A named list with components \code{time}, \code{variable}, \code{diagnostics}, and,
 when \code{attr(model, "deriv")} is \code{TRUE}, \code{sens1}, plus \code{sens2} when
 \code{attr(model, "deriv2")} is \code{TRUE}. A model compiled with
-\code{sweep = "reverse"} carries neither, and returns \code{adjoint} instead:
+\code{derivMode = "reverse"} carries neither, and returns \code{adjoint} instead:
 \verb{[n_states + n_params, n_seed]}, indexed exactly as a forward \code{sens1ini}
 seeds. Output arrays are time-first:
 \code{variable} is \verb{[n_t, n_x]}, \code{sens1} is \verb{[n_t, n_x, n_s]}, and

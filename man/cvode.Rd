@@ -14,7 +14,7 @@ cvode(
   modelname = NULL,
   outdir = tempdir(),
   deriv = FALSE,
-  sweep = c("forward", "reverse"),
+  derivMode = c("forward", "reverse"),
   asaCheckpoints = 200L,
   sparse = NULL,
   method = c("bdf", "adams"),
@@ -48,7 +48,7 @@ and exported C symbols. A random identifier is used when \code{NULL}.}
 
 \item{deriv}{Logical. Compute first-order parameter sensitivities.}
 
-\item{sweep}{Direction the derivatives are taken in. \code{"forward"} (default)
+\item{derivMode}{Direction the derivatives are taken in. \code{"forward"} (default)
 is the CVODES staggered forward sensitivity solver, driven by \code{deriv}.
 \code{"reverse"} is CVODES adjoint sensitivity analysis: the forward pass
 stores checkpoints, and one backward solve per seed column integrates
@@ -58,9 +58,9 @@ stores checkpoints, and one backward solve per seed column integrates
 the adjoint over checkpointed states and cannot be told about a jump.}
 
 \item{asaCheckpoints}{Accepted forward steps between checkpoints under
-\code{sweep = "reverse"}. The adjoint interpolates the forward state between
+\code{derivMode = "reverse"}. The adjoint interpolates the forward state between
 them, so fewer steps means less interpolation error and more memory.
-Ignored under \code{sweep = "forward"}.}
+Ignored under \code{derivMode = "forward"}.}
 
 \item{sparse}{Logical or \code{NULL}. \code{NULL} auto-selects sparse vs.
 dense LU from the Jacobian sparsity; \code{TRUE} forces sparse, \code{FALSE}
@@ -99,7 +99,7 @@ selection guidance are described in
 \details{
 Available methods are \code{"bdf"} (default) and \code{"adams"}. Sensitivities
 are first-order forward only; \code{deriv2} is not supported.
-\code{sweep = "reverse"} compiles the CVODES adjoint instead, returning
+\code{derivMode = "reverse"} compiles the CVODES adjoint instead, returning
 \verb{$adjoint} the way the native backend's reverse mode does. Events,
 forcings, \code{rootfunc}, and \code{fixed} behave as in \code{\link[=cppODE]{cppODE()}}.
 

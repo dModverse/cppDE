@@ -977,22 +977,3 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     impl(M, p, dX, dP, dX2, dP2, deriv2, attach.input, fixed)
   }
 }
-
-
-#' Algebraic Functions in C++ (deprecated spelling)
-#'
-#' @description
-#' The former name of [cppFUN()], kept so existing scripts keep running. It
-#' passes everything through unchanged and warns once per session.
-#'
-#' @param ... Passed to [cppFUN()].
-#' @return Whatever [cppFUN()] returns.
-#' @seealso [cppFUN()]
-#' @export
-funCpp <- function(...) {
-  .Deprecated("cppFUN", package = "cppDE",
-              msg = paste("'funCpp' is now 'cppFUN', for symmetry with",
-                          "cppODE(). The old name still works and will be",
-                          "removed in a later release."))
-  cppFUN(...)
-}

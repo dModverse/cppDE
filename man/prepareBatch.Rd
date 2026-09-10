@@ -20,7 +20,11 @@ prepareBatch(
   hini = 0,
   roottol = 1e-06,
   maxroot = 1L,
-  seed = NULL
+  seed = NULL,
+  adjointGrid = FALSE,
+  errWeights = NULL,
+  keepStore = FALSE,
+  store = NULL
 )
 }
 \arguments{
@@ -96,13 +100,37 @@ Default \code{1e-6}.}
 \item{maxroot}{Maximum number of triggers per root event. Default \code{1}.}
 
 \item{seed}{Reverse-mode seed, for a model compiled with
-\code{cppODE(..., sweep = "reverse")} and required by one. A
+\code{cppODE(..., derivMode = "reverse")} and required by one. A
 \verb{[n_out, n_states]} matrix or an \verb{[n_out, n_states, n_seed]} array, whose
 first dimension is the solve's own output row count: a root event observes
 at times it was not asked for, so that count is not \code{length(times)} in
 general. What comes back is \verb{w' * dx/dtheta} summed over times and states,
 one column per seed column. Supplying it to a forward model is an error, as
 is leaving it out on a reverse one.}
+
+\item{adjointGrid}{Whether the sweep also reports the grid it ran on, as
+\verb{$adjointGrid}. \code{FALSE} by default; requires a \code{seed} and the native
+backend. Costs one
+\verb{[n_steps, n_states, n_seed]} array, so it is a diagnostic.}
+
+\item{errWeights}{Optional lambda from an earlier sweep, used as a
+step-size weight. Native backend only. A list with \code{time} (ascending, length \code{n}), \code{lambda}
+(\verb{[n, n_states]}), and optionally \code{breaks} (indices into \code{time} the
+interpolant must not span), \code{gradtol} (default \code{1e-6}) and \code{floor}
+(smallest weight as a fraction of the largest, default \code{0}). The
+controller then takes the maximum of its own error norm and
+\eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
+finer than \code{abstol} and \code{reltol} ask, never coarser. Requires a \code{seed}.}
+
+\item{keepStore}{Whether a reverse solve returns its checkpoints as
+\verb{$store}, for a later solve to reuse through \code{store}. The \code{seed} may then
+be omitted, which runs the model for its values alone. Native backend
+only: CVODES holds its checkpoints itself.}
+
+\item{store}{The \verb{$store} of an earlier solve of the same model at the same
+\code{times} and \code{parms}. The solve integrates nothing and goes straight to the
+sweep. A store from a different point is an error, not a silent reuse. It
+may be reused any number of times and is freed with its last reference.}
 }
 \value{
 An object of class \code{"cppDEbatch"} for \code{\link[=solveBatch]{solveBatch()}}.

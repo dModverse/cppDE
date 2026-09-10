@@ -10,7 +10,7 @@
 #'
 #' Available methods are `"bdf"` (default) and `"adams"`. Sensitivities
 #' are first-order forward only; `deriv2` is not supported.
-#' `sweep = "reverse"` compiles the CVODES adjoint instead, returning
+#' `derivMode = "reverse"` compiles the CVODES adjoint instead, returning
 #' `$adjoint` the way the native backend's reverse mode does. Events,
 #' forcings, `rootfunc`, and `fixed` behave as in [cppODE()].
 #'
@@ -33,10 +33,10 @@
 #'   times, as [cppODE()] does. Both backends then return the same output grid.
 #' @param method One of `"bdf"` (default) or `"adams"`.
 #' @param asaCheckpoints Accepted forward steps between checkpoints under
-#'   `sweep = "reverse"`. The adjoint interpolates the forward state between
+#'   `derivMode = "reverse"`. The adjoint interpolates the forward state between
 #'   them, so fewer steps means less interpolation error and more memory.
-#'   Ignored under `sweep = "forward"`.
-#' @param sweep Direction the derivatives are taken in. `"forward"` (default)
+#'   Ignored under `derivMode = "forward"`.
+#' @param derivMode Direction the derivatives are taken in. `"forward"` (default)
 #'   is the CVODES staggered forward sensitivity solver, driven by `deriv`.
 #'   `"reverse"` is CVODES adjoint sensitivity analysis: the forward pass
 #'   stores checkpoints, and one backward solve per seed column integrates
@@ -69,7 +69,7 @@
 cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = NULL,
                   compile = TRUE, modelname = NULL, outdir = tempdir(),
                   deriv = FALSE,
-                  sweep = c("forward", "reverse"),
+                  derivMode = c("forward", "reverse"),
                   asaCheckpoints = 200L,
                   sparse = NULL,
                   method = c("bdf", "adams"),
@@ -78,12 +78,12 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
                   verbose = FALSE) {
 
   method <- match.arg(method)
-  sweep  <- match.arg(sweep)
-  is_reverse <- identical(sweep, "reverse")
+  derivMode <- match.arg(derivMode)
+  is_reverse <- identical(derivMode, "reverse")
   # The two directions are separate compilations, as they are on the native
   # backend: the direction decides what the generated code is.
   if (is_reverse && deriv)
-    stop("sweep = \"reverse\" carries no forward sensitivities; use ",
+    stop("derivMode = \"reverse\" carries no forward sensitivities; use ",
          "deriv = FALSE.", call. = FALSE)
   asaCheckpoints <- as.integer(asaCheckpoints)[1]
   if (is.na(asaCheckpoints) || asaCheckpoints < 1L)
@@ -264,7 +264,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   attr(modelname, "jacobian")    <- list(f.x = jac_matrix_R, f.time = unlist(res$time_derivs))
   attr(modelname, "deriv")       <- isTRUE(deriv)
   attr(modelname, "deriv2")      <- FALSE
-  attr(modelname, "sweep")       <- sweep
+  attr(modelname, "derivMode")   <- derivMode
   # CVODE always uses runtime-sized sensitivity slots (CVodeSensInit1 allocates
   # Ns_active vectors at solve time), so it's effectively heap AD from the
   # compile-time-width perspective.

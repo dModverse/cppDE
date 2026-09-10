@@ -30,9 +30,9 @@ seed_for <- function(res, n_seed = 1L, seed = 1L) {
 
 test_that("a reverse model answers what the forward sensitivities answer", {
   mf <- cppODE(eqns, modelname = "rev_plain_f", deriv = TRUE)
-  mr <- cppODE(eqns, modelname = "rev_plain_r", sweep = "reverse")
+  mr <- cppODE(eqns, modelname = "rev_plain_r", derivMode = "reverse")
 
-  expect_identical(attr(mr, "sweep"), "reverse")
+  expect_identical(attr(mr, "derivMode"), "reverse")
   expect_false(attr(mr, "deriv"))
 
   fwd <- do.call(solveODE, c(list(mf, times, pars), tol))
@@ -50,7 +50,7 @@ test_that("a reverse model answers what the forward sensitivities answer", {
 
 test_that("the gap to the forward mode falls with the tolerance", {
   mf <- cppODE(eqns, modelname = "rev_scale_f", deriv = TRUE)
-  mr <- cppODE(eqns, modelname = "rev_scale_r", sweep = "reverse")
+  mr <- cppODE(eqns, modelname = "rev_scale_r", derivMode = "reverse")
 
   rel <- vapply(10^-c(6, 12), function(tt) {
     o   <- list(abstol = tt, reltol = tt)
@@ -80,7 +80,7 @@ test_that("the reverse mode carries events, roots and forcings", {
   fc <- list(u = data.frame(time = c(0, 2, 5), value = c(0.1, 0.25, 0.05)))
 
   mf <- cppODE(eq, events = ev, forcings = "u", modelname = "rev_ev_f", deriv = TRUE)
-  mr <- cppODE(eq, events = ev, forcings = "u", modelname = "rev_ev_r", sweep = "reverse")
+  mr <- cppODE(eq, events = ev, forcings = "u", modelname = "rev_ev_r", derivMode = "reverse")
 
   fwd <- do.call(solveODE, c(list(mf, times, p, forcings = fc), tol))
   # Both jumps have to be in the run, or the test proves nothing.
@@ -96,7 +96,7 @@ test_that("the reverse mode carries events, roots and forcings", {
 
 test_that("the reverse mode goes through the batch entry", {
   mf <- cppODE(eqns, modelname = "rev_batch_f", deriv = TRUE)
-  mr <- cppODE(eqns, modelname = "rev_batch_r", sweep = "reverse")
+  mr <- cppODE(eqns, modelname = "rev_batch_r", derivMode = "reverse")
 
   p2 <- pars; p2["k1"] <- 1.3
   conds <- list(one = list(parms = pars), two = list(parms = p2))
@@ -117,16 +117,16 @@ test_that("the reverse mode goes through the batch entry", {
 
 test_that("the seed and the mode have to agree", {
   mf <- cppODE(eqns, modelname = "rev_guard_f", deriv = TRUE)
-  mr <- cppODE(eqns, modelname = "rev_guard_r", sweep = "reverse")
+  mr <- cppODE(eqns, modelname = "rev_guard_r", derivMode = "reverse")
 
   fwd <- solveODE(mf, times, pars)
   W   <- seed_for(fwd)
 
-  expect_error(solveODE(mf, times, pars, seed = W), "sweep")
+  expect_error(solveODE(mf, times, pars, seed = W), "derivMode")
   expect_error(solveODE(mr, times, pars), "needs a 'seed'")
   expect_error(solveODE(mr, times, pars, seed = W[, 1, , drop = FALSE]),
                "state columns")
-  expect_error(cppODE(eqns, modelname = "rev_no2nd", sweep = "reverse",
+  expect_error(cppODE(eqns, modelname = "rev_no2nd", derivMode = "reverse",
                       deriv2 = TRUE),
                "second order")
 })
@@ -135,7 +135,7 @@ test_that("every method carries the reverse mode", {
   for (m in c("bdf", "adams", "rb4", "tsit5")) {
     mf <- cppODE(eqns, method = m, modelname = paste0("rev_m_f_", m), deriv = TRUE)
     mr <- cppODE(eqns, method = m, modelname = paste0("rev_m_r_", m),
-                 sweep = "reverse")
+                 derivMode = "reverse")
     fwd <- do.call(solveODE, c(list(mf, times, pars), tol))
     W   <- seed_for(fwd)
     rv  <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
@@ -145,7 +145,7 @@ test_that("every method carries the reverse mode", {
   }
 })
 test_that("adjointGrid reports the grid the sweep ran on", {
-  mr <- cppODE(eqns, modelname = "rev_grid_r", sweep = "reverse")
+  mr <- cppODE(eqns, modelname = "rev_grid_r", derivMode = "reverse")
   mv <- cppODE(eqns, modelname = "rev_grid_v", deriv = FALSE)
 
   val <- do.call(solveODE, c(list(mv, times, pars), tol))
@@ -188,7 +188,7 @@ test_that("the refinement indicator is alive on every method", {
   # means wout() or error_scale() has come undone again.
   for (m in c("bdf", "adams", "rb4", "tsit5")) {
     mr <- cppODE(eqns, method = m, modelname = paste0("rev_eta_", m),
-                 sweep = "reverse")
+                 derivMode = "reverse")
     mv <- cppODE(eqns, method = m, modelname = paste0("rev_eta_v_", m),
                  deriv = FALSE)
     val <- solveODE(mv, times, pars, abstol = 1e-8, reltol = 1e-6)
@@ -211,7 +211,7 @@ test_that("lambda weights can only refine the grid, never coarsen it", {
   # grid stays at least as fine as abstol/rtol ask. That is the property the
   # whole scheme rests on: it makes a wrong weight cost time and never
   # accuracy, which is what lets a weight from an earlier run be used at all.
-  mr <- cppODE(eqns, modelname = "rev_ew_r", sweep = "reverse")
+  mr <- cppODE(eqns, modelname = "rev_ew_r", derivMode = "reverse")
   mv <- cppODE(eqns, modelname = "rev_ew_v", deriv = FALSE)
 
   val <- solveODE(mv, times, pars, abstol = 1e-8, reltol = 1e-6)
@@ -244,7 +244,7 @@ test_that("lambda weights can only refine the grid, never coarsen it", {
 test_that("every method takes lambda weights", {
   for (m in c("bdf", "adams", "rb4", "tsit5")) {
     mr <- cppODE(eqns, method = m, modelname = paste0("rev_ewm_", m),
-                 sweep = "reverse")
+                 derivMode = "reverse")
     mv <- cppODE(eqns, method = m, modelname = paste0("rev_ewv_", m),
                  deriv = FALSE)
     val <- solveODE(mv, times, pars, abstol = 1e-8, reltol = 1e-6)
@@ -267,7 +267,7 @@ test_that("every method takes lambda weights", {
 })
 
 test_that("malformed lambda weights are an error, not a silent no-op", {
-  mr <- cppODE(eqns, modelname = "rev_ewbad", sweep = "reverse")
+  mr <- cppODE(eqns, modelname = "rev_ewbad", derivMode = "reverse")
   mv <- cppODE(eqns, modelname = "rev_ewbadv", deriv = FALSE)
   val <- solveODE(mv, times, pars)
   W   <- seed_for(val)
@@ -301,9 +301,9 @@ test_that("the CVODE backend takes derivatives backwards", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
   mf <- cppODE(eqns, modelname = "asa_fwd", deriv = TRUE)
-  ma <- cvode(eqns, modelname = "asa_rev", sweep = "reverse")
+  ma <- cvode(eqns, modelname = "asa_rev", derivMode = "reverse")
 
-  expect_identical(attr(ma, "sweep"), "reverse")
+  expect_identical(attr(ma, "derivMode"), "reverse")
   expect_false(attr(ma, "deriv"))
 
   fwd <- do.call(solveODE, c(list(mf, times, pars), tol))
@@ -319,12 +319,38 @@ test_that("the CVODE backend takes derivatives backwards", {
                tolerance = 1e-6)
 })
 
+test_that("ASA goes through the batch entry too", {
+  skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
+
+  ma <- cvode(eqns, modelname = "asa_batch", derivMode = "reverse")
+  mv <- cppODE(eqns, modelname = "asa_batch_v", deriv = FALSE)
+
+  p2 <- pars; p2["k1"] <- 1.3
+  conds <- list(one = list(parms = pars), two = list(parms = p2))
+  W <- lapply(conds, function(cc)
+    seed_for(do.call(solveODE, c(list(mv, times, cc$parms), tol))))
+
+  one <- lapply(seq_along(conds), function(k)
+    do.call(solveODE, c(list(ma, times, conds[[k]]$parms, seed = W[[k]]), tol)))
+  bat <- do.call(solveODEBatch,
+                 c(list(ma, mapply(function(cc, w) c(cc, list(seed = w)),
+                                   conds, W, SIMPLIFY = FALSE),
+                        times = times), tol))
+
+  # The batch used to size its results before the solve, which left no slot for
+  # the adjoint and reported success without it.
+  for (k in seq_along(conds)) {
+    expect_false(is.null(bat[[k]]$adjoint))
+    expect_identical(bat[[k]]$adjoint, one[[k]]$adjoint)
+  }
+})
+
 test_that("ASA and the native adjoint answer the same question", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
   mv <- cppODE(eqns, modelname = "asa_cmp_v", deriv = FALSE)
-  mr <- cppODE(eqns, modelname = "asa_cmp_r", sweep = "reverse")
-  ma <- cvode(eqns,  modelname = "asa_cmp_a", sweep = "reverse")
+  mr <- cppODE(eqns, modelname = "asa_cmp_r", derivMode = "reverse")
+  ma <- cvode(eqns,  modelname = "asa_cmp_a", derivMode = "reverse")
 
   val <- do.call(solveODE, c(list(mv, times, pars), tol))
   W   <- seed_for(val)
@@ -343,7 +369,7 @@ test_that("the two CVODE directions refuse each other's arguments", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
   # Second-order and forward sensitivities have no reverse counterpart here.
-  expect_error(cvode(eqns, modelname = "asa_guard_d", sweep = "reverse",
+  expect_error(cvode(eqns, modelname = "asa_guard_d", derivMode = "reverse",
                      deriv = TRUE),
                "no forward sensitivities")
 
@@ -352,14 +378,14 @@ test_that("the two CVODE directions refuse each other's arguments", {
   ev <- data.frame(var = "A", time = 1.0, value = 0.3, method = "add",
                    stringsAsFactors = FALSE)
   expect_error(cvode(eqns, events = ev, modelname = "asa_guard_e",
-                     sweep = "reverse"),
+                     derivMode = "reverse"),
                "does not support events")
 
   mf <- cvode(eqns, modelname = "asa_guard_f")
-  ma <- cvode(eqns, modelname = "asa_guard_r", sweep = "reverse")
+  ma <- cvode(eqns, modelname = "asa_guard_r", derivMode = "reverse")
   val <- solveODE(mf, times, pars)
   W   <- seed_for(val)
-  expect_error(solveODE(mf, times, pars, seed = W), "sweep")
+  expect_error(solveODE(mf, times, pars, seed = W), "derivMode")
   expect_error(solveODE(ma, times, pars), "needs a .seed.")
 })
 test_that("the ASA backward problem gets the caller's step budget", {
@@ -378,7 +404,7 @@ test_that("the ASA backward problem gets the caller's step budget", {
   otol <- list(abstol = 1e-10, reltol = 1e-8)
 
   mf <- cppODE(rob, modelname = "asa_ms_f", deriv = TRUE)
-  ma <- cvode(rob,  modelname = "asa_ms_a", sweep = "reverse")
+  ma <- cvode(rob,  modelname = "asa_ms_a", derivMode = "reverse")
 
   fwd <- do.call(solveODE, c(list(mf, tr, pr), otol))
   # A weight that no linear invariant annihilates: Robertson conserves
@@ -398,7 +424,7 @@ test_that("a reverse solve can hand its checkpoints to the next one", {
   # is built from, one for the sweep. Without this the states are integrated
   # twice. What has to hold is that the pair answers exactly what one seeded
   # call answers: the store is a saving, never a different number.
-  mr <- cppODE(eqns, modelname = "rev_store_r", sweep = "reverse")
+  mr <- cppODE(eqns, modelname = "rev_store_r", derivMode = "reverse")
 
   one <- do.call(solveODE, c(list(mr, times, pars, seed = NULL,
                                   keepStore = TRUE), tol))
@@ -426,7 +452,7 @@ test_that("a store from another point is refused, not quietly used", {
   # This is the whole safety of the scheme. A store carries the run it was made
   # from; handed back at a different theta it would give a gradient at one point
   # reported at another, and nothing downstream could tell.
-  mr <- cppODE(eqns, modelname = "rev_store_g", sweep = "reverse")
+  mr <- cppODE(eqns, modelname = "rev_store_g", derivMode = "reverse")
   one <- do.call(solveODE, c(list(mr, times, pars, keepStore = TRUE), tol))
   W   <- seed_for(one)
 
@@ -443,7 +469,7 @@ test_that("a store from another point is refused, not quietly used", {
 
   # And the two arguments belong to the reverse mode alone.
   mf <- cppODE(eqns, modelname = "rev_store_f", deriv = TRUE)
-  expect_error(solveODE(mf, times, pars, keepStore = TRUE), "sweep")
+  expect_error(solveODE(mf, times, pars, keepStore = TRUE), "derivMode")
   expect_error(solveODE(mr, times, pars, store = "not a pointer", seed = W),
                "element of an earlier solve")
   expect_error(solveODE(mr, times, pars), "needs a 'seed'")

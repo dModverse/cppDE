@@ -9,6 +9,8 @@ solveBatch(
   parms = NULL,
   sens1ini = NULL,
   sens2ini = NULL,
+  seed = NULL,
+  errWeights = NULL,
   cores = NULL,
   traceFile = NULL,
   onFailure = c("stop", "warn", "silent")
@@ -23,6 +25,15 @@ reuse the prepared values.}
 \item{sens1ini, sens2ini}{Lists of sensitivity initial values, one per
 condition, or \code{NULL} to reuse. Shapes must match the prepared ones.}
 
+\item{seed}{List of reverse-mode seeds, one per condition, or \code{NULL} to
+reuse. A new objective seeds a new cotangent at every iteration while its
+shape stays put, which is what makes a prepared handle usable in reverse
+mode. Shapes must match the prepared ones.}
+
+\item{errWeights}{List of weightings for the step-size controller, one per
+condition, or \code{NULL} to keep the prepared ones. Each is the \code{errWeights}
+list of \code{\link[=solveODE]{solveODE()}}, typically lambda from the previous iteration.}
+
 \item{cores, traceFile, onFailure}{As in \code{\link[=solveODEBatch]{solveODEBatch()}}.}
 }
 \value{
@@ -30,8 +41,8 @@ A list of \code{\link[=solveODE]{solveODE()}} results, named as the prepared con
 }
 \description{
 Re-solves the conditions of a \code{\link[=prepareBatch]{prepareBatch()}} handle with new numbers.
-Only \code{parms}, \code{sens1ini} and \code{sens2ini} may change; anything else needs a
-fresh handle.
+Only \code{parms}, \code{sens1ini}, \code{sens2ini}, \code{seed} and \code{errWeights} may change;
+anything else needs a fresh handle.
 }
 \seealso{
 \code{\link[=prepareBatch]{prepareBatch()}}

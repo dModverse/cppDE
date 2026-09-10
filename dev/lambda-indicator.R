@@ -105,7 +105,7 @@ build <- function(name, m) {
   m$value <- cppODE(m$eq, events = m$events, modelname = paste0("li_v_", name),
                     deriv = FALSE, method = m$method, outdir = .workingDir)
   m$rev   <- cppODE(m$eq, events = m$events, modelname = paste0("li_r_", name),
-                    sweep = "reverse", method = m$method, outdir = .workingDir)
+                    derivMode = "reverse", method = m$method, outdir = .workingDir)
 
   v <- solveODE(m$value, m$times, m$pars,
                 abstol = if (is.null(m$atol)) 1e-10 else m$atol, reltol = 1e-10)
