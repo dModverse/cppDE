@@ -14,8 +14,8 @@
 // recorded step sequence rather than adapting again.
 //
 // Covered: a fixed-time reset whose value depends on a parameter, a
-// root-triggered reset whose value does, both on bdf and on tsit5, so both
-// carry shapes are exercised; observations before, between and after the jumps,
+// root-triggered reset whose value does, on all four methods, so every carry
+// shape is exercised; observations before, between and after the jumps,
 // including the post-jump observation the engine emits, which is a value and
 // not an interpolation; a seed one observation at a time and over all at once.
 //
@@ -164,6 +164,10 @@ struct pipeline<cppde::multistepper<M, V, J, R>> {
 };
 template<class V, class R> struct pipeline<cppde::tsit5<V, R>> {
   using controller = cppde::onestep_controller<cppde::tsit5<V, R>>;
+  using dense      = cppde::onestep_dense_output<controller>;
+};
+template<class V, class R> struct pipeline<cppde::rosenbrock4<V, R>> {
+  using controller = cppde::onestep_controller<cppde::rosenbrock4<V, R>>;
   using dense      = cppde::onestep_dense_output<controller>;
 };
 
@@ -431,9 +435,13 @@ static void run_method(const char* name, double tol)
 
 int main() {
   using cppde::multistep_method;
-  // bdf is what dMod2 compiles; tsit5 is the other carry shape, where the
-  // restart is the identity and the jump is the whole boundary.
+  // All four, because a jump is the one place where the three carry shapes
+  // differ: the multistep methods throw their Nordsieck history away and build
+  // a new one, the one-step methods carry the state alone, and rb4 solves its
+  // stages against a matrix the restart invalidates.
   run_method<cppde::multistepper<multistep_method::bdf, double, cppde::dense_lu_tag>>("bdf", 1e-6);
+  run_method<cppde::multistepper<multistep_method::adams, double, cppde::dense_lu_tag>>("adams", 1e-6);
+  run_method<cppde::rosenbrock4<double>>("rb4", 1e-9);
   run_method<cppde::tsit5<double>>("tsit5", 1e-9);
 
   std::printf(g_failures == 0 ? "\nOK\n" : "\n%d FAILURES\n", g_failures);

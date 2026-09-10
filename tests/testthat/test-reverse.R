@@ -129,6 +129,11 @@ test_that("the seed and the mode have to agree", {
   expect_error(cppODE(eqns, modelname = "rev_no2nd", derivMode = "reverse",
                       deriv2 = TRUE),
                "second order")
+  # The Rosenbrock replay takes a dense Jacobian only, so this combination is
+  # refused here rather than in the compiler.
+  expect_error(cppODE(eqns, modelname = "rev_rb4_sparse", derivMode = "reverse",
+                      method = "rb4", sparse = TRUE),
+               "no reverse mode")
 })
 
 test_that("every method carries the reverse mode", {

@@ -6,9 +6,10 @@
 #   dev/cxx/run.sh --against F  diff this build's output against F
 #
 # A leading --codual, --reverse-step, --reverse-step-rb4,
-# --reverse-step-multistep, --reverse-trajectory, --reverse-trajectory-methods
-# --reverse-events, --err-weights or --sparse-transpose selects a reverse-AD
-# harness.
+# --reverse-step-multistep, --reverse-trajectory, --reverse-trajectory-methods,
+# --reverse-events, --reverse-forcing, --reverse-sparse, --err-weights or
+# --sparse-transpose selects a reverse-AD harness; --bench-codual and
+# --bench-revmem select a bench rather than a test.
 #
 # The output is the assertion: two revisions that compute the same thing must
 # produce byte-identical output.
@@ -52,6 +53,32 @@ case "${1:-}" in
   --reverse-events)
     SRC="$REPO/dev/cxx/test_reverse_events.cpp"
     OUT=${TMPDIR:-/tmp}/cppde_reverse_events
+    shift
+    ;;
+  --reverse-forcing)
+    SRC="$REPO/dev/cxx/test_reverse_forcing.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_reverse_forcing
+    shift
+    ;;
+  --reverse-sparse)
+    SRC="$REPO/dev/cxx/test_reverse_sparse.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_reverse_sparse
+    KLU=$(Rscript -e 'cfg <- try(get("cvodeConfig", envir = asNamespace("cppDE")), silent = TRUE); if (!inherits(cfg, "try-error") && isTRUE(cfg$klu_available)) cat("-DKLU", cfg$klu_cflags, cfg$klu_libs)' 2>/dev/null || true)
+    shift
+    ;;
+  --bench-adjoint-step)
+    SRC="$REPO/dev/cxx/bench_adjoint_step.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_bench_adjoint_step
+    shift
+    ;;
+  --bench-codual)
+    SRC="$REPO/dev/cxx/bench_codual.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_bench_codual
+    shift
+    ;;
+  --bench-revmem)
+    SRC="$REPO/dev/cxx/bench_revmem.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_bench_revmem
     shift
     ;;
   --err-weights)
