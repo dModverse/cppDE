@@ -282,6 +282,85 @@ void apply_multistep_adjoint(const multistep_operators<Stepper>& ops,
   ops.A.apply_transposed(w_pred.data(), n, w_in);
 }
 
+// ---------------------------------------------------------------------------
+//  The adjoint of one explicit Runge-Kutta step.
+//
+//    X_i    = x + h sum_{j<i} a_ij k_j,   k_i = f(X_i, t + c_i h)
+//    x_out  = x + h sum_i b_i k_i
+//
+//  and backwards, with u_j = J(X_j, t_j)' m_j,
+//
+//    m_i    = h b_i w + h sum_{j>i} a_ji u_j
+//    w_x    = w + sum_i u_i
+//    w_th  += sum_i (df/dp)(X_i, t_i)' m_i
+//
+//  The stage states are not checkpointed, so the step is run forward once in
+//  plain double to recover them. That is the same work the forward step did,
+//  and it is why an explicit method's adjoint costs about twice its step
+//  rather than the three hundred right-hand sides a tape costs.
+// ---------------------------------------------------------------------------
+struct onestep_workspace {
+  std::vector<double> xout, xerr, m, u, x_stage, q;
+  std::vector<std::vector<double> > mm;
+};
+
+template<class Stepper, class System, class AdjTerms>
+void apply_onestep_adjoint(Stepper& st, System& sys,
+                           const double* x0, double t, double dt,
+                           std::size_t n, std::size_t n_phi,
+                           const double* w_out,
+                           const AdjTerms& adj,
+                           double* w_in, double* w_theta,
+                           onestep_workspace& ws,
+                           double* w_out_state = nullptr)
+{
+  constexpr int S = Stepper::n_stages_used;
+
+  ws.xout.assign(n, 0.0);
+  ws.xerr.assign(n, 0.0);
+  std::vector<double> x(x0, x0 + n);
+  st.do_step(sys, x, t, ws.xout, dt, ws.xerr);
+
+  if (w_out_state) for (std::size_t i = 0; i < n; ++i) w_out_state[i] = w_out[i];
+
+  if (ws.mm.size() < static_cast<std::size_t>(S) + 1) ws.mm.resize(S + 1);
+  std::vector<std::vector<double> >& U = ws.mm;
+  for (int i = 1; i <= S; ++i) U[i].assign(n, 0.0);
+
+  for (std::size_t i = 0; i < n; ++i) w_in[i] = w_out[i];
+
+  // Newest stage first: u_j is needed by every earlier stage and by nothing
+  // later, so one pass suffices.
+  for (int i = S; i >= 1; --i) {
+    ws.m.assign(n, 0.0);
+    const double bi = Stepper::tableau_b(i);
+    for (std::size_t k = 0; k < n; ++k) ws.m[k] = dt * bi * w_out[k];
+    for (int j = i + 1; j <= S; ++j) {
+      const double aji = Stepper::tableau_a(j, i);
+      if (aji == 0.0) continue;
+      for (std::size_t k = 0; k < n; ++k) ws.m[k] += dt * aji * U[j][k];
+    }
+
+    // The stage state, rebuilt from the step start and the stage derivatives.
+    ws.x_stage.assign(x0, x0 + n);
+    for (int j = 1; j < i; ++j) {
+      const double aij = Stepper::tableau_a(i, j);
+      if (aij == 0.0) continue;
+      const auto& kj = st.stage_k(j);
+      for (std::size_t k = 0; k < n; ++k) ws.x_stage[k] += dt * aij * kj[k];
+    }
+    const double ti = t + Stepper::tableau_c(i) * dt;
+
+    adj.jac_t_vec(ws.x_stage, ws.m, ti, ws.u);
+    U[i] = ws.u;
+    for (std::size_t k = 0; k < n; ++k) w_in[k] += ws.u[k];
+
+    ws.q.assign(n_phi, 0.0);
+    adj.dfdp_t_vec(ws.x_stage, ws.m, ti, ws.q);
+    for (std::size_t k = 0; k < ws.q.size(); ++k) w_theta[k] += ws.q[k];
+  }
+}
+
 }  // namespace adjoint
 }  // namespace cppde
 

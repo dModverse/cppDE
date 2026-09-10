@@ -38,6 +38,7 @@
 #include <vector>
 
 #include <cppde/cppde.hpp>
+#include <cppde/cppde_adjoint_step.hpp>
 
 using cppde::codual;
 using cppde::dual;
@@ -86,6 +87,37 @@ template<class V>
 static std::pair<model<V>, int> make_system(const std::vector<V>& p) {
   return std::make_pair(model<V>(p), 0);
 }
+
+// What the code generator emits beside the model for a reverse build. Written
+// out here for the same model, so the written step adjoint is checkable
+// without a generated source.
+struct adjoint_terms {
+  std::vector<double> p;
+
+  void jac_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                 const double& t, std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    const double s   = std::sqrt(x[1]);
+    const double ds  = 0.5 / s;                 // d sqrt(x1) / d x1
+    const double ex  = std::exp(-x[0]) * std::cos(t);
+    out[0] = (-p[0] * x[1]) * lam[0] + (p[0] * x[1]) * lam[1]
+           + (-p[3] * ex) * lam[2];
+    out[1] = (-p[0] * x[0]) * lam[0] + (p[0] * x[0] - p[2] * ds) * lam[1]
+           + (p[2] * ds) * lam[2];
+    out[2] = (p[1]) * lam[0] + (-p[1]) * lam[2];
+  }
+
+  void dfdp_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                  const double& t, std::vector<double>& out) const {
+    out.assign(NX + NP, 0.0);
+    const double s  = std::sqrt(x[1]);
+    const double ex = std::exp(-x[0]) * std::cos(t);
+    out[NX + 0] = (-x[0] * x[1]) * lam[0] + (x[0] * x[1]) * lam[1];
+    out[NX + 1] = (x[2]) * lam[0] + (-x[2]) * lam[2];
+    out[NX + 2] = (-s) * lam[1] + (s) * lam[2];
+    out[NX + 3] = (ex) * lam[2];
+  }
+};
 
 static const double X0[NX] = {1.4, 0.9, 0.3};
 static const double P [NP] = {0.7, 0.35, 1.1, 0.25};
@@ -208,6 +240,33 @@ static void reverse_steps(const std::vector<cp_type>& cps, bool tape_stepsize,
 }
 
 // ---------------------------------------------------------------------------
+//  The same trajectory backwards, written rather than recorded. The step size
+//  is frozen here, so this answers the x and theta block and says nothing
+//  about t or h.
+// ---------------------------------------------------------------------------
+
+static void closed_steps(const std::vector<cp_type>& cps,
+                         std::vector<double>& wx, std::vector<double>& wp)
+{
+  std::vector<double> pv(P, P + NP);
+  auto sys = make_system<double>(pv);
+  adjoint_terms adj{pv};
+  cppde::tsit5<double> st;
+  cppde::adjoint::onestep_workspace ws;
+
+  std::vector<double> wphi(NX + NP, 0.0), win(NX, 0.0);
+  for (std::size_t s = cps.size(); s-- > 0;) {
+    const auto& cp = cps[s];
+    cppde::adjoint::apply_onestep_adjoint(
+        st, sys, cp.start_state(), cp.t, cp.dt, NX, NX + NP,
+        wx.data(), adj, win.data(), wphi.data(), ws);
+    wx = win;
+  }
+  wp.assign(NP, 0.0);
+  for (std::size_t j = 0; j < NP; ++j) wp[j] = wphi[NX + j];
+}
+
+// ---------------------------------------------------------------------------
 
 static void compare(const char* name, unsigned n_steps, const double* w,
                     bool tape_stepsize)
@@ -222,6 +281,11 @@ static void compare(const char* name, unsigned n_steps, const double* w,
   std::vector<double> wx(w, w + NX), wp, replayed_end;
   double wt0 = 0.0, wh = 0.0;
   reverse_steps(cps, tape_stepsize, wx, wp, wt0, wh, replayed_end);
+
+  // The written adjoint over the same checkpoints. Only against the frozen
+  // reference: it does not carry the step size, by design.
+  std::vector<double> cx(w, w + NX), cp_par;
+  if (!tape_stepsize) closed_steps(cps, cx, cp_par);
 
   std::printf("%-20s", name);
   for (std::size_t i = 0; i < NX; ++i) std::printf(" %.17g", wx[i]);
@@ -240,6 +304,10 @@ static void compare(const char* name, unsigned n_steps, const double* w,
     else if (j == IT) { got = wt0;        tag = "  dt0"; }
     else              { got = wh;         tag = "  dh"; }
     close(wS, got, std::string(name) + tag);
+    if (!tape_stepsize && j < IT) {
+      const double gotc = (j < NX) ? cx[j] : cp_par[j - NX];
+      close(wS, gotc, std::string(name) + " closed" + tag);
+    }
   }
 
   // The step end must survive recomputation under a different scalar type and,

@@ -411,6 +411,54 @@ private:
 
 public:
   mutable cppde::profiler m_prof;
+
+  // ====================================================================
+  //  The tableau, for a written adjoint.
+  //
+  //  An explicit method's backward recursion is stated in these numbers and
+  //  in nothing else, so it reads them here rather than carrying a copy that
+  //  could drift. Stage 7 is FSAL and carries no weight in the solution, so
+  //  the recursion runs over six.
+  // ====================================================================
+  static constexpr int n_stages_used = 6;
+
+  /// a(i, j) for i > j, both one-based; zero elsewhere.
+  static double tableau_a(int i, int j) {
+    switch (i * 10 + j) {
+      case 21: return a21;
+      case 31: return a31; case 32: return a32;
+      case 41: return a41; case 42: return a42; case 43: return a43;
+      case 51: return a51; case 52: return a52; case 53: return a53;
+      case 54: return a54;
+      case 61: return a61; case 62: return a62; case 63: return a63;
+      case 64: return a64; case 65: return a65;
+      default: return 0.0;
+    }
+  }
+  /// The solution weights, one-based.
+  static double tableau_b(int i) {
+    switch (i) {
+      case 1: return b1; case 2: return b2; case 3: return b3;
+      case 4: return b4; case 5: return b5; case 6: return b6;
+      default: return 0.0;
+    }
+  }
+  /// The nodes, one-based; c1 is zero.
+  static double tableau_c(int i) {
+    switch (i) {
+      case 2: return c2; case 3: return c3; case 4: return c4;
+      case 5: return c5; case 6: return c6;
+      default: return 0.0;
+    }
+  }
+  /// Stage derivative i, one-based, valid after do_step.
+  const state_type& stage_k(int i) const {
+    switch (i) {
+      case 1: return m_k1.m_v; case 2: return m_k2.m_v; case 3: return m_k3.m_v;
+      case 4: return m_k4.m_v; case 5: return m_k5.m_v; case 6: return m_k6.m_v;
+      default: return m_k7.m_v;
+    }
+  }
 };
 
 } // namespace cppde
