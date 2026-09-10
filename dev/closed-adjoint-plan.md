@@ -158,47 +158,173 @@ Entwicklungsreihenfolge, nicht Auslieferungsschnitte.
 
 ### Stufe 0. Zwei Messungen, bevor eine Zeile entsteht
 
-- *Ausdrucksgröße.* `df/dp` und die beiden Kontraktionen für Bachmann (25 Zustände,
-  113 Parameter) und Lang (124 Zustände, 294 Parameter) erzeugen, ohne sie zu benutzen,
-  und Quellgröße und Übersetzungszeit gegen den heutigen Stand messen. Das einzige
-  Risiko, das den Entwurf kippen kann.
-- *Kostenmodell prüfen.* Am `long`-Profil nachrechnen, welcher Anteil der 8,8 µs auf das
-  Replay der Nordsieck-Arithmetik entfällt und welcher auf die eine RHS-Auswertung. Die
-  Schätzung "gut eine Mikrosekunde" steht und fällt damit.
+**Erledigt am 2026-09-10. Beide fallen günstiger aus als der Entwurf angenommen hat.**
+
+*Ausdrucksgröße.* `df/dp` und die beiden Kontraktionen symbolisch abgeleitet und
+emittiert, ohne sie zu benutzen:
+
+| | Zustände | Parameter | `df/dx` | `df/dp` | Ableitung |
+|---|---|---|---|---|---|
+| Bachmann | 25 | 29 | 89 | 67 | 0,1 s |
+| Lang | 124 | 218 | 1175 | 1394 | 2,4 s |
+
+Quellgröße, gegen das, was das Modell heute ohnehin emittiert:
+
+| | rhs + Jacobi heute | `J'λ` + `(df/dp)'λ` neu | Verhältnis |
+|---|---|---|---|
+| Bachmann | 7,5 KB | 11,8 KB | 1,6 |
+| Lang | 132,4 KB | 202,4 KB | 1,5 |
+
+**Die Übersetzungszeit fällt, statt zu steigen.** Auf Lang, eine
+Übersetzungseinheit, Minimum aus drei Läufen:
+
+| | Quelle | `g++ -O2` |
+|---|---|---|
+| die zweite Erzeugung über `codual`, wie heute | 171,3 KB | 5,1 s |
+| die beiden Kontraktionen, in `double` | 202,8 KB | 1,9 s |
+
+Neunzehn Prozent mehr Quelle, 2,7-mal schneller übersetzt. Die
+Expression-Templates des Tape-Typs sind teurer als der Text, den sie ersetzen.
+Bei der Messung ist aufgefallen, dass eine nicht instanziierte codual-Struktur
+968 Byte Objektcode erzeugt statt 210 KB: die Elementfunktionen sind implizit
+inline, ein Vergleich ohne Treiber misst nichts.
+
+*Kostenmodell.* Die beiden Kontraktionen auf Bachmann, je Aufruf, `-O2`:
+
+| | ns |
+|---|---|
+| `J'λ`, 89 Einträge | 10,1 |
+| `(df/dp)'λ`, 67 Einträge | 7,9 |
+| beide zusammen | 18,0 |
+
+Achtzehn Nanosekunden gegen 180 ns für den transponierten Solve und 740 ns für
+`rev_prepare`. **Der geschlossene Schritt-Adjungierte ist damit von der linearen
+Algebra dominiert, nicht von den Kontraktionen**, und landet bei etwa einer
+Mikrosekunde gegen 8,8 heute. Das ist Faktor neun auf dem Rückwärtslauf und
+setzt ihn auf rund das 1,3-fache der Vorwärtsintegration, besser als die
+angesetzten 1,7.
+
+**Der nächste Hebel danach steht damit auch fest:** `rev_prepare` kostet je
+Schritt das Vierfache des Solves, obwohl sich die transponierte Struktur
+zwischen zwei Faktorisierungen nicht ändert.
 
 ### Stufe 1. Die Verifikationslöcher schließen, vor dem Umbau
 
-Der Umbau ist genau dort am riskantesten, wo heute nicht geprüft wird. Drei Löcher, alle
-in `dev/cxx/`:
+**Erledigt am 2026-09-10.** Drei Löcher, alle in `dev/cxx/`, alle zu. Der heutige
+Reverse-Pfad besteht die neue Abdeckung überall dort, wo er sie überhaupt
+annehmen kann, und an der einen Stelle, wo er es nicht kann, war es ein echtes
+Loch im Vollständigkeitskriterium.
 
-- **Ereignisse decken nur bdf und tsit5 ab** (`test_reverse_events.cpp:436-437`). rb4 und
-  adams haben in C++ **keine** Ereignisabdeckung. Genau die beiden bekommen in Stufe 4
-  eine neu geschriebene Saltation.
-- **Forcings haben null C++-Abdeckung.** Nur ein R-Test, auf bdf. `J'λ` ist betroffen,
-  sobald eine Forcing multiplikativ auftritt.
-- **Der dünne Pfad läuft nie durch den Reverse-Stepper.** Der transponierte Kern ist
-  geprüft (`test_sparse_transpose.cpp`), ein KLU-Modell rückwärts nicht.
+**Ereignisse decken jetzt alle vier Verfahren ab** statt bdf und tsit5.
+`test_reverse_events.cpp` bekommt eine `pipeline`-Spezialisierung für rb4 und
+zwei Läufe mehr. adams, rb4 und tsit5 bestehen auf Anhieb. Tape-Breite je
+Schritt, nebenbei gemessen: bdf 249 Knoten, adams 306, rb4 576, tsit5 463.
 
-Dazu die Kleinigkeiten: `bench_codual.cpp:12` und `bench_revmem.cpp:14` nennen
-`run.sh`-Flags, die es nicht gibt (`run.sh:21-71`); sie werden verdrahtet, weil der Bench
-die Wirkung des Umbaus belegen muss. Und `run.sh --record` läuft einmal über alle
-Prüfstände, um den Ist-Stand als Referenzausgabe festzuhalten.
+**Forcings haben eine eigene Abdeckung**, `test_reverse_forcing.cpp`, alle vier
+Verfahren, mit einer Forcing multiplikativ in zwei Gleichungen und additiv in
+einer dritten. Das ist die Form, in der sie in `df/dx` eingeht statt nur in
+`dfdt`, und der Reverse-Pfad trägt sie. Die Carry-Handoff-Prüfung steht dort
+auf 1e-7 statt 1e-9, und der Grund ist das Orakel: unter `dual` maximiert die
+Abbruchregel des Korrektors über die Sensitivitätsspalten und verlässt die
+Iteration an einer leicht anderen Stelle als der Doppelt-Lauf, die Forcing
+verstärkt das auf etwa 3e-9. Keine einzige Adjungierten-Prüfung ist davon
+betroffen.
+
+**Der dünne Pfad läuft jetzt rückwärts**, `test_reverse_sparse.cpp`, dasselbe
+Modell und dieselben Toleranzen wie der dichte Prüfstand, nur mit
+`sparse_lu_tag`. bdf und adams bestehen.
+
+**Ein Fund dabei: rb4 hat auf einer dünnen Jacobi keinen Rückwärtspfad.**
+`rosenbrock4::replay_step` baut sich eine eigene dichte Jacobi und bildet das
+Residuum über jeden Eintrag (`cppde_rosenbrock4.hpp:430-446`), also übersetzt
+ein dünnes rb4-Reverse-Modell nicht. An der R-Oberfläche bestätigt: bdf dünn
+rückwärts übersetzt, rb4 dünn rückwärts bricht im Compiler ab. `cppODE()`
+verweigert die Kombination jetzt vorher, mit Test, und Stufe 3b hebt die
+Verweigerung wieder auf, weil sie das Replay ohnehin ersetzt.
+
+Dazu die Kleinigkeiten: `--bench-codual` und `--bench-revmem` sind verdrahtet,
+sie waren in beiden Benches dokumentiert und existierten nicht. Und
+`run.sh --record` hat den Ist-Stand aller elf Prüfstände festgehalten.
 
 ### Stufe 2. Die erzeugten Kontraktionen
 
-`df/dp` und die beiden Kontraktionen aus `codegen_cvode.py` nach `codegen_cppODE.py`
-heben, mit CSE (`_cse_temps`, `:982-1006`), über `ScalarType` templatisierbar. Neuer
-Schlüssel im Rückgabe-Dict (`:893-906`), Splice in `R/cppODE.R:1550-1557`. Der
-CVODE-Emitter importiert danach aus derselben Quelle statt eine eigene Ableitung zu
-führen. Dabei fällt der fehlende `DiracDelta`-Guard auf (siehe Risiken).
+**Erledigt am 2026-09-10.** `generate_ode_cpp(emit_contractions = TRUE)` emittiert
+`struct adjoint_terms` mit `jac_t_vec` und `dfdp_t_vec`, beide mit CSE, beide
+über `ScalarType` templatisierbar, beide nach Ausgabeslot gruppiert statt
+akkumuliert. `R/cppODE.R` reicht das für jedes Reverse-Modell durch, in `double`,
+neben dem Wertkörper. Ein explizites Verfahren emittiert keine Jacobi und braucht
+für die Integration auch keine, leitet sie für die Kontraktion aber trotzdem ab.
+
+Nachgerechnet, nicht behauptet: `J'λ` gegen die emittierte Jacobi auf 1e-13,
+`(df/dp)'λ` gegen zentrale Differenzen auf 1e-6, der Anfangswertblock exakt null.
+
+**Zwei Generatorfehler dabei behoben, beide älter als dieser Plan.**
+
+*Eine multiplikative Forcing erzeugte nicht übersetzbaren C++.*
+`_generate_jac_code_plain` reichte `forcings_list = []` an den Drucker für die
+Jacobi-Einträge und die CSE-Temps, aber die echte Liste für `dfdt`. Eine Forcing,
+die die Differentiation überlebt, kam damit als undeklarierter Bezeichner heraus.
+Latent, weil jedes Beispiel und jeder Test sie additiv verwendet, wo sie aus
+`df/dx` verschwindet. Regressionstest in `test-ode-methods.R`.
+
+*`Heaviside` brach den Generator ab.* `DiracDelta` hat keinen Drucker. Jede
+Ableitung des ODE-Emitters geht jetzt durch denselben Guard, den
+`codegen_cppFUN.py` seit je hat. Regressionstest in `test-piecewise.R`.
+
+**Offen geblieben:** der CVODE-Emitter führt seine `df/dp`-Ableitung weiterhin
+selbst. Das Zusammenlegen gehört in Stufe 7, wenn ohnehin an beiden Emittern
+gearbeitet wird.
 
 ### Stufe 3. `adjoint_step<Stepper>`, Verfahren für Verfahren
 
-- 3a bdf und adams: Residuum, Nordsieck-Rescale, Pascal-Shift, Tail, Dense-Output.
+**3a bdf und adams: erledigt am 2026-09-10.** `cppde_adjoint_step.hpp`.
+
+Der Entwurf hat sich beim Bauen an einer Stelle gedreht, und zum Besseren. Ein
+Schritt zerfällt in
+
+    zn_pred = A zn_in                    Rescale und Pascal-Shift
+    res(y, zn_pred, theta) = 0           der Korrektor, über die IFT
+    zn_out  = B zn_pred + c acor         der Schwanz, acor = y - zn_pred[0]
+
+und `A`, `B`, `c` wirken **auf den Slot-Index allein**, mit Koeffizienten aus dem
+Carry, für jede Zustandskomponente gleich. Sie werden deshalb nicht von Hand
+transponiert, sondern **aus dem Stepper selbst gelesen**: ein Probe-Stepper,
+dessen Zustände die Slots sind, bekommt die Einheitsmatrix ins
+`[Slot x Komponente]`-Feld und läuft durch dieselben Routinen wie der
+Vorwärtsschritt. Damit kann hier nichts von der Implementierung abweichen, weil
+hier nichts wiederholt wird: geschrieben sind nur die Transponierten und die
+IFT.
+
+Dafür ist `replay_predict` aus `replay_residual` herausgezogen worden, die
+Vorstufe ohne die Auswertung der rechten Seite. Eine Definition, zwei Aufrufer.
+
+**Geprüft** im vorhandenen `test_reverse_step_multistep.cpp`, dem schärfsten
+Orakel im Baum: derselbe Schritt, dieselbe Dual-Referenz, jeder Nordsieck-Slot
+einzeln geseedet, Aufwärmlängen 3/8/20/45/80, Ordnung hoch und runter, Rescale,
+bdf und adams. Der geschriebene Adjungierte trifft die Referenz überall auf
+1e-9.
+
+**Gemessen**, `dev/cxx/bench_adjoint_step.cpp`, derselbe Schritt:
+
+| | Vorwärtsschritt | Tape | geschrieben |
+|---|---|---|---|
+| bdf | 0,141 µs | 1,603 µs (11,4x) | 0,320 µs (2,27x) |
+| adams | 0,157 µs | 2,185 µs (13,9x) | 0,319 µs (2,03x) |
+
+Drei Dinge haben den Weg dorthin gebaut, jedes gemessen statt geraten. Alle
+Spalten in einem Durchlauf statt einer je Spalte, weil die Operatoren
+komponentenweise gleich wirken. Der Probe-Stepper einmal angelegt statt je
+Schritt, denn sein Konstruktor allokiert jeden Slot, den er je brauchen könnte,
+und das war zuerst 78 Prozent des ganzen Pfades. Und ein Zwischenspeicher auf
+dem Carry: über lange Strecken hält ein Lauf Ordnung und Schrittweite, und dann
+sind es dieselben Matrizen.
+
+Ohne Zwischenspeicher liegt der geschriebene Pfad bei 0,64 µs, also immer noch
+2,5-mal schneller als das Tape. Die Trefferquote auf einem echten Lauf ist noch
+zu messen.
+
 - 3b rb4: sechs Stufenlösungen gegen dieselbe Faktorisierung.
 - 3c tsit5: explizite Rückwärtsrekursion und Hermite-Interpolant.
-
-Jede gegen den Vorwärtsmodus geprüft, bevor die nächste beginnt.
 
 ### Stufe 4. Ereignisse und Wurzeln
 

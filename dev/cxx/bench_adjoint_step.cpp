@@ -1,30 +1,15 @@
-// One multistep step backwards, BDF and Adams: stage 3b of dev/adjoint-plan.md.
+// The written step adjoint against the taped one, on the same step.
 //
-// The oracle is the forward mode on the same step. What a multistep method
-// carries across a step boundary is the Nordsieck history and not the state
-// alone, so the sensitivity is that of the map
+// Both compute the same thing and are checked against each other in
+// test_reverse_step_multistep.cpp; this only asks what they cost. The forward
+// step is timed beside them, because the number that matters is the ratio: a
+// reverse mode should cost a small multiple of the thing it differentiates.
 //
-//   (zn_in, theta) -> zn_out,
-//
-// forward as the full matrix S and reverse as w' S for one w. Both differentiate
-// the same discrete step, so they agree to rounding.
-//
-// The corrector is where the two differ in construction and must not differ in
-// result. Forward iterates and peels the tangents by the implicit function
-// theorem at every iteration; reverse puts the solution back and records the
-// equation it solves, closing it by a transposed solve against the same matrix.
-// Neither differentiates the iterates.
-//
-// Covered, for both methods: the unit seeds on every Nordsieck slot and a mixed
-// one, at order 2 through 4 reached by a real controller warm-up, with the order
-// held, raised and lowered, and with a rescale applied.
-//
-// Every number is printed at %.17g, so the output is the assertion as well.
-//
-// Build and run:  dev/cxx/run.sh --reverse-step-multistep
+// Build and run:  dev/cxx/run.sh --bench-adjoint-step
 //
 // Copyright (C) 2026 Simon Beyer
 
+#include <chrono>
 #include <cstdio>
 #include <cmath>
 #include <string>
@@ -400,124 +385,100 @@ static void closed_step(const checkpoint<M>& cp, const std::vector<double>& w,
 
 // ---------------------------------------------------------------------------
 
-template<cppde::multistep_method M>
-static void compare(const char* name, const checkpoint<M>& cp_in, int q_next,
-                    double eta, const std::vector<double>& w,
-                    double t_interp = 0.0)
-{
-  checkpoint<M> cp = cp_in;
-  cp.q_next  = q_next;
-  cp.eta     = eta;
-
-  const std::size_t n  = cp.n_states;
-  const std::size_t nz = static_cast<std::size_t>(cp.carry.q + 1) * n;
-  const unsigned    nd = static_cast<unsigned>(nz + NP);
-
-  std::vector<double> S, fwd_carry;
-  forward_step<M>(cp, q_next, eta, nd, S, fwd_carry, t_interp);
-
-  std::vector<double> wz, wp, rev_carry;
-  reverse_step<M>(cp, w, wz, wp, rev_carry, t_interp);
-
-  // The written adjoint, against the same reference. Not for an observation
-  // inside the step: the dense-output adjoint is its own piece and comes with
-  // the trajectory, not with the step.
-  std::vector<double> cz, cp_par;
-  const bool closed = (t_interp <= 0.0);
-  if (closed) closed_step<M>(cp, w, cz, cp_par);
-
-  check(fwd_carry.size() == rev_carry.size(),
-        std::string(name) + " same carry width");
-  for (std::size_t i = 0; i < fwd_carry.size() && i < rev_carry.size(); ++i)
-    close(fwd_carry[i], rev_carry[i], std::string(name) + " carry " + std::to_string(i));
-
-  std::printf("%-30s q %d -> %d  eta %.3g  |", name, cp.carry.q, q_next, eta);
-  for (std::size_t i = 0; i < wz.size(); ++i) std::printf(" %.17g", wz[i]);
-  std::printf("  |");
-  for (std::size_t j = 0; j < NP; ++j) std::printf(" %.17g", wp[j]);
-  std::printf("\n");
-
-  for (unsigned d = 0; d < nd; ++d) {
-    double wS = 0.0;
-    for (std::size_t r = 0; r < fwd_carry.size(); ++r)
-      wS += (r < w.size() ? w[r] : 0.0) * S[r * nd + d];
-    const double got = (d < nz) ? wz[d] : wp[d - nz];
-    const std::string tag = (d < nz) ? "  dz" + std::to_string(d)
-                                     : "  dp" + std::to_string(d - nz);
-    close(wS, got, std::string(name) + tag);
-    if (closed) {
-      const double gotc = (d < nz) ? cz[d] : cp_par[d - nz];
-      close(wS, gotc, std::string(name) + " closed" + tag);
-    }
+template<class F> static double timeit(F f, int reps, int inner) {
+  double best = 1e30;
+  for (int r = 0; r < reps; ++r) {
+    auto t0 = std::chrono::steady_clock::now();
+    for (int i = 0; i < inner; ++i) f();
+    auto t1 = std::chrono::steady_clock::now();
+    const double us =
+        std::chrono::duration<double, std::micro>(t1 - t0).count() / inner;
+    if (us < best) best = us;
   }
+  return best;
 }
 
 template<cppde::multistep_method M>
-static void run_method(const char* method)
+static void bench_method(const char* name)
 {
-  for (const int warm : {3, 8, 20, 45, 80}) {
-    checkpoint<M> cp;
-    std::vector<double> x;
-    double t = 0.0, dt = 0.0;
-    warm_up<M>(cp, x, t, dt, warm);
+  checkpoint<M> cp;
+  std::vector<double> x;
+  double t = 0.0, dt = 0.0;
+  warm_up<M>(cp, x, t, dt, 45);
 
-    const std::size_t n  = cp.n_states;
-    const std::size_t nz = static_cast<std::size_t>(cp.carry.q + 1) * n;
-
-    // The state the corrector converged to at this step, from the forward run.
-    {
-      std::vector<double> p(P, P + NP);
-      auto sys = make_system<double>(p);
-      stepper_d<M> st;
-      st.set_tolerances(ATOL, RTOL);
-      st.load_carry(cp.carry, n);
-      for (int j = 0; j <= cp.carry.q; ++j)
-        for (std::size_t i = 0; i < n; ++i)
-          st.zn_mut(j)[i] = cp.zn[static_cast<std::size_t>(j) * n + i];
-      std::vector<double> xin(cp.zn.begin(), cp.zn.begin() + n), xo(n), xe(n);
-      st.do_step(sys, xin, cp.t, xo, cp.dt, xe);
-      check(st.newton_converged(),
-            std::string(method) + " the captured step converged");
-      polish_corrector<M>(sys, st, cp.t, xo);
-      cp.y.assign(xo.begin(), xo.end());
-    }
-
-    std::vector<double> wmix(static_cast<std::size_t>(cp.carry.q + 2) * n);
-    for (std::size_t k = 0; k < wmix.size(); ++k)
-      wmix[k] = 0.4 * static_cast<double>(k % 3) - 0.5;
-
-    const std::string tag = std::string(method) + " warm" + std::to_string(warm);
-    check(nz >= 2 * n, tag + " reached order two or higher");
-
-    // Every Nordsieck slot on its own, so no column of the carry Jacobian hides.
-    for (std::size_t r = 0; r < nz && r < 4 * n; ++r) {
-      std::vector<double> e(nz + n, 0.0);
-      e[r] = 1.0;
-      compare<M>((tag + " e" + std::to_string(r)).c_str(), cp, cp.carry.q, 1.0, e);
-    }
-
-    // Seeded through the dense output rather than on the carry, which is how an
-    // observation inside a step reaches the step.
-    compare<M>((tag + " interp mid").c_str(), cp, cp.carry.q, 1.0, wmix,
-               cp.t + 0.4 * cp.dt);
-    compare<M>((tag + " interp end").c_str(), cp, cp.carry.q, 1.0, wmix,
-               cp.t + cp.dt);
-
-    compare<M>((tag + " mixed").c_str(),   cp, cp.carry.q,     1.0,  wmix);
-    compare<M>((tag + " rescale").c_str(), cp, cp.carry.q,     0.83, wmix);
-    compare<M>((tag + " order up").c_str(), cp, cp.carry.q + 1, 1.0, wmix);
-    if (cp.carry.q > 1)
-      compare<M>((tag + " order down").c_str(), cp, cp.carry.q - 1, 1.0, wmix);
+  const std::size_t n = cp.n_states;
+  {
+    std::vector<double> p(P, P + NP);
+    auto sys = make_system<double>(p);
+    stepper_d<M> st;
+    st.set_tolerances(ATOL, RTOL);
+    st.load_carry(cp.carry, n);
+    for (int j = 0; j <= cp.carry.q; ++j)
+      for (std::size_t i = 0; i < n; ++i)
+        st.zn_mut(j)[i] = cp.zn[static_cast<std::size_t>(j) * n + i];
+    std::vector<double> xin(n), xout(n), xerr(n);
+    for (std::size_t i = 0; i < n; ++i) xin[i] = st.zn_mut(0)[i];
+    st.do_step(sys, xin, cp.t, xout, cp.dt, xerr);
+    cp.y = xout;
   }
+  cp.q_next = cp.carry.q;
+  cp.eta    = 1.0;
+
+  std::vector<double> w(static_cast<std::size_t>(cp.carry.q + 1) * n, 0.0);
+  for (std::size_t i = 0; i < w.size(); ++i) w[i] = 0.3 + 0.05 * i;
+
+  // The forward step, as the unit the other two are quoted in.
+  std::vector<double> pv(P, P + NP);
+  auto sysd = make_system<double>(pv);
+  stepper_d<M> fwd;
+  fwd.set_tolerances(ATOL, RTOL);
+  std::vector<double> xin(n), xout(n), xerr(n);
+  const double t_fwd = timeit([&]{
+    fwd.load_carry(cp.carry, n);
+    for (int j = 0; j <= cp.carry.q; ++j)
+      for (std::size_t i = 0; i < n; ++i)
+        fwd.zn_mut(j)[i] = cp.zn[static_cast<std::size_t>(j) * n + i];
+    for (std::size_t i = 0; i < n; ++i) xin[i] = fwd.zn_mut(0)[i];
+    fwd.do_step(sysd, xin, cp.t, xout, cp.dt, xerr);
+  }, 7, 2000);
+
+  std::vector<double> wz, wp, carry_out, cz, cpar;
+  const double t_tape = timeit([&]{ reverse_step<M>(cp, w, wz, wp, carry_out); }, 7, 2000);
+  const double t_closed = timeit([&]{ closed_step<M>(cp, w, cz, cpar); }, 7, 2000);
+
+  // What the probe alone costs inside the written path.
+  struct null_rhs {
+    void operator()(const std::vector<double>&, std::vector<double>& d,
+                    const double&) const { d.assign(d.size(), 0.0); }
+  };
+  struct null_sys { null_rhs first; } nsys;
+  cppde::adjoint::multistep_probe<stepper_d<M>> held;
+  cppde::adjoint::multistep_operators<stepper_d<M>> ops_out;
+  const double t_probe = timeit([&]{
+    held.valid = false;
+    held.build(cp.carry, cp.dt, 0.0,
+               [&](stepper_d<M>& probe) { cp.apply_tail(probe, nsys); }, ops_out);
+  }, 7, 2000);
+  double rl1 = 0, gam = 0, hh = 0;
+  const double t_pre = timeit([&]{
+    cppde::adjoint::probe_pre(held.pre, cp.carry, cp.dt, ops_out.A, rl1, gam, hh);
+  }, 7, 2000);
+  const double t_tailp = timeit([&]{
+    cppde::adjoint::probe_tail(held.tail_probe, cp.carry, cp.dt,
+        [&](stepper_d<M>& probe) { cp.apply_tail(probe, nsys); },
+        ops_out.B, ops_out.c, ops_out.q_out);
+  }, 7, 2000);
+
+  std::printf("%-7s q %d   forward %6.3f us   taped %6.3f us (%5.1fx)   "
+              "written %6.3f us (%5.2fx)   probe %6.3f = pre %6.3f + tail %6.3f\n",
+              name, cp.carry.q, t_fwd, t_tape, t_tape / t_fwd,
+              t_closed, t_closed / t_fwd, t_probe, t_pre, t_tailp);
 }
 
 int main() {
-  std::printf("%-30s %-22s %s\n", "case", "order and rescale",
-              "| w' dzn_out/dzn_in | w' dzn_out/dtheta");
-
-  run_method<cppde::multistep_method::bdf>("bdf");
-  run_method<cppde::multistep_method::adams>("adams");
-
+  using cppde::multistep_method;
+  bench_method<multistep_method::bdf>("bdf");
+  bench_method<multistep_method::adams>("adams");
   std::printf(g_failures == 0 ? "\nOK\n" : "\n%d FAILURES\n", g_failures);
   return g_failures == 0 ? 0 : 1;
 }

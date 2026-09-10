@@ -1298,6 +1298,50 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   //  cotangent is complete and the solve runs on a partial one.
   // ====================================================================
 
+  // ====================================================================
+  //  replay_predict: everything a step does to the Nordsieck history before
+  //  its corrector, and the coefficients that follow from it. Returns rl1,
+  //  with m_h and m_gamma set.
+  //
+  //  Split out of replay_residual because a written step adjoint needs the
+  //  same transform without a system to evaluate: applied to a unit slot it
+  //  gives one column of the matrix the adjoint transposes. One definition,
+  //  so the two cannot drift apart.
+  // ====================================================================
+  time_type replay_predict(size_t n, time_type dt_s)
+  {
+    if (m_nst > 0) {
+      if (std::abs(dt_s - m_hscale) > 1e-14 * std::max(1.0, std::abs(m_hscale))) {
+        m_eta = dt_s / m_hscale;
+        ndfRescale();
+      }
+      m_h = m_hscale;
+    } else {
+      m_h = dt_s;
+      if (m_hscale == 0.0) m_hscale = dt_s;
+    }
+
+    ndfPredict(n);
+
+    // Both families solve the same equation with different coefficients, so the
+    // residual is one formula: gamma = h * rl1 in either case.
+    time_type rl1;
+    if constexpr (Method == multistep_method::adams) {
+      adams_set_coefficients(m_q, m_qwait, m_h, m_tau, m_l, m_tq);
+      rl1 = time_type(1.0) / m_l[1];
+    } else {
+      ndfSet();
+      const double kappa_q = m_use_ndf_kappa ? ndf_constants::NDF_KAPPA[m_q] : 0.0;
+      rl1 = time_type(1.0) / (m_l[1] * time_type(1.0 - kappa_q));
+    }
+    m_gamma = m_h * rl1;
+    return rl1;
+  }
+
+  // The correction coefficients the tail maps acor back through, valid after
+  // replay_predict.
+  const time_type* nordsieck_l() const { return m_l.data(); }
+
   template<class System, class TimeArg>
   void replay_residual(System& system, const state_type& x, TimeArg t, TimeArg dt,
                        const state_type& y, state_type& res)
@@ -1315,32 +1359,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     const size_t n = x.size();
     resize_impl(x);
 
-    if (m_nst > 0) {
-      if (std::abs(dt_s - m_hscale) > 1e-14 * std::max(1.0, std::abs(m_hscale))) {
-        m_eta = dt_s / m_hscale;
-        ndfRescale();
-      }
-      m_h = m_hscale;
-    } else {
-      m_h = dt_s;
-      if (m_hscale == 0.0) m_hscale = dt_s;
-    }
-
-    ndfPredict(n);
-
-    // Both families solve the same equation with different coefficients, so the
-    // residual below is one formula: gamma = h * rl1 in either case.
-    time_type rl1;
-    if constexpr (Method == multistep_method::adams) {
-      adams_set_coefficients(m_q, m_qwait, m_h, m_tau, m_l, m_tq);
-      rl1 = time_type(1.0) / m_l[1];
-    } else {
-      ndfSet();
-      const double kappa_q = m_use_ndf_kappa ? ndf_constants::NDF_KAPPA[m_q] : 0.0;
-      rl1 = time_type(1.0) / (m_l[1] * time_type(1.0 - kappa_q));
-    }
-    m_gamma = m_h * rl1;
-
+    const time_type rl1 = replay_predict(n, dt_s);
     const time_type t_new = t_s + m_h;
     deriv_func(y, m_ftemp.m_v, value_type(t_new));
 
