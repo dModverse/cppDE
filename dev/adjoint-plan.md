@@ -74,6 +74,10 @@ Schichten bis zum Skalar von `normL2`.
   Reverse-Pfad als Testartefakt, siehe unten.
 - Der Weg ist ein **Reverse-Skalartyp**, nicht handgeschriebene Adjoint-Gleichungen pro Stepper.
   Was dafür zusätzlich templatisiert werden muss, wird templatisiert.
+  **Gefallen am 2026-09-10**, nachdem der Profiler das Tape mit 90 Prozent des
+  Rückwärtslaufs ausgewiesen hat und die Steuerungskette draußen ist. Der Nachfolgeplan
+  `dev/closed-adjoint-plan.md` ersetzt es durch erzeugte Kontraktionen und geschriebene
+  Schritt-Adjungierte.
 - cppDE bekommt einen Branch `devel-reverseAD`; dMod2 hat ihn bereits. Beide stehen am 2026-09-07
   auf ihrem master, die Optimierer-Arbeit ist dort gelandet. `sync-devel.yaml` merged in dMod2 jeden
   master-Push nach `devel-reverseAD` und legt bei Konflikt ein Issue an, statt den Branch zu
