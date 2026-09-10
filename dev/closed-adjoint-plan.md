@@ -323,8 +323,40 @@ Ohne Zwischenspeicher liegt der geschriebene Pfad bei 0,64 µs, also immer noch
 2,5-mal schneller als das Tape. Die Trefferquote auf einem echten Lauf ist noch
 zu messen.
 
-- 3b rb4: sechs Stufenlösungen gegen dieselbe Faktorisierung.
-- 3c tsit5: explizite Rückwärtsrekursion und Hermite-Interpolant.
+**3c tsit5: erledigt am 2026-09-10.** Die Rückwärtsrekursion eines expliziten
+Verfahrens steht in seiner Tableau und sonst nirgends, also gibt `tsit5` seine
+Koeffizienten heraus statt dass der Adjungierte eine zweite Abschrift trägt.
+Die Stufenzustände sind nicht gecheckpointet, also läuft der Schritt einmal in
+`double` vorwärts, um sie zu holen, und die Rekursion kontrahiert danach `J'`
+und `(df/dp)'` je Stufe. Stufe 7 ist FSAL und trägt keine Lösung, die Rekursion
+läuft also über sechs.
+
+Geprüft in `test_reverse_step.cpp` über einen und über vier Schritte, gegen die
+eingefrorene Dual-Referenz. Der Prüfstand beißt: eine relative Störung von 1e-6
+an einem einzigen Koeffizienten bricht vierzehn Zusicherungen.
+
+**3d. Die Verdrahtung in die Trajektorie. Fehlte im Plan.**
+
+Die Stufenliste sprang von den Schritt-Adjungierten zu den Ereignissen, aber
+dazwischen liegt das Stück, ohne das kein Solve den geschriebenen Adjungierten
+je benutzt und die zweite Abnahmezahl gar nicht messbar ist.
+
+`closed_trajectory<Stepper>` läuft denselben `trajectory_store` rückwärts wie
+`trajectory_recorder::sweep`, aber ohne Tape. Je Schritt: die Beobachtungen im
+Schritt über den Dense-Output einseeden, den Schritt-Adjungierten anwenden, den
+Carry an den vorigen Schritt reichen, `wp` aufsummieren.
+
+Der Dense-Output-Adjungierte fällt dabei mit ab, statt hingeschrieben zu werden:
+der Tail-Probe hat nach seinem Durchlauf einen gültigen Interpolanten über `B`,
+also gibt `eval_dense_into(t_obs, .)` auf ihm unmittelbar die Zeile
+`d x_interp / d (zn_pred, acor)`. Eine Auswertung je Beobachtung, exakt, und
+wieder nichts wiederholt.
+
+Zuerst ohne Ereignisse, was für die Abnahmemessung reicht, denn Bachmann hat
+keine. Die Ereignisgrenzen kommen mit Stufe 4.
+
+- 3b rb4: sechs Stufenlösungen gegen dieselbe Faktorisierung. Hebt zugleich die
+  Verweigerung von dünn plus rb4 plus reverse aus Stufe 1 wieder auf.
 
 ### Stufe 4. Ereignisse und Wurzeln
 
