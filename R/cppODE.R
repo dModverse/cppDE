@@ -115,17 +115,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   is_explicit  <- function(m) m %in% c("tsit5")
   is_rosenbrock <- function(m) m %in% c("rosenbrock4")
 
-  # rosenbrock4's taped replay builds its own dense Jacobian and forms the
-  # residual over every entry, so a sparse model has no backward path through
-  # it. The written adjoint has one, and takes every model without an
-  # intervention; what is left is the combination that still needs the tape.
-  if (is_reverse && identical(method, "rosenbrock4") && isTRUE(sparse) &&
-      (!is.null(events) || !is.null(rootfunc)))
-    stop("method = \"rb4\" with sparse = TRUE and an intervention has no ",
-         "reverse mode: that combination still replays on a tape, which takes ",
-         "a dense Jacobian only. Use sparse = FALSE, or another method.",
-         call. = FALSE)
-
   # The reverse trajectory checkpoints inside the dense loop; the controlled
   # loop steps in place and clips to the next output time, where a checkpoint
   # would need the state before the step rather than after it.
@@ -339,14 +328,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # signature is tied to the stepper's matrix type.
   use_sparse <- isTRUE(codegen_result$use_sparse)
 
-  # The same refusal as above, for the case where the generator decided
-  # sparsity rather than the caller.
-  if (use_sparse && is_reverse && identical(method, "rosenbrock4") &&
-      (!is.null(events) || !is.null(rootfunc)))
-    stop("method = \"rb4\" with an intervention has no reverse mode on a ",
-         "sparse Jacobian, and this model was found sparse. Pass ",
-         "sparse = FALSE, or another method.", call. = FALSE)
-
   if (use_sparse) {
     stats <- codegen_result$sparsity_stats
     message(sprintf("Sparse Jacobian detected (%dx%d, %d nnz, %.3f%% sparse)",
@@ -385,21 +366,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         rhs_dict = as.list(setNames(rhs, variables))
       )
       rev_event_code <- paste(rev_event_lines, collapse = "\n")
-
-      # What a written jump adjoint asks the model for. Plain double, beside
-      # the contractions of f and for the same reason.
-      event_adj_code <- paste(codegen$generate_event_code(
-        events_df = events,
-        states_list = variables,
-        params_list = params,
-        n_states = n_variables,
-        num_type = numType,
-        ad_level = numLevel,
-        arena = numArena,
-        forcings_list = forcings,
-        rhs_dict = as.list(setNames(rhs, variables)),
-        emit_adjoint = TRUE
-      ), collapse = "\n")
     }
 
     ## Fixed-event times as plain-double expressions over the flat [states, params]
@@ -408,6 +374,25 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     event_time_exprs <- codegen$fixed_event_time_exprs(
       events_df = events, states_list = variables, params_list = params,
       n_states = n_variables, forcings_list = forcings)
+  }
+
+  # What a written jump adjoint asks the model for. Plain double, beside the
+  # contractions of f and for the same reason. Emitted for every reverse model:
+  # a rootfunc can jump too, and a trajectory that always has the struct has one
+  # shape rather than two.
+  if (is_reverse) {
+    event_adj_code <- paste(codegen$generate_event_code(
+      events_df = events,
+      states_list = variables,
+      params_list = params,
+      n_states = n_variables,
+      num_type = numType,
+      ad_level = numLevel,
+      arena = numArena,
+      forcings_list = forcings,
+      rhs_dict = as.list(setNames(rhs, variables)),
+      emit_adjoint = TRUE
+    ), collapse = "\n")
   }
 
   # --- Generate rootfunc code if needed ---
@@ -1274,10 +1259,10 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
 
-  # A written step adjoint replaces the tape wherever it is complete, which is
-  # every method without an intervention. An intervention's boundary map is
-  # stage 4 of dev/closed-adjoint-plan.md and still replays.
-  use_written <- is_reverse && is.null(events) && is.null(rootfunc)
+  # A written step adjoint replaces the tape everywhere: every method, and an
+  # intervention too, whose boundary is the restart and the saltation written
+  # out rather than replayed.
+  use_written <- is_reverse
   # Both one-step families walk the same trajectory; it branches inside on
   # whether the stages are linear solves.
   written_onestep <- is_explicit(method) || is_rosenbrock(method)
@@ -1373,22 +1358,25 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       # a model with an intervention still takes.
       if (use_written) c(
         "  {",
+        "    auto _cl_sys = std::make_pair(sys, jac);",
         if (written_onestep) c(
           sprintf("    cppde::adjoint::closed_onestep_trajectory<%s> _cl;", rev_stepper_type),
-          sprintf("    %s _cl_st;", rev_stepper_type),
-          "    auto _cl_sys = std::make_pair(sys, jac);")
+          sprintf("    %s _cl_st;", rev_stepper_type))
         else
           sprintf("    cppde::adjoint::closed_multistep_trajectory<%s> _cl;", rev_stepper_type),
         "    _cl.trace_lambda(args.adj_trace);",
         "    adjoint_terms _adj(_theta, F);",
+        "    event_adjoint_terms _eadj(_theta, F);",
+        "    auto _cl_jmp = cppde::adjoint::make_jump_terms(",
+        "        _cl_sys, _eadj, fixed_events, root_events);",
         "    for (int c = 0; c < n_seed; ++c) {",
         "      for (int o = 0; o < n_out; ++o)",
         sprintf("        for (int i = 0; i < %d; ++i)", n_variables),
         sprintf("          _seed_col[(size_t)o * %d + i] =", n_variables),
         sprintf("              args.seed[o + (size_t)n_out * (i + (size_t)%d * c)];", n_variables),
         "      _cl.sweep(_rev_store, (size_t)n_phi_rows, _seed_col.data(),",
-        if (written_onestep) "                _cl_sys, _adj, _cl_st);"
-        else                 "                _adj, _rev_solver);",
+        if (written_onestep) "                _cl_sys, _adj, _cl_st, _cl_jmp);"
+        else                 "                _adj, _rev_solver, _cl_jmp);",
         sprintf("      for (int i = 0; i < %d; ++i)", n_variables),
         "        res.adjoint[i + (size_t)n_phi_rows * c] = _cl.wx0()[i] + _cl.wp()[i];",
         sprintf("      for (int j = %d; j < n_phi_rows; ++j)", n_variables),

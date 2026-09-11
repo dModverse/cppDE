@@ -79,19 +79,42 @@ test_that("the reverse mode carries events, roots and forcings", {
           d_amt = 0.4, t_dose = 1.0)
   fc <- list(u = data.frame(time = c(0, 2, 5), value = c(0.1, 0.25, 0.05)))
 
-  mf <- cppODE(eq, events = ev, forcings = "u", modelname = "rev_ev_f", deriv = TRUE)
-  mr <- cppODE(eq, events = ev, forcings = "u", modelname = "rev_ev_r", derivMode = "reverse")
+  for (m in c("bdf", "adams", "rb4", "tsit5")) {
+    mf <- cppODE(eq, events = ev, forcings = "u", method = m,
+                 modelname = paste0("rev_ev_f_", m), deriv = TRUE)
+    mr <- cppODE(eq, events = ev, forcings = "u", method = m,
+                 modelname = paste0("rev_ev_r_", m), derivMode = "reverse")
 
-  fwd <- do.call(solveODE, c(list(mf, times, p, forcings = fc), tol))
-  # Both jumps have to be in the run, or the test proves nothing.
-  expect_gt(nrow(fwd$variable), length(times))
+    fwd <- do.call(solveODE, c(list(mf, times, p, forcings = fc), tol))
+    # Both jumps have to be in the run, or the test proves nothing.
+    expect_gt(nrow(fwd$variable), length(times))
 
-  W   <- seed_for(fwd)
-  rev <- do.call(solveODE, c(list(mr, times, p, forcings = fc, seed = W), tol))
+    W   <- seed_for(fwd)
+    rev <- do.call(solveODE, c(list(mr, times, p, forcings = fc, seed = W), tol))
 
-  expect_equal(rev$variable, fwd$variable, tolerance = 1e-6)
-  ref <- contract(fwd$sens1, W)[, 1]
-  expect_equal(unname(rev$adjoint[names(ref), 1]), unname(ref), tolerance = 1e-5)
+    expect_equal(rev$variable, fwd$variable, tolerance = 1e-6, info = m)
+    ref <- contract(fwd$sens1, W)[, 1]
+    expect_equal(unname(rev$adjoint[names(ref), 1]), unname(ref),
+                 tolerance = 1e-5, info = m)
+  }
+})
+
+test_that("a sparse model jumps backwards too", {
+  ev <- data.frame(var = "A", time = "t_dose", value = "d_amt",
+                   method = "add", stringsAsFactors = FALSE)
+  pe <- c(pars, t_dose = 1.0, d_amt = 0.4)
+  for (m in c("bdf", "rb4")) {
+    mf <- cppODE(eqns, events = ev, method = m, sparse = TRUE,
+                 modelname = paste0("rev_sp_ev_f_", m), deriv = TRUE)
+    mr <- cppODE(eqns, events = ev, method = m, sparse = TRUE,
+                 modelname = paste0("rev_sp_ev_r_", m), derivMode = "reverse")
+    fwd <- do.call(solveODE, c(list(mf, times, pe), tol))
+    W   <- seed_for(fwd)
+    rv  <- do.call(solveODE, c(list(mr, times, pe, seed = W), tol))
+    ref <- contract(fwd$sens1, W)[, 1]
+    expect_equal(unname(rv$adjoint[names(ref), 1]), unname(ref),
+                 tolerance = 1e-5, info = m)
+  }
 })
 
 test_that("the reverse mode goes through the batch entry", {
@@ -129,14 +152,6 @@ test_that("the seed and the mode have to agree", {
   expect_error(cppODE(eqns, modelname = "rev_no2nd", derivMode = "reverse",
                       deriv2 = TRUE),
                "second order")
-  # The Rosenbrock replay takes a dense Jacobian only. The written adjoint does
-  # not replay, so what is refused here is the combination that still does.
-  expect_error(cppODE(eqns, modelname = "rev_rb4_sparse_ev", derivMode = "reverse",
-                      method = "rb4", sparse = TRUE,
-                      events = data.frame(var = "A", time = 1, value = 0.1,
-                                          method = "add",
-                                          stringsAsFactors = FALSE)),
-               "no reverse mode")
 })
 
 test_that("a written Rosenbrock adjoint carries a multiplicative forcing", {

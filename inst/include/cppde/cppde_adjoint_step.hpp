@@ -33,10 +33,13 @@
 #ifndef CPPDE_ADJOINT_STEP_HPP
 #define CPPDE_ADJOINT_STEP_HPP
 
+#include <cmath>
 #include <cstddef>
 #include <type_traits>
 #include <vector>
 
+#include <cppde/cppde_dual_math.hpp>
+#include <cppde/cppde_events.hpp>
 #include <cppde/cppde_profiler.hpp>
 
 // The hot loops here run over buffers that are always distinct. Saying so is
@@ -378,6 +381,257 @@ void apply_multistep_adjoint(const multistep_operators<Stepper>& ops,
                               w_in, w_theta, ws, w_out_state);
 }
 
+/// What a trajectory needs to take a jump apart: the right-hand side, the
+/// model's derivatives of the event expressions, and the events themselves.
+/// A model without any passes `no_jumps`, and the boundary compiles out.
+struct no_jumps { static constexpr bool active = false; };
+
+template<class System, class EvAdj, class FixedEvents, class RootEvents>
+struct jump_terms {
+  static constexpr bool active = true;
+  System& sys;
+  const EvAdj& eadj;
+  const FixedEvents& fixed;
+  const RootEvents& root;
+};
+
+template<class System, class EvAdj, class FixedEvents, class RootEvents>
+jump_terms<System, EvAdj, FixedEvents, RootEvents>
+make_jump_terms(System& s, const EvAdj& e, const FixedEvents& f,
+                const RootEvents& r) { return {s, e, f, r}; }
+
+/// The restart, transposed. initialize() builds the whole Nordsieck history out
+/// of one state, zn[0] = x and zn[1] = h f(x, t) with the rest zero, so the
+/// history's cotangent collapses onto that state and nothing is left above it.
+/// The trajectory start and every event boundary apply the same map.
+template<class AdjTerms>
+void collapse_restart(const std::vector<double>& w_carry, std::size_t n,
+                      const std::vector<double>& x0, double t0, double h0,
+                      const AdjTerms& adj, double* w_state, double* w_theta,
+                      std::vector<double>& mu, std::vector<double>& jv)
+{
+  for (std::size_t i = 0; i < n; ++i)
+    w_state[i] = (i < w_carry.size()) ? w_carry[i] : 0.0;
+  if (w_carry.size() < 2 * n) return;
+  mu.assign(w_carry.begin() + static_cast<std::ptrdiff_t>(n),
+            w_carry.begin() + static_cast<std::ptrdiff_t>(2 * n));
+  adj.jac_t_vec(x0, mu, t0, jv);
+  for (std::size_t i = 0; i < n; ++i) w_state[i] += h0 * jv[i];
+  adj.dfdp_t_vec_axpy(x0, mu, t0, h0, w_theta);
+}
+
+// ---------------------------------------------------------------------------
+//  The adjoint of one jump.
+//
+//  The engine carries a discontinuity across on a Heun sandwich: a forward
+//  shift to the event surface, the resets, a backward shift to the grid time.
+//  The shift is by the event time's own residual, whose value is subtracted off
+//  before it is used, so it is numerically zero and only its derivative
+//  survives. In value the jump is therefore a jump, and the sandwich collapses
+//  to the classical saltation:
+//
+//    dx = R'(dx_before + f_before s) - f_after s
+//
+//  with R the resets and s the residual's differential. For a root event
+//  s = -(grad g . dx + dg/dp . dp) / g_dot, for a fixed one it is the
+//  differential of the event's time. The second-order correction of the root's
+//  dt* multiplies dt* itself and drops with it.
+//
+//  So a jump's adjoint needs the right-hand side at the two ends and the model's
+//  own derivatives of the event expressions. It needs no Jacobian: every term
+//  the shifts would have contributed carries a factor that is zero.
+// ---------------------------------------------------------------------------
+struct jump_workspace {
+  std::vector<double> fb, fa, g, wy;
+  std::vector<std::vector<double> > path;
+};
+
+/// One reset, transposed. `w_z` is the cotangent on the state it wrote, `w_y`
+/// the one on the state it read, which starts as a copy of `w_z`.
+///     Replace   z[k] = h(y, t)
+///     Add       z[k] = y[k] + h(y, t)
+///     Multiply  z[k] = y[k] * h(y, t)
+template<class GradX, class GradP>
+void reset_transpose(int k, cppde::detail::EventMethod method, double h,
+                     int idx,
+                     const std::vector<double>& y, double t, std::size_t n,
+                     const double* w_z, double* w_y, double* w_theta,
+                     GradX&& dh_dx, GradP&& dh_dp_axpy, std::vector<double>& g)
+{
+  if (k < 0) return;
+  const double wk = w_z[k];
+  double c = 1.0;
+  using cppde::detail::EventMethod;
+  switch (method) {
+    case EventMethod::Replace:  w_y[k] -= wk; break;
+    case EventMethod::Add:      break;
+    case EventMethod::Multiply: w_y[k] += wk * (h - 1.0); c = y[k]; break;
+  }
+  if (wk == 0.0) return;
+  dh_dx(idx, y, t, g);
+  for (std::size_t i = 0; i < n; ++i) w_y[i] += wk * c * g[i];
+  dh_dp_axpy(idx, y, t, wk * c, w_theta);
+}
+
+/// A batch of root events, which share one surface and one dt*.
+template<class System, class RootEvents, class EvAdj>
+void apply_root_jump_adjoint(const std::vector<double>& x_before,
+                             const std::vector<double>& x_after,
+                             double t, const RootEvents& root_events,
+                             const std::vector<cppde::detail::TriggeredEvent>& triggered,
+                             System& sys, const EvAdj& eadj, std::size_t n,
+                             const double* w_out, double* w_in, double* w_theta,
+                             jump_workspace& ws)
+{
+  ws.fb.assign(n, 0.0);
+  sys.first(x_before, ws.fb, t);
+
+  // Which event dt* came from, picked the way the forward run picks it: the
+  // first triggered, non-terminal one whose gradients are there.
+  std::size_t src = triggered.size();
+  double g_dot = 0.0;
+  for (std::size_t j = 0; j < triggered.size(); ++j) {
+    const auto& evt = root_events[triggered[j].index];
+    if (evt.terminal) continue;
+    if (evt.dg_dx && evt.dg_dt) {
+      ws.g.assign(n, 0.0);
+      evt.dg_dx(x_before, t, ws.g);
+      double gd = evt.dg_dt(x_before, t);
+      for (std::size_t i = 0; i < n; ++i) gd += ws.g[i] * ws.fb[i];
+      if (std::abs(gd) >= 1e-15) { src = j; g_dot = gd; }
+      break;
+    }
+  }
+  const bool shifted = (src < triggered.size());
+
+  double w_s = 0.0;
+  if (shifted) {
+    ws.fa.assign(n, 0.0);
+    sys.first(x_after, ws.fa, t);
+    for (std::size_t i = 0; i < n; ++i) w_s -= ws.fa[i] * w_out[i];
+  }
+
+  // The resets, every one reading the same pre-jump state.
+  for (std::size_t i = 0; i < n; ++i) w_in[i] = w_out[i];
+  for (std::size_t j = triggered.size(); j-- > 0;) {
+    const std::size_t idx = triggered[j].index;
+    const auto& evt = root_events[idx];
+    if (evt.terminal) continue;
+    const double h = (evt.state_index >= 0 && evt.value_func)
+                   ? evt.value_func(x_before, t) : 0.0;
+    reset_transpose(
+        evt.state_index, evt.method, h, static_cast<int>(idx), x_before, t, n,
+        w_out, w_in, w_theta,
+        [&](int e, const std::vector<double>& y, double tt, std::vector<double>& o)
+          { eadj.root_dh_dx(e, y, tt, o); },
+        [&](int e, const std::vector<double>& y, double tt, double sc, double* o)
+          { eadj.root_dh_dp_axpy(e, y, tt, sc, o); },
+        ws.g);
+  }
+
+  if (!shifted) return;
+  for (std::size_t i = 0; i < n; ++i) w_s += ws.fb[i] * w_in[i];
+
+  // s = -(grad g . dx + dg/dp . dp) / g_dot
+  const std::size_t idx = triggered[src].index;
+  const double c = -w_s / g_dot;
+  ws.g.assign(n, 0.0);
+  root_events[idx].dg_dx(x_before, t, ws.g);
+  for (std::size_t i = 0; i < n; ++i) w_in[i] += c * ws.g[i];
+  eadj.root_dg_dp_axpy(static_cast<int>(idx), x_before, t, c, w_theta);
+}
+
+/// The fixed events at one time, each its own sandwich, applied in order. The
+/// last of them carries the root resets a jump switched on.
+template<class System, class FixedEvents, class RootEvents, class EvAdj>
+void apply_fixed_jump_adjoint(const std::vector<double>& x_before,
+                              double t, const FixedEvents& fixed_events,
+                              const RootEvents& root_events,
+                              const std::vector<std::size_t>& switched,
+                              System& sys, const EvAdj& eadj, std::size_t n,
+                              const double* w_out, double* w_in, double* w_theta,
+                              jump_workspace& ws)
+{
+  // Which of them fire here, and which is last: the same test the engine makes.
+  std::vector<int> fired;
+  for (std::size_t j = 0; j < fixed_events.size(); ++j)
+    if (std::abs(static_cast<double>(fixed_events[j].time) - t) < 1e-14)
+      fired.push_back(static_cast<int>(j));
+
+  // The value path through the resets, which the store does not keep: a jump of
+  // several events runs one sandwich each, and every one reads what the last
+  // left. In value a sandwich is its reset, so this is the reset chain.
+  const std::size_t n_steps = fired.size() + switched.size();
+  ws.path.assign(n_steps + 1, std::vector<double>());
+  ws.path[0] = x_before;
+  std::size_t s = 0;
+  for (std::size_t j = 0; j < fired.size(); ++j, ++s) {
+    ws.path[s + 1] = ws.path[s];
+    cppde::detail::apply_event_action_fixed(ws.path[s + 1], ws.path[s],
+                                            fixed_events[fired[j]]);
+  }
+  for (std::size_t j = 0; j < switched.size(); ++j, ++s) {
+    ws.path[s + 1] = ws.path[s];
+    cppde::detail::apply_event_action(ws.path[s + 1], ws.path[s], t,
+                                      root_events[switched[j]]);
+  }
+
+  // Backwards through the same chain. The switched resets ride on the last
+  // sandwich's surface, so they sit inside its shift rather than beside it.
+  std::vector<double> w(w_out, w_out + n);
+  ws.wy.assign(n, 0.0);
+  for (std::size_t j = switched.size(); j-- > 0;) {
+    const std::size_t p = fired.size() + j;
+    const auto& evt = root_events[switched[j]];
+    const double h = (evt.state_index >= 0 && evt.value_func)
+                   ? evt.value_func(ws.path[p], t) : 0.0;
+    ws.wy = w;
+    reset_transpose(
+        evt.state_index, evt.method, h, static_cast<int>(switched[j]),
+        ws.path[p], t, n, w.data(), ws.wy.data(), w_theta,
+        [&](int e, const std::vector<double>& y, double tt, std::vector<double>& o)
+          { eadj.root_dh_dx(e, y, tt, o); },
+        [&](int e, const std::vector<double>& y, double tt, double sc, double* o)
+          { eadj.root_dh_dp_axpy(e, y, tt, sc, o); },
+        ws.g);
+    w.swap(ws.wy);
+  }
+
+  for (std::size_t j = fired.size(); j-- > 0;) {
+    const auto& evt = fixed_events[fired[j]];
+    const std::vector<double>& y = ws.path[j];
+    const std::vector<double>& z = ws.path[j + 1];
+
+    ws.fb.assign(n, 0.0); ws.fa.assign(n, 0.0);
+    sys.first(y, ws.fb, t);
+    // The last sandwich ends on the surface the switched resets left.
+    const std::vector<double>& zz =
+        (j + 1 == fired.size()) ? ws.path[n_steps] : z;
+    sys.first(zz, ws.fa, t);
+
+    double w_s = 0.0;
+    for (std::size_t i = 0; i < n; ++i) w_s -= ws.fa[i] * w[i];
+
+    const double h = (evt.state_index >= 0 && evt.value_func)
+                   ? evt.value_func(y, evt.time) : 0.0;
+    ws.wy = w;
+    reset_transpose(
+        evt.state_index, evt.method, h, fired[j], y, t, n,
+        w.data(), ws.wy.data(), w_theta,
+        [&](int e, const std::vector<double>& yy, double tt, std::vector<double>& o)
+          { eadj.fixed_dh_dx(e, yy, tt, o); },
+        [&](int e, const std::vector<double>& yy, double tt, double sc, double* o)
+          { eadj.fixed_dh_dp_axpy(e, yy, tt, sc, o); },
+        ws.g);
+    w.swap(ws.wy);
+
+    for (std::size_t i = 0; i < n; ++i) w_s += ws.fb[i] * w[i];
+    eadj.fixed_dtime_dp_axpy(fired[j], w_s, w_theta);
+  }
+
+  for (std::size_t i = 0; i < n; ++i) w_in[i] = w[i];
+}
+
 // ---------------------------------------------------------------------------
 //  A whole trajectory backwards, without a tape.
 //
@@ -403,9 +657,9 @@ public:
   void trace_lambda(bool on) { m_trace = on; }
 
   /// One seed column. `seeds` is [n_obs x n_states] row-major.
-  template<class Store, class AdjTerms, class Solver>
+  template<class Store, class AdjTerms, class Solver, class Jumps = no_jumps>
   void sweep(const Store& store, std::size_t n_phi, const double* seeds,
-             const AdjTerms& adj, Solver& solver)
+             const AdjTerms& adj, Solver& solver, const Jumps& jumps = Jumps())
   {
     const std::size_t n = store.n_states();
     const std::size_t n_steps = store.n_steps();
@@ -417,8 +671,12 @@ public:
     m_eta.assign(m_trace ? n_steps : 0u, 0.0);
     if (n_steps == 0) return;
 
-    // The cotangent the step above hands down, on its own carry.
-    std::vector<double> w_carry;
+    // The cotangent the step above hands down, on its own carry. Across an
+    // intervention it is instead a cotangent on a point inside the step below,
+    // because the restart threw the carry away.
+    std::vector<double> w_carry, pending, w_after, w_before;
+    bool pending_interp = false;
+    double pending_t = 0.0;
     std::size_t next_obs = store.n_obs();
 
     multistep_operators<Stepper> ops;
@@ -433,7 +691,7 @@ public:
       // this step's own interpolant, not the one it kept from another.
       std::size_t obs_lo = next_obs;
       while (obs_lo > 0 && store.obs(obs_lo - 1).step == k + 1) --obs_lo;
-      const bool observed = (obs_lo < next_obs);
+      const bool observed = (obs_lo < next_obs) || pending_interp;
       if (observed) m_probe.valid = false;
 
       const double tail_key =
@@ -450,22 +708,13 @@ public:
       m_ws.w_pred.assign(nz_in, 0.0);
       m_ws.w_acor.assign(n, 0.0);
 
-      if (!w_carry.empty()) {
-        auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
-        w_carry.resize(nz_out, 0.0);
-        carry_into_pred(ops, n, w_carry.data(), m_ws.w_pred.data(),
-                        m_ws.w_acor.data());
-      }
-
-      // The observations this step carries, through its own interpolant.
-      for (std::size_t o = obs_lo; o < next_obs; ++o) {
+      // A cotangent at a time inside this step, through its own interpolant.
+      // The probe's states are the slots plus one for acor, so the row it
+      // writes is d x_interp / d (zn_pred[0..q], acor).
+      auto seed_dense = [&](double t_obs, const double* w) {
         auto _tp = m_prof.timer(cppde::prof_cat::rev_interp);
-        // The probe's states are the slots plus one for acor, so the row it
-        // writes is d x_interp / d (zn_pred[0..q], acor).
         dense_row.assign(static_cast<std::size_t>(ops.q_in + 2), 0.0);
-        m_probe.tail_probe.eval_dense_into(clamp_to_step(cp, store.obs(o).t),
-                                          dense_row);
-        const double* w = seeds + o * n;
+        m_probe.tail_probe.eval_dense_into(clamp_to_step(cp, t_obs), dense_row);
         for (int j = 0; j <= ops.q_in; ++j)
           for (std::size_t i = 0; i < n; ++i)
             m_ws.w_pred[static_cast<std::size_t>(j) * n + i] +=
@@ -473,6 +722,26 @@ public:
         const std::size_t acor_slot = dense_row.size() - 1;
         for (std::size_t i = 0; i < n; ++i)
           m_ws.w_acor[i] += dense_row[acor_slot] * w[i];
+      };
+
+      // What the step above handed back. Ordinarily its carry, read off this
+      // step's end; across an intervention a cotangent on a point inside this
+      // step, and then the carry is not read at all.
+      if (pending_interp) {
+        seed_dense(pending_t, pending.data());
+        pending_interp = false;
+      } else if (!w_carry.empty()) {
+        auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
+        w_carry.resize(nz_out, 0.0);
+        carry_into_pred(ops, n, w_carry.data(), m_ws.w_pred.data(),
+                        m_ws.w_acor.data());
+      }
+
+      // The observations this step carries. One a jump produced is a value and
+      // is seeded at the boundary instead.
+      for (std::size_t o = obs_lo; o < next_obs; ++o) {
+        if (store.obs(o).event < store.n_events()) continue;
+        seed_dense(store.obs(o).t, seeds + o * n);
       }
       next_obs = obs_lo;
 
@@ -505,24 +774,64 @@ public:
         m_eta[k] = e * ops.err_scale;
       }
       w_carry.swap(w_in);
+
+      // The intervention this step was entered through, if any. Two maps in the
+      // order the forward run applied them, so swept the other way round: the
+      // restart, which collapses the carry onto the state the jump ended on,
+      // and the jump itself.
+      if constexpr (Jumps::active) {
+        const std::size_t ei = store.event_before(k);
+        if (ei < store.n_events()) {
+          const auto& e = store.event(ei);
+          w_after.assign(n, 0.0);
+          m_ws.x.assign(e.x_after.begin(), e.x_after.end());
+          collapse_restart(w_carry, n, m_ws.x, e.t,
+                           e.restart ? e.dt_restart
+                                     : static_cast<double>(cp.carry.h),
+                           adj, w_after.data(), m_wp.data(), m_ws.mu, jtv);
+
+          // Observations the jump produced are values, not interpolations.
+          for (std::size_t o = 0; o < store.n_obs(); ++o)
+            if (store.obs(o).event == ei)
+              for (std::size_t i = 0; i < n; ++i)
+                w_after[i] += seeds[o * n + i];
+
+          w_before.assign(n, 0.0);
+          if (e.root)
+            apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
+                                    e.triggered, jumps.sys, jumps.eadj, n,
+                                    w_after.data(), w_before.data(),
+                                    m_wp.data(), m_jws);
+          else
+            apply_fixed_jump_adjoint(e.x_before, e.t, jumps.fixed, jumps.root,
+                                     e.switched, jumps.sys, jumps.eadj, n,
+                                     w_after.data(), w_before.data(),
+                                     m_wp.data(), m_jws);
+
+          // The state entering the jump was read off the dense output of the
+          // step below it. At the run's own start there is no such step and it
+          // is the initial state's.
+          w_carry.clear();
+          if (e.after_step > 0) {
+            pending = w_before;
+            pending_t = e.t_before;
+            pending_interp = true;
+          } else {
+            for (std::size_t i = 0; i < n; ++i) m_wx[i] += w_before[i];
+          }
+        }
+      }
     }
 
-    // The trajectory start. initialize() builds the whole history out of one
-    // state, zn[0] = x0 and zn[1] = h f(x0, t0) with the rest zero, so the
-    // history's cotangent collapses onto that state and nothing is left above
-    // it. The same map an event restart applies, which is why the boundary is
-    // not a special case of the step but its own.
-    const auto& cp0 = store.step(0);
-    for (std::size_t i = 0; i < n && i < w_carry.size(); ++i) m_wx[i] = w_carry[i];
-    if (w_carry.size() >= 2 * n) {
-      const double h0 = static_cast<double>(cp0.carry.h);
+    // The trajectory start, which is the same restart with no jump under it.
+    if (!w_carry.empty()) {
+      const auto& cp0 = store.step(0);
+      w_after.assign(n, 0.0);
       m_ws.x.assign(cp0.start_state(), cp0.start_state() + n);
-      m_ws.mu.assign(w_carry.begin() + static_cast<std::ptrdiff_t>(n),
-                     w_carry.begin() + static_cast<std::ptrdiff_t>(2 * n));
-      jtv.assign(n, 0.0);
-      adj.jac_t_vec(m_ws.x, m_ws.mu, cp0.t, jtv);
-      for (std::size_t i = 0; i < n; ++i) m_wx[i] += h0 * jtv[i];
-      adj.dfdp_t_vec_axpy(m_ws.x, m_ws.mu, cp0.t, h0, m_wp.data());
+      collapse_restart(w_carry, n, m_ws.x, cp0.t,
+                       static_cast<double>(cp0.carry.h), adj, w_after.data(),
+                       m_wp.data(), m_ws.mu, jtv);
+      for (std::size_t i = 0; i < n; ++i) m_wx[i] += w_after[i];
     }
 
     // Anything observed before the first step is the initial state itself.
@@ -556,6 +865,7 @@ private:
 
   null_sys m_null;
   cppde::profiler m_prof;
+  jump_workspace m_jws;
   multistep_probe<Stepper> m_probe;
   multistep_workspace m_ws;
   bool m_trace = false;
@@ -843,9 +1153,10 @@ public:
   void trace_lambda(bool on) { m_trace = on; }
 
   /// One seed column. `seeds` is [n_obs x n_states] row-major.
-  template<class Store, class System, class AdjTerms>
+  template<class Store, class System, class AdjTerms, class Jumps = no_jumps>
   void sweep(const Store& store, std::size_t n_phi, const double* seeds,
-             System& sys, const AdjTerms& adj, Stepper& st)
+             System& sys, const AdjTerms& adj, Stepper& st,
+             const Jumps& jumps = Jumps())
   {
     constexpr bool rosen = has_stage_vectors<Stepper>::value;
     const std::size_t n = store.n_states();
@@ -860,7 +1171,9 @@ public:
 
     std::size_t next_obs = store.n_obs();
     std::vector<double> w_out(n, 0.0), w_in(n, 0.0), w_start(n, 0.0), jv, x0,
-                        mu_seed;
+                        mu_seed, pending, w_after, w_before;
+    bool pending_interp = false;
+    double pending_t = 0.0;
 
     for (std::size_t k = n_steps; k-- > 0;) {
       const auto& cp = store.step(k);
@@ -882,13 +1195,14 @@ public:
 
       w_start.assign(n, 0.0);
       if constexpr (rosen) mu_seed.assign(stage_slots(n), 0.0);
-      for (std::size_t o = obs_lo; o < next_obs; ++o) {
+
+      // A cotangent at a time inside this step, through its interpolant.
+      auto seed_at = [&](double t_raw, const double* w) {
         auto _tp = m_prof.timer(cppde::prof_cat::rev_interp);
-        const double t_obs = clamp_to_step(cp, store.obs(o).t);
+        const double t_obs = clamp_to_step(cp, t_raw);
         const double s = (t_obs - cp.t) / cp.dt;
         double cw[4];
         Stepper::dense_weights(s, cw);
-        const double* w = seeds + o * n;
 
         for (std::size_t i = 0; i < n; ++i) {
           w_start[i] += cw[0] * w[i];
@@ -912,6 +1226,13 @@ public:
           seed_through_rhs(adj, m_ws.xout, cp.t + cp.dt, w, cp.dt * cw[3], n,
                            n_phi, w_out.data(), jv);
         }
+      };
+
+      // What the step above handed back, where a jump put it inside this step.
+      if (pending_interp) { seed_at(pending_t, pending.data()); pending_interp = false; }
+      for (std::size_t o = obs_lo; o < next_obs; ++o) {
+        if (store.obs(o).event < store.n_events()) continue;
+        seed_at(store.obs(o).t, seeds + o * n);
       }
       next_obs = obs_lo;
 
@@ -937,9 +1258,45 @@ public:
         m_eta[k] = e;
       }
       w_out.swap(w_in);
+
+      // The intervention this step was entered through. A one-step method
+      // carries only the state, so there is no restart to collapse: what the
+      // step hands down is already the cotangent on the state the jump left.
+      if constexpr (Jumps::active) {
+        const std::size_t ei = store.event_before(k);
+        if (ei < store.n_events()) {
+          const auto& e = store.event(ei);
+          w_after = w_out;
+          for (std::size_t o = 0; o < store.n_obs(); ++o)
+            if (store.obs(o).event == ei)
+              for (std::size_t i = 0; i < n; ++i)
+                w_after[i] += seeds[o * n + i];
+
+          w_before.assign(n, 0.0);
+          if (e.root)
+            apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
+                                    e.triggered, jumps.sys, jumps.eadj, n,
+                                    w_after.data(), w_before.data(),
+                                    m_wp.data(), m_jws);
+          else
+            apply_fixed_jump_adjoint(e.x_before, e.t, jumps.fixed, jumps.root,
+                                     e.switched, jumps.sys, jumps.eadj, n,
+                                     w_after.data(), w_before.data(),
+                                     m_wp.data(), m_jws);
+
+          w_out.assign(n, 0.0);
+          if (e.after_step > 0) {
+            pending = w_before;
+            pending_t = e.t_before;
+            pending_interp = true;
+          } else {
+            for (std::size_t i = 0; i < n; ++i) m_wx[i] += w_before[i];
+          }
+        }
+      }
     }
 
-    for (std::size_t i = 0; i < n; ++i) m_wx[i] = w_out[i];
+    for (std::size_t i = 0; i < n; ++i) m_wx[i] += w_out[i];
 
     // Anything observed before the first step is the initial state itself.
     while (next_obs > 0) {
@@ -984,6 +1341,7 @@ private:
   }
 
   cppde::profiler m_prof;
+  jump_workspace m_jws;
   onestep_workspace m_ws;
   rosenbrock_workspace m_rws;
   bool m_trace = false;

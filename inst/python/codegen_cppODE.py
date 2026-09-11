@@ -2016,6 +2016,39 @@ def _emit_event_switch(name, cases, num_type, args, head):
     lines += ["    default: break;", "    }", "  }", ""]
     return lines
 
+def _empty_event_adjoint_terms(n_states, n_params, num_type):
+    """The same struct with nothing in it, for a model that never jumps."""
+    state_type = f"std::vector<{num_type}>"
+    xargs = (f"int ev, const {state_type}& x, const {num_type}& t, "
+             f"{state_type}& out")
+    pargs = (f"int ev, const {state_type}& x, const {num_type}& t, "
+             f"const {num_type}& sc, {num_type}* out")
+    xhead = ["    (void)x; (void)t; (void)ev;",
+             f"    out.assign({n_states}u, {num_type}(0.0));"]
+    phead = ["    (void)x; (void)t; (void)ev; (void)sc; (void)out;"]
+    out = [
+        "// The derivatives of a jump's own expressions, by event and kind.",
+        "struct event_adjoint_terms {",
+        f"  std::vector<{num_type}> params;",
+        f"  std::vector<const cppde::PchipForcing<{num_type}>*> F;",
+        "",
+        f"  event_adjoint_terms(const std::vector<{num_type}>& p_,",
+        f"                      const std::vector<const cppde::PchipForcing<{num_type}>*>& F_)",
+        "    : params(p_), F(F_) {}",
+        "",
+    ]
+    for name, args, head in (("fixed_dh_dx", xargs, xhead),
+                             ("fixed_dh_dp_axpy", pargs, phead),
+                             ("root_dh_dx", xargs, xhead),
+                             ("root_dh_dp_axpy", pargs, phead),
+                             ("root_dg_dp_axpy", pargs, phead)):
+        out += [f"  void {name}({args}) const {{"] + head + ["  }", ""]
+    out += [f"  void fixed_dtime_dp_axpy(int ev, const {num_type}& sc, {num_type}* out) const {{",
+            "    (void)ev; (void)sc; (void)out;", "  }", ""]
+    out += ["};"]
+    return out
+
+
 def generate_event_code(events_df, states_list, params_list, n_states,
                         num_type="double", forcings_list=None, rhs_dict=None,
     ad_level=0,
@@ -2071,6 +2104,10 @@ def generate_event_code(events_df, states_list, params_list, n_states,
         forcings_list = list(forcings_list)
     
     if events_df is None or len(events_df) == 0:
+        # A model with no events still gets the struct, so a trajectory takes
+        # one shape whether or not anything jumps in it.
+        if emit_adjoint:
+            return _empty_event_adjoint_terms(n_states, len(params_list), num_type)
         return []
 
     if hasattr(events_df, "to_dict"):

@@ -534,18 +534,62 @@ Kombination zusammen, die noch nachspielt: dünn plus rb4 plus Ereignis. Dafür
 wird der getapete Sweep nur noch dort emittiert, wo der geschriebene nicht
 greift. Wo er greift, ist er nicht die Vorgabe, sondern der einzige Pfad.
 
-### Stufe 4. Ereignisse und Wurzeln, mit dem Restart darin
+### Stufe 4. Ereignisse und Wurzeln, mit dem Restart darin. Erledigt am 2026-09-11
 
-Saltationsmatrix bilden und transponiert anwenden, Ereigniszeit-Ableitung aus
-`compute_dt_star` ohne Zero-Shift-Trick, feste Ereignisse und Wurzelereignisse getrennt.
+**Der Sprung ist im Wert ein Sprung.** Die Maschine trägt eine Unstetigkeit über
+eine Heun-Klammer: eine Schicht vorwärts auf die Ereignisfläche, die
+Rücksetzungen, eine Schicht zurück auf die Gitterzeit. Geschoben wird um den
+Rest der Ereigniszeit, und von dem wird der Wert abgezogen, bevor er benutzt
+wird. Er ist also **numerisch exakt null**, und nur seine Ableitung überlebt.
 
-**Größer als der Plan sagt.** `replay_boundary` spielt nicht nur die Saltation
-nach, sondern auch die **Ereignisausdrücke des Modells**
-(`cppde_reverse_trajectory.hpp:594-604`). Geschlossen heißt also: erzeugte vjps
-für Ereigniswert und Wurzelfunktion, die Heun-Schichten über `J'`, und die
-IFT-Ableitung von `dt*` von Hand. `dg_dx` und `dg_dt` sind bereits erzeugte
-Funktionen, und die Zweitordnungskorrektur ist eine Differenzenformel, die sich
-ableiten lässt wie sie dasteht.
+Damit ist die Klammer im Wert die Identität und kollabiert auf die klassische
+Saltation:
+
+    dx = R'(dx_before + f_before s) − f_after s
+
+mit `R` den Rücksetzungen und `s` dem Differential des Zeitrests. Für eine
+Wurzel ist das `−(∇g·dx + ∂g/∂p·dp)/ġ`, für ein festes Ereignis das Differential
+seiner Zeit. Die Zweitordnungskorrektur multipliziert `dt*` mit sich selbst und
+fällt mit ihm weg.
+
+**Ein Sprung-Adjungierter braucht darum keine Jacobi.** Er braucht die rechte
+Seite an beiden Enden und die Ableitungen der Ereignisausdrücke; jeder Term, den
+die Schichten beigetragen hätten, trägt einen Faktor, der null ist. Der Plan
+hatte hier `J'` je Schicht angesetzt, also vier Kontraktionen, die nicht
+gebraucht werden.
+
+**Die Modellseite** steht in `event_adjoint_terms`, erzeugt neben den
+Kontraktionen von `f`: je Ereignis die Ableitung seines Werts nach Zustand und
+Parametern, für eine Wurzel die ihrer Bedingung nach den Parametern, für ein
+festes Ereignis die seiner Zeit. Indiziert nach der Stelle, an der der
+Vorwärtslauf das Ereignis einreiht, damit ein Index auf beiden Seiten dasselbe
+meint.
+
+**Der Restart ist ein Aufrufer geworden**, wie vorgesehen: `collapse_restart`
+steht einmal da und wird von der Startgrenze und von jeder Ereignisgrenze
+gerufen.
+
+**Der Kotangens landet nicht immer auf einem Carry.** Der Zustand, der in den
+Sprung geht, wurde vom Dense-Output des Schritts darunter gelesen, also geht
+sein Kotangens dorthin und der Carry wird gar nicht gelesen: der Restart hat ihn
+weggeworfen. Beide Trajektorien führen das als anstehende Interpolation, genau
+wie der getapete Sweep.
+
+**Damit fällt die Verweigerung von dünn plus rb4 plus reverse ganz**, denn der
+getapete Sweep wird für ein Reverse-Modell überhaupt nicht mehr emittiert.
+
+Geprüft in `test-reverse.R`: Ereignisse auf allen vier Verfahren, mit einem
+festen Ereignis über eine Parameterzeit, einem Wurzelereignis multiplikativ und
+einer Forcing daneben, dazu ein dünnes Modell mit Sprung auf bdf und rb4.
+
+### Eine Beschränkung, die bleibt
+
+**Die Mehrschrittverfahren laufen nur mit Dense-Interpolation**, vorwärts wie
+rückwärts. Der Nordsieck-Interpolant ist dort nicht eine Ausgabeform neben
+anderen, sondern das Verfahren selbst: die Historie *ist* der Interpolant.
+`useDenseOutput = FALSE` wird für bdf und adams deshalb verworfen, mit einer
+Warnung, und war es schon vor diesem Plan. Es gibt keinen Grund, dem
+Rückwärtspfad einen Weg zu bauen, den der Vorwärtspfad nicht hat.
 
 ### Stufe 5. Der Nordsieck-Restart. Geht in Stufe 4 auf.
 
@@ -568,12 +612,17 @@ Bei dieser Modellgröße sind 0,44 µs für 150 Flops fast nur Aufwand; das hebt
 eine erzeugte LU mit fester Pivotfolge, und die tauscht Genauigkeit gegen Zeit.
 Bleibt draußen, solange das Kriterium lautet: keine Genauigkeit einbüßen.
 
-### Stufe 6. `cppFUN` bekommt einen symbolischen vjp
+### Stufe 6. `cppFUN` bekommt einen symbolischen vjp. Erledigt am 2026-09-11
 
-Heute instanziiert `_write_vjp_impl` (`codegen_cppFUN.py:946-1018`) den Ausdruckskörper
-ein zweites Mal über `codual`. Ersetzt durch eine erzeugte Kontraktion `w' ∂f/∂x` und
-`w' ∂f/∂p` aus `derivSymb.jac_hess_symb` (`derivSymb.py:325-404`), mit CSE (`_cse_exprs`,
-`:438-449`). Die R-Schnittstelle `$vjp(x, p, W)` bleibt zeichengleich, dMod2 merkt nichts.
+`_write_vjp_impl` instanziierte den Ausdruckskörper ein zweites Mal über `codual`
+und legte dafür ein Tape an. Jetzt kontrahiert es die symbolische Jacobi: dieselben
+Einträge, die `_jacobian` emittiert, mit CSE, einmal je Beobachtung berechnet und
+je Seed kontrahiert. Ein Aufrufer im Dual-Modus übergibt keine symbolische Jacobi,
+also wird sie dort abgeleitet; die Rückwärtsrichtung ist so oder so ihre
+Kontraktion.
+
+Die R-Schnittstelle `$vjp(x, p, W)` bleibt zeichengleich, dMod2 merkt nichts.
+`codegen_cppFUN.py` nennt `codual` nicht mehr.
 
 ### Stufe 7. Umschalten und löschen
 
@@ -586,22 +635,31 @@ Ableitungen nach Schrittzeit und Schrittweite, die das eingefrorene Gitter aus
 der Kettenregel nimmt. Auf Bachmann kostet die gewichtete Zielfunktion 131 ms
 gegen 122 ungewichtet, statt auf das Tape zurückzufallen.
 
-Zu schreiben: `lambda` ist der Kotangens am Schrittende, den
-`apply_multistep_adjoint_pre` als `w_out_state` schon herausgibt; `eta` ist er
-gegen `acor = y − zn_pred[0]`, mal `error_constant()`, und beide Größen liegen
-im Checkpoint und in den Operatoren. `wt` und `wdt` fallen weg: sie sind die
-Ableitungen nach Schrittzeit und Schrittweite, die das eingefrorene Gitter aus
-der Kettenregel nimmt, und sie standen nur da, weil das Tape sie umsonst
-mitlieferte. `test-reverse.R` verlangt von ihnen heute nur die Form.
+**Die zweite Vorbedingung ist seit Stufe 4 erfüllt:** ein Reverse-Modell
+emittiert den getapeten Sweep überhaupt nicht mehr. Was noch steht, steht
+ungenutzt.
 
-Danach kann `test-reverse.R` wieder Gleichheit verlangen statt 1e-12.
+**Die Bestandsaufnahme**, damit das Löschen mechanisch bleibt:
 
+| weg | bleibt, in derselben Datei |
+|---|---|
+| `cppde_codual.hpp`, `_math`, `_tape` | |
+| `step_recorder` und seine Replay-Weichen | `equation_solver`, `step_checkpoint` |
+| `trajectory_recorder`, `replay_one`, `replay_boundary`, `apply_jump` | `trajectory_store`, `event_record`, `observation` |
+| `rosenbrock4::replay_step`, `replay_inv_gamma_dt` | die Tableau-Zugänge aus 3b |
+| `multistepper::replay_residual`, `replay_outputs` | `replay_predict`, das der Probe-Stepper braucht |
+| `step_checkpoint::load` und `finish` | `capture`, `apply_tail`, `start_state` |
+| die codual-Zweige in `cppde_ad_traits.hpp` und `cppde_profiler.hpp` | |
+| `dev/cxx/test_codual.cpp`, `bench_codual.cpp`, `bench_revmem.cpp` | |
+| der getapete Vergleichspfad in den Reverse-Prüfständen | ihr Orakel, der Vorwärtsmodus |
 
-`cppde_codual.hpp`, `cppde_codual_math.hpp`, `cppde_codual_tape.hpp` entfallen. Mit ihnen
-entfällt die **zweite Erzeugung des Modellrumpfs**: `R/cppODE.R:296-312` und `:346-359`
-rufen den Generator heute ein zweites Mal mit `num_type = "cppde::codual<double>"`; der
-geschlossene Adjungierte braucht `f` und `J` nur in `double`, also fällt `namespace rev_`
-(`:1545-1548`) weg. Nebenbei weniger Übersetzungszeit je Reverse-Modell.
+Mit dem Tape entfällt die **zweite Erzeugung des Modellrumpfs**: `R/cppODE.R`
+ruft den Generator ein zweites Mal mit `num_type = "cppde::codual<double>"` und
+emittiert `namespace rev_` samt einem zweiten Satz Forcings. Der geschlossene
+Adjungierte braucht `f` und `J` nur in `double`. Nebenbei weniger
+Übersetzungszeit je Reverse-Modell, und nach der Messung aus Stufe 0 ist das der
+größere Posten: die Expression-Templates des Tape-Typs kosteten auf Lang 5,1
+Sekunden gegen 1,9 für mehr Text in `double`.
 
 ### Stufe 8. Zweite Ordnung
 
