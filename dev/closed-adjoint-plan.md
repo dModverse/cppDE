@@ -482,21 +482,57 @@ Mehrschrittverfahrens, dessen Nordsieck-Operatoren man sonst abschreiben müsste
 
 rb4 hat noch keinen Schritt-Adjungierten und bleibt bis 3b auf dem Tape.
 
-**3b rb4: braucht zweite Ableitungen. Der Plan hat das nicht gesehen.**
+**3b rb4: erledigt am 2026-09-11. Es brauchte zweite Ableitungen, und der Plan
+hat das nicht gesehen.**
 
-Die sechs Stufen lösen gegen `W = I/(γh) − J(x, t)` mit `J` am Schrittanfang
-(`cppde_rosenbrock4.hpp:430-446`). Jede Stufenlösung hängt damit über `W` von `x`
-und `θ` ab, nicht nur über ihre rechte Seite, und das Tape hat diese Terme
-stillschweigend mitgeliefert. Geschrieben brauchen sie `λ' ∂(Jv)/∂x` und
-`λ' ∂(Jv)/∂p`, für nichtautonome Modelle dazu dasselbe über `∂f/∂t`.
+Die sechs Stufen lösen gegen `W = I/(γh) − J(x, t)` mit `J` am Schrittanfang.
+Jede Stufenlösung hängt damit über `W` von `x` und `θ` ab, nicht nur über ihre
+rechte Seite: aus `g = W⁻¹ r` folgt `dg = W⁻¹(dr + (dJ) g)`, und der Adjungierte
+dieses Terms ist die Kontraktion von λ mit der Ableitung von `J g`. Das ist eine
+zweite Ableitung, die das Tape stillschweigend geliefert hat.
 
-Das ist dieselbe Maschinerie wie Stufe 2, mit `J·v` als Funktionskörper statt
-`f` und `v` als zusätzlichem Eingang. **Und es ist genau die Kontraktion, die
-Stufe 8 braucht**, also teilen sich 3b und 8 einen Generator. Erste Handlung ist
-die Messung aus Stufe 0 noch einmal, auf der zweiten Ordnung.
+**Die Messung aus Stufe 0, auf der zweiten Ordnung: sie fällt kleiner aus als
+die erste.**
 
-Hebt zugleich die Verweigerung von dünn plus rb4 plus reverse aus Stufe 1 wieder
-auf, denn `replay_step` fällt damit weg.
+| | Zustände | Parameter | nnz `J` | nnz `∂(Jv)/∂x` | Quelle 1. Ord | 2. Ord | `g++` |
+|---|---|---|---|---|---|---|---|
+| Bachmann | 25 | 54 | 89 | 55 | 13,4 KB | 19,5 KB | 0,16 / 0,16 s |
+| Lang | 124 | 342 | 1175 | 1108 | 260,8 KB | 298,2 KB | 0,26 / 0,28 s |
+
+Eine rechte Seite zweimal abzuleiten tötet Terme, statt welche zu erzeugen. Das
+Risiko der Ausdrucksschwellung ist damit erledigt, und der Rückfall auf eine
+Datentabelle wird nicht gebraucht.
+
+**Der Generator emittiert vier weitere Kontraktionen, aber nur für rb4**, denn
+nur dort werden sie gebraucht und ableiten ist nicht umsonst: `jvp_x_t_vec` und
+`jvp_p_t_vec_axpy` über `J(x,p,t)·v`, und `dfdt_x_t_vec` und
+`dfdt_p_t_vec_axpy` über `df/dt`. Letztere sind nötig, weil vier der Stufen ein
+Vielfaches von `df/dt` addieren. Die Emission läuft durch dieselbe Routine wie
+die erste Ordnung, mit einem anderen Körper: `_emit_contraction_pair`.
+
+*Nebenbei:* `df/dt` trägt für jede Forcing einen Kettenterm, den der
+Jacobi-Emitter als Text anhängt. Damit dessen Ableitung nach Zustand und
+Parameter stimmt, wird die Zeitableitung der Forcing als erfundenes Symbol
+geführt und differenziert wie die Konstante, die sie an dieser Stelle ist.
+
+**Die transponierten Solves gehen durch die Faktorisierung des Steppers
+selbst**, nicht durch eine zweite. Ein Korrektorverfahren darf das nicht, seine
+Iterationsmatrix ist absichtlich veraltet; eine Rosenbrock-Stufe ist ein direkter
+Solve, und die Matrix, mit der sie gelöst hat, ist die Matrix, die ihre Ableitung
+braucht. Nachgesehen, dass das trägt: der Regler gibt `reuse_jacobian` nur nach
+einem verworfenen Versuch heraus, und der begann am selben Zustand.
+
+**Geprüft** in `test_reverse_step_rb4.cpp` über einen, zwei und vier Schritte
+gegen die Dual-Referenz auf 1e-11, und in `test_reverse_trajectory_methods.cpp`
+über die ganze Trajektorie samt Beobachtungen im Schritt. Der Prüfstand beißt:
+die sechste Stufe wertet an `X_5 + g_5` aus, und `X_5` trägt die a-Koeffizienten
+der fünften; mit einer eigenen Zeile für die sechste lag der Gradient um 1e-3
+daneben.
+
+**Die Verweigerung von dünn plus rb4 plus reverse fällt** auf die eine
+Kombination zusammen, die noch nachspielt: dünn plus rb4 plus Ereignis. Dafür
+wird der getapete Sweep nur noch dort emittiert, wo der geschriebene nicht
+greift. Wo er greift, ist er nicht die Vorgabe, sondern der einzige Pfad.
 
 ### Stufe 4. Ereignisse und Wurzeln, mit dem Restart darin
 
