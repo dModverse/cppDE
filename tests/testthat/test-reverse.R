@@ -176,6 +176,34 @@ test_that("a written Rosenbrock adjoint carries a multiplicative forcing", {
   }
 })
 
+test_that("an equilibrated run goes backwards", {
+  # rootfunc stops the run when the state stops moving, so the output grid is
+  # the run's own. A sensitivity run does not produce the same one: it adapts
+  # on the tangents as well and reaches the root elsewhere, so there is no
+  # forward gradient on this grid to compare against. What is asserted is that
+  # the backward pass answers on the grid its own forward pass produced, and
+  # that this pass is the value run to the last bit.
+  eq <- c(R = "k_act - k_deact * R",
+          A = "-k1 * A * R + k2 * pA",
+          pA = "k1 * A * R - k2 * pA")
+  pe <- c(R = 1, A = 1, pA = 0, k_act = 0.1, k_deact = 0.7, k1 = 0.1, k2 = 0.05)
+  tt <- seq(0, 1e3, length.out = 50)
+  for (m in c("bdf", "rb4")) {
+    mv <- cppODE(eq, rootfunc = "equilibrate", method = m,
+                 modelname = paste0("rev_eq_v_", m), deriv = FALSE)
+    mr <- cppODE(eq, rootfunc = "equilibrate", method = m,
+                 modelname = paste0("rev_eq_r_", m), derivMode = "reverse")
+    val <- do.call(solveODE, c(list(mv, tt, pe), tol))
+    expect_lt(nrow(val$variable), length(tt))   # it really did stop early
+    W   <- seed_for(val)
+    rv  <- do.call(solveODE, c(list(mr, tt, pe, seed = W), tol))
+    expect_identical(rv$variable, val$variable)
+    expect_equal(dim(rv$adjoint), c(length(pe), 1L), info = m)
+    expect_true(all(is.finite(rv$adjoint)), info = m)
+    expect_gt(max(abs(rv$adjoint)), 1e-6)
+  }
+})
+
 test_that("rb4 goes backwards on a sparse Jacobian", {
   mf <- cppODE(eqns, modelname = "rev_rb4_sp_f", method = "rb4", sparse = TRUE,
                deriv = TRUE)

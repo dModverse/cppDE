@@ -1,7 +1,6 @@
 /*
  Main header for cppDE: ODE integration and sensitivity calculation
- using in-tree dual numbers (forward) and coduals (reverse) for automatic
- differentiation.
+ using in-tree dual numbers forwards and a written adjoint backwards.
 
  This is the ODE surface, not the whole library. The batch entry point, the
  chain-rule kernels and the return codes are included by the generated sources
@@ -35,11 +34,6 @@
 #include <cppde/cppde_dual2nd.hpp>
 #include <cppde/cppde_dual2nd_math.hpp>
 #include <cppde/cppde_dual2nd_expr.hpp>
-
-// ============================================================================
-//  cppde::codual (reverse-mode AD backend)
-// ============================================================================
-#include <cppde/cppde_codual_math.hpp>
 
 // ============================================================================
 //  cppDE types and infrastructure
@@ -102,10 +96,10 @@
 // ============================================================================
 //  Reverse-mode sweep
 //
-//  Checkpoint per accepted step, replay under codual, one backwards pass. The
-//  step-level machinery is stepper-agnostic; each stepper family supplies its
-//  own checkpoint. The trajectory layer stores those checkpoints, walks them
-//  backwards and seeds the observation times through the dense output.
+//  Checkpoint per accepted step, one backwards pass. The step-level machinery
+//  is stepper-agnostic; each stepper family supplies its own checkpoint. The
+//  trajectory layer stores those checkpoints, and cppde_adjoint_step.hpp walks
+//  them backwards, seeding the observation times through the dense output.
 // ============================================================================
 #include <cppde/cppde_reverse_step.hpp>
 #include <cppde/cppde_reverse_trajectory.hpp>

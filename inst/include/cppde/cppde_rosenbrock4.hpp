@@ -150,15 +150,6 @@ public:
 
   // Same method on another scalar type. The coefficients follow Value2, so a
   // hand-supplied set does not survive the rebind.
-  // Scratch the reverse replay needs and the forward path does not: the Jacobian
-  // under the tape type and the right-hand side each equation is formed against.
-  // Empty for a value type that never replays, so no forward run pays for it.
-  struct replay_scratch {
-    dense_matrix<Value> J;
-    std::vector<Value>  dfdt, rhs;
-  };
-  struct no_replay_scratch {};
-
   template<class Value2> using rebind_value =
     rosenbrock4<Value2, JacobianPattern,
                 default_rosenbrock_coefficients<Value2>, Resizer>;
@@ -242,12 +233,8 @@ public:
   // ====================================================================
   //  stages: the six Rosenbrock stages, with the linear solve left open.
   //
-  //  The forward path hands in the LU, the reverse replay hands in the equation
-  //  each solve stands for. One body for both, so the stage arithmetic cannot
-  //  drift between the two directions.
-  //
-  //  dfdt is what the Jacobian evaluation filled; the caller owns it because the
-  //  two paths keep it in different places.
+  //  The solve is a parameter so the stage arithmetic is stated once. dfdt is
+  //  what the Jacobian evaluation filled; the caller owns it.
   // ====================================================================
 
   template<class DerivFunc, class Solve>
@@ -391,67 +378,6 @@ public:
     // --- Solution ---
     for (size_t i = 0; i < n; ++i)
       xout[i] = m_xtmp.m_v[i] + xerr[i];
-  }
-
-  // ====================================================================
-  //  replay_step: one step for the reverse sweep.
-  //
-  //  The same six stages, with every linear solve replaced by the equation it
-  //  solves: W g = rhs, with g handed in at the value the forward run computed
-  //  and W = -J + I/(gamma*dt) on the tape. Their derivatives close by the
-  //  implicit function theorem, one transposed solve each against the matrix all
-  //  six share.
-  //
-  //  sink is what marks the tape between the equations, which the sweep needs;
-  //  see cppde_reverse_step.hpp.
-  // ====================================================================
-
-  template<class Sys, class TimeArg, class Sink>
-  void replay_step(Sys& system, const state_type& x, TimeArg t, TimeArg dt,
-                   state_type& xout, state_type& xerr, Sink& sink)
-  {
-    auto& deriv_func  = system.first;
-    auto& jacobi_func = system.second;
-
-    const size_t n = x.size();
-    const time_type t_s  = static_cast<time_type>(ad_lu::scalar_value(t));
-    const time_type dt_s = static_cast<time_type>(ad_lu::scalar_value(dt));
-
-    m_resizer.adjust_size(x, [this](auto&& arg) {
-      return this->resize_impl(std::forward<decltype(arg)>(arg));
-    });
-
-    deriv_func(x, m_dxdt.m_v, value_type(t_s));
-
-    const value_type inv_gamma_dt =
-        static_cast<value_type>(1) / (m_coef.gamma * dt_s);
-
-    // The emitted Jacobian writes -J, which is what W is built from.
-    if (m_replay.J.rows() != static_cast<int>(n)) m_replay.J.resize(n, n);
-    else m_replay.J.set_zero();
-    m_replay.dfdt.assign(n, value_type());
-    jacobi_func(x, m_replay.J, value_type(t_s), m_replay.dfdt);
-
-    auto equation = [&](state_type& v) {
-      m_replay.rhs = v;
-      sink.begin(v);
-      state_type& res = sink.residual();
-      res.assign(n, value_type());
-      for (size_t i = 0; i < n; ++i) {
-        value_type acc = inv_gamma_dt * v[i];
-        for (size_t j = 0; j < n; ++j) acc = acc + m_replay.J(i, j) * v[j];
-        res[i] = acc - m_replay.rhs[i];
-      }
-      sink.done();
-    };
-
-    stages(deriv_func, x, t_s, dt_s, xout, xerr, m_replay.dfdt, equation);
-  }
-
-  // The scaling the equations are linearised against: W = -J + inv_gamma_dt * I.
-  time_type replay_inv_gamma_dt(time_type dt_s) const {
-    return static_cast<time_type>(1)
-         / (static_cast<time_type>(ad_lu::scalar_value(m_coef.gamma)) * dt_s);
   }
 
   // ====================================================================
@@ -776,9 +702,6 @@ protected:
 private:
 
   lu_type m_lu;
-
-  std::conditional_t<cppde::ad_traits::is_reverse<Value>::value,
-                     replay_scratch, no_replay_scratch> m_replay;
 
   resizer_type m_resizer;
   resizer_type m_x_err_resizer;

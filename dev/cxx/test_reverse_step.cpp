@@ -40,7 +40,6 @@
 #include <cppde/cppde.hpp>
 #include <cppde/cppde_adjoint_step.hpp>
 
-using cppde::codual;
 using cppde::dual;
 
 static int g_failures = 0;
@@ -128,9 +127,7 @@ static const double DT = 0.13;
 
 // Direction layout: the states, the parameters, then the trajectory start and
 // the step size.
-static constexpr unsigned IT = NX + NP;
-static constexpr unsigned IH = NX + NP + 1;
-static constexpr unsigned ND = NX + NP + 2;
+static constexpr unsigned ND = NX + NP;
 
 using D = dual<double, ND>;
 
@@ -142,7 +139,7 @@ using D = dual<double, ND>;
 // ---------------------------------------------------------------------------
 
 // S is [NX x ND] row-major, x_end is the trajectory end.
-static void forward_steps(unsigned n_steps, bool seed_time,
+static void forward_steps(unsigned n_steps,
                           std::vector<double>& S, std::vector<double>& x_end)
 {
   std::vector<D> p(NP);
@@ -150,7 +147,6 @@ static void forward_steps(unsigned n_steps, bool seed_time,
   auto sys = make_system<D>(p);
 
   D t0(T0), h(DT);
-  if (seed_time) { t0.diff(IT); h.diff(IH); }
 
   std::vector<D> x(NX), xout(NX), xerr(NX);
   for (std::size_t i = 0; i < NX; ++i) { x[i] = D(X0[i]); x[i].diff(i); }
@@ -175,11 +171,10 @@ static void forward_steps(unsigned n_steps, bool seed_time,
 }
 
 // ---------------------------------------------------------------------------
-//  Reverse: replay each step from its checkpoint, newest first, handing the
-//  step-start cotangent to the previous step and summing the shared ones.
+//  Reverse: the adjoint of each step from its checkpoint, newest first, handing
+//  the step-start cotangent to the previous step and summing the shared ones.
 // ---------------------------------------------------------------------------
 
-using rec_type = cppde::reverse::step_recorder<cppde::tsit5<double>, double>;
 using cp_type  = cppde::reverse::step_checkpoint<cppde::tsit5<double>, double>;
 
 // Forward value run, collecting one checkpoint per accepted step.
@@ -203,42 +198,6 @@ static void checkpoints(unsigned n_steps, std::vector<cp_type>& cps,
   x_end = x;
 }
 
-// wx on entry is the cotangent of the trajectory end, on return that of its
-// start. wp, wt0 and wh accumulate over the steps, since theta, t0 and h are
-// shared by all of them; t_s = t0 + s*h routes each step's wt onto both.
-static void reverse_steps(const std::vector<cp_type>& cps, bool tape_stepsize,
-                          std::vector<double>& wx, std::vector<double>& wp,
-                          double& wt0, double& wh,
-                          std::vector<double>& replayed_end)
-{
-  wp.assign(NP, 0.0);
-  wt0 = 0.0;
-  wh  = 0.0;
-  for (std::size_t s = cps.size(); s-- > 0;) {
-    rec_type rec;
-    rec.tape_stepsize(tape_stepsize);
-    rec.begin();
-
-    std::vector<codual<double>> p(NP);
-    for (std::size_t j = 0; j < NP; ++j) p[j] = codual<double>(P[j]);
-    rec.independent(p);
-    // The functor copies params; that copy carries the slots to read back.
-    auto sys = make_system<codual<double>>(p);
-    rec.record(sys, cps[s]);
-
-    if (s + 1 == cps.size()) {
-      replayed_end.assign(NX, 0.0);
-      for (std::size_t i = 0; i < NX; ++i) replayed_end[i] = rec.xout()[i].x();
-    }
-
-    rec.seed(wx);
-    rec.sweep();
-    rec.accumulate(sys.first.params, wp);
-    wt0 += rec.wt();
-    wh  += rec.wdt() + static_cast<double>(s) * rec.wt();
-    wx   = rec.wx();
-  }
-}
 
 // ---------------------------------------------------------------------------
 //  The same trajectory backwards, written rather than recorded. The step size
@@ -269,46 +228,32 @@ static void closed_steps(const std::vector<cp_type>& cps,
 
 // ---------------------------------------------------------------------------
 
-static void compare(const char* name, unsigned n_steps, const double* w,
-                    bool tape_stepsize)
+static void compare(const char* name, unsigned n_steps, const double* w)
 {
   std::vector<double> S, fwd_end;
-  forward_steps(n_steps, tape_stepsize, S, fwd_end);
+  forward_steps(n_steps, S, fwd_end);
 
   std::vector<cp_type> cps;
   std::vector<double>  cp_end;
   checkpoints(n_steps, cps, cp_end);
 
-  std::vector<double> wx(w, w + NX), wp, replayed_end;
-  double wt0 = 0.0, wh = 0.0;
-  reverse_steps(cps, tape_stepsize, wx, wp, wt0, wh, replayed_end);
-
-  // The written adjoint over the same checkpoints. Only against the frozen
-  // reference: it does not carry the step size, by design.
-  std::vector<double> cx(w, w + NX), cp_par;
-  if (!tape_stepsize) closed_steps(cps, cx, cp_par);
+  std::vector<double> wx(w, w + NX), wp;
+  closed_steps(cps, wx, wp);
 
   std::printf("%-20s", name);
   for (std::size_t i = 0; i < NX; ++i) std::printf(" %.17g", wx[i]);
   std::printf("  |");
   for (std::size_t j = 0; j < NP; ++j) std::printf(" %.17g", wp[j]);
-  std::printf("  | %.17g %.17g\n", wt0, wh);
+  std::printf("\n");
 
   // w' S, the contraction the reverse pass computes in one sweep.
   for (unsigned j = 0; j < ND; ++j) {
     double wS = 0.0;
     for (std::size_t i = 0; i < NX; ++i) wS += w[i] * S[i * ND + j];
-    double got;
-    std::string tag;
-    if      (j < NX)  { got = wx[j];      tag = "  dx" + std::to_string(j); }
-    else if (j < IT)  { got = wp[j - NX]; tag = "  dp" + std::to_string(j - NX); }
-    else if (j == IT) { got = wt0;        tag = "  dt0"; }
-    else              { got = wh;         tag = "  dh"; }
+    const double got = (j < NX) ? wx[j] : wp[j - NX];
+    const std::string tag = (j < NX) ? "  dx" + std::to_string(j)
+                                     : "  dp" + std::to_string(j - NX);
     close(wS, got, std::string(name) + tag);
-    if (!tape_stepsize && j < IT) {
-      const double gotc = (j < NX) ? cx[j] : cp_par[j - NX];
-      close(wS, gotc, std::string(name) + " closed" + tag);
-    }
   }
 
   // The step end must survive recomputation under a different scalar type and,
@@ -317,14 +262,11 @@ static void compare(const char* name, unsigned n_steps, const double* w,
   for (std::size_t i = 0; i < NX; ++i) {
     close(fwd_end[i], cp_end[i],
           std::string(name) + " value run x" + std::to_string(i), 1e-15);
-    close(cp_end[i], replayed_end[i],
-          std::string(name) + " replay x" + std::to_string(i), 1e-15);
   }
 }
 
 int main() {
-  std::printf("%-20s %-20s %-20s %-20s\n", "case", "w'dx/dx0", "| w'dx/dtheta",
-              "| w'dx/dt0, dh");
+  std::printf("%-20s %-20s %s\n", "case", "w'dx/dx0", "| w'dx/dtheta");
 
   // Unit seeds are the rows of the Jacobian, one sweep each.
   static const double e0[NX] = {1.0, 0.0, 0.0};
@@ -333,25 +275,20 @@ int main() {
   // What an objective seeds: a reduction over every state at once.
   static const double wm[NX] = {0.6, -1.3, 2.2};
 
-  compare("1 step e0", 1, e0, true);
-  compare("1 step e1", 1, e1, true);
-  compare("1 step e2", 1, e2, true);
-  compare("1 step mixed", 1, wm, true);
+  compare("1 step e0", 1, e0);
+  compare("1 step e1", 1, e1);
+  compare("1 step e2", 1, e2);
+  compare("1 step mixed", 1, wm);
 
-  // Frozen: t and h off the tape. The x and theta block must be untouched and
-  // both time cotangents exactly zero.
-  compare("1 step frozen", 1, wm, false);
-  compare("4 steps frozen", 4, wm, false);
+  compare("4 steps mixed", 4, wm);
 
-  // Chained: h is one variable shared by every step, so its cotangent is a sum,
-  // and t = t0 + s*h routes each step's wt onto t0 and h both.
-  compare("2 steps e0", 2, e0, true);
-  compare("2 steps mixed", 2, wm, true);
-  compare("4 steps mixed", 4, wm, true);
+  compare("2 steps e0", 2, e0);
+  compare("2 steps mixed", 2, wm);
+  compare("4 steps mixed", 4, wm);
 
   // A zero seed must produce a zero cotangent.
   static const double z[NX] = {0.0, 0.0, 0.0};
-  compare("1 step zero", 1, z, true);
+  compare("1 step zero", 1, z);
 
   std::printf(g_failures == 0 ? "\nOK\n" : "\n%d FAILURES\n", g_failures);
   return g_failures == 0 ? 0 : 1;

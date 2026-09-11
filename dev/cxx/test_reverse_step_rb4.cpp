@@ -27,7 +27,6 @@
 #include <cppde/cppde.hpp>
 #include <cppde/cppde_adjoint_step.hpp>
 
-using cppde::codual;
 using cppde::dual;
 
 static int g_failures = 0;
@@ -238,44 +237,6 @@ static void closed_steps(const std::vector<cp_type>& cps,
   for (std::size_t j = 0; j < NP; ++j) wp[j] = wphi[NX + j];
 }
 
-static void reverse_steps(const std::vector<cp_type>& cps,
-                          std::vector<double>& wx, std::vector<double>& wp,
-                          std::vector<double>& replayed_end)
-{
-  using C = codual<double>;
-  std::vector<double> pv(P, P + NP);
-  auto jac_d = jacobian<double>{pv};
-
-  wp.assign(NP, 0.0);
-  for (std::size_t s = cps.size(); s-- > 0;) {
-    cppde::reverse::step_recorder<StepD, double> rec;
-    rec.begin();
-
-    std::vector<C> p(NP);
-    for (std::size_t j = 0; j < NP; ++j) p[j] = C(P[j]);
-    rec.independent(p);
-    auto sys = make_system<C>(p);
-
-    rec.load(cps[s], cps[s].dt);
-
-    // W at the step start, which is where rosenbrock4 evaluates it.
-    cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
-    solver.prepare(cps[s].x, cps[s].t,
-                   rec.stepper().replay_inv_gamma_dt(cps[s].dt));
-
-    rec.attempt_staged(sys, rec.dt_in(), solver);
-
-    if (s + 1 == cps.size()) {
-      replayed_end.assign(NX, 0.0);
-      for (std::size_t i = 0; i < NX; ++i) replayed_end[i] = rec.xout()[i].x();
-    }
-
-    rec.seed(wx);
-    rec.sweep();
-    rec.accumulate(p, wp);
-    wx = rec.wx();
-  }
-}
 
 // ---------------------------------------------------------------------------
 
@@ -288,35 +249,30 @@ static void compare(const char* name, unsigned n_steps, const double* w)
   std::vector<double>  cp_end;
   checkpoints(n_steps, cps, cp_end);
 
-  std::vector<double> wx(w, w + NX), wp, replayed_end;
-  reverse_steps(cps, wx, wp, replayed_end);
-
   std::vector<double> cwx(w, w + NX), cwp;
   closed_steps(cps, cwx, cwp);
 
   std::printf("%-20s", name);
-  for (std::size_t i = 0; i < NX; ++i) std::printf(" %.17g", wx[i]);
+  for (std::size_t i = 0; i < NX; ++i) std::printf(" %.17g", cwx[i]);
   std::printf("  |");
-  for (std::size_t j = 0; j < NP; ++j) std::printf(" %.17g", wp[j]);
+  for (std::size_t j = 0; j < NP; ++j) std::printf(" %.17g", cwp[j]);
   std::printf("\n");
 
   for (unsigned j = 0; j < ND; ++j) {
     double wS = 0.0;
     for (std::size_t i = 0; i < NX; ++i) wS += w[i] * S[i * ND + j];
-    const double got = (j < NX) ? wx[j] : wp[j - NX];
+    const double got = (j < NX) ? cwx[j] : cwp[j - NX];
     const std::string tag = (j < NX) ? "  dx" + std::to_string(j)
                                      : "  dp" + std::to_string(j - NX);
     close(wS, got, std::string(name) + tag);
-    const double gotc = (j < NX) ? cwx[j] : cwp[j - NX];
-    close(wS, gotc, std::string(name) + " written" + tag);
   }
 
-  // The stage values come back out of the factorisation rather than a
-  // checkpoint, so the replayed step end is the check that they came back right.
-  for (std::size_t i = 0; i < NX; ++i) {
-    close(fwd_end[i], cp_end[i], std::string(name) + " value run x" + std::to_string(i));
-    close(cp_end[i], replayed_end[i], std::string(name) + " replay x" + std::to_string(i));
-  }
+  // The stages come back out of the factorisation rather than a checkpoint, so
+  // the run in double and the checkpointed one agreeing on the step end is the
+  // check that they came back right.
+  for (std::size_t i = 0; i < NX; ++i)
+    close(fwd_end[i], cp_end[i],
+          std::string(name) + " value run x" + std::to_string(i));
 }
 
 int main() {

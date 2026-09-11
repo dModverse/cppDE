@@ -161,8 +161,8 @@ class ScalarType(str):
                 Decides whether std::exp becomes cppde::exp and how many .val()
                 calls peel a scalar out.
       arena     whether those layers allocate in cppde::dual_arena, so the
-                right-hand side needs a scope. True for dual, false for codual,
-                which carries a tape index and allocates nothing.
+                right-hand side needs a scope. True for dual, false for a plain
+                double.
 
     Matching the name is what this replaces, and it is not a stylistic
     preference: a third type name once passed every `num_type in ("AD", "AD2")`
@@ -1278,9 +1278,8 @@ def _arena_scope_lines(num_type):
     only: working-set growth is bounded by total RHS calls × per-RHS
     temps, but no per-call scope is safe.
 
-    A plain double has no arena to bound, and neither has a tape type: a codual
-    carries an index, not a tangent, and allocates nothing here. Both say so
-    through ScalarType.arena rather than through their name."""
+    A plain double has no arena to bound, and says so through ScalarType.arena
+    rather than through its name."""
     if _uses_arena(num_type) and _ad_level(num_type) == 1:
         return ["    cppde::dual_arena::scope _rhs_arena_scope;"]
     return []

@@ -5,11 +5,10 @@
 #   dev/cxx/run.sh --record F   write the numeric output to F (reference run)
 #   dev/cxx/run.sh --against F  diff this build's output against F
 #
-# A leading --codual, --reverse-step, --reverse-step-rb4,
-# --reverse-step-multistep, --reverse-trajectory, --reverse-trajectory-methods,
-# --reverse-events, --reverse-forcing, --reverse-sparse, --err-weights or
-# --sparse-transpose selects a reverse-AD harness; --bench-codual and
-# --bench-revmem select a bench rather than a test.
+# A leading --reverse-step, --reverse-step-rb4, --reverse-step-multistep,
+# --reverse-trajectory-methods, --reverse-events, --reverse-forcing,
+# --reverse-sparse, --err-weights or --sparse-transpose selects a reverse-AD
+# harness; --bench-adjoint-step selects a bench rather than a test.
 #
 # The output is the assertion: two revisions that compute the same thing must
 # produce byte-identical output.
@@ -20,11 +19,6 @@ SRC="$REPO/dev/cxx/test_dual_expr.cpp"
 OUT=${TMPDIR:-/tmp}/cppde_etest
 
 case "${1:-}" in
-  --codual)
-    SRC="$REPO/dev/cxx/test_codual.cpp"
-    OUT=${TMPDIR:-/tmp}/cppde_codual
-    shift
-    ;;
   --reverse-step)
     SRC="$REPO/dev/cxx/test_reverse_step.cpp"
     OUT=${TMPDIR:-/tmp}/cppde_reverse_step
@@ -43,11 +37,6 @@ case "${1:-}" in
   --reverse-trajectory-methods)
     SRC="$REPO/dev/cxx/test_reverse_trajectory_methods.cpp"
     OUT=${TMPDIR:-/tmp}/cppde_reverse_trajectory_methods
-    shift
-    ;;
-  --reverse-trajectory)
-    SRC="$REPO/dev/cxx/test_reverse_trajectory.cpp"
-    OUT=${TMPDIR:-/tmp}/cppde_reverse_trajectory
     shift
     ;;
   --reverse-events)
@@ -69,16 +58,6 @@ case "${1:-}" in
   --bench-adjoint-step)
     SRC="$REPO/dev/cxx/bench_adjoint_step.cpp"
     OUT=${TMPDIR:-/tmp}/cppde_bench_adjoint_step
-    shift
-    ;;
-  --bench-codual)
-    SRC="$REPO/dev/cxx/bench_codual.cpp"
-    OUT=${TMPDIR:-/tmp}/cppde_bench_codual
-    shift
-    ;;
-  --bench-revmem)
-    SRC="$REPO/dev/cxx/bench_revmem.cpp"
-    OUT=${TMPDIR:-/tmp}/cppde_bench_revmem
     shift
     ;;
   --err-weights)

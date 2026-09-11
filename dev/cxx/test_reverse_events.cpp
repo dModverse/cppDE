@@ -34,7 +34,6 @@
 
 #include <cppde/cppde.hpp>
 
-using cppde::codual;
 using cppde::dual;
 
 static int g_failures = 0;
@@ -154,6 +153,93 @@ static event_set<V> make_events(const std::vector<V>& p) {
 // ---------------------------------------------------------------------------
 //  Driver plumbing, one shape per stepper family.
 // ---------------------------------------------------------------------------
+
+// What the generator emits beside the model for a reverse build.
+struct adjoint_terms {
+  std::vector<double> p;
+
+  void jac_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                 const double& t, std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[0] = (-p[0]) * lam[0] + (p[0]) * lam[1];
+    out[1] = (p[1] * x[2]) * lam[0]
+           + (-p[1] * x[2] - 2.0 * p[2] * x[1]) * lam[1]
+           + (2.0 * p[2] * x[1] * std::cos(t)) * lam[2];
+    out[2] = (p[1] * x[1]) * lam[0] + (-p[1] * x[1]) * lam[1]
+           + (-p[3]) * lam[2];
+  }
+
+  void dfdp_t_vec_axpy(const std::vector<double>& x,
+                       const std::vector<double>& lam,
+                       const double& t, const double& sc,
+                       double* out) const {
+    out[NX + 0] += sc * ((-x[0]) * lam[0] + (x[0]) * lam[1]);
+    out[NX + 1] += sc * ((x[1] * x[2]) * lam[0] + (-x[1] * x[2]) * lam[1]);
+    out[NX + 2] += sc * ((-x[1] * x[1]) * lam[1]
+                         + (x[1] * x[1] * std::cos(t)) * lam[2]);
+    out[NX + 3] += sc * ((-x[2]) * lam[2]);
+  }
+
+  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v,
+                   const std::vector<double>& lam, const double& t,
+                   std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[0] = 0.0;
+    out[1] = (p[1] * v[2]) * lam[0]
+           + (-2.0 * p[2] * v[1] - p[1] * v[2]) * lam[1]
+           + (2.0 * p[2] * std::cos(t) * v[1]) * lam[2];
+    out[2] = (p[1] * v[1]) * lam[0] + (-p[1] * v[1]) * lam[1];
+  }
+
+  void jvp_p_t_vec_axpy(const std::vector<double>& x,
+                        const std::vector<double>& v,
+                        const std::vector<double>& lam, const double& t,
+                        const double& sc, double* out) const {
+    const double q = x[2] * v[1] + x[1] * v[2];
+    out[NX + 0] += sc * ((-v[0]) * lam[0] + (v[0]) * lam[1]);
+    out[NX + 1] += sc * ((q) * lam[0] + (-q) * lam[1]);
+    out[NX + 2] += sc * ((-2.0 * x[1] * v[1]) * lam[1]
+                         + (2.0 * x[1] * std::cos(t) * v[1]) * lam[2]);
+    out[NX + 3] += sc * ((-v[2]) * lam[2]);
+  }
+
+  void dfdt_x_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                    const double& t, std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[1] = (-2.0 * p[2] * x[1] * std::sin(t)) * lam[2];
+  }
+
+  void dfdt_p_t_vec_axpy(const std::vector<double>& x,
+                         const std::vector<double>& lam,
+                         const double& t, const double& sc,
+                         double* out) const {
+    out[NX + 2] += sc * ((-x[1] * x[1] * std::sin(t)) * lam[2]);
+  }
+};
+
+// And what it emits for the jump: the derivatives of the event expressions
+// themselves. The fixed event multiplies state 0 by 0.5 + p3 at a constant
+// time; the root event adds 0.05 * p1 to state 2 where x0 crosses a level.
+struct event_adjoint_terms {
+  std::vector<double> p;
+
+  void fixed_dh_dx(int, const std::vector<double>&, const double&,
+                   std::vector<double>& out) const { out.assign(NX, 0.0); }
+  void fixed_dh_dp_axpy(int ev, const std::vector<double>&, const double&,
+                        const double& sc, double* out) const {
+    if (ev == 0) out[NX + 3] += sc * 1.0;
+  }
+  void fixed_dtime_dp_axpy(int, const double&, double*) const {}
+
+  void root_dh_dx(int, const std::vector<double>&, const double&,
+                  std::vector<double>& out) const { out.assign(NX, 0.0); }
+  void root_dh_dp_axpy(int ev, const std::vector<double>&, const double&,
+                       const double& sc, double* out) const {
+    if (ev == 0) out[NX + 1] += sc * 0.05;
+  }
+  void root_dg_dp_axpy(int, const std::vector<double>&, const double&,
+                       const double&, double*) const {}
+};
 
 template<class S> struct pipeline;
 
@@ -375,31 +461,26 @@ static void run_method(const char* name, double tol)
   auto jac_d = jacobian<double>{pv};
 
   const std::size_t n_seed = store.n_obs() * NX;
-  std::size_t max_nodes = 0;
   auto sweep_with = [&](const std::vector<double>& seeds, std::vector<double>& out) {
-    cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
-    cppde::reverse::trajectory_recorder<S, double> rev;
-    rev.sweep(store, pv,
-              [](const std::vector<codual<double>>& pc) {
-                return make_system<codual<double>>(pc);
-              },
-              [](const std::vector<codual<double>>& pc) {
-                return make_events<codual<double>>(pc);
-              },
-              seeds, solver);
-    if (rev.max_tape_nodes() > max_nodes) max_nodes = rev.max_tape_nodes();
-    // Everything the replay produced has to be the run's own output, the
-    // post-jump observations included: a replay that lands elsewhere
-    // differentiates elsewhere and nothing else would say so.
-    for (std::size_t o = 0; o < store.n_obs(); ++o)
-      if (store.obs(o).step > 0 || store.obs(o).event != NPOS)
-        for (std::size_t i = 0; i < NX; ++i)
-          close(x_run[o * NX + i], rev.replayed_obs()[o * NX + i],
-                std::string(name) + " replayed value " + std::to_string(o * NX + i),
-                tol);
+    adjoint_terms adj{pv};
+    event_adjoint_terms eadj{pv};
+    auto sysd = make_system<double>(pv);
+    auto evd  = make_events<double>(pv);
+    auto jmp  = cppde::adjoint::make_jump_terms(sysd, eadj, evd.fixed, evd.root);
     out.assign(ND, 0.0);
-    for (std::size_t i = 0; i < NX; ++i) out[i] = rev.wx0()[i];
-    for (std::size_t j = 0; j < NP; ++j) out[NX + j] = rev.wp()[j];
+    if constexpr (cppde::reverse::has_step_snapshot<S>::value) {
+      cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
+      cppde::adjoint::closed_multistep_trajectory<S> tr;
+      tr.sweep(store, NX + NP, seeds.data(), adj, solver, jmp);
+      for (std::size_t i = 0; i < NX; ++i) out[i] = tr.wx0()[i];
+      for (std::size_t j = 0; j < NP; ++j) out[NX + j] = tr.wp()[NX + j];
+    } else {
+      S st;
+      cppde::adjoint::closed_onestep_trajectory<S> tr;
+      tr.sweep(store, NX + NP, seeds.data(), sysd, adj, st, jmp);
+      for (std::size_t i = 0; i < NX; ++i) out[i] = tr.wx0()[i];
+      for (std::size_t j = 0; j < NP; ++j) out[NX + j] = tr.wp()[NX + j];
+    }
   };
 
   auto compare = [&](const std::string& what, const std::vector<double>& seeds) {
@@ -428,9 +509,6 @@ static void run_method(const char* name, double tol)
     all[k] = 0.3 * static_cast<double>(k % 5) - 0.7;
   compare("all", all);
 
-  const std::size_t node = sizeof(cppde::codual_tape<double>::node);
-  std::printf("  tape %zu nodes at the widest step, %zu bytes\n",
-              max_nodes, max_nodes * node);
 }
 
 int main() {

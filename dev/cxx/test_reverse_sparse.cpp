@@ -32,7 +32,6 @@
 
 #include <cppde/cppde.hpp>
 
-using cppde::codual;
 using cppde::dual;
 
 static int g_failures = 0;
@@ -123,6 +122,65 @@ using D = dual<double, ND_MAX>;
 // ---------------------------------------------------------------------------
 //  The controller and dense-output wrapper each stepper family is driven with.
 // ---------------------------------------------------------------------------
+
+// What the generator emits beside the model for a reverse build.
+struct adjoint_terms {
+  std::vector<double> p;
+
+  void jac_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                 const double& t, std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[0] = (-p[0]) * lam[0] + (p[0]) * lam[1];
+    out[1] = (p[1] * x[2]) * lam[0]
+           + (-p[1] * x[2] - 2.0 * p[2] * x[1]) * lam[1]
+           + (2.0 * p[2] * x[1] * std::cos(t)) * lam[2];
+    out[2] = (p[1] * x[1]) * lam[0] + (-p[1] * x[1]) * lam[1];
+  }
+
+  void dfdp_t_vec_axpy(const std::vector<double>& x,
+                       const std::vector<double>& lam,
+                       const double& t, const double& sc,
+                       double* out) const {
+    out[NX + 0] += sc*((-x[0]) * lam[0] + (x[0]) * lam[1]);
+    out[NX + 1] += sc*((x[1] * x[2]) * lam[0] + (-x[1] * x[2]) * lam[1]);
+    out[NX + 2] += sc*((-x[1] * x[1]) * lam[1] + (x[1] * x[1] * std::cos(t)) * lam[2]);
+  }
+
+  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v,
+                   const std::vector<double>& lam, const double& t,
+                   std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[0] = 0.0;
+    out[1] = (p[1] * v[2]) * lam[0]
+           + (-2.0 * p[2] * v[1] - p[1] * v[2]) * lam[1]
+           + (2.0 * p[2] * std::cos(t) * v[1]) * lam[2];
+    out[2] = (p[1] * v[1]) * lam[0] + (-p[1] * v[1]) * lam[1];
+  }
+
+  void jvp_p_t_vec_axpy(const std::vector<double>& x,
+                        const std::vector<double>& v,
+                        const std::vector<double>& lam, const double& t,
+                        const double& sc, double* out) const {
+    const double q = x[2] * v[1] + x[1] * v[2];
+    out[NX + 0] += sc * ((-v[0]) * lam[0] + (v[0]) * lam[1]);
+    out[NX + 1] += sc * ((q) * lam[0] + (-q) * lam[1]);
+    out[NX + 2] += sc * ((-2.0 * x[1] * v[1]) * lam[1]
+                         + (2.0 * x[1] * std::cos(t) * v[1]) * lam[2]);
+  }
+
+  void dfdt_x_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                    const double& t, std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[1] = (-2.0 * p[2] * x[1] * std::sin(t)) * lam[2];
+  }
+
+  void dfdt_p_t_vec_axpy(const std::vector<double>& x,
+                         const std::vector<double>& lam,
+                         const double& t, const double& sc,
+                         double* out) const {
+    out[NX + 2] += sc * ((-x[1] * x[1] * std::sin(t)) * lam[2]);
+  }
+};
 
 template<class S> struct pipeline;
 
@@ -406,28 +464,18 @@ static void run_method(const char* name, double tol)
   auto jac_d = jacobian<double>{pv};
 
   const std::size_t n_seed = store.n_obs() * NX;
-  std::size_t max_nodes = 0;
   auto sweep_with = [&](const std::vector<double>& seeds, std::vector<double>& out) {
     cppde::reverse::equation_solver<jacobian<double>, double, true> solver(jac_d);
-    cppde::reverse::trajectory_recorder<S, double> rev;
-    rev.sweep(store, pv,
-              [](const std::vector<codual<double>>& pc) {
-                return make_system<codual<double>>(pc);
-              },
-              seeds, solver);
-    if (rev.max_tape_nodes() > max_nodes) max_nodes = rev.max_tape_nodes();
-    // An observation before the first step never passes through one, so the
-    // replay has nothing to interpolate there.
-    for (std::size_t o = 0; o < store.n_obs(); ++o)
-      if (store.obs(o).step > 0)
-        for (std::size_t i = 0; i < NX; ++i)
-          close(x_run[o * NX + i], rev.replayed_obs()[o * NX + i],
-                std::string(name) + " replayed value " + std::to_string(o * NX + i), tol);
+    cppde::adjoint::closed_multistep_trajectory<S> tr;
+    adjoint_terms adj{pv};
+    tr.sweep(store, NX + NP, seeds.data(), adj, solver);
     out.assign(nd, 0.0);
-    for (std::size_t i = 0; i < NX; ++i) out[i] = rev.wx0()[i];
-    check(rev.whistory0().empty(),
+    for (std::size_t i = 0; i < NX; ++i) out[i] = tr.wx0()[i];
+    check(tr.whistory0().empty() ||
+          std::all_of(tr.whistory0().begin(), tr.whistory0().end(),
+                      [](double v) { return v == 0.0; }),
           std::string(name) + " the start's history cotangent is collapsed");
-    for (std::size_t j = 0; j < NP; ++j) out[n_carry + j] = rev.wp()[j];
+    for (std::size_t j = 0; j < NP; ++j) out[n_carry + j] = tr.wp()[NX + j];
   };
 
   auto compare = [&](const char* what, const std::vector<double>& seeds) {
@@ -457,14 +505,6 @@ static void run_method(const char* name, double tol)
     all[k] = 0.3 * static_cast<double>(k % 5) - 0.7;
   compare("all", all);
 
-  // The bound the design claims: one step of tape, not one trajectory. Printed
-  // per method because what a step costs differs by an order of magnitude
-  // between them, rosenbrock4 putting its whole iteration matrix on the tape
-  // where an explicit method puts only its stages.
-  const std::size_t node = sizeof(cppde::codual_tape<double>::node);
-  std::printf("  tape %zu nodes at the widest step, %zu bytes;"
-              " the whole run taped would be %zu\n",
-              max_nodes, max_nodes * node, max_nodes * store.n_steps() * node);
 }
 
 int main() {

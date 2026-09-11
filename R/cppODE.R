@@ -260,12 +260,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   numLevel <- if (deriv2) 2L else if (deriv) 1L else 0L
   numArena <- deriv || deriv2
 
-  # The reverse body's own type. A codual carries a tape index rather than a
-  # tangent, so it has one derivative layer and no arena to bound.
-  revType  <- "cppde::codual<double>"
-  revLevel <- 1L
-  revArena <- FALSE
-
   # Auto-selected sparse without KLU -> dense. An explicit sparse = TRUE
   # is left alone and reaches compile().
   sparse_for_codegen <- sparse
@@ -299,28 +293,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   adj_code <- codegen_result$adj_code
   time_derivs_str <- codegen_result$time_derivs
 
-  # The same model body a second time on the reverse scalar type. Two
-  # generations rather than one template, because the emitted code asks the
-  # scalar type for things a double does not answer, and because the two live
-  # in one translation unit and have to be told apart by namespace anyway.
-  rev_ode_code <- rev_jac_code <- ""
-  if (is_reverse) {
-    rev_result <- codegen$generate_ode_cpp(
-      rhs_dict = as.list(setNames(rhs, variables)),
-      params_list = params,
-      num_type = revType,
-      ad_level = revLevel,
-      arena = revArena,
-      fixed_states = fixed_initials,
-      fixed_params = fixed_params,
-      forcings_list = forcings,
-      sparse = sparse_for_codegen,
-      skip_jacobian = FALSE
-    )
-    rev_ode_code <- rev_result$ode_code
-    rev_jac_code <- rev_result$jac_code
-  }
-
   if (verbose) message("  \u2713 ODE and Jacobian generated")
 
   # --- Sparse LU decision ---
@@ -335,7 +307,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
   # --- Generate event code if needed ---
-  event_code <- rev_event_code <- event_adj_code <- ""
+  event_code <- event_adj_code <- ""
   if (!is.null(events)) {
     if (verbose) message("Generating event code...")
 
@@ -352,21 +324,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     )
 
     event_code <- paste(event_lines, collapse = "\n")
-
-    if (is_reverse) {
-      rev_event_lines <- codegen$generate_event_code(
-        events_df = events,
-        states_list = variables,
-        params_list = params,
-        n_states = n_variables,
-        num_type = revType,
-        ad_level = revLevel,
-        arena = revArena,
-        forcings_list = forcings,
-        rhs_dict = as.list(setNames(rhs, variables))
-      )
-      rev_event_code <- paste(rev_event_lines, collapse = "\n")
-    }
 
     ## Fixed-event times as plain-double expressions over the flat [states, params]
     ## vector, so the batch entry can size its output exactly. NULL means it cannot:
@@ -417,8 +374,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   # --- Generate forcing initialization code ---
   forcing_init_code <- paste(codegen$generate_forcing_init_code(n_forcings, numType), collapse = "\n")
-  rev_forcing_init_code <- if (is_reverse)
-    paste(codegen$generate_forcing_init_code(n_forcings, revType), collapse = "\n") else ""
 
 
   # --- C++ includes ---
@@ -439,9 +394,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   )
 
   # --- Using declarations ---
-  # No scalar alias: the emitted code spells cppde::dual<double, N> and
-  # cppde::codual<double> out, so nothing downstream has to know what a
-  # three-letter name stands for.
+  # No scalar alias: the emitted code spells cppde::dual<double, N> out, so
+  # nothing downstream has to know what a three-letter name stands for.
   if (deriv2 || deriv) {
     usings <- c(
       "using namespace cppde;"
@@ -1274,18 +1228,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # wp the flat vector's, and an event value that reads an initial state puts a
   # contribution on both, hence the sum on the state rows.
   if (is_reverse) {
-    solver_decl <- if (is_explicit(method)) character(0) else c(
+    # The transposed solve a corrector needs. An explicit method has none, and
+    # a Rosenbrock stage transposes the stepper's own factorisation.
+    solver_decl <- if (written_onestep) character(0) else c(
       sprintf("  cppde::reverse::equation_solver<jacobian, double, %s> _rev_solver(jac);",
               if (use_sparse) "true" else "false"))
-    sweep_call <- if (is_explicit(method))
-      "        _seed_col);" else "        _seed_col, _rev_solver);"
-    events_arg <- if (nzchar(rev_event_code)) c(
-      "        [&](const std::vector<cppde::codual<double> >& pc) {",
-      sprintf("          typename cppde::reverse::trajectory_recorder<%s, double>::event_set ev;",
-              rev_stepper_type),
-      "          rev_::build_events(pc, _rev_F, ev.fixed, ev.root);",
-      "          return ev;",
-      "        },") else character(0)
 
     externC <- c(externC,
       "",
@@ -1319,28 +1266,12 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       sprintf("  if (args.n_seed_states != %d)", n_variables),
       "    return res.fail(cppde::RC_ILL_INPUT, \"seed has the wrong state count\");",
       "",
-      "  // Forcings on the reverse type. Their nodes are numbers, so this is a",
-      "  // second reader over the same data, not a second interpolation.",
-      "  std::vector<cppde::PchipForcing<cppde::codual<double> > > _rev_forcings(n_forcings);",
-      "  std::vector<const cppde::PchipForcing<cppde::codual<double> >*> _rev_F(n_forcings);",
-      "  for (int fi = 0; fi < n_forcings; ++fi) {",
-      "    const int n_points = args.flen[fi];",
-      "    std::vector<double> ft(args.ftimes[fi], args.ftimes[fi] + n_points);",
-      "    std::vector<double> fv(args.fvalues[fi], args.fvalues[fi] + n_points);",
-      "    _rev_forcings[fi].initialize(ft, fv);",
-      "    _rev_F[fi] = &_rev_forcings[fi];",
-      "  }",
-      "",
       "  std::vector<double> _theta(full_params.begin(), full_params.end());",
       "  const int n_seed = args.n_seed_cols;",
       "  res.n_adj_rows = n_phi_rows;",
       "  res.n_adj_cols = n_seed;",
       "  res.adjoint.assign((size_t)n_phi_rows * n_seed, 0.0);",
       solver_decl,
-      if (!use_written) c(
-        sprintf("  cppde::reverse::trajectory_recorder<%s, double> _rev;",
-                rev_stepper_type),
-        "  _rev.trace_lambda(args.adj_trace);") else character(0),
       "  if (args.adj_trace) {",
       "    const int _ns = (int)_rev_store.n_steps();",
       sprintf("    res.n_adj_steps = _ns;  res.n_adj_states = %d;", n_variables),
@@ -1397,43 +1328,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         "#endif",
         "    return res.return_code;",
         "  }") else character(0),
-      # The taped sweep, for a model the written one does not cover. It is not
-      # a fallback: where the written path applies it returns above, and a
-      # Rosenbrock replay on a sparse Jacobian does not even compile.
-      if (use_written) character(0) else c(
-      "  for (int c = 0; c < n_seed; ++c) {",
-      "    for (int o = 0; o < n_out; ++o)",
-      sprintf("      for (int i = 0; i < %d; ++i)", n_variables),
-      sprintf("        _seed_col[(size_t)o * %d + i] =", n_variables),
-      sprintf("            args.seed[o + (size_t)n_out * (i + (size_t)%d * c)];", n_variables),
-      "    _rev.sweep(_rev_store, _theta,",
-      "        [&](const std::vector<cppde::codual<double> >& pc) {",
-      "          return std::make_pair(rev_::ode_system(pc, _rev_F),",
-      "                                rev_::jacobian(pc, _rev_F));",
-      "        },",
-      events_arg,
-      sweep_call,
-      sprintf("    for (int i = 0; i < %d; ++i)", n_variables),
-      "      res.adjoint[i + (size_t)n_phi_rows * c] = _rev.wx0()[i] + _rev.wp()[i];",
-      sprintf("    for (int j = %d; j < n_phi_rows; ++j)", n_variables),
-      "      res.adjoint[j + (size_t)n_phi_rows * c] = _rev.wp()[j];",
-      "#ifdef CPPDE_PROFILE",
-      "    // Per-category timings of the sweep itself, to stderr. Empty and",
-      "    // compiled away without -DCPPDE_PROFILE, which cppODE(profile = TRUE)",
-      "    // supplies.",
-      "    _rev.report_profile(_rev_store);",
-      if (!is_explicit(method)) "    _rev_solver.report_profile();" else "",
-      "#endif",
-      "    if (args.adj_trace) {",
-      "      const int _ns = res.n_adj_steps;",
-      "      for (int k = 0; k < _ns; ++k) {",
-      "        res.eta[k + (size_t)_ns * c] = _rev.eta()[k];",
-      sprintf("        for (int i = 0; i < %d; ++i)", n_variables),
-      sprintf("          res.lambda[k + (size_t)_ns * (i + (size_t)%d * c)] =", n_variables),
-      sprintf("              _rev.lambda()[(size_t)k * %d + i];", n_variables),
-      "      }",
-      "    }",
-      "  }"))
+      character(0))
   }
 
   externC <- c(externC, "  return res.return_code;")
@@ -1621,14 +1516,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "    for (size_t i = 0; i < x.size(); ++i) y.push_back(x[i]);",
     "  }",
     "};",
-    event_builder("double", event_code),
-    "",
-    "// The same model on the tape type. The backward pass instantiates it once",
-    "// per step and throws the tape away again, so nothing here outlives a step.",
-    "namespace rev_ {",
-    rev_ode_code, "", rev_jac_code,
-    event_builder(revType, rev_event_code),
-    "}") else character(0)
+    event_builder("double", event_code)) else character(0)
 
   cpp_text <- c(
     paste0("/** Code auto-generated by cppDE ", as.character(utils::packageVersion("cppDE")), " **/"),

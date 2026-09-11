@@ -28,7 +28,6 @@
 namespace cppde {
   template<class T, unsigned N> class dual;
   template<class T, unsigned N> class dual2nd;
-  template<class T>             class codual;
 }
 
 namespace cppde {
@@ -41,18 +40,6 @@ namespace ad_traits {
 template<class T>           struct is_ad : std::false_type {};
 template<class T, unsigned N>     struct is_ad<cppde::dual<T, N>>    : std::true_type {};
 template<class T, unsigned N>     struct is_ad<cppde::dual2nd<T, N>> : std::true_type {};
-
-// ============================================================================
-//  is_reverse<T>
-//
-//  cppde::codual<T> is an AD type but deliberately NOT an is_ad one: is_ad
-//  promises tangent slots, which drive the sensitivity loop in wrms_max_ewt,
-//  the tangent slab and the LU peeling. A codual carries a tape slot instead,
-//  so the few sites that must tell it apart from a plain scalar test this.
-// ============================================================================
-
-template<class T>           struct is_reverse : std::false_type {};
-template<class T>                 struct is_reverse<cppde::codual<T>> : std::true_type {};
 
 // is_dual2nd<T>: matches only cppde::dual2nd<S, N>, not its base class.
 // Used by the LU/slab/multistepper paths to dispatch to the dual2nd-aware
@@ -71,7 +58,6 @@ template<class T, unsigned N>     struct is_dual2nd<cppde::dual2nd<T, N>> : std:
 template<class T>           struct inner_type                    { using type = T; };
 template<class T, unsigned N>     struct inner_type<cppde::dual<T, N>>    { using type = T; };
 template<class T, unsigned N>     struct inner_type<cppde::dual2nd<T, N>> { using type = cppde::dual<T, N>; };
-template<class T>                 struct inner_type<cppde::codual<T>>     { using type = T; };
 template<class T> using inner_type_t = typename inner_type<T>::type;
 
 // ============================================================================
@@ -81,7 +67,6 @@ template<class T> using inner_type_t = typename inner_type<T>::type;
 template<class T>           struct scalar_type                    { using type = T; };
 template<class T, unsigned N>     struct scalar_type<cppde::dual<T, N>>     : scalar_type<T> {};
 template<class T, unsigned N>     struct scalar_type<cppde::dual2nd<T, N>>  : scalar_type<T> {};
-template<class T>                 struct scalar_type<cppde::codual<T>>      : scalar_type<T> {};
 template<class T> using scalar_type_t = typename scalar_type<T>::type;
 
 // ============================================================================
@@ -102,41 +87,18 @@ inline double scalar_value(const cppde::dual2nd<T, N>& v) {
   return scalar_value(v.x());
 }
 
-template<class T>
-inline double scalar_value(const cppde::codual<T>& v) {
-  return scalar_value(v.x());
-}
-
 // ============================================================================
 //  step_coef<TimeArg>: the type the steppers combine their stages in.
 //
-//  Reverse keeps the step size symbolic, so the sweep picks up dy/dh and the
-//  adjoint runs through the step-size control. Forward scalarises it: there dt
-//  carries no tangent anyway, because the error norm and the control law are
-//  both double, so a symbolic h would cost tangent arithmetic on zeros.
-//
-//  CPPDE_SYMBOLIC_STEPSIZE lifts that for forward too. It is how the reverse
-//  step-size term gets an exact oracle instead of a plausibility argument, and
-//  it belongs to a test build, never to a shipped one.
+//  The step size is a constant of the map being differentiated, the grid being
+//  frozen, so it carries no tangent and the stage weights are plain doubles
+//  whatever the state is integrated in.
 // ============================================================================
 
-template<class TimeArg>
-struct step_coef {
-#ifdef CPPDE_SYMBOLIC_STEPSIZE
-  static constexpr bool symbolic = !std::is_arithmetic_v<TimeArg>;
-#else
-  static constexpr bool symbolic = is_reverse<TimeArg>::value;
-#endif
-  using type = std::conditional_t<symbolic, TimeArg, double>;
-};
-
-template<class TimeArg> using step_coef_t = typename step_coef<TimeArg>::type;
+template<class TimeArg> using step_coef_t = double;
 
 template<class TimeArg>
-inline step_coef_t<TimeArg> step_coef_of(const TimeArg& dt) {
-  if constexpr (step_coef<TimeArg>::symbolic) return dt;
-  else return scalar_value(dt);
-}
+inline double step_coef_of(const TimeArg& dt) { return scalar_value(dt); }
 
 // ============================================================================
 //  Bulk extraction / injection helpers (generic over any AD type with the

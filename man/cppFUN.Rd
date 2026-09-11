@@ -57,9 +57,9 @@ named, and the default \code{c("forward", "reverse")} builds both.
 \itemize{
 \item \code{"forward"}: forward-mode AD on \code{cppde::dual}, delivering \code{jac},
 \code{hess} and \code{evaluate}.
-\item \code{"reverse"}: the vector-Jacobian product \code{vjp}, a second
-instantiation of the body over \code{cppde::codual}. Naming one direction
-alone omits the other's entries, and its compile time with them.
+\item \code{"reverse"}: the vector-Jacobian product \code{vjp}, a contraction of the
+symbolic Jacobian. Naming one direction alone omits the other's
+entries, and its compile time with them.
 \item \code{"symbolic"}: an analytic SymPy-derived Jacobian and Hessian
 contracted via BLAS, in place of forward AD. It is a backend for the
 forward direction rather than a direction of its own, so it cannot be

@@ -19,7 +19,6 @@
 #include <cppde/cppde.hpp>
 #include <cppde/cppde_adjoint_step.hpp>
 
-using cppde::codual;
 using cppde::dual;
 
 static int g_failures = 0;
@@ -268,69 +267,6 @@ static void forward_step(const checkpoint<M>& cp, int q_next, double eta,
   }
 }
 
-// ---------------------------------------------------------------------------
-//  Reverse: the same step replayed under codual, seeded on the carry out.
-// ---------------------------------------------------------------------------
-
-template<cppde::multistep_method M>
-static void reverse_step(const checkpoint<M>& cp, const std::vector<double>& w,
-                         std::vector<double>& wz, std::vector<double>& wp,
-                         std::vector<double>& carry_out, double t_interp = 0.0)
-{
-  using C = codual<double>;
-  const std::size_t n = cp.n_states;
-
-  cppde::reverse::step_recorder<stepper_d<M>, double> rec;
-  rec.begin();
-
-  std::vector<C> p(NP);
-  for (std::size_t j = 0; j < NP; ++j) p[j] = C(P[j]);
-  rec.independent(p);
-  auto sys = make_system<C>(p);
-
-  rec.load(cp, cp.dt);
-
-  // The equation's matrix at the solution, in plain doubles: the forward run's
-  // own factorisation belongs to its iteration and is stale by design. Scaled by
-  // gamma, since factorize_W builds W = (1/gamma) I - J and the residual's
-  // derivative in y is gamma * W.
-  std::vector<double> pv(P, P + NP);
-  auto jac_d = jacobian<double>{pv};
-  cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
-
-  rec.attempt_implicit(sys, rec.dt_in(), cp.y, solver);
-  // The equation is res = (y - zn0) + rl1*zn1 - gamma*f, so its derivative in y
-  // is gamma * W, which is what the scale argument carries.
-  const double gamma = rec.implicit_gamma();
-  solver.prepare(cp.y, rec.implicit_t_new(), 1.0 / gamma, gamma);
-
-  if (t_interp > 0.0) {
-    std::vector<C> xi;
-    rec.interpolate(t_interp, xi);
-    carry_out.assign(xi.size(), 0.0);
-    for (std::size_t i = 0; i < xi.size(); ++i) {
-      carry_out[i] = xi[i].x();
-      xi[i].seed(i < w.size() ? w[i] : 0.0);
-    }
-  } else {
-    const auto& co = rec.carry_out();
-    carry_out.assign(co.size(), 0.0);
-    for (std::size_t i = 0; i < co.size(); ++i) {
-      carry_out[i] = co[i].x();
-      co[i].seed(i < w.size() ? w[i] : 0.0);
-    }
-  }
-
-  rec.sweep();
-
-  wz.assign(static_cast<std::size_t>(cp.carry.q + 1) * n, 0.0);
-  for (std::size_t i = 0; i < n; ++i) wz[i] = rec.wx()[i];
-  for (std::size_t i = 0; i < rec.whistory().size(); ++i)
-    wz[n + i] = rec.whistory()[i];
-
-  wp.assign(NP, 0.0);
-  rec.accumulate(p, wp);
-}
 
 // ---------------------------------------------------------------------------
 //  The same step adjoint, written rather than recorded.
@@ -443,8 +379,7 @@ static void bench_method(const char* name)
     fwd.do_step(sysd, xin, cp.t, xout, cp.dt, xerr);
   }, 7, 2000);
 
-  std::vector<double> wz, wp, carry_out, cz, cpar;
-  const double t_tape = timeit([&]{ reverse_step<M>(cp, w, wz, wp, carry_out); }, 7, 2000);
+  std::vector<double> cz, cpar;
   const double t_closed = timeit([&]{ closed_step<M>(cp, w, cz, cpar); }, 7, 2000);
 
   // What the probe alone costs inside the written path.
@@ -470,9 +405,9 @@ static void bench_method(const char* name)
         ops_out.B, ops_out.c, ops_out.q_out);
   }, 7, 2000);
 
-  std::printf("%-7s q %d   forward %6.3f us   taped %6.3f us (%5.1fx)   "
-              "written %6.3f us (%5.2fx)   probe %6.3f = pre %6.3f + tail %6.3f\n",
-              name, cp.carry.q, t_fwd, t_tape, t_tape / t_fwd,
+  std::printf("%-7s q %d   forward %6.3f us   written %6.3f us (%5.2fx)   "
+              "probe %6.3f = pre %6.3f + tail %6.3f\n",
+              name, cp.carry.q, t_fwd,
               t_closed, t_closed / t_fwd, t_probe, t_pre, t_tailp);
 }
 

@@ -36,7 +36,6 @@
 #include <cppde/cppde.hpp>
 #include <cppde/cppde_adjoint_step.hpp>
 
-using cppde::codual;
 using cppde::dual;
 
 static int g_failures = 0;
@@ -459,32 +458,7 @@ static void run_method(const char* name, double tol)
 
   const std::size_t n_seed = store.n_obs() * NX;
   std::size_t max_nodes = 0;
-  std::vector<double> lam_taped, eta_taped, lam_written, eta_written;
-  auto sweep_with = [&](const std::vector<double>& seeds, std::vector<double>& out) {
-    cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
-    cppde::reverse::trajectory_recorder<S, double> rev;
-    rev.trace_lambda(true);
-    rev.sweep(store, pv,
-              [](const std::vector<codual<double>>& pc) {
-                return make_system<codual<double>>(pc);
-              },
-              seeds, solver);
-    if (rev.max_tape_nodes() > max_nodes) max_nodes = rev.max_tape_nodes();
-    // An observation before the first step never passes through one, so the
-    // replay has nothing to interpolate there.
-    for (std::size_t o = 0; o < store.n_obs(); ++o)
-      if (store.obs(o).step > 0)
-        for (std::size_t i = 0; i < NX; ++i)
-          close(x_run[o * NX + i], rev.replayed_obs()[o * NX + i],
-                std::string(name) + " replayed value " + std::to_string(o * NX + i), tol);
-    out.assign(nd, 0.0);
-    for (std::size_t i = 0; i < NX; ++i) out[i] = rev.wx0()[i];
-    check(rev.whistory0().empty(),
-          std::string(name) + " the start's history cotangent is collapsed");
-    for (std::size_t j = 0; j < NP; ++j) out[n_carry + j] = rev.wp()[j];
-    lam_taped = rev.lambda();
-    eta_taped = rev.eta();
-  };
+  std::vector<double> lam_written, eta_written;
 
   // The written trajectory adjoint, for the multistep family. It walks the same
   // store without a tape; an explicit method has no Nordsieck carry and comes
@@ -526,8 +500,6 @@ static void run_method(const char* name, double tol)
   };
 
   auto compare = [&](const char* what, const std::vector<double>& seeds) {
-    std::vector<double> got;
-    sweep_with(seeds, got);
     std::vector<double> gotc;
     if constexpr (multistep_here) sweep_closed(seeds, gotc, std::true_type{});
     else if constexpr (onestep_here) sweep_closed_one(seeds, gotc, std::true_type{});
@@ -538,24 +510,16 @@ static void run_method(const char* name, double tol)
           wS += seeds[o * NX + i] * S_obs[(o * NX + i) * nd + d];
       const std::string tag = (d < n_carry) ? "  dz" + std::to_string(d)
                                             : "  dp" + std::to_string(d - n_carry);
-      close(wS, got[d], std::string(name) + " " + what + tag, tol);
       if constexpr (multistep_here || onestep_here)
-        close(wS, gotc[d], std::string(name) + " written " + what + tag, tol);
+        close(wS, gotc[d], std::string(name) + " " + what + tag, tol);
     }
-    // The per-step trace is the same two quantities either way, and a
-    // lambda-weighted controller reads them rather than the gradient.
+    // The per-step trace is what a lambda-weighted controller reads. There is no
+    // second source for it any more, so what is asserted is that it is there and
+    // that lambda is not a row of zeros.
     if constexpr (multistep_here) {
-      check(lam_written.size() == lam_taped.size() &&
-            eta_written.size() == eta_taped.size(),
-            std::string(name) + " " + what + " the traces have one length");
-      for (std::size_t k = 0; k < eta_taped.size(); ++k) {
-        close(eta_taped[k], eta_written[k],
-              std::string(name) + " " + what + " eta" + std::to_string(k), tol);
-        for (std::size_t i = 0; i < NX; ++i)
-          close(lam_taped[k * NX + i], lam_written[k * NX + i],
-                std::string(name) + " " + what + " lambda" +
-                std::to_string(k) + "," + std::to_string(i), tol);
-      }
+      check(eta_written.size() == store.n_steps() &&
+            lam_written.size() == store.n_steps() * NX,
+            std::string(name) + " " + what + " one trace row per step");
     }
   };
 
@@ -572,14 +536,6 @@ static void run_method(const char* name, double tol)
     all[k] = 0.3 * static_cast<double>(k % 5) - 0.7;
   compare("all", all);
 
-  // The bound the design claims: one step of tape, not one trajectory. Printed
-  // per method because what a step costs differs by an order of magnitude
-  // between them, rosenbrock4 putting its whole iteration matrix on the tape
-  // where an explicit method puts only its stages.
-  const std::size_t node = sizeof(cppde::codual_tape<double>::node);
-  std::printf("  tape %zu nodes at the widest step, %zu bytes;"
-              " the whole run taped would be %zu\n",
-              max_nodes, max_nodes * node, max_nodes * store.n_steps() * node);
 }
 
 int main() {

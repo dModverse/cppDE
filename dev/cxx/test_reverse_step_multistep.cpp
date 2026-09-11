@@ -34,7 +34,6 @@
 #include <cppde/cppde.hpp>
 #include <cppde/cppde_adjoint_step.hpp>
 
-using cppde::codual;
 using cppde::dual;
 
 static int g_failures = 0;
@@ -284,68 +283,9 @@ static void forward_step(const checkpoint<M>& cp, int q_next, double eta,
 }
 
 // ---------------------------------------------------------------------------
-//  Reverse: the same step replayed under codual, seeded on the carry out.
+//  Reverse: the same step written, seeded on the carry out.
 // ---------------------------------------------------------------------------
 
-template<cppde::multistep_method M>
-static void reverse_step(const checkpoint<M>& cp, const std::vector<double>& w,
-                         std::vector<double>& wz, std::vector<double>& wp,
-                         std::vector<double>& carry_out, double t_interp = 0.0)
-{
-  using C = codual<double>;
-  const std::size_t n = cp.n_states;
-
-  cppde::reverse::step_recorder<stepper_d<M>, double> rec;
-  rec.begin();
-
-  std::vector<C> p(NP);
-  for (std::size_t j = 0; j < NP; ++j) p[j] = C(P[j]);
-  rec.independent(p);
-  auto sys = make_system<C>(p);
-
-  rec.load(cp, cp.dt);
-
-  // The equation's matrix at the solution, in plain doubles: the forward run's
-  // own factorisation belongs to its iteration and is stale by design. Scaled by
-  // gamma, since factorize_W builds W = (1/gamma) I - J and the residual's
-  // derivative in y is gamma * W.
-  std::vector<double> pv(P, P + NP);
-  auto jac_d = jacobian<double>{pv};
-  cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
-
-  rec.attempt_implicit(sys, rec.dt_in(), cp.y, solver);
-  // The equation is res = (y - zn0) + rl1*zn1 - gamma*f, so its derivative in y
-  // is gamma * W, which is what the scale argument carries.
-  const double gamma = rec.implicit_gamma();
-  solver.prepare(cp.y, rec.implicit_t_new(), 1.0 / gamma, gamma);
-
-  if (t_interp > 0.0) {
-    std::vector<C> xi;
-    rec.interpolate(t_interp, xi);
-    carry_out.assign(xi.size(), 0.0);
-    for (std::size_t i = 0; i < xi.size(); ++i) {
-      carry_out[i] = xi[i].x();
-      xi[i].seed(i < w.size() ? w[i] : 0.0);
-    }
-  } else {
-    const auto& co = rec.carry_out();
-    carry_out.assign(co.size(), 0.0);
-    for (std::size_t i = 0; i < co.size(); ++i) {
-      carry_out[i] = co[i].x();
-      co[i].seed(i < w.size() ? w[i] : 0.0);
-    }
-  }
-
-  rec.sweep();
-
-  wz.assign(static_cast<std::size_t>(cp.carry.q + 1) * n, 0.0);
-  for (std::size_t i = 0; i < n; ++i) wz[i] = rec.wx()[i];
-  for (std::size_t i = 0; i < rec.whistory().size(); ++i)
-    wz[n + i] = rec.whistory()[i];
-
-  wp.assign(NP, 0.0);
-  rec.accumulate(p, wp);
-}
 
 // ---------------------------------------------------------------------------
 //  The same step adjoint, written rather than recorded.
@@ -403,8 +343,7 @@ static void closed_step(const checkpoint<M>& cp, const std::vector<double>& w,
 
 template<cppde::multistep_method M>
 static void compare(const char* name, const checkpoint<M>& cp_in, int q_next,
-                    double eta, const std::vector<double>& w,
-                    double t_interp = 0.0)
+                    double eta, const std::vector<double>& w)
 {
   checkpoint<M> cp = cp_in;
   cp.q_next  = q_next;
@@ -415,22 +354,10 @@ static void compare(const char* name, const checkpoint<M>& cp_in, int q_next,
   const unsigned    nd = static_cast<unsigned>(nz + NP);
 
   std::vector<double> S, fwd_carry;
-  forward_step<M>(cp, q_next, eta, nd, S, fwd_carry, t_interp);
+  forward_step<M>(cp, q_next, eta, nd, S, fwd_carry, 0.0);
 
-  std::vector<double> wz, wp, rev_carry;
-  reverse_step<M>(cp, w, wz, wp, rev_carry, t_interp);
-
-  // The written adjoint, against the same reference. Not for an observation
-  // inside the step: the dense-output adjoint is its own piece and comes with
-  // the trajectory, not with the step.
-  std::vector<double> cz, cp_par;
-  const bool closed = (t_interp <= 0.0);
-  if (closed) closed_step<M>(cp, w, cz, cp_par);
-
-  check(fwd_carry.size() == rev_carry.size(),
-        std::string(name) + " same carry width");
-  for (std::size_t i = 0; i < fwd_carry.size() && i < rev_carry.size(); ++i)
-    close(fwd_carry[i], rev_carry[i], std::string(name) + " carry " + std::to_string(i));
+  std::vector<double> wz, wp;
+  closed_step<M>(cp, w, wz, wp);
 
   std::printf("%-30s q %d -> %d  eta %.3g  |", name, cp.carry.q, q_next, eta);
   for (std::size_t i = 0; i < wz.size(); ++i) std::printf(" %.17g", wz[i]);
@@ -446,10 +373,6 @@ static void compare(const char* name, const checkpoint<M>& cp_in, int q_next,
     const std::string tag = (d < nz) ? "  dz" + std::to_string(d)
                                      : "  dp" + std::to_string(d - nz);
     close(wS, got, std::string(name) + tag);
-    if (closed) {
-      const double gotc = (d < nz) ? cz[d] : cp_par[d - nz];
-      close(wS, gotc, std::string(name) + " closed" + tag);
-    }
   }
 }
 
@@ -497,12 +420,9 @@ static void run_method(const char* method)
       compare<M>((tag + " e" + std::to_string(r)).c_str(), cp, cp.carry.q, 1.0, e);
     }
 
-    // Seeded through the dense output rather than on the carry, which is how an
-    // observation inside a step reaches the step.
-    compare<M>((tag + " interp mid").c_str(), cp, cp.carry.q, 1.0, wmix,
-               cp.t + 0.4 * cp.dt);
-    compare<M>((tag + " interp end").c_str(), cp, cp.carry.q, 1.0, wmix,
-               cp.t + cp.dt);
+    // An observation inside a step reaches it through the dense output, whose
+    // adjoint belongs to the trajectory rather than to one step. It is checked
+    // where it lives, in test_reverse_trajectory_methods.cpp.
 
     compare<M>((tag + " mixed").c_str(),   cp, cp.carry.q,     1.0,  wmix);
     compare<M>((tag + " rescale").c_str(), cp, cp.carry.q,     0.83, wmix);

@@ -37,9 +37,9 @@
 #'   named, and the default `c("forward", "reverse")` builds both.
 #'   * `"forward"`: forward-mode AD on `cppde::dual`, delivering `jac`,
 #'     `hess` and `evaluate`.
-#'   * `"reverse"`: the vector-Jacobian product `vjp`, a second
-#'     instantiation of the body over `cppde::codual`. Naming one direction
-#'     alone omits the other's entries, and its compile time with them.
+#'   * `"reverse"`: the vector-Jacobian product `vjp`, a contraction of the
+#'     symbolic Jacobian. Naming one direction alone omits the other's
+#'     entries, and its compile time with them.
 #'   * `"symbolic"`: an analytic SymPy-derived Jacobian and Hessian
 #'     contracted via BLAS, in place of forward AD. It is a backend for the
 #'     forward direction rather than a direction of its own, so it cannot be
@@ -139,7 +139,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
   fun_impl      <- function(...) .fun_impl(st, ...)
   ## The forward entries need either backend; the reverse one is its own build
-  ## product, so a "forward"-only object carries no vjp and pays no codual body.
+  ## product, so a "forward"-only object carries no vjp and does not derive one.
   fwd           <- emit_deriv && (use_ad || symbolic)
   jac_impl      <- if (deriv  && fwd) function(...) .jac_impl(st, ...)
   hess_impl     <- if (deriv2 && fwd) function(...) .hess_impl(st, ...)

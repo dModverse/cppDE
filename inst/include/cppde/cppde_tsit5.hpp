@@ -183,10 +183,8 @@ public:
     // Use TimeArg (not time_type) so AD derivative components propagate
     // through the deriv_func t arguments below.
     const TimeArg h    = dt;
-    // Stage AXPY alphas. Scalar for a plain or forward-AD time, where dt never
-    // carries a tangent; symbolic under the reverse sweep, so dy/dh comes out
-    // of the tape and the adjoint runs through the step-size control.
-    // See ad_traits::step_coef.
+    // Stage AXPY alphas. The grid is frozen, so dt carries no tangent in any
+    // direction and these are plain doubles. See ad_traits::step_coef.
     using coef_type = ad_traits::step_coef_t<TimeArg>;
     const coef_type hc = ad_traits::step_coef_of(dt);
 

@@ -526,8 +526,8 @@ constexpr int method_max_order(multistep_method m) {
 // ============================================================================
 //  The carry across a step boundary, apart from the Nordsieck slots: the order,
 //  the step-size history and the counters that decide how the coefficients are
-//  built. Values only and free of the scalar type, so a run in double hands it
-//  to a replay under another one.
+//  built. Values only and free of the scalar type, so the backward walk reads
+//  it as the forward run left it.
 // ============================================================================
 
 template<int MaxOrder>
@@ -545,7 +545,7 @@ struct multistep_carry {
 //  Between two accepted steps that is the previous step's tail plus every
 //  attempt this one threw away, and a thrown-away attempt is not free: it
 //  rescales the history the next attempt reads. All of it is control decision,
-//  so a reverse replay repeats the record instead of deriving it again.
+//  so the backward walk repeats the record instead of deriving it again.
 // ============================================================================
 
 enum class history_op : unsigned char {
@@ -592,7 +592,7 @@ public:
   typedef cppde::stepper_tag              stepper_category;
   typedef multistepper<Method, Value, JacobianPattern, Resizer> stepper_type;
 
-  // Same method on another scalar type, for the reverse replay.
+  // Same method on another scalar type.
   template<class Value2> using rebind_value =
     multistepper<Method, Value2, JacobianPattern, Resizer>;
 
@@ -1243,8 +1243,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   //
   //  Everything a step reads that an earlier step wrote, apart from the
   //  Nordsieck slots themselves: the order, the step-size history and the
-  //  counters that decide how the coefficients are built. Values only, so a run
-  //  in double hands it to a replay under another scalar type.
+  //  counters that decide how the coefficients are built. Values only, so the
+  //  backward walk reads it as the forward run left it.
   // ====================================================================
 
   using carry = multistep_carry<max_order>;
@@ -1279,34 +1279,30 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   state_type& zn_mut(int j) { return m_zn[j].m_v; }
 
   // ====================================================================
-  //  replay_residual: one step for the reverse sweep.
-  //
-  //  Rescale, predict and coefficients exactly as the forward step, then the
-  //  corrector short-circuited. y is handed in at the value the forward run
-  //  converged to, and what stands in for the iteration, Newton for the BDF
-  //  family and PECE for Adams, is the equation both of them solve,
-  //
-  //    res = (y - zn0) + rl1*zn1 - gamma*f(y, t+h),
-  //
-  //  whose derivative closes by the implicit function theorem rather than by
-  //  differentiating the iterates. No Jacobian and no LU: the iteration matrix
-  //  belongs to the iteration, not to the equation.
-  //
-  //  Two calls, and the split is load-bearing: the caller marks the tape between
-  //  them. Everything that reads y other than the equation itself has to be
-  //  recorded after that mark, or the sweep reaches the equation before y's
-  //  cotangent is complete and the solve runs on a partial one.
+  //  replay_outputs: what the corrector's solution makes of the step. acor is
+  //  the correction the tail maps back into the history, and the error estimate
+  //  is that same vector. A probe stepper drives this with a unit slot to read
+  //  the tail's operators off, which is the only caller left.
   // ====================================================================
+  void replay_outputs(const state_type& y, state_type& x_out, state_type& xerr)
+  {
+    const size_t n = y.size();
+    for (size_t i = 0; i < n; ++i) {
+      m_acor.m_v[i] = y[i] - m_zn[0].m_v[i];
+      x_out[i]      = y[i];
+      xerr[i]       = m_acor.m_v[i];
+    }
+    m_newton_converged = true;
+  }
 
   // ====================================================================
   //  replay_predict: everything a step does to the Nordsieck history before
   //  its corrector, and the coefficients that follow from it. Returns rl1,
   //  with m_h and m_gamma set.
   //
-  //  Split out of replay_residual because a written step adjoint needs the
-  //  same transform without a system to evaluate: applied to a unit slot it
-  //  gives one column of the matrix the adjoint transposes. One definition,
-  //  so the two cannot drift apart.
+  //  A written step adjoint needs this transform without a system to evaluate:
+  //  applied to a unit slot it gives one column of the matrix the adjoint
+  //  transposes.
   // ====================================================================
   time_type replay_predict(size_t n, time_type dt_s)
   {
@@ -1342,47 +1338,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // replay_predict.
   const time_type* nordsieck_l() const { return m_l.data(); }
 
-  template<class System, class TimeArg>
-  void replay_residual(System& system, const state_type& x, TimeArg t, TimeArg dt,
-                       const state_type& y, state_type& res)
-  {
-    using ndf_detail::scalar_value;
-    time_type t_s  = static_cast<time_type>(scalar_value(t));
-    time_type dt_s = static_cast<time_type>(scalar_value(dt));
 
-    typedef typename unwrap_reference<System>::type system_type;
-    typedef typename unwrap_reference<
-      typename system_type::first_type>::type deriv_func_type;
-    system_type&     sys        = system;
-    deriv_func_type& deriv_func = sys.first;
-
-    const size_t n = x.size();
-    resize_impl(x);
-
-    const time_type rl1 = replay_predict(n, dt_s);
-    const time_type t_new = t_s + m_h;
-    deriv_func(y, m_ftemp.m_v, value_type(t_new));
-
-    for (size_t i = 0; i < n; ++i)
-      res[i] = (y[i] - m_zn[0].m_v[i]) + rl1 * m_zn[1].m_v[i]
-             - m_gamma * m_ftemp.m_v[i];
-  }
-
-  // The step's outputs, recorded after the caller has marked the tape: the
-  // accumulated correction the Nordsieck update reads, the step end and the
-  // error estimate.
-  void replay_outputs(const state_type& y, state_type& x_out, state_type& xerr)
-  {
-    const size_t n = y.size();
-    for (size_t i = 0; i < n; ++i) {
-      m_acor.m_v[i] = y[i] - m_zn[0].m_v[i];
-      x_out[i]      = y[i];
-      xerr[i]       = m_acor.m_v[i];
-    }
-    m_newton_converged = true;
-  }
-
-  // The step's own gamma, valid after replay_step. The residual's derivative in
+  // The step's own gamma, valid after replay_predict. The residual's derivative in
   // y is gamma * W, so the transposed solve is scaled by it.
   time_type gamma() const { return m_gamma; }
 
