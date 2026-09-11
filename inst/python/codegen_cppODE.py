@@ -1008,6 +1008,10 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
     over the flat parameter vector, whose first n_states slots belong to the
     initial values and stay zero. Both are grouped by output slot, so a slot is
     written once rather than accumulated into.
+
+    Both size their own output. A caller that has to size it first has to know
+    the model's state and parameter counts at the call site, and one that gets
+    it wrong writes past the end of a vector with nothing to say so.
     """
     zero = sp.Integer(0)
     n_params = len(params_list)
@@ -1040,6 +1044,7 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
         f"                 const {num_type}& t,",
         f"                 std::vector<{num_type}>& out) const {{",
         "    (void)x; (void)t;",
+        f"    out.assign({n_states}u, {num_type}(0.0));",
     ]
     lines += _arena_scope_lines(num_type)
     flat = [e for j in sorted(by_col) for _, e in by_col[j]]
@@ -1071,7 +1076,7 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
         f"                  const {num_type}& t,",
         f"                  std::vector<{num_type}>& out) const {{",
         "    (void)x; (void)t;",
-        f"    for (std::size_t i = 0; i < {n_states}u; ++i) out[i] = {num_type}(0.0);",
+        f"    out.assign({n_phi}u, {num_type}(0.0));",
     ]
     lines += _arena_scope_lines(num_type)
     flat = [e for k in sorted(by_par) for _, e in by_par[k]]

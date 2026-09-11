@@ -149,6 +149,37 @@ test_that("every method carries the reverse mode", {
                  tolerance = 1e-5, info = m)
   }
 })
+# A model wider than the Nordsieck history is deep. Every other model in this
+# file has fewer states than a step has slots, so a buffer sized by one and used
+# for the other fits, and a contraction writing per state stays inside it.
+wide  <- local({
+  n <- 10L
+  v <- paste0("A", seq_len(n))
+  k <- paste0("k", seq_len(n))
+  eq <- setNames(character(n), v)
+  eq[1] <- paste0("-", k[1], "*", v[1])
+  for (i in 2:n)
+    eq[i] <- paste0(k[i - 1], "*", v[i - 1], " - ", k[i], "*", v[i], "*", v[i])
+  eq
+})
+wpars <- c(setNames(seq(1.5, 0.6, length.out = 10), paste0("A", 1:10)),
+           setNames(seq(0.9, 0.2, length.out = 10), paste0("k", 1:10)))
+
+test_that("the reverse mode carries a model wider than its history is deep", {
+  for (m in c("bdf", "adams")) {
+    mf <- cppODE(wide, method = m, modelname = paste0("rev_wide_f_", m),
+                 deriv = TRUE)
+    mr <- cppODE(wide, method = m, modelname = paste0("rev_wide_r_", m),
+                 derivMode = "reverse")
+    fwd <- do.call(solveODE, c(list(mf, times, wpars), tol))
+    W   <- seed_for(fwd)
+    rv  <- do.call(solveODE, c(list(mr, times, wpars, seed = W), tol))
+    ref <- contract(fwd$sens1, W)[, 1]
+    expect_equal(unname(rv$adjoint[names(ref), 1]), unname(ref),
+                 tolerance = 1e-5, info = m)
+  }
+})
+
 test_that("adjointGrid reports the grid the sweep ran on", {
   mr <- cppODE(eqns, modelname = "rev_grid_r", derivMode = "reverse")
   mv <- cppODE(eqns, modelname = "rev_grid_v", deriv = FALSE)
