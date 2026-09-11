@@ -1113,170 +1113,133 @@ weighted by the error model, and $\bar\theta$ is $\nabla_\theta J$
 exactly. Several cotangents may be supplied as columns of a
 three-dimensional array, one sweep each.
 
-### The codual scalar and its tape
+### The step map and its adjoint
 
-Reverse-mode AD cannot be realised by an augmented arithmetic alone.
-A dual number carries its derivative forward through each operation,
-so the derivative is available the moment the value is; a reverse
-derivative is a sum over all downstream uses of a quantity, and none
-of them has happened yet when the operation executes. The
-computation must therefore be recorded and traversed backwards.
+Reverse-mode differentiation cannot be realised by an augmented
+arithmetic alone. A dual number carries its derivative forward through
+each operation, so the derivative is available the moment the value is;
+a reverse derivative is a sum over all downstream uses of a quantity,
+and none of them has happened yet when the operation executes.
 
-The recording type is \verb|cppde::codual<T>|. It holds a value and
-an index into a shared tape; every overloaded operation appends one
-node,
-\[
-  \texttt{node} = (\,a,\; b,\; \partial c/\partial a,\; \partial c/\partial b\,),
-\]
-naming the tape slots of its operands and the local partials of the
-result with respect to them. The tape is thus a linearisation of the
-straight-line program that produced the value. The reverse sweep
-walks it from the last node to the first, propagating adjoints by
-\[
-  \bar a \mathrel{+}= \frac{\partial c}{\partial a}\,\bar c,
-  \qquad
-  \bar b \mathrel{+}= \frac{\partial c}{\partial b}\,\bar c,
-\]
-which is the chain rule read right to left. Because the partials are
-stored as $T$ and the adjoint accumulator is a $\mathrm{std::vector}\langle T\rangle$,
-the construction is generic in the scalar type; the shipped
-instantiation is $T = \mathrm{double}$.
+One way out is to record the computation and traverse the recording
+backwards, and cppDE did that until 2026-09-11. The other is to observe
+that the map being differentiated is not an arbitrary computation: it is
+one accepted step of a known method on a grid that is frozen. Its adjoint
+can therefore be stated rather than discovered, and that is what the
+library now does.
 
-### Checkpoint per step and replay
+An accepted step of the multistep family decomposes into three pieces:
+\begin{align}
+  z^{\text{pred}} &= A\, z^{\text{in}}, \label{eq:step-pred}\\
+  r(y, z^{\text{pred}}, \theta) &= 0, \label{eq:step-corr}\\
+  z^{\text{out}} &= B\, z^{\text{pred}} + c\, a, \qquad a = y - z^{\text{pred}}_0,
+  \label{eq:step-tail}
+\end{align}
+the Nordsieck rescale and Pascal shift, the corrector, and the tail the
+controller applies between this step's acceptance and the next one's.
+$A$, $B$ and $c$ act on the slot index alone, with coefficients that
+follow from the carry and are the same for every state component. They
+are therefore not transposed by hand but read off the stepper itself: a
+probe whose states are the slots is driven through the very routines the
+forward step runs, with the identity in the
+$[\text{slot} \times \text{component}]$ array, and every column comes
+back in one pass. Nothing about the step is restated, so nothing can
+drift from it.
 
-Taping an entire integration is not affordable. A single evaluation
-of $f$ on a model of moderate size leaves hundreds of nodes, and an
-adaptive run takes hundreds to thousands of steps; the tape would be
-proportional to their product, and the reverse mode would trade a
-factor $M$ in time for a comparable factor in memory.
+The corrector is closed by the implicit function theorem, which is what
+makes the adjoint of an implicit step cheap: $\partial r/\partial y$ is
+the very iteration matrix $W = I - \gamma J$ the forward step
+factorises, and one transposed solve against it replaces the whole
+Newton iteration. The Rosenbrock family is a transposed stage recursion
+instead, six solves against one factorisation, and an explicit method is
+the textbook backward recursion over its tableau.
 
-cppDE avoids this with a checkpoint-and-replay scheme. The forward
-pass runs in plain \verb|double|, no AD type at all, and
-records, for each accepted step, the state it started from, its start
-time, and the size it took. That checkpoint store grows as
-$n_{\mathrm{steps}} \times (n_x + 2)$ doubles, which is the memory of
-the trajectory itself and not of its derivative.
+The model supplies the contractions the adjoint needs, emitted by the
+code generator beside the right-hand side: $J^{\mathsf T}\lambda$,
+$(\partial f/\partial p)^{\mathsf T}\lambda$ and, for a Rosenbrock
+method, the same two over $J v$, whose derivative is a second one
+because its stages solve against a matrix built from the Jacobian.
 
-The reverse pass then walks the steps newest first. For each one it
-rewinds the tape, re-executes that one step under
-\verb|codual<double>| starting from its checkpoint, seeds the
-cotangent the later step handed back together with any observation
-falling inside it, and sweeps. The peak tape is therefore one step
-wide, independent of the length of the run, and after the first step
-the tape allocates nothing further: rewinding keeps the capacity.
-Parameters are shared by every step, so their adjoint accumulates
-across the loop, which is the discrete form of the quadrature that the
-continuous adjoint writes as an integral.
+### Checkpoint per step
 
-Observations do not generally fall at step ends. The dense-output
-interpolant of Section \ref{sec:cppde} is recorded on the tape of the
-step whose bracket contains the observation time, so a single sweep
-carries both the step and every interpolation inside it, and the
-cotangent reaches the step's state through the same polynomial the
-forward run evaluated.
+The backward walk still needs the state the forward run passed through.
+An adaptive run takes hundreds to thousands of steps, so the states are
+not kept as a tape of operations but as one checkpoint per accepted
+step: the step-start state, the carry, the time and the size the
+controller chose, and the record of what the controller did to the carry
+afterwards. Memory is linear in the number of steps and holds no
+derivative information at all.
 
-### The corrector without replaying its iteration
-
-For BDF/NDF and Rosenbrock the step is not an explicit formula. A
-naive replay would re-run the Newton iteration under \verb|codual|
-and tape every iterate, which both inflates the tape and
-differentiates the iteration rather than the equation it solves.
-
-cppDE instead differentiates the implicit function directly. Let the
-accepted step satisfy $F(x_{n}, x_{n-1}, \theta) = 0$, with
-$F$ the corrector residual and $\partial F/\partial x_n$ the
-iteration matrix the forward run already factorised. The implicit
-function theorem gives
-\[
-  \bar u = \left( \frac{\partial F}{\partial x_n} \right)^{\!-\top} \bar x_n,
-  \qquad
-  \overline{(\,\cdot\,)} \mathrel{+}=
-    -\left( \frac{\partial F}{\partial (\,\cdot\,)} \right)^{\!\top} \bar u ,
-\]
-so one transposed linear solve replaces the entire iteration
-history. The factorisation is the same LU or KLU object the forward
-step built, reused transposed; the tape holds only the residual, not
-the iterates. The linear stage solves of Rosenbrock are handled the
-same way, one transposed solve per stage.
-
-The reverse mode is more exacting of the linear algebra than the
-forward mode is. A Newton corrector iterates, so a factorisation that
-has become numerically poor is corrected by the next iterate and
-never observed; the adjoint solve uses its result once and directly.
-This is why the sparse path checks the reciprocal pivot growth of a
-reused KLU ordering rather than trusting \verb|klu_refactor| to
-report failure.
+Observations sit at interpolated times, not at step ends. Each step's
+own continuous extension carries them, and its adjoint falls out of the
+same probe: after the tail the probe holds a valid interpolant, so
+evaluating it at the observation time gives the row
+$\partial x_{\text{interp}} / \partial (z^{\text{pred}}, a)$ directly.
 
 ### Events backwards
 
-An intervention between two steps is replayed as the composition it
-was: the drift to the root, the reset map, and the restart. Which
-events fired and where the root sat are control decisions and are
-read back from the record, not decided again; what is re-executed is
-the arithmetic. The saltation construction of the previous section is
-traversed in reverse order, so the transposed saltation matrix
-carries the cotangent back across the jump, and
-$\partial t^{*}/\partial \theta$ from \eqref{eq:dt-star-first} enters
-through the same expression, transposed. For a multistep method the
-restart rebuilds the whole Nordsieck history out of the post-jump
-state, so the cotangent of that history collapses onto a cotangent of
-the single state, which is what makes an event boundary cheap in
-reverse.
+An intervention is a map of its own between two steps. The engine
+carries a discontinuity across on a Heun sandwich: a shift to the event
+surface, the resets, a shift back to the grid time. The shift is by the
+event time's own residual, and that residual has its value subtracted
+off before it is used, so it is numerically zero and only its derivative
+survives. In value the jump is therefore a jump, and the sandwich
+collapses to the classical saltation,
+\begin{equation}
+  \mathrm{d}x = R'\!\left(\mathrm{d}x_{\text{before}} + f_{\text{before}}\, s\right)
+              - f_{\text{after}}\, s,
+  \label{eq:saltation}
+\end{equation}
+with $R$ the resets and $s$ the differential of the event time. For a
+root event $s = -(\nabla g \cdot \mathrm{d}x + \partial g/\partial p
+\cdot \mathrm{d}p)/\dot g$, the implicit function theorem on the root
+condition; for a fixed event it is the differential of the event's own
+time expression. A jump's adjoint therefore needs the right-hand side at
+the two ends and the model's derivatives of the event expressions, and
+no Jacobian: every term the shifts would have contributed carries a
+factor that is zero.
+
+After a jump the multistepper restarts, and \verb|initialize| builds the
+whole Nordsieck history out of one state, so the history's cotangent
+collapses onto that state. The trajectory's own start applies the same
+map, which is why it is written once and called twice.
 
 ### The step grid is not differentiated
 
-The adaptive controller chooses $h_n$ from the error estimate, which
-depends on $\theta$; the computed trajectory therefore depends on
-$\theta$ both through the differential equation and through the grid.
-The reverse mode holds the grid fixed at what the forward run chose:
-each step is replayed at the size read from its checkpoint, and that
-size is a constant on the tape.
-
-This is Bock's principle of internal numerical differentiation. The
-nominal integration adapts freely; the adaptive decisions are then
-regarded as \emph{specified}, and the derivative is taken of the
-scheme that those decisions produced. The alternative, taping the
-control law so that $h_n$ becomes a differentiable function of the
-error and hence of $\theta$, was implemented in cppDE behind a
-switch and removed. Two reasons decided it. First, $h(\theta)$ is
-piecewise smooth with jumps, not smooth: the step count changes
-discontinuously as $\theta$ varies, and a sweep over $\theta$ shows
-the resulting difference quotient scaling with the sweep density,
-which is the signature of a jump. Automatic differentiation sees only
-the smooth part, so taping the controller yields the true gradient
-plus a smooth grid term minus the jump term that dominates it, a
-third quantity, and not the derivative of anything the program
-reports. Second, the recorded control law includes the rejected
-attempts, which is precisely the tape growth the checkpoint scheme
-exists to avoid.
+The sizes the controller chose are constants of the map being
+differentiated. This is Bock's internal numerical differentiation: the
+nominal run adapts freely, and the derivative is taken of the scheme
+that run actually applied. Differentiating the control law instead puts
+spurious derivatives of the time steps into the chain rule and makes the
+discrete adjoint inconsistent with the adjoint ODE; the term was
+measured at $O(\text{tol})$ and is deliberately absent.
 
 ### Relation to the forward mode
 
-Both modes are exact derivatives, but of two different
-discretisations. The forward mode's error norm
-\eqref{eq:wrms-sens} maximises over the sensitivity columns, so a
-run with sensitivities active takes a finer grid than the same model
-solved for its value alone. The reverse mode's forward pass carries
-no tangents, so its grid is the value-only grid.
+Forward and reverse do not agree to machine precision and should not. A
+sensitivity run lets the step-size controller take the maximum over the
+state error and every tangent column, so it adapts on a finer grid than
+a value-only run. The two differentiate two different discretisations,
+each exactly, and their gap falls with the tolerance.
 
-The consequence is a consistency property that is worth stating
-explicitly. Under \verb|derivMode = "reverse"| the returned value and the
-returned gradient belong to the same trajectory: the gradient is the
-exact derivative of the number that was reported. Under forward
-sensitivities they do not, the value being reported from a grid that
-the tangents made finer. The two gradients agree to
-$\mathcal{O}(\mathtt{tol})$ and the difference falls with the
-tolerance, so the distinction is invisible at tight tolerance and
-matters where a trust-region step compares a predicted reduction with
-an achieved one.
+The corollary favours reverse beyond its cost: its gradient belongs to
+the trajectory a value-only solve produces, so the value and the
+gradient a caller receives are consistent with each other. That matters
+where a trust-region step compares a predicted reduction with an
+achieved one.
+
+A Rosenbrock adjoint is the sharpest of them, and for a structural
+reason: its stages are direct solves, so its adjoint is the exact
+transpose of the discrete step, where a corrector's is the implicit
+function theorem applied to an iteration that stopped early.
 
 The reverse mode carries no \verb|sens1| and no \verb|sens2|; second
 derivatives remain a forward-mode facility. It supports all four
 time-stepping methods, time- and root-triggered events, forcings, the
 batch entry point and the sparse linear solver. The implementation
-resides in \texttt{cppde\_codual.hpp},
-\texttt{cppde\_codual\_tape.hpp}, \texttt{cppde\_reverse\_step.hpp}
-and \texttt{cppde\_reverse\_trajectory.hpp}.
+resides in \texttt{cppde\_adjoint\_step.hpp},
+\texttt{cppde\_reverse\_step.hpp} and
+\texttt{cppde\_reverse\_trajectory.hpp}.
 
 ## Method selection
 
@@ -1434,15 +1397,14 @@ $\partial^2 y/\partial\theta^2$.
 \item \verb|"reverse"| (default alongside \verb|"forward"|): the
 vector-Jacobian product \texttt{\_vjp}, which contracts a cotangent
 of the outputs into cotangents of the variables and parameters at a
-cost independent of the upstream parameter count. It instantiates
-the expression body a second time, over \texttt{cppde::codual},
-so it is separately requestable: a caller that only ever multiplies
-by the Jacobian should not compile it.
+cost independent of the upstream parameter count. It contracts the
+symbolic Jacobian, and is separately requestable: a caller that only
+ever multiplies by the Jacobian should not compile it.
 \end{itemize}
 
 \verb|"symbolic"| is a backend for the forward Jacobian rather than a
 direction of its own, and cannot be combined with the other two;
-there is no symbolic vector-Jacobian product. \verb|"forward"| and
+the vector-Jacobian product is symbolic either way. \verb|"forward"| and
 \verb|"reverse"| are independent build products and may be asked for
 together, which is the default.
 

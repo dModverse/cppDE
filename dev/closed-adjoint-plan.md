@@ -3,6 +3,11 @@
 **Nachfolgeplan zu `dev/adjoint-plan.md`, angelegt 2026-09-10.** Jener Plan hat den
 diskreten Adjungierten gebaut und ist abgearbeitet. Dieser nimmt ihm das Tape ab.
 
+**Stand 2026-09-11: die Stufen 0 bis 7 sind abgearbeitet.** Ein Reverse-Modell
+zeichnet nichts mehr auf, auf keinem Verfahren und mit keiner Art von
+Intervention; das Wort `codual` kommt in cppDE nicht mehr vor. Offen ist Stufe 8,
+die zweite Ordnung.
+
 ## Kontext
 
 Der diskrete Adjungierte steht und liefert richtige Gradienten, ist aber langsamer als
@@ -660,6 +665,29 @@ Adjungierte braucht `f` und `J` nur in `double`. Nebenbei weniger
 Übersetzungszeit je Reverse-Modell, und nach der Messung aus Stufe 0 ist das der
 größere Posten: die Expression-Templates des Tape-Typs kosteten auf Lang 5,1
 Sekunden gegen 1,9 für mehr Text in `double`.
+
+**Das Wort `codual` kommt in cppDE nicht mehr vor**, in keinem Header, keinem
+Generator, keinem Prüfstand und keiner Zeile Vignette.
+
+Zwei Dinge waren beim Löschen nicht offensichtlich. `replay_outputs` sieht nach
+Tape aus, ist aber die Art, wie der Probe-Stepper `acor` bildet: es bleibt, mit
+einem Kommentar, der sagt warum. Und `has_step_snapshot` stand im gelöschten
+Teil, wird aber vom Checkpoint-Sammler gebraucht.
+
+**Die Prüfstände sind mitgezogen worden, nicht weggeworfen.** Ihr Orakel war nie
+das Tape, sondern der Vorwärtsmodus, also verlieren sie nur den zweiten Weg
+dorthin. Drei von ihnen, Forcings, Ereignisse und der dünne Pfad, hatten bis
+dahin gar keinen geschriebenen Vergleich; sie haben jetzt einen, mit von Hand
+geschriebenen Kontraktionen, und `test_reverse_events.cpp` prüft damit den
+Sprung-Adjungierten auf allen vier Verfahren gegen die Dual-Referenz.
+
+Was ersatzlos entfällt: der Schritt-Adjungierte einer Beobachtung mitten im
+Schritt, denn der Dense-Output-Adjungierte gehört der Trajektorie und wird dort
+geprüft; die Kotangenten nach Schrittzeit und Schrittweite; und der Vergleich
+der Lambda-Spur gegen eine zweite Quelle, die es nicht mehr gibt.
+
+*Offen geblieben:* der CVODE-Emitter führt seine `df/dp`-Ableitung weiterhin
+selbst. Das Zusammenlegen ist kein Teil des Löschens und wartet.
 
 ### Stufe 8. Zweite Ordnung
 
