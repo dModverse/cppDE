@@ -113,14 +113,18 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # use onestep_controller / onestep_dense_output.
   is_multistep <- function(m) m %in% c("bdf", "adams")
   is_explicit  <- function(m) m %in% c("tsit5")
+  is_rosenbrock <- function(m) m %in% c("rosenbrock4")
 
-  # rosenbrock4's replay builds its own dense Jacobian and forms the residual
-  # over every entry, so a sparse model has no backward path. Refusing here
-  # beats a compiler error out of the generated source.
-  if (is_reverse && identical(method, "rosenbrock4") && isTRUE(sparse))
-    stop("method = \"rb4\" with sparse = TRUE has no reverse mode: the ",
-         "Rosenbrock replay takes a dense Jacobian only. Use sparse = FALSE, ",
-         "or another method.", call. = FALSE)
+  # rosenbrock4's taped replay builds its own dense Jacobian and forms the
+  # residual over every entry, so a sparse model has no backward path through
+  # it. The written adjoint has one, and takes every model without an
+  # intervention; what is left is the combination that still needs the tape.
+  if (is_reverse && identical(method, "rosenbrock4") && isTRUE(sparse) &&
+      (!is.null(events) || !is.null(rootfunc)))
+    stop("method = \"rb4\" with sparse = TRUE and an intervention has no ",
+         "reverse mode: that combination still replays on a tape, which takes ",
+         "a dense Jacobian only. Use sparse = FALSE, or another method.",
+         call. = FALSE)
 
   # The reverse trajectory checkpoints inside the dense loop; the controlled
   # loop steps in place and clips to the next output time, where a checkpoint
@@ -294,7 +298,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     # A written step adjoint asks the model for two contractions rather than
     # differentiating the step. They are plain double, so they ride with the
     # value body and not with the reverse one.
-    emit_contractions = is_reverse
+    emit_contractions = is_reverse,
+    # A Rosenbrock stage solves against a matrix built from the Jacobian, so its
+    # adjoint asks for the derivative of that matrix applied to a vector. No
+    # other method does, and deriving it is not free.
+    emit_jvp = is_reverse && is_rosenbrock(method)
   )
 
   ode_code <- codegen_result$ode_code
@@ -333,10 +341,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   # The same refusal as above, for the case where the generator decided
   # sparsity rather than the caller.
-  if (use_sparse && is_reverse && identical(method, "rosenbrock4"))
-    stop("method = \"rb4\" has no reverse mode on a sparse Jacobian, and this ",
-         "model was found sparse. Pass sparse = FALSE, or another method.",
-         call. = FALSE)
+  if (use_sparse && is_reverse && identical(method, "rosenbrock4") &&
+      (!is.null(events) || !is.null(rootfunc)))
+    stop("method = \"rb4\" with an intervention has no reverse mode on a ",
+         "sparse Jacobian, and this model was found sparse. Pass ",
+         "sparse = FALSE, or another method.", call. = FALSE)
 
   if (use_sparse) {
     stats <- codegen_result$sparsity_stats
@@ -1250,11 +1259,13 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
 
-  # A written step adjoint replaces the tape where it is complete: the multistep
-  # family and tsit5, and no intervention, whose boundary map is stage 4. rb4
-  # keeps the tape until its stage solves are written.
-  use_written <- is_reverse && (is_multistep(method) || is_explicit(method)) &&
-    is.null(events) && is.null(rootfunc)
+  # A written step adjoint replaces the tape wherever it is complete, which is
+  # every method without an intervention. An intervention's boundary map is
+  # stage 4 of dev/closed-adjoint-plan.md and still replays.
+  use_written <- is_reverse && is.null(events) && is.null(rootfunc)
+  # Both one-step families walk the same trajectory; it branches inside on
+  # whether the stages are linear solves.
+  written_onestep <- is_explicit(method) || is_rosenbrock(method)
 
   # --- The backward sweep ---
   # One per seed column. The map differentiated is (x0, theta) -> the observed
@@ -1326,8 +1337,10 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "  res.n_adj_cols = n_seed;",
       "  res.adjoint.assign((size_t)n_phi_rows * n_seed, 0.0);",
       solver_decl,
-      sprintf("  cppde::reverse::trajectory_recorder<%s, double> _rev;", rev_stepper_type),
-      "  _rev.trace_lambda(args.adj_trace);",
+      if (!use_written) c(
+        sprintf("  cppde::reverse::trajectory_recorder<%s, double> _rev;",
+                rev_stepper_type),
+        "  _rev.trace_lambda(args.adj_trace);") else character(0),
       "  if (args.adj_trace) {",
       "    const int _ns = (int)_rev_store.n_steps();",
       sprintf("    res.n_adj_steps = _ns;  res.n_adj_states = %d;", n_variables),
@@ -1345,7 +1358,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       # a model with an intervention still takes.
       if (use_written) c(
         "  {",
-        if (is_explicit(method)) c(
+        if (written_onestep) c(
           sprintf("    cppde::adjoint::closed_onestep_trajectory<%s> _cl;", rev_stepper_type),
           sprintf("    %s _cl_st;", rev_stepper_type),
           "    auto _cl_sys = std::make_pair(sys, jac);")
@@ -1359,8 +1372,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         sprintf("          _seed_col[(size_t)o * %d + i] =", n_variables),
         sprintf("              args.seed[o + (size_t)n_out * (i + (size_t)%d * c)];", n_variables),
         "      _cl.sweep(_rev_store, (size_t)n_phi_rows, _seed_col.data(),",
-        if (is_explicit(method)) "                _cl_sys, _adj, _cl_st);"
-        else                     "                _adj, _rev_solver);",
+        if (written_onestep) "                _cl_sys, _adj, _cl_st);"
+        else                 "                _adj, _rev_solver);",
         sprintf("      for (int i = 0; i < %d; ++i)", n_variables),
         "        res.adjoint[i + (size_t)n_phi_rows * c] = _cl.wx0()[i] + _cl.wp()[i];",
         sprintf("      for (int j = %d; j < n_phi_rows; ++j)", n_variables),
@@ -1377,10 +1390,14 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         "    }",
         "#ifdef CPPDE_PROFILE",
         "    _cl.report_profile();",
-        if (!is_explicit(method)) "    _rev_solver.report_profile();" else "",
+        if (!written_onestep) "    _rev_solver.report_profile();" else "",
         "#endif",
         "    return res.return_code;",
         "  }") else character(0),
+      # The taped sweep, for a model the written one does not cover. It is not
+      # a fallback: where the written path applies it returns above, and a
+      # Rosenbrock replay on a sparse Jacobian does not even compile.
+      if (use_written) character(0) else c(
       "  for (int c = 0; c < n_seed; ++c) {",
       "    for (int o = 0; o < n_out; ++o)",
       sprintf("      for (int i = 0; i < %d; ++i)", n_variables),
@@ -1413,7 +1430,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       sprintf("              _rev.lambda()[(size_t)k * %d + i];", n_variables),
       "      }",
       "    }",
-      "  }")
+      "  }"))
   }
 
   externC <- c(externC, "  return res.return_code;")

@@ -25,6 +25,7 @@
 #include <vector>
 
 #include <cppde/cppde.hpp>
+#include <cppde/cppde_adjoint_step.hpp>
 
 using cppde::codual;
 using cppde::dual;
@@ -149,6 +150,94 @@ static void checkpoints(unsigned n_steps, std::vector<cp_type>& cps,
   x_end = x;
 }
 
+// What the code generator emits beside the model for a reverse rb4 build.
+// Written out here for the same model, so the written step adjoint is checkable
+// without a generated source. A Rosenbrock stage solves against a matrix built
+// from the Jacobian, so two of these four are second derivatives.
+struct adjoint_terms {
+  std::vector<double> p;
+
+  void jac_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                 const double& t, std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[0] = (-p[0]) * lam[0] + (p[0]) * lam[1];
+    out[1] = (p[1] * x[2]) * lam[0]
+           + (-p[1] * x[2] - 2.0 * p[2] * x[1]) * lam[1]
+           + (2.0 * p[2] * x[1] * std::cos(t)) * lam[2];
+    out[2] = (p[1] * x[1]) * lam[0] + (-p[1] * x[1]) * lam[1];
+  }
+
+  void dfdp_t_vec_axpy(const std::vector<double>& x,
+                       const std::vector<double>& lam,
+                       const double& t, const double& sc,
+                       double* out) const {
+    out[NX + 0] += sc * ((-x[0]) * lam[0] + (x[0]) * lam[1]);
+    out[NX + 1] += sc * ((x[1] * x[2]) * lam[0] + (-x[1] * x[2]) * lam[1]);
+    out[NX + 2] += sc * ((-x[1] * x[1]) * lam[1]
+                         + (x[1] * x[1] * std::cos(t)) * lam[2]);
+  }
+
+  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v,
+                   const std::vector<double>& lam, const double& t,
+                   std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[0] = 0.0;
+    out[1] = (p[1] * v[2]) * lam[0]
+           + (-2.0 * p[2] * v[1] - p[1] * v[2]) * lam[1]
+           + (2.0 * p[2] * std::cos(t) * v[1]) * lam[2];
+    out[2] = (p[1] * v[1]) * lam[0] + (-p[1] * v[1]) * lam[1];
+  }
+
+  void jvp_p_t_vec_axpy(const std::vector<double>& x,
+                        const std::vector<double>& v,
+                        const std::vector<double>& lam, const double& t,
+                        const double& sc, double* out) const {
+    const double q = x[2] * v[1] + x[1] * v[2];
+    out[NX + 0] += sc * ((-v[0]) * lam[0] + (v[0]) * lam[1]);
+    out[NX + 1] += sc * ((q) * lam[0] + (-q) * lam[1]);
+    out[NX + 2] += sc * ((-2.0 * x[1] * v[1]) * lam[1]
+                         + (2.0 * x[1] * std::cos(t) * v[1]) * lam[2]);
+  }
+
+  void dfdt_x_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                    const double& t, std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[1] = (-2.0 * p[2] * x[1] * std::sin(t)) * lam[2];
+  }
+
+  void dfdt_p_t_vec_axpy(const std::vector<double>& x,
+                         const std::vector<double>& lam,
+                         const double& t, const double& sc,
+                         double* out) const {
+    out[NX + 2] += sc * ((-x[1] * x[1] * std::sin(t)) * lam[2]);
+  }
+};
+
+// ---------------------------------------------------------------------------
+//  The same steps, written rather than recorded.
+// ---------------------------------------------------------------------------
+
+static void closed_steps(const std::vector<cp_type>& cps,
+                         std::vector<double>& wx, std::vector<double>& wp)
+{
+  std::vector<double> pv(P, P + NP);
+  auto sysd = make_system<double>(pv);
+  adjoint_terms adj{pv};
+  cppde::adjoint::rosenbrock_workspace ws;
+  StepD st;
+
+  std::vector<double> wphi(NX + NP, 0.0), w_in(NX, 0.0);
+  for (std::size_t s = cps.size(); s-- > 0;) {
+    w_in.assign(NX, 0.0);
+    cppde::adjoint::apply_rosenbrock_adjoint(
+        st, sysd, cps[s].x.data(), cps[s].t, cps[s].dt, NX, NX + NP,
+        wx.data(), adj, w_in.data(), wphi.data(), ws);
+    wx = w_in;
+  }
+  wp.assign(NP, 0.0);
+  for (std::size_t j = 0; j < NP; ++j) wp[j] = wphi[NX + j];
+}
+
 static void reverse_steps(const std::vector<cp_type>& cps,
                           std::vector<double>& wx, std::vector<double>& wp,
                           std::vector<double>& replayed_end)
@@ -202,6 +291,9 @@ static void compare(const char* name, unsigned n_steps, const double* w)
   std::vector<double> wx(w, w + NX), wp, replayed_end;
   reverse_steps(cps, wx, wp, replayed_end);
 
+  std::vector<double> cwx(w, w + NX), cwp;
+  closed_steps(cps, cwx, cwp);
+
   std::printf("%-20s", name);
   for (std::size_t i = 0; i < NX; ++i) std::printf(" %.17g", wx[i]);
   std::printf("  |");
@@ -215,6 +307,8 @@ static void compare(const char* name, unsigned n_steps, const double* w)
     const std::string tag = (j < NX) ? "  dx" + std::to_string(j)
                                      : "  dp" + std::to_string(j - NX);
     close(wS, got, std::string(name) + tag);
+    const double gotc = (j < NX) ? cwx[j] : cwp[j - NX];
+    close(wS, gotc, std::string(name) + " written" + tag);
   }
 
   // The stage values come back out of the factorisation rather than a

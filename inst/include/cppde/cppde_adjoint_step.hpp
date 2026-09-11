@@ -34,6 +34,7 @@
 #define CPPDE_ADJOINT_STEP_HPP
 
 #include <cstddef>
+#include <type_traits>
 #include <vector>
 
 #include <cppde/cppde_profiler.hpp>
@@ -656,6 +657,173 @@ void apply_onestep_adjoint(Stepper& st, System& sys,
 }
 
 // ---------------------------------------------------------------------------
+//  The adjoint of one Rosenbrock step.
+//
+//  Six solves against one matrix W = I/(gamma h) - J(x, t):
+//
+//    X_i   = x + sum_{j<i} a_ij g_j,     F_i = f(X_i, t + node_i h)
+//    g_i   = W^-1 ( F_i + h d_i D + sum_{j<i} (c_ij/h) g_j )
+//    X_6   = X_5 + g_5,   e = W^-1 ( F_6 + sum_j (c_6j/h) g_j )
+//    x_out = X_6 + e
+//
+//  with F_1 = f(x, t) and D = df/dt(x, t).
+//
+//  W is built from the Jacobian, so a stage depends on x and theta through the
+//  matrix as well as through its right-hand side: g = W^-1 r gives
+//  dg = W^-1 (dr + (dJ) g), whose adjoint is the contraction of lambda with the
+//  derivative of J g. That is a second derivative, which a tape supplied
+//  silently and a written adjoint has to ask the model for.
+//
+//  The transposed solves go through the stepper's own factorisation, which is
+//  the one the stages solved against. A corrector method may not do that, its
+//  iteration matrix being stale by design; a Rosenbrock stage is a direct solve
+//  and the matrix it used is the matrix its derivative needs.
+// ---------------------------------------------------------------------------
+struct rosenbrock_workspace {
+  std::vector<double> xout, xerr, x, lam, wx, wD, jv, xs;
+  std::vector<std::vector<double> > mu, wX;
+};
+
+template<class Stepper, class System, class AdjTerms>
+void apply_rosenbrock_adjoint(Stepper& st, System& sys,
+                              const double* x0, double t, double dt,
+                              std::size_t n, std::size_t n_phi,
+                              const double* w_out,
+                              const AdjTerms& adj,
+                              double* w_in, double* w_theta,
+                              rosenbrock_workspace& ws,
+                              const double* mu_seed = nullptr,
+                              double* w_out_state = nullptr)
+{
+  constexpr int S = Stepper::n_stages_used;   // five stages, then the error
+
+  // The step once forward, to recover the stages and the factorisation. An
+  // accepted step rebuilds the Jacobian at its own start, so this is the same
+  // matrix and the same stages the run produced.
+  ws.xout.assign(n, 0.0);
+  ws.xerr.assign(n, 0.0);
+  ws.x.assign(x0, x0 + n);
+  st.do_step(sys, ws.x, t, ws.xout, dt, ws.xerr);
+
+  if (w_out_state) for (std::size_t i = 0; i < n; ++i) w_out_state[i] = w_out[i];
+
+  if (ws.mu.size() < static_cast<std::size_t>(S) + 2) ws.mu.resize(S + 2);
+  if (ws.wX.size() < static_cast<std::size_t>(S) + 2) ws.wX.resize(S + 2);
+  for (int i = 1; i <= S + 1; ++i) {
+    ws.mu[i].assign(n, 0.0);
+    ws.wX[i].assign(n, 0.0);
+  }
+  ws.wx.assign(n, 0.0);
+  ws.wD.assign(n, 0.0);
+
+  // An observation inside the step reaches the stages directly: the continuous
+  // extension is linear in them.
+  if (mu_seed)
+    for (int i = 1; i <= S; ++i)
+      for (std::size_t k = 0; k < n; ++k)
+        ws.mu[i][k] += mu_seed[static_cast<std::size_t>(i - 1) * n + k];
+
+  // The stage state X_i, rebuilt from the step start and the stage vectors.
+  // The error stage reads the last stage's state plus that stage's own vector,
+  // so it takes the last stage's combination and not a row of its own.
+  auto stage_state = [&](int i) {
+    const int row = (i == S + 1) ? S : i;
+    ws.xs.assign(x0, x0 + n);
+    for (int j = 1; j < row; ++j) {
+      const double a = Stepper::stage_a(row, j);
+      if (a == 0.0) continue;
+      const auto& gj = st.stage_g(j);
+      for (std::size_t k = 0; k < n; ++k) ws.xs[k] += a * gj[k];
+    }
+    if (i == S + 1) {
+      const auto& gs = st.stage_g(S);
+      for (std::size_t k = 0; k < n; ++k) ws.xs[k] += gs[k];
+    }
+  };
+
+  // One solved stage: the matrix term, the right-hand side's couplings, and
+  // the stage's own evaluation of f.
+  auto sweep_stage = [&](int i, const std::vector<double>& gi, double* wXi) {
+    ws.lam = ws.mu[i];
+    st.stage_solve_transposed(ws.lam);
+
+    adj.jvp_x_t_vec(ws.x, gi, ws.lam, t, ws.jv);
+    for (std::size_t k = 0; k < n; ++k) ws.wx[k] += ws.jv[k];
+    adj.jvp_p_t_vec_axpy(ws.x, gi, ws.lam, t, 1.0, w_theta);
+
+    for (int j = 1; j < i; ++j) {
+      const double c = Stepper::stage_c(i, j) / dt;
+      if (c == 0.0) continue;
+      for (std::size_t k = 0; k < n; ++k) ws.mu[j][k] += c * ws.lam[k];
+    }
+    const double d = Stepper::stage_d(i);
+    if (d != 0.0)
+      for (std::size_t k = 0; k < n; ++k) ws.wD[k] += dt * d * ws.lam[k];
+
+    const double ti = t + Stepper::stage_node(i) * dt;
+    if (i == 1) {
+      adj.jac_t_vec(ws.x, ws.lam, ti, ws.jv);
+      for (std::size_t k = 0; k < n; ++k) ws.wx[k] += ws.jv[k];
+      adj.dfdp_t_vec_axpy(ws.x, ws.lam, ti, 1.0, w_theta);
+      return;
+    }
+    stage_state(i);
+    adj.jac_t_vec(ws.xs, ws.lam, ti, ws.jv);
+    for (std::size_t k = 0; k < n; ++k) wXi[k] += ws.jv[k];
+    adj.dfdp_t_vec_axpy(ws.xs, ws.lam, ti, 1.0, w_theta);
+  };
+
+  // The cotangent on X_i, spread onto the step start and the stages it reads.
+  auto spread_stage_state = [&](int i, const double* wXi) {
+    for (std::size_t k = 0; k < n; ++k) ws.wx[k] += wXi[k];
+    for (int j = 1; j < i; ++j) {
+      const double a = Stepper::stage_a(i, j);
+      if (a == 0.0) continue;
+      for (std::size_t k = 0; k < n; ++k) ws.mu[j][k] += a * wXi[k];
+    }
+  };
+
+  // x_out = X_6 + e
+  for (std::size_t k = 0; k < n; ++k) {
+    ws.wX[S + 1][k] += w_out[k];
+    ws.mu[S + 1][k] += w_out[k];
+  }
+  // The error solve, whose stage vector is the error estimate itself.
+  sweep_stage(S + 1, ws.xerr, ws.wX[S + 1].data());
+  // X_6 = X_5 + g_5
+  for (std::size_t k = 0; k < n; ++k) {
+    ws.wX[S][k] += ws.wX[S + 1][k];
+    ws.mu[S][k] += ws.wX[S + 1][k];
+  }
+
+  for (int i = S; i >= 1; --i) {
+    sweep_stage(i, st.stage_g(i), ws.wX[i].data());
+    if (i >= 2) spread_stage_state(i, ws.wX[i].data());
+  }
+
+  // D = df/dt(x, t), which the Jacobian evaluation filled and every early
+  // stage reads.
+  bool any = false;
+  for (std::size_t k = 0; k < n && !any; ++k) any = (ws.wD[k] != 0.0);
+  if (any) {
+    adj.dfdt_x_t_vec(ws.x, ws.wD, t, ws.jv);
+    for (std::size_t k = 0; k < n; ++k) ws.wx[k] += ws.jv[k];
+    adj.dfdt_p_t_vec_axpy(ws.x, ws.wD, t, 1.0, w_theta);
+  }
+
+  for (std::size_t k = 0; k < n; ++k) w_in[k] = ws.wx[k];
+  (void)n_phi;
+}
+
+// Whether a one-step method's stages are linear solves it can hand out, rather
+// than explicit combinations its tableau already describes. That is what decides
+// how its adjoint moves through a step.
+template<class S, class = void> struct has_stage_vectors : std::false_type {};
+template<class S>
+struct has_stage_vectors<S, std::void_t<decltype(std::declval<const S&>().stage_g(1))>>
+: std::true_type {};
+
+// ---------------------------------------------------------------------------
 //  A whole trajectory backwards on a one-step method, without a tape.
 //
 //  The same store, the same order, the same outputs as the multistep form, and
@@ -679,6 +847,7 @@ public:
   void sweep(const Store& store, std::size_t n_phi, const double* seeds,
              System& sys, const AdjTerms& adj, Stepper& st)
   {
+    constexpr bool rosen = has_stage_vectors<Stepper>::value;
     const std::size_t n = store.n_states();
     const std::size_t n_steps = store.n_steps();
 
@@ -690,7 +859,8 @@ public:
     if (n_steps == 0) return;
 
     std::size_t next_obs = store.n_obs();
-    std::vector<double> w_out(n, 0.0), w_in(n, 0.0), w_start(n, 0.0), jv;
+    std::vector<double> w_out(n, 0.0), w_in(n, 0.0), w_start(n, 0.0), jv, x0,
+                        mu_seed;
 
     for (std::size_t k = n_steps; k-- > 0;) {
       const auto& cp = store.step(k);
@@ -698,14 +868,20 @@ public:
       std::size_t obs_lo = next_obs;
       while (obs_lo > 0 && store.obs(obs_lo - 1).step == k + 1) --obs_lo;
 
-      // The step runs forward once in plain double to recover its stages. The
-      // interpolant reads two of them, so this has to come before the seeding.
-      m_ws.xout.assign(n, 0.0);
-      m_ws.xerr.assign(n, 0.0);
-      std::vector<double> x0(cp.start_state(), cp.start_state() + n);
-      st.do_step(sys, x0, cp.t, m_ws.xout, cp.dt, m_ws.xerr);
+      x0.assign(cp.start_state(), cp.start_state() + n);
+
+      // An explicit method's interpolant reads the right-hand side at both ends
+      // of the step, so its stages have to be there before an observation can
+      // be seeded. A Rosenbrock interpolant is linear in its own stage vectors
+      // with constant weights, and needs nothing but the weights.
+      if constexpr (!rosen) {
+        m_ws.xout.assign(n, 0.0);
+        m_ws.xerr.assign(n, 0.0);
+        st.do_step(sys, x0, cp.t, m_ws.xout, cp.dt, m_ws.xerr);
+      }
 
       w_start.assign(n, 0.0);
+      if constexpr (rosen) mu_seed.assign(stage_slots(n), 0.0);
       for (std::size_t o = obs_lo; o < next_obs; ++o) {
         auto _tp = m_prof.timer(cppde::prof_cat::rev_interp);
         const double t_obs = clamp_to_step(cp, store.obs(o).t);
@@ -718,19 +894,36 @@ public:
           w_start[i] += cw[0] * w[i];
           w_out[i]   += cw[1] * w[i];
         }
-        // k1 = f(x_old, t) and k7 = f(x_new, t + dt), so the two derivative
-        // weights land on the states at the two ends and on theta.
-        seed_through_rhs(adj, x0, cp.t, w, cp.dt * cw[2], n, n_phi,
-                         w_start.data(), jv);
-        seed_through_rhs(adj, m_ws.xout, cp.t + cp.dt, w, cp.dt * cw[3], n,
-                         n_phi, w_out.data(), jv);
+        if constexpr (rosen) {
+          // The other two weights sit on the continuous extension's own two
+          // vectors, each a fixed combination of the stages.
+          for (int j = 1; j <= Stepper::n_stages_used; ++j) {
+            const double c = Stepper::dense_stage_weight(3, j) * cw[2]
+                           + Stepper::dense_stage_weight(4, j) * cw[3];
+            if (c == 0.0) continue;
+            double* mj = mu_seed.data() + static_cast<std::size_t>(j - 1) * n;
+            for (std::size_t i = 0; i < n; ++i) mj[i] += c * w[i];
+          }
+        } else {
+          // k1 = f(x_old, t) and k7 = f(x_new, t + dt), so the two derivative
+          // weights land on the states at the two ends and on theta.
+          seed_through_rhs(adj, x0, cp.t, w, cp.dt * cw[2], n, n_phi,
+                           w_start.data(), jv);
+          seed_through_rhs(adj, m_ws.xout, cp.t + cp.dt, w, cp.dt * cw[3], n,
+                           n_phi, w_out.data(), jv);
+        }
       }
       next_obs = obs_lo;
 
       w_in.assign(n, 0.0);
       { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
-        onestep_recurse(st, x0.data(), cp.t, cp.dt, n, n_phi, w_out.data(),
-                        adj, w_in.data(), m_wp.data(), m_ws); }
+        if constexpr (rosen)
+          apply_rosenbrock_adjoint(st, sys, x0.data(), cp.t, cp.dt, n, n_phi,
+                                   w_out.data(), adj, w_in.data(), m_wp.data(),
+                                   m_rws, mu_seed.data());
+        else
+          onestep_recurse(st, x0.data(), cp.t, cp.dt, n, n_phi, w_out.data(),
+                          adj, w_in.data(), m_wp.data(), m_ws); }
       for (std::size_t i = 0; i < n; ++i) w_in[i] += w_start[i];
 
       // lambda is what this step hands the one below it. eta is the cotangent
@@ -738,8 +931,9 @@ public:
       // one-step method reports already scaled.
       if (m_trace) {
         for (std::size_t i = 0; i < n; ++i) m_lam[k * n + i] = w_in[i];
+        const std::vector<double>& xe = rosen ? m_rws.xerr : m_ws.xerr;
         double e = 0.0;
-        for (std::size_t i = 0; i < n; ++i) e += w_out[i] * m_ws.xerr[i];
+        for (std::size_t i = 0; i < n; ++i) e += w_out[i] * xe[i];
         m_eta[k] = e;
       }
       w_out.swap(w_in);
@@ -781,8 +975,17 @@ private:
     (void)n_phi;
   }
 
+  /// How many stage cotangents a step carries, when it carries any.
+  static std::size_t stage_slots(std::size_t n) {
+    if constexpr (has_stage_vectors<Stepper>::value)
+      return static_cast<std::size_t>(Stepper::n_stages_used) * n;
+    else
+      return 0u;
+  }
+
   cppde::profiler m_prof;
   onestep_workspace m_ws;
+  rosenbrock_workspace m_rws;
   bool m_trace = false;
   std::vector<double> m_wx, m_whist, m_wp, m_lam, m_eta;
 };

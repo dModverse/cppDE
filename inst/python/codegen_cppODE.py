@@ -232,7 +232,8 @@ class _ModelSymbols:
     """
     __slots__ = ('printer', '_map')
 
-    def __init__(self, states, params, n_states, forcings, use_initial_states):
+    def __init__(self, states, params, n_states, forcings, use_initial_states,
+                 vectors=()):
         mapping = {}
         # forcings first (they may shadow param/state names)
         for i, f in enumerate(forcings):
@@ -252,6 +253,11 @@ class _ModelSymbols:
             mapping[f"{s}_0"] = f"params[{i}]"
         # time
         mapping["time"] = "t"
+        # Slots this generator invents for quantities the model has no name
+        # for: an argument a contraction carries beside the state, a forcing's
+        # time derivative. Last, so nothing of the model's can shadow them.
+        for name, slot in vectors:
+            mapping[name] = slot
 
         self._map = mapping
         self.printer = _get_printer(tuple(sorted(mapping.items())))
@@ -260,11 +266,12 @@ class _ModelSymbols:
         """The C++ a bare symbol prints as; an unmapped name stays as it is."""
         return self._map.get(name, name)
 @lru_cache(maxsize=8)
-def _get_symbols(states_tuple, params_tuple, n_states, forcings_tuple, use_initial_states):
+def _get_symbols(states_tuple, params_tuple, n_states, forcings_tuple,
+                 use_initial_states, vectors_tuple=()):
     """Cached factory: the mapping is rebuilt only when the signature changes."""
     return _ModelSymbols(
         list(states_tuple), list(params_tuple), n_states,
-        list(forcings_tuple), use_initial_states,
+        list(forcings_tuple), use_initial_states, list(vectors_tuple),
     )
 # =====================================================================
 # Math macro replacement map
@@ -385,7 +392,8 @@ def _negate_cpp_expr(expr_str):
 # _to_cpp - Convert SymPy expression to C++ code
 # =====================================================================
 
-def _to_cpp(expr, states, params, n_states, num_type, forcings=None, use_initial_states=False):
+def _to_cpp(expr, states, params, n_states, num_type, forcings=None,
+            use_initial_states=False, vectors=()):
     """Convert a SymPy expression to C++ code.
 
     The printer substitutes a slot for every model symbol, so the result holds
@@ -404,7 +412,7 @@ def _to_cpp(expr, states, params, n_states, num_type, forcings=None, use_initial
 
     symbols = _get_symbols(
         tuple(states), tuple(params), n_states,
-        tuple(forcings), use_initial_states,
+        tuple(forcings), use_initial_states, tuple(vectors),
     )
 
     if isinstance(expr, sp.Symbol):
@@ -445,7 +453,8 @@ def generate_ode_cpp(
     skip_jacobian=False,
     ad_level=0,
     arena=False,
-    emit_contractions=False):
+    emit_contractions=False,
+    emit_jvp=False):
     """
     Generate C++ code for ODE system and Jacobian.
 
@@ -599,9 +608,51 @@ def generate_ode_cpp(
             )
         param_syms_list = [params_syms[p] for p in params_list]
         dfdp_nnz = _compute_ode_dfdp(exprs, param_syms_list, set(param_syms_list))
+        jvp_matrix = jvp_dfdp_nnz = dfdt_matrix = dfdt_dfdp_nnz = None
+        v_slots = fd_slots = ()
+        if emit_jvp:
+            # A Rosenbrock stage solves against a matrix built from J and adds a
+            # multiple of df/dt, so its adjoint needs the derivative of both.
+            # Jv is one expression per state over the nonzeros of its row, and
+            # the derivatives of these come from the same two routines.
+            states_syms_list = [states_syms[st] for st in states_list]
+            v_syms = [sp.Symbol(f"_jv{k}") for k in range(n_states)]
+            v_slots = tuple((str(v), f"v[{k}]") for k, v in enumerate(v_syms))
+            jv = [sum((jac_matrix[i][k] * v_syms[k]
+                       for k in range(n_states) if jac_matrix[i][k] != 0),
+                      sp.Integer(0))
+                  for i in range(n_states)]
+            jvp_matrix = _compute_ode_jacobian_serial(
+                jv, states_syms_list, set(states_syms_list)
+            )
+            jvp_dfdp_nnz = _compute_ode_dfdp(jv, param_syms_list,
+                                             set(param_syms_list))
+
+            # df/dt as the model really computes it: the explicit time
+            # derivative plus, for every forcing, the chain term the Jacobian
+            # emitter appends as text. A forcing's own time derivative is a
+            # constant here, so it rides as an invented symbol and differentiates
+            # like one.
+            fd_syms = [sp.Symbol(f"_fd{j}") for j in range(len(forcings_list))]
+            fd_slots = tuple((str(fd), f"F[{j}]->derivative(t)")
+                             for j, fd in enumerate(fd_syms))
+            dfdt_exprs = []
+            for i, expr in enumerate(exprs):
+                d = time_derivs[i]
+                for j, fname in enumerate(forcings_list):
+                    df_dF = sp.diff(expr, forcing_syms[fname])
+                    if df_dF != 0:
+                        d = d + df_dF * fd_syms[j]
+                dfdt_exprs.append(d)
+            dfdt_matrix = _compute_ode_jacobian_serial(
+                dfdt_exprs, states_syms_list, set(states_syms_list)
+            )
+            dfdt_dfdp_nnz = _compute_ode_dfdp(dfdt_exprs, param_syms_list,
+                                              set(param_syms_list))
         adj_cpp_lines = _generate_contraction_code(
             jac_matrix, dfdp_nnz, states_list, params_list, n_states, num_type,
-            forcings_list
+            forcings_list, jvp_matrix, jvp_dfdp_nnz, v_slots,
+            dfdt_matrix, dfdt_dfdp_nnz, fd_slots
         )
 
     # Sparsity analysis: decide dense vs sparse
@@ -999,10 +1050,101 @@ def _compute_ode_dfdp(exprs, param_syms_list, param_syms_set):
                     out.append((i, k, d))
     return out
 
+def _emit_contraction_pair(jac_matrix, dfdp_nnz, states_list, params_list,
+                           n_states, num_type, forcings_list,
+                           state_name, param_name, extra_arg, vectors, prefix):
+    """One contraction pair: over the states, and over the flat parameters.
+
+    `extra_arg` says whether both of them carry a vector argument ahead of
+    lambda, and `vectors` maps the symbols this generator invented to the slots
+    they print as.
+    """
+    zero = sp.Integer(0)
+    n_params = len(params_list)
+    n_phi = n_states + n_params
+    pad = " " * (len(state_name) + 8)
+    padp = " " * (len(param_name) + 8)
+
+    # --- over the states, grouped by column, output sized here ------------
+    by_col = {}
+    if jac_matrix is not None:
+        for i in range(n_states):
+            for j in range(n_states):
+                e = jac_matrix[i][j]
+                if e != zero and e != 0:
+                    by_col.setdefault(j, []).append((i, e))
+
+    lines = [f"  void {state_name}(const std::vector<{num_type}>& x,"]
+    if extra_arg:
+        lines.append(f"{pad}const std::vector<{num_type}>& v,")
+    lines += [
+        f"{pad}const std::vector<{num_type}>& lam,",
+        f"{pad}const {num_type}& t,",
+        f"{pad}std::vector<{num_type}>& out) const {{",
+        "    (void)x; (void)t;",
+        f"    out.assign({n_states}u, {num_type}(0.0));",
+    ]
+    lines += _arena_scope_lines(num_type)
+    flat = [e for j in sorted(by_col) for _, e in by_col[j]]
+    cse_temps, simplified = _cse_temps(flat, prefix=f"_cse_{prefix}x")
+    lines += _emit_cse_temps(cse_temps, states_list, params_list, n_states,
+                             num_type, forcings_list, vectors)
+    pos = 0
+    for j in range(n_states):
+        if j not in by_col:
+            lines.append(f"    out[{j}] = {num_type}(0.0);")
+            continue
+        terms = []
+        for (i, _) in by_col[j]:
+            cpp = _to_cpp(simplified[pos], states_list, params_list, n_states,
+                          num_type, forcings_list, vectors=vectors)
+            terms.append(f"({cpp})*lam[{i}]")
+            pos += 1
+        lines.append(f"    out[{j}] = " + " + ".join(terms) + ";")
+    lines += ["  }", ""]
+
+    # --- over the parameters, scaled and added into the caller's own ------
+    by_par = {}
+    for (i, k, e) in dfdp_nnz:
+        by_par.setdefault(k, []).append((i, e))
+
+    lines += [f"  void {param_name}(const std::vector<{num_type}>& x,"]
+    if extra_arg:
+        lines.append(f"{padp}const std::vector<{num_type}>& v,")
+    lines += [
+        f"{padp}const std::vector<{num_type}>& lam,",
+        f"{padp}const {num_type}& t,",
+        f"{padp}const {num_type}& sc,",
+        f"{padp}{num_type}* out) const {{",
+        "    (void)x; (void)t;",
+    ]
+    lines += _arena_scope_lines(num_type)
+    flat = [e for k in sorted(by_par) for _, e in by_par[k]]
+    cse_temps, simplified = _cse_temps(flat, prefix=f"_cse_{prefix}p")
+    lines += _emit_cse_temps(cse_temps, states_list, params_list, n_states,
+                             num_type, forcings_list, vectors)
+    pos = 0
+    for k in range(n_params):
+        slot = n_states + k
+        if k not in by_par:
+            continue
+        terms = []
+        for (i, _) in by_par[k]:
+            cpp = _to_cpp(simplified[pos], states_list, params_list, n_states,
+                          num_type, forcings_list, vectors=vectors)
+            terms.append(f"({cpp})*lam[{i}]")
+            pos += 1
+        lines.append(f"    out[{slot}] += sc*(" + " + ".join(terms) + ");")
+    lines += ["  }", ""]
+    return lines
+
 
 def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
-                               n_states, num_type, forcings_list):
-    """The two contractions a written step adjoint asks the model for.
+                               n_states, num_type, forcings_list,
+                               jvp_matrix=None, jvp_dfdp_nnz=None, v_slots=(),
+                               dfdt_matrix=None, dfdt_dfdp_nnz=None,
+                               fd_slots=()):
+    """The contractions a written step adjoint asks the model for.
 
     `jac_t_vec` is J' lambda over the states and sizes its own output; a caller
     that has to size it first has to know the model's dimensions at the call
@@ -1013,11 +1155,13 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
     the first n_states slots belong to the initial values and never move, so the
     added form touches only the slots that carry a term: no buffer to clear, no
     second pass to add.
-    """
-    zero = sp.Integer(0)
-    n_params = len(params_list)
-    n_phi = n_states + n_params
 
+    `jvp_x_t_vec` and `jvp_p_t_vec_axpy` are the same two over J(x, p, t) v,
+    whose derivative is a second one, and `dfdt_x_t_vec` and
+    `dfdt_p_t_vec_axpy` the same two over df/dt. A Rosenbrock stage solves
+    against a matrix built from J and adds a multiple of df/dt, so its adjoint
+    needs all four; nothing else does, and they are emitted only where they are.
+    """
     lines = [
         "// The contractions a reverse step needs from the model.",
         "struct adjoint_terms {",
@@ -1029,74 +1173,20 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
         "    : params(p_), F(F_) {}",
         "",
     ]
-
-    # --- J' lambda, grouped by state column -------------------------------
-    by_col = {}
-    if jac_matrix is not None:
-        for i in range(n_states):
-            for j in range(n_states):
-                e = jac_matrix[i][j]
-                if e != zero and e != 0:
-                    by_col.setdefault(j, []).append((i, e))
-
-    lines += [
-        f"  void jac_t_vec(const std::vector<{num_type}>& x,",
-        f"                 const std::vector<{num_type}>& lam,",
-        f"                 const {num_type}& t,",
-        f"                 std::vector<{num_type}>& out) const {{",
-        "    (void)x; (void)t;",
-        f"    out.assign({n_states}u, {num_type}(0.0));",
-    ]
-    lines += _arena_scope_lines(num_type)
-    flat = [e for j in sorted(by_col) for _, e in by_col[j]]
-    cse_temps, simplified = _cse_temps(flat, prefix="_cse_at")
-    lines += _emit_cse_temps(cse_temps, states_list, params_list, n_states,
-                             num_type, forcings_list)
-    pos = 0
-    for j in range(n_states):
-        if j not in by_col:
-            lines.append(f"    out[{j}] = {num_type}(0.0);")
-            continue
-        terms = []
-        for (i, _) in by_col[j]:
-            cpp = _to_cpp(simplified[pos], states_list, params_list, n_states,
-                          num_type, forcings_list)
-            terms.append(f"({cpp})*lam[{i}]")
-            pos += 1
-        lines.append(f"    out[{j}] = " + " + ".join(terms) + ";")
-    lines += ["  }", ""]
-
-    # --- (df/dp)' lambda, grouped by parameter slot ------------------------
-    by_par = {}
-    for (i, k, e) in dfdp_nnz:
-        by_par.setdefault(k, []).append((i, e))
-
-    lines += [
-        f"  void dfdp_t_vec_axpy(const std::vector<{num_type}>& x,",
-        f"                       const std::vector<{num_type}>& lam,",
-        f"                       const {num_type}& t,",
-        f"                       const {num_type}& sc,",
-        f"                       {num_type}* out) const {{",
-        "    (void)x; (void)t;",
-    ]
-    lines += _arena_scope_lines(num_type)
-    flat = [e for k in sorted(by_par) for _, e in by_par[k]]
-    cse_temps, simplified = _cse_temps(flat, prefix="_cse_pt")
-    lines += _emit_cse_temps(cse_temps, states_list, params_list, n_states,
-                             num_type, forcings_list)
-    pos = 0
-    for k in range(n_params):
-        slot = n_states + k
-        if k not in by_par:
-            continue
-        terms = []
-        for (i, _) in by_par[k]:
-            cpp = _to_cpp(simplified[pos], states_list, params_list, n_states,
-                          num_type, forcings_list)
-            terms.append(f"({cpp})*lam[{i}]")
-            pos += 1
-        lines.append(f"    out[{slot}] += sc*(" + " + ".join(terms) + ");")
-    lines += ["  }", "};", f"// adjoint_terms writes into {n_phi} slots"]
+    lines += _emit_contraction_pair(
+        jac_matrix, dfdp_nnz, states_list, params_list, n_states, num_type,
+        forcings_list, "jac_t_vec", "dfdp_t_vec_axpy", False, (), "a")
+    if jvp_matrix is not None:
+        lines += _emit_contraction_pair(
+            jvp_matrix, jvp_dfdp_nnz, states_list, params_list, n_states,
+            num_type, forcings_list, "jvp_x_t_vec", "jvp_p_t_vec_axpy",
+            True, tuple(v_slots), "j")
+        lines += _emit_contraction_pair(
+            dfdt_matrix, dfdt_dfdp_nnz, states_list, params_list, n_states,
+            num_type, forcings_list, "dfdt_x_t_vec", "dfdt_p_t_vec_axpy",
+            False, tuple(fd_slots), "d")
+    n_phi = n_states + len(params_list)
+    lines += ["};", f"// adjoint_terms writes into {n_phi} slots"]
     return lines
 
 
@@ -1149,7 +1239,8 @@ def _cse_temps(exprs, prefix='_cse_t'):
     return temps, simplified
 
 
-def _emit_cse_temps(temps, states_list, params_list, n_states, num_type, forcings_list):
+def _emit_cse_temps(temps, states_list, params_list, n_states, num_type,
+                    forcings_list, vectors=()):
     """Emit `const num_type _cse_tN = expr;` lines from sp.cse temps.
 
     Materialising into num_type (rather than `auto`) forces ET evaluation at
@@ -1157,7 +1248,8 @@ def _emit_cse_temps(temps, states_list, params_list, n_states, num_type, forcing
     of re-walks of the ET tree."""
     lines = []
     for sym, sub in temps:
-        sub_cpp = _to_cpp(sub, states_list, params_list, n_states, num_type, forcings_list)
+        sub_cpp = _to_cpp(sub, states_list, params_list, n_states, num_type,
+                          forcings_list, vectors=vectors)
         # A piecewise condition can be lifted into its own temp, and that one
         # holds a truth value, not a model quantity.
         temp_type = "bool" if is_boolean(sub) else num_type

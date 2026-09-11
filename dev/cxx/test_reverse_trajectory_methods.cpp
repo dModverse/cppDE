@@ -116,6 +116,41 @@ struct adjoint_terms {
     out[NX + 1] += sc*((x[1] * x[2]) * lam[0] + (-x[1] * x[2]) * lam[1]);
     out[NX + 2] += sc*((-x[1] * x[1]) * lam[1] + (x[1] * x[1] * std::cos(t)) * lam[2]);
   }
+
+  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v,
+                   const std::vector<double>& lam, const double& t,
+                   std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[0] = 0.0;
+    out[1] = (p[1] * v[2]) * lam[0]
+           + (-2.0 * p[2] * v[1] - p[1] * v[2]) * lam[1]
+           + (2.0 * p[2] * std::cos(t) * v[1]) * lam[2];
+    out[2] = (p[1] * v[1]) * lam[0] + (-p[1] * v[1]) * lam[1];
+  }
+
+  void jvp_p_t_vec_axpy(const std::vector<double>& x,
+                        const std::vector<double>& v,
+                        const std::vector<double>& lam, const double& t,
+                        const double& sc, double* out) const {
+    const double q = x[2] * v[1] + x[1] * v[2];
+    out[NX + 0] += sc * ((-v[0]) * lam[0] + (v[0]) * lam[1]);
+    out[NX + 1] += sc * ((q) * lam[0] + (-q) * lam[1]);
+    out[NX + 2] += sc * ((-2.0 * x[1] * v[1]) * lam[1]
+                         + (2.0 * x[1] * std::cos(t) * v[1]) * lam[2]);
+  }
+
+  void dfdt_x_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
+                    const double& t, std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[1] = (-2.0 * p[2] * x[1] * std::sin(t)) * lam[2];
+  }
+
+  void dfdt_p_t_vec_axpy(const std::vector<double>& x,
+                         const std::vector<double>& lam,
+                         const double& t, const double& sc,
+                         double* out) const {
+    out[NX + 2] += sc * ((-x[1] * x[1] * std::sin(t)) * lam[2]);
+  }
 };
 
 template<class V>

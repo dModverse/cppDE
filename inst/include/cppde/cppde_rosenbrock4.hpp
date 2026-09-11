@@ -578,6 +578,142 @@ public:
                        ad_lu::scalar_value(m_coef.d35), m_g5.m_v, m_G.slab(4));
   }
 
+  // ====================================================================
+  //  What a written adjoint reads.
+  //
+  //  The stage recursion belongs to the method and is stated once, in stages().
+  //  The adjoint transposes it, and reads the coefficients and the stage
+  //  vectors from here rather than carrying a second copy of either.
+  // ====================================================================
+
+  /// Stage vectors g1..g5; the sixth solve is the embedded error, which
+  /// do_step hands back separately.
+  static constexpr int n_stages_used = 5;
+
+  /// The explicit combination weights a(i, j), i > j, both one-based.
+  static double stage_a(int i, int j) {
+    const rosenbrock_coefficients c;
+    switch (i * 10 + j) {
+      case 21: return ad_lu::scalar_value(c.a21);
+      case 31: return ad_lu::scalar_value(c.a31);
+      case 32: return ad_lu::scalar_value(c.a32);
+      case 41: return ad_lu::scalar_value(c.a41);
+      case 42: return ad_lu::scalar_value(c.a42);
+      case 43: return ad_lu::scalar_value(c.a43);
+      case 51: return ad_lu::scalar_value(c.a51);
+      case 52: return ad_lu::scalar_value(c.a52);
+      case 53: return ad_lu::scalar_value(c.a53);
+      case 54: return ad_lu::scalar_value(c.a54);
+      default: return 0.0;
+    }
+  }
+
+  /// The stage-coupling weights c(i, j), i > j, both one-based. Row six
+  /// belongs to the error estimate. The recursion divides them by the step.
+  static double stage_c(int i, int j) {
+    const rosenbrock_coefficients c;
+    switch (i * 10 + j) {
+      case 21: return ad_lu::scalar_value(c.c21);
+      case 31: return ad_lu::scalar_value(c.c31);
+      case 32: return ad_lu::scalar_value(c.c32);
+      case 41: return ad_lu::scalar_value(c.c41);
+      case 42: return ad_lu::scalar_value(c.c42);
+      case 43: return ad_lu::scalar_value(c.c43);
+      case 51: return ad_lu::scalar_value(c.c51);
+      case 52: return ad_lu::scalar_value(c.c52);
+      case 53: return ad_lu::scalar_value(c.c53);
+      case 54: return ad_lu::scalar_value(c.c54);
+      case 61: return ad_lu::scalar_value(c.c61);
+      case 62: return ad_lu::scalar_value(c.c62);
+      case 63: return ad_lu::scalar_value(c.c63);
+      case 64: return ad_lu::scalar_value(c.c64);
+      case 65: return ad_lu::scalar_value(c.c65);
+      default: return 0.0;
+    }
+  }
+
+  /// The df/dt weights d_i, one-based; stages five and six carry none.
+  static double stage_d(int i) {
+    const rosenbrock_coefficients c;
+    switch (i) {
+      case 1: return ad_lu::scalar_value(c.d1);
+      case 2: return ad_lu::scalar_value(c.d2);
+      case 3: return ad_lu::scalar_value(c.d3);
+      case 4: return ad_lu::scalar_value(c.d4);
+      default: return 0.0;
+    }
+  }
+
+  /// The nodes, one-based; the first is zero and the last two are one.
+  static double stage_node(int i) {
+    const rosenbrock_coefficients c;
+    switch (i) {
+      case 2: return ad_lu::scalar_value(c.c2);
+      case 3: return ad_lu::scalar_value(c.c3);
+      case 4: return ad_lu::scalar_value(c.c4);
+      case 5: case 6: return 1.0;
+      default: return 0.0;
+    }
+  }
+
+  /// The two continuous-extension vectors as combinations of the stages:
+  /// which = 3 gives cont3's weights, which = 4 gives cont4's, j one-based.
+  static double dense_stage_weight(int which, int j) {
+    const rosenbrock_coefficients c;
+    if (which == 3) switch (j) {
+      case 1: return ad_lu::scalar_value(c.d21);
+      case 2: return ad_lu::scalar_value(c.d22);
+      case 3: return ad_lu::scalar_value(c.d23);
+      case 4: return ad_lu::scalar_value(c.d24);
+      case 5: return ad_lu::scalar_value(c.d25);
+      default: return 0.0;
+    }
+    switch (j) {
+      case 1: return ad_lu::scalar_value(c.d31);
+      case 2: return ad_lu::scalar_value(c.d32);
+      case 3: return ad_lu::scalar_value(c.d33);
+      case 4: return ad_lu::scalar_value(c.d34);
+      case 5: return ad_lu::scalar_value(c.d35);
+      default: return 0.0;
+    }
+  }
+
+  /// 1 / (gamma h), the diagonal W is built with.
+  static double inv_gamma_dt_of(double dt_s) {
+    const rosenbrock_coefficients c;
+    return 1.0 / (ad_lu::scalar_value(c.gamma) * dt_s);
+  }
+
+  /// Stage vector i, one-based, valid after do_step.
+  const state_type& stage_g(int i) const {
+    switch (i) {
+      case 1: return m_g1.m_v; case 2: return m_g2.m_v; case 3: return m_g3.m_v;
+      case 4: return m_g4.m_v; default: return m_g5.m_v;
+    }
+  }
+
+  /// W^-T b on the factorisation the step itself used. The stage solves are
+  /// direct, so the adjoint has to transpose that matrix and no other.
+  void stage_solve_transposed(state_type& b) { m_lu.solve_transposed(b); }
+
+  /// f(x, t) at the step start, valid after do_step.
+  const state_type& stage_f0() const { return m_dxdt.m_v; }
+
+  /// df/dt at the step start, as the Jacobian evaluation filled it.
+  const state_type& stage_dfdt() const { return m_lu.dfdt(); }
+
+  /// The continuous extension's four weights at theta, over
+  /// (x_old, x_new, cont3, cont4). One statement of the basis, two readers:
+  /// calc_state contracts it forward, the written adjoint transposes it.
+  template<class TimeArg>
+  static void dense_weights(const TimeArg& s, TimeArg* w) {
+    const TimeArg s1 = TimeArg(1.0) - s;
+    w[0] = s1;
+    w[1] = s;
+    w[2] = s * s1;
+    w[3] = s * s1 * s;
+  }
+
   template<class TimeArg>
   void calc_state(TimeArg t, state_type& x,
                   const state_type& x_old, TimeArg t_old,
