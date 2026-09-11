@@ -46,6 +46,63 @@ Form heute möglich:
 **Das Ziel:** der Adjungierte wird erzeugt und geschrieben statt aufgezeichnet. Danach
 trägt `cppde::codual` nichts mehr und der Typ verschwindet, im Solver wie in `cppFUN`.
 
+## Wo es nach 3d steht
+
+**Gemessen am 2026-09-11**, gleiche Maschine, gleicher Kern, gleiche Toleranzen.
+Bachmann, ganze Kette bis `normL2`, 36 Bedingungen, 113 Parameter:
+
+| Route | ms | in Wertläufen | vorher |
+|---|---|---|---|
+| Wertlauf | 35,4 | 1,00 | 36,5 |
+| Vorwärts | 979,1 | 27,6 | 1026,4 |
+| Adjungierter, geschrieben | 119,6 | 3,37 | 335,7 mit Tape |
+| CVODES ASA | 205,5 | 5,80 | 216,6 |
+
+Der Gradient kostet jetzt 3,37 Wertläufe statt 9,19 und liegt **um das
+1,72-fache unter ASA**, wo er vorher um das 1,55-fache darüber lag. Der Winkel
+gegen den Vorwärtsgradienten steht unverändert bei 3,55e-07.
+
+Je Schritt, Bedingung `long`, 721 Schritte, `cppODE(profile = TRUE)`:
+
+| | ms | je Schritt | Anteil |
+|---|---|---|---|
+| Vorwärtsintegration, ganzer Stepper | 0,530 | 0,735 µs | |
+| `rev_prepare`, Jacobi und Faktorisierung | 0,411 | 0,570 µs | 39% |
+| `rev_adjoint`, die Schrittalgebra | 0,415 | 0,576 µs | 39% |
+| `rev_solve`, der transponierte Solve | 0,126 | 0,175 µs | 12% |
+| `rev_operators`, die Operatoren lesen | 0,101 | 0,140 µs | 10% |
+| **Rückwärtslauf** | **1,056** | **1,465 µs** | **1,99x** |
+
+Damit ist Abnahmezahl 1 erreicht, gegen 12,5x zu Beginn, und Abnahmezahl 2 auch.
+Die lineare Algebra ist jetzt die Hälfte des Rückwärtslaufs, die Schrittalgebra
+die andere. Das Tape ist aus dem Profil verschwunden.
+
+**Die Trefferquote des Operator-Zwischenspeichers lag bei null**, und der Grund
+war eine Zeile: `qwait` stand im Schlüssel. Es zählt herunter bis zur nächsten
+Ordnungsentscheidung und wechselt darum fast jeden Schritt, erreicht aber nur
+die Fehlerkonstanten für hoch und runter. Adams nimmt es entgegen und liest es
+nie, NDF benutzt es für `tq[1]` und `tq[3]`. Beides gehört dem Regler, der nicht
+differenziert wird. Ohne die Zeile: 142 Neuaufbauten auf 721 Schritte, und
+`rev_operators` fällt von 0,317 auf 0,101 ms.
+
+**Zwei Fehler haben die Messung selbst gefunden, beide durch die Abdeckung
+gerutscht.**
+
+*Die erzeugte Kontraktion dimensionierte ihre Ausgabe nicht, die handgeschriebene
+schon.* Zwei Verträge für dieselbe Funktion, und die Prüfstände sahen nur den
+einen. Die Startgrenze der Trajektorie reichte `jac_t_vec` den Puffer der
+Dense-Output-Zeile, der einen Eintrag je Nordsieck-Slot lang ist. Bei zwei
+Zuständen passt das, bei fünfundzwanzig nicht. Der Generator dimensioniert jetzt
+selbst, und ein Prüfstand mit mehr Zuständen als Slots steht in `test-reverse.R`.
+
+*Der geschriebene Pfad hatte kein Profil.* Der Berichtaufruf stand nur im
+getapeten Zweig, also war Abnahmezahl 1 auf ihm gar nicht messbar. Zwei
+Kategorien dazu, `rev_operators` und `rev_adjoint`, und der Zeitnehmer sitzt am
+Neuaufbau statt am Aufruf, damit die Aufrufzahl die Fehlzugriffe zählt.
+
+**Der nächste Hebel ist damit benannt und beziffert:** `rev_prepare`, 39 Prozent
+des Rückwärtslaufs.
+
 ## Was das bringt, und was nicht
 
 Ein geschlossener Schritt-Adjungierter kostet den transponierten Solve, ein bis zwei
@@ -335,7 +392,8 @@ Geprüft in `test_reverse_step.cpp` über einen und über vier Schritte, gegen d
 eingefrorene Dual-Referenz. Der Prüfstand beißt: eine relative Störung von 1e-6
 an einem einzigen Koeffizienten bricht vierzehn Zusicherungen.
 
-**3d. Die Verdrahtung in die Trajektorie. Fehlte im Plan.**
+**3d. Die Verdrahtung in die Trajektorie. Fehlte im Plan. Mehrschritt erledigt
+am 2026-09-10, Einschritt offen.**
 
 Die Stufenliste sprang von den Schritt-Adjungierten zu den Ereignissen, aber
 dazwischen liegt das Stück, ohne das kein Solve den geschriebenen Adjungierten
@@ -355,19 +413,61 @@ wieder nichts wiederholt.
 Zuerst ohne Ereignisse, was für die Abnahmemessung reicht, denn Bachmann hat
 keine. Die Ereignisgrenzen kommen mit Stufe 4.
 
-- 3b rb4: sechs Stufenlösungen gegen dieselbe Faktorisierung. Hebt zugleich die
-  Verweigerung von dünn plus rb4 plus reverse aus Stufe 1 wieder auf.
+*Offen:* dasselbe für die Einschrittverfahren. Deren Dense-Output wird
+hingeschrieben statt probiert: tsit5 interpoliert Hermite-kubisch über `x_alt`,
+`x_neu`, `k1` und `k7`, eine Beobachtung verteilt sich also über je eine `J'`-
+und eine `(df/dp)'`-Kontraktion an beiden Enden auf den Kotangens am Schrittende,
+den am Schrittanfang und auf θ. rb4 interpoliert linear in seinen Stufenvektoren
+und seedet die Stufen-Kotangenten unmittelbar. Der Probe-Stepper bleibt damit der
+Sonderfall des Mehrschrittverfahrens, dessen Nordsieck-Operatoren man sonst
+abschreiben müsste.
 
-### Stufe 4. Ereignisse und Wurzeln
+**3b rb4: braucht zweite Ableitungen. Der Plan hat das nicht gesehen.**
+
+Die sechs Stufen lösen gegen `W = I/(γh) − J(x, t)` mit `J` am Schrittanfang
+(`cppde_rosenbrock4.hpp:430-446`). Jede Stufenlösung hängt damit über `W` von `x`
+und `θ` ab, nicht nur über ihre rechte Seite, und das Tape hat diese Terme
+stillschweigend mitgeliefert. Geschrieben brauchen sie `λ' ∂(Jv)/∂x` und
+`λ' ∂(Jv)/∂p`, für nichtautonome Modelle dazu dasselbe über `∂f/∂t`.
+
+Das ist dieselbe Maschinerie wie Stufe 2, mit `J·v` als Funktionskörper statt
+`f` und `v` als zusätzlichem Eingang. **Und es ist genau die Kontraktion, die
+Stufe 8 braucht**, also teilen sich 3b und 8 einen Generator. Erste Handlung ist
+die Messung aus Stufe 0 noch einmal, auf der zweiten Ordnung.
+
+Hebt zugleich die Verweigerung von dünn plus rb4 plus reverse aus Stufe 1 wieder
+auf, denn `replay_step` fällt damit weg.
+
+### Stufe 4. Ereignisse und Wurzeln, mit dem Restart darin
 
 Saltationsmatrix bilden und transponiert anwenden, Ereigniszeit-Ableitung aus
 `compute_dt_star` ohne Zero-Shift-Trick, feste Ereignisse und Wurzelereignisse getrennt.
 
-### Stufe 5. Der Nordsieck-Restart
+**Größer als der Plan sagt.** `replay_boundary` spielt nicht nur die Saltation
+nach, sondern auch die **Ereignisausdrücke des Modells**
+(`cppde_reverse_trajectory.hpp:594-604`). Geschlossen heißt also: erzeugte vjps
+für Ereigniswert und Wurzelfunktion, die Heun-Schichten über `J'`, und die
+IFT-Ableitung von `dt*` von Hand. `dg_dx` und `dg_dt` sind bereits erzeugte
+Funktionen, und die Zweitordnungskorrektur ist eine Differenzenformel, die sich
+ableiten lässt wie sie dasteht.
 
-`replay_boundary`s Multistep-Zweig (`cppde_reverse_trajectory.hpp:615-632`) läuft heute
-über `initialize()` auf dem codual-Stepper. `initialize` baut jeden Slot aus einem
-Zustand, der Adjungierte kollabiert also auf diesen Zustand, und das ist hinschreibbar.
+### Stufe 5. Der Nordsieck-Restart. Geht in Stufe 4 auf.
+
+`initialize()` baut jeden Slot aus einem Zustand, der Adjungierte kollabiert also
+auf diesen Zustand. Das steht seit 3d geschrieben, als Startgrenze der
+Trajektorie (`cppde_adjoint_step.hpp`, das Ende von `sweep`). Nach einem Ereignis
+gilt dieselbe Abbildung, Stufe 5 ist damit ein Aufrufer und kein Baustein.
+
+### Stufe 5b. `rev_prepare`
+
+39 Prozent des Rückwärtslaufs: Jacobi plus Faktorisierung, je Schritt, gegen
+einen Vorwärtslauf, der dieselbe Matrix bis zu zwanzig Schritte lang
+weiterbenutzt. **Frisch muss sie sein**, denn die IFT verlangt `J` am
+konvergierten `y`, und die Staleness des Vorwärtslaufs gehört seiner Iteration.
+**Neu faktorisiert muss sie nicht sein**: eine gehaltene Faktorisierung plus
+iterative Nachkorrektur gegen das echte `W` kostet zwei Dreieckslösungen und ein
+Matvec statt `n³/3`. Bei 25 Zuständen ein knapper Gewinn, bei 124 ein großer.
+Neu faktorisieren, sobald zwei Durchgänge die Korrektortoleranz nicht erreichen.
 
 ### Stufe 6. `cppFUN` bekommt einen symbolischen vjp
 
@@ -378,14 +478,22 @@ ein zweites Mal über `codual`. Ersetzt durch eine erzeugte Kontraktion `w' ∂f
 
 ### Stufe 7. Umschalten und löschen
 
-**Vorbedingung, aus 3d gelernt:** die Lambda-Spur (`adjointGrid`, `wt`, `wdt`,
-`eta`) hängt heute am Tape. Solange sie dort hängt, wählt der Schalter die
-Implementierung, und zwei Wege, die dasselbe rechnen, tun es in verschiedener
-Reihenfolge. `test-reverse.R:184` verlangte Bitgleichheit und steht jetzt auf
-1e-12, mit dem Grund im Kommentar. Bevor das Tape gelöscht wird, muss die Spur
-im geschriebenen Pfad stehen: `lambda` ist der Kotangens am Schrittende, den
-`apply_multistep_adjoint_pre` schon herausgibt, `eta` braucht zusätzlich `acor`,
-das aus `y` und der ersten Zeile von `A` folgt.
+**Vorbedingung, aus 3d gelernt, und sie wiegt mehr als Bitgleichheit:** die
+Lambda-Spur (`adjointGrid`, `wt`, `wdt`, `eta`) hängt heute am Tape, und
+`adjointGrid` wählt darum die Implementierung. dMod2 schaltet die Spur ein,
+sobald `optionsReverse$gradtol` gesetzt ist, **also schließen sich der
+adjoint-gewichtete Regler und der geschriebene Pfad heute aus**. Das ist kein
+Randfall der Löschung, sondern ein Feature ohne den Umbau.
+
+Zu schreiben: `lambda` ist der Kotangens am Schrittende, den
+`apply_multistep_adjoint_pre` als `w_out_state` schon herausgibt; `eta` ist er
+gegen `acor = y − zn_pred[0]`, mal `error_constant()`, und beide Größen liegen
+im Checkpoint und in den Operatoren. `wt` und `wdt` fallen weg: sie sind die
+Ableitungen nach Schrittzeit und Schrittweite, die das eingefrorene Gitter aus
+der Kettenregel nimmt, und sie standen nur da, weil das Tape sie umsonst
+mitlieferte. `test-reverse.R` verlangt von ihnen heute nur die Form.
+
+Danach kann `test-reverse.R` wieder Gleichheit verlangen statt 1e-12.
 
 
 `cppde_codual.hpp`, `cppde_codual_math.hpp`, `cppde_codual_tape.hpp` entfallen. Mit ihnen
@@ -438,11 +546,16 @@ gegen den Vorwärtsgradienten darf sich nicht verschlechtern, heute 3,55e-07.
 **Abnahme, in dieser Reihenfolge:**
 
 1. Der Rückwärtslauf kostet höchstens das Doppelte der Vorwärtsintegration, je Schritt,
-   auf allen vier Verfahren, gemessen mit `cppODE(profile = TRUE)`. Heute 12,5x. Der
-   Bericht geht nur nach stderr, das reicht.
-2. Die Bachmann-Kette über alle 36 Bedingungen ist schneller als CVODES ASA, heute 336
-   gegen 217 ms. Fällt sie nicht, liegt es an der Kette darüber, und das ist ein eigener
-   Befund, kein Fehlschlag dieses Plans.
+   auf allen vier Verfahren, gemessen mit `cppODE(profile = TRUE)`. Der Bericht geht nur
+   nach stderr, das reicht. **Auf bdf erreicht am 2026-09-11, 1,99x gegen 12,5x zu
+   Beginn.** Die anderen drei stehen aus, bis 3b und der Einschritt-Teil von 3d sie
+   überhaupt auf den geschriebenen Pfad bringen.
+2. Die Bachmann-Kette über alle 36 Bedingungen ist schneller als CVODES ASA.
+   **Erreicht am 2026-09-11, 120 gegen 206 ms.**
+
+`rev_prepare` wird dabei getrennt ausgewiesen: es ist Jacobi und Faktorisierung, also
+dieselbe Arbeit, die der Vorwärtslauf seltener tut, und es skaliert mit `n³` statt mit
+dem Adjungierten. Stufe 5b misst sich daran.
 
 ## Risiken
 
