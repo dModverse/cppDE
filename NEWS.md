@@ -1,3 +1,13 @@
+# cppDE 0.9.5
+
+* **Bug fix.** OpenMP is detected on Windows. `configure.win` read
+  `SHLIB_OPENMP_CXXFLAGS` from `R_HOME/etc/Makeconf`, which does not exist
+  there -- R keeps that file under the architecture subdirectory. Detection
+  therefore reported "no SHLIB_OPENMP_CXXFLAGS in Makeconf" on every Windows
+  install, `solveODEBatch()` ran serially and generated models were built
+  without `-fopenmp`. Both configure scripts now look under `etc/$R_ARCH`
+  first, and the Windows summary line reports OpenMP alongside CVODE and KLU.
+
 # cppDE 0.9.4
 
 * A threaded BLAS no longer deadlocks a forked worker. Its worker threads do not

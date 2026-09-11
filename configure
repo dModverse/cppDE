@@ -845,8 +845,14 @@ fi
 openmp_available=0
 openmp_cxxflags=""
 openmp_libs=""
-omp_flag=$(sed -n 's/^[[:space:]]*SHLIB_OPENMP_CXXFLAGS[[:space:]]*=[[:space:]]*//p' \
-             "${R_HOME}/etc/Makeconf" 2>/dev/null | head -n1)
+# etc/Makeconf normally, but sub-architecture builds keep it in etc/$R_ARCH.
+omp_flag=""
+for mk in "${R_HOME}/etc${R_ARCH}/Makeconf" "${R_HOME}/etc/Makeconf"; do
+  [ -f "$mk" ] || continue
+  omp_flag=$(sed -n 's/^[[:space:]]*SHLIB_OPENMP_CXXFLAGS[[:space:]]*=[[:space:]]*//p' \
+               "$mk" | head -n1)
+  [ -n "$omp_flag" ] && break
+done
 if [ -n "$omp_flag" ]; then
   omp_snippet='#include <omp.h>
 int main(){ int n = 0;
