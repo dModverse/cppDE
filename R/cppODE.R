@@ -354,7 +354,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
   # --- Generate event code if needed ---
-  event_code <- rev_event_code <- ""
+  event_code <- rev_event_code <- event_adj_code <- ""
   if (!is.null(events)) {
     if (verbose) message("Generating event code...")
 
@@ -385,6 +385,21 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         rhs_dict = as.list(setNames(rhs, variables))
       )
       rev_event_code <- paste(rev_event_lines, collapse = "\n")
+
+      # What a written jump adjoint asks the model for. Plain double, beside
+      # the contractions of f and for the same reason.
+      event_adj_code <- paste(codegen$generate_event_code(
+        events_df = events,
+        states_list = variables,
+        params_list = params,
+        n_states = n_variables,
+        num_type = numType,
+        ad_level = numLevel,
+        arena = numArena,
+        forcings_list = forcings,
+        rhs_dict = as.list(setNames(rhs, variables)),
+        emit_adjoint = TRUE
+      ), collapse = "\n")
     }
 
     ## Fixed-event times as plain-double expressions over the flat [states, params]
@@ -1632,6 +1647,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "", includings, "", usings, "", "namespace {",
     ode_code, "", jac_code,
     if (is_reverse) c("", adj_code) else character(0),
+    if (nzchar(event_adj_code)) c("", event_adj_code) else character(0),
     "", observer_code,
     reverse_block,
     "", "}", "", externC

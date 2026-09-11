@@ -1958,10 +1958,69 @@ def fixed_event_time_exprs(events_df, states_list, params_list, n_states,
     return out or None
 
 
+def _event_grad_case(expr, states_list, params_list, n_states, num_type,
+                     forcings_list, local_symbols):
+    """One event expression's two gradients, as the body of a switch case.
+
+    The state side writes a gradient, the parameter side accumulates a scaled
+    one into the flat vector, which is the shape every other contraction here
+    takes.
+    """
+    zero = sp.Integer(0)
+    n_sl = len(states_list)
+    xs, ps = [], []
+    if expr is None or expr == zero:
+        return xs, ps
+    free = expr.free_symbols
+    for j, s in enumerate(states_list):
+        sym = local_symbols.get(s)
+        if sym is None or sym not in free:
+            continue
+        d = _replace_dirac_delta(sp.diff(expr, sym))
+        if d == 0:
+            continue
+        xs.append(f"      out[{j}] = {_to_cpp(d, states_list, params_list, n_sl, num_type, forcings_list)};")
+    for k, p in enumerate(params_list):
+        sym = local_symbols.get(p)
+        if sym is None or sym not in free:
+            continue
+        d = _replace_dirac_delta(sp.diff(expr, sym))
+        if d == 0:
+            continue
+        ps.append(f"      out[{n_states + k}] += sc*({_to_cpp(d, states_list, params_list, n_sl, num_type, forcings_list)});")
+    # An initial value reads as a parameter slot of its own.
+    for j, s in enumerate(states_list):
+        sym = local_symbols.get(f"{s}_0")
+        if sym is None or sym not in free:
+            continue
+        d = _replace_dirac_delta(sp.diff(expr, sym))
+        if d == 0:
+            continue
+        ps.append(f"      out[{j}] += sc*({_to_cpp(d, states_list, params_list, n_sl, num_type, forcings_list)});")
+    return xs, ps
+
+
+def _emit_event_switch(name, cases, num_type, args, head):
+    """A switch over the event index, with the cases a caller collected."""
+    lines = [f"  void {name}({args}) const {{"]
+    lines += head
+    if not any(body for _, body in cases):
+        return lines + ["    (void)ev;", "  }", ""]
+    lines.append("    switch (ev) {")
+    for idx, body in cases:
+        if not body:
+            continue
+        lines.append(f"    case {idx}: {{")
+        lines += body
+        lines.append("      break; }")
+    lines += ["    default: break;", "    }", "  }", ""]
+    return lines
+
 def generate_event_code(events_df, states_list, params_list, n_states,
                         num_type="double", forcings_list=None, rhs_dict=None,
     ad_level=0,
-    arena=False):
+    arena=False,
+    emit_adjoint=False):
     """
     Generate C++ initialization lines for fixed-time and root events.
 
@@ -2051,6 +2110,13 @@ def generate_event_code(events_df, states_list, params_list, n_states,
             list_lengths.append(len(v))
     n_events = max(list_lengths) if list_lengths else 1
 
+    # What a jump's adjoint asks the model for, collected per kind in the order
+    # the forward run pushes the events, so an index means the same on both
+    # sides. Only filled under emit_adjoint.
+    adj_fixed_hx, adj_fixed_hp, adj_fixed_tp = [], [], []
+    adj_root_hx, adj_root_hp, adj_root_gp = [], [], []
+    n_fixed = n_root = 0
+
     for i in range(n_events):
         var_raw = _get_list_value(events_dict, "var", i, n_events)
         if var_raw is None:
@@ -2110,7 +2176,22 @@ def generate_event_code(events_df, states_list, params_list, n_states,
             event_lines.append(f"    {method_code}  // method")
             event_lines.append(f"  }});")
             event_lines.append("")
-            
+
+            if emit_adjoint:
+                hx, hp = _event_grad_case(
+                    _safe_sympify(str(value_raw), local_symbols)
+                    if value_raw is not None else None,
+                    states_list, params_list, n_states, num_type, forcings_list,
+                    local_symbols)
+                _, tp = _event_grad_case(
+                    _safe_sympify(str(time_raw), local_symbols),
+                    states_list, params_list, n_states, num_type, forcings_list,
+                    local_symbols)
+                adj_fixed_hx.append((n_fixed, hx))
+                adj_fixed_hp.append((n_fixed, hp))
+                adj_fixed_tp.append((n_fixed, tp))
+            n_fixed += 1
+
         elif root_code is not None:
             # ============================================================
             # Root-finding event
@@ -2171,11 +2252,63 @@ def generate_event_code(events_df, states_list, params_list, n_states,
 
             event_lines.append(f"  }});")
             event_lines.append("")
-            
+
+            if emit_adjoint:
+                hx, hp = _event_grad_case(
+                    _safe_sympify(str(value_raw), local_symbols)
+                    if value_raw is not None else None,
+                    states_list, params_list, n_states, num_type, forcings_list,
+                    local_symbols)
+                _, gp = _event_grad_case(
+                    _safe_sympify(str(root_raw), local_symbols),
+                    states_list, params_list, n_states, num_type, forcings_list,
+                    local_symbols)
+                adj_root_hx.append((n_root, hx))
+                adj_root_hp.append((n_root, hp))
+                adj_root_gp.append((n_root, gp))
+            n_root += 1
+
         else:
             raise ValueError(f"Event {i}: must specify either 'time' or 'root'")
 
-    return event_lines
+    if not emit_adjoint:
+        return event_lines
+
+    # ------------------------------------------------------------------
+    #  What a written jump adjoint asks the model for. The saltation itself is
+    #  the stepper's arithmetic and is stated in the adjoint; these are the
+    #  model's own derivatives, which only the generator knows.
+    # ------------------------------------------------------------------
+    n_phi = n_states + len(params_list)
+    xargs = (f"int ev, const {state_type}& x, const {num_type}& t, "
+             f"{state_type}& out")
+    pargs = (f"int ev, const {state_type}& x, const {num_type}& t, "
+             f"const {num_type}& sc, {num_type}* out")
+    xhead = [f"    (void)x; (void)t;",
+             f"    out.assign({n_states}u, {num_type}(0.0));"]
+    phead = ["    (void)x; (void)t;"]
+
+    out = [
+        "// The derivatives of a jump's own expressions, by event and kind.",
+        "struct event_adjoint_terms {",
+        f"  std::vector<{num_type}> params;",
+        f"  std::vector<const cppde::PchipForcing<{num_type}>*> F;",
+        "",
+        f"  event_adjoint_terms(const std::vector<{num_type}>& p_,",
+        f"                      const std::vector<const cppde::PchipForcing<{num_type}>*>& F_)",
+        "    : params(p_), F(F_) {}",
+        "",
+    ]
+    out += _emit_event_switch("fixed_dh_dx", adj_fixed_hx, num_type, xargs, xhead)
+    out += _emit_event_switch("fixed_dh_dp_axpy", adj_fixed_hp, num_type, pargs, phead)
+    out += _emit_event_switch(
+        "fixed_dtime_dp_axpy", adj_fixed_tp, num_type,
+        f"int ev, const {num_type}& sc, {num_type}* out", [])
+    out += _emit_event_switch("root_dh_dx", adj_root_hx, num_type, xargs, xhead)
+    out += _emit_event_switch("root_dh_dp_axpy", adj_root_hp, num_type, pargs, phead)
+    out += _emit_event_switch("root_dg_dp_axpy", adj_root_gp, num_type, pargs, phead)
+    out += ["};", f"// event_adjoint_terms writes into {n_phi} slots"]
+    return out
 # =====================================================================
 # Root function code generation
 # =====================================================================
