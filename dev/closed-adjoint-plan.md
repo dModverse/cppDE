@@ -103,6 +103,62 @@ Neuaufbau statt am Aufruf, damit die Aufrufzahl die Fehlzugriffe zählt.
 **Der nächste Hebel ist damit benannt und beziffert:** `rev_prepare`, 39 Prozent
 des Rückwärtslaufs.
 
+## Wo es nach der Leistungsrunde steht
+
+**Gemessen am 2026-09-11**, nach 3d, dem Einschritt-Teil und einer Runde auf den
+Kosten. Dieselbe Kette, dieselbe Maschine:
+
+| Route | ms | in Wertläufen | mit Tape |
+|---|---|---|---|
+| Wertlauf | 34,8 | 1,00 | 36,5 |
+| Vorwärts | 974,6 | 28,0 | 1026,4 |
+| Adjungierter, geschrieben | 106,6 | 3,06 | 335,7 |
+| CVODES ASA | 201,1 | 5,77 | 216,6 |
+
+**Der Gradient kostet drei Wertläufe und liegt um das 1,89-fache unter ASA.** Der
+Winkel gegen den Vorwärtsgradienten steht unverändert bei 3,55e-07: keine der
+Änderungen rechnet anders, sie rechnen dasselbe weniger oft.
+
+Je Schritt, Bedingung `long`, 721 Schritte, Minimum über zwanzig Läufe im selben
+Prozess, weil die Maschine zwischen zwei Läufen um ein Drittel driftet:
+
+| | je Schritt | Anteil |
+|---|---|---|
+| Vorwärtsintegration, ganzer Stepper | 0,639 µs | |
+| `lu_factor`, KLUs Refaktorisierung | 0,444 µs | 42% |
+| `rev_adjoint`, die Schrittalgebra | 0,280 µs | 26% |
+| `rev_solve`, der transponierte Solve | 0,155 µs | 15% |
+| `rev_operators`, die Operatoren lesen | 0,094 µs | 9% |
+| `jac_eval` und `w_build` | 0,086 µs | 8% |
+| **Rückwärtslauf** | **1,065 µs** | **1,67x** |
+
+Was die Runde gebracht hat, und woran sie gescheitert wäre:
+
+**Die Kontraktion wird akkumulierend emittiert.** Jeder Aufrufer addierte ihr
+Ergebnis in etwas, das er schon hatte, also hat die zuweisende Form einen Vektor
+in der Breite des ganzen Parametersatzes genullt, für jeden Parameter einen Slot
+geschrieben, ob er einen Term trägt oder nicht, und dem Aufrufer einen zweiten
+Durchgang zum Addieren gelassen. Ein Drittel der Schrittalgebra.
+
+**Der Zusammenbau von W ging durch einen BLAS-Aufruf**, für ein paar hundert
+Doubles, dessen Vermittlung mehr kostet als die Kopie. Jetzt `memcpy`, und was
+von `lu_factor` bleibt, ist zu 92 Prozent KLU selbst.
+
+**Gegen KLUs eigenen Aufwand ist mit Iteration nichts zu holen, und das ist
+Arithmetik.** Ein gehaltener Faktor plus Nachkorrektur konvergiert linear mit der
+relativen Änderung von W, und die ist über einen Schritt zu groß, um in weniger
+als drei Durchgängen auf 1e-13 zu kommen. Drei Durchgänge kosten mehr als die
+Refaktorisierung. Bei 25 Zuständen sind 0,44 µs für 150 Flops fast nur Aufwand,
+kein Rechnen; das hebt nur eine erzeugte LU mit fester Pivotfolge, und die
+tauscht Genauigkeit gegen Zeit. Bleibt draußen.
+
+**Die Kette über dem Solver ist inzwischen die Hälfte.** `.Call` ist 50 Prozent
+einer Reverse-Zielfunktion, der Rest ist R, und davon war ein Viertel
+Mengenoperationen auf Namen. `intersect` und `setdiff` aus base nullen,
+vereinheitlichen und suchen; ein `match` reicht, weil Parameternamen eindeutig
+sind. `.pickCotangent` fällt damit von 10 auf 3 Prozent, die ganze Zielfunktion
+um zwölf.
+
 ## Was das bringt, und was nicht
 
 Ein geschlossener Schritt-Adjungierter kostet den transponierten Solve, ein bis zwei
