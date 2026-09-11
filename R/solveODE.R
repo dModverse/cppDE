@@ -486,15 +486,13 @@
   ## indexes the same way a forward sens1ini seeds.
   if (!is.null(result$adjoint) && is.null(dimnames(result$adjoint)))
     dimnames(result$adjoint) <- list(prep$theta_names, prep$seed_names)
-  ## The sweep's own grid. lambda is [step, state, seed]; wt and wdt carry one
-  ## column per seed, so they name the way the adjoint's columns do.
+  ## The sweep's own grid. lambda is [step, state, seed]; eta carries one column
+  ## per seed, so it names the way the adjoint's columns do.
   if (!is.null(result$adjointGrid)) {
     g <- result$adjointGrid
     if (is.null(dimnames(g$lambda)))
       dimnames(g$lambda) <- list(step = NULL, variable = prep$variables,
                                  seed = prep$seed_names)
-    if (is.null(dimnames(g$wt)))  dimnames(g$wt)  <- list(NULL, prep$seed_names)
-    if (is.null(dimnames(g$wdt))) dimnames(g$wdt) <- list(NULL, prep$seed_names)
     if (is.null(dimnames(g$eta))) dimnames(g$eta) <- list(NULL, prep$seed_names)
     result$adjointGrid <- g
   }
@@ -739,13 +737,10 @@
 #' attached.
 #'
 #' With `adjointGrid = TRUE` a reverse solve also carries `$adjointGrid`, a
-#' list of `time` and `h`, the start and length of each accepted step;
-#' `wt`, `wdt` and `eta`, one column per seed, being
-#' \eqn{\partial J/\partial t_k}, \eqn{\partial J/\partial h_k} and
-#' \eqn{\lambda^T e_k}; and `lambda`, `[n_steps, n_states, n_seed]`, the
-#' adjoint state at each step's start. `eta` estimates the step's share of the
-#' error in the objective; `wdt` is the transport derivative and is the size of
-#' the objective rather than of its error.
+#' list of `time` and `h`, the start and length of each accepted step; `eta`,
+#' one column per seed, being \eqn{\lambda^T e_k}; and `lambda`,
+#' `[n_steps, n_states, n_seed]`, the adjoint state at each step's start. `eta`
+#' estimates the step's share of the error in the objective.
 
 #' With `keepStore = TRUE` it carries `$store`, an external pointer to the
 #' checkpoints, for a later solve to take through `store`.

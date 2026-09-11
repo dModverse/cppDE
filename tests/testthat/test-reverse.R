@@ -193,12 +193,10 @@ test_that("adjointGrid reports the grid the sweep ran on", {
   rv <- do.call(solveODE,
                 c(list(mr, times, pars, seed = W, adjointGrid = TRUE), tol))
   G  <- rv$adjointGrid
-  expect_named(G, c("time", "h", "wt", "wdt", "eta", "lambda"))
+  expect_named(G, c("time", "h", "eta", "lambda"))
 
   n <- length(G$h)
   expect_gt(n, 4L)
-  expect_equal(dim(G$wt),     c(n, 2L))
-  expect_equal(dim(G$wdt),    c(n, 2L))
   expect_equal(dim(G$eta),    c(n, 2L))
   expect_equal(dim(G$lambda), c(n, length(attr(mr, "variables")), 2L))
 
@@ -211,11 +209,9 @@ test_that("adjointGrid reports the grid the sweep ran on", {
   expect_gte(sum(G$h), times[length(times)] - times[1])
   expect_lt(sum(G$h), 1.5 * (times[length(times)] - times[1]))
 
-  # Turning the trace on must not move the answer. Not bit for bit while the
-  # trace lives only on the taped sweep: asking for the grid picks that path,
-  # and the written one sums the same terms in another order. The two have to
-  # meet again when the tape goes.
-  expect_equal(rv$adjoint, plain$adjoint, tolerance = 1e-12)
+  # Turning the trace on must not move the answer, to the last bit: it is the
+  # same sweep either way, with two more vectors written down.
+  expect_identical(rv$adjoint, plain$adjoint)
   expect_equal(diagnostics(rv)$accepted, diagnostics(plain)$accepted)
 })
 

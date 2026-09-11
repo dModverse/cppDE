@@ -158,13 +158,10 @@ an additional \verb{$trace} \code{data.frame} with per-step diagnostics is
 attached.
 
 With \code{adjointGrid = TRUE} a reverse solve also carries \verb{$adjointGrid}, a
-list of \code{time} and \code{h}, the start and length of each accepted step;
-\code{wt}, \code{wdt} and \code{eta}, one column per seed, being
-\eqn{\partial J/\partial t_k}, \eqn{\partial J/\partial h_k} and
-\eqn{\lambda^T e_k}; and \code{lambda}, \verb{[n_steps, n_states, n_seed]}, the
-adjoint state at each step's start. \code{eta} estimates the step's share of the
-error in the objective; \code{wdt} is the transport derivative and is the size of
-the objective rather than of its error.
+list of \code{time} and \code{h}, the start and length of each accepted step; \code{eta},
+one column per seed, being \eqn{\lambda^T e_k}; and \code{lambda},
+\verb{[n_steps, n_states, n_seed]}, the adjoint state at each step's start. \code{eta}
+estimates the step's share of the error in the objective.
 With \code{keepStore = TRUE} it carries \verb{$store}, an external pointer to the
 checkpoints, for a later solve to take through \code{store}.
 }

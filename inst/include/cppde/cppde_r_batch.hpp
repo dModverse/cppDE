@@ -85,10 +85,9 @@ struct solve_result {
   // The grid the sweep ran on and what the adjoint says about it. Filled only
   // under args.adj_trace: lambda alone is n_steps * n_states doubles.
   //   step_t, step_h  [n_adj_steps]
-  //   wt, wdt         [n_adj_steps, n_adj_cols]   dJ/dt_k and dJ/dh_k
   //   eta             [n_adj_steps, n_adj_cols]   lambda^T e_k
   //   lambda          [n_adj_steps, n_states, n_adj_cols]
-  std::vector<double> step_t, step_h, wt, wdt, eta, lambda;
+  std::vector<double> step_t, step_h, eta, lambda;
   int n_adj_steps = 0, n_adj_states = 0;
   // Set only under args.want_store. `wrap_store` is emitted by the model, the
   // only place the store's type is known; phase C calls it on the main thread.
@@ -447,15 +446,14 @@ inline SEXP build_trace(const ndf_detail::TraceBuffer& tb) {
   return lst;
 }
 
-// list(time, h, wt, wdt, eta, lambda): the grid the sweep ran on and what the
-// adjoint says about each step. eta is the refinement indicator; wdt is the
-// transport derivative and is the size of J, not of its error.
+// list(time, h, eta, lambda): the grid the sweep ran on and what the adjoint
+// says about each step. eta is the refinement indicator.
 inline SEXP build_adjoint_grid(const solve_result& r) {
   const int ns = r.n_adj_steps, nc = r.n_adj_cols, nx = r.n_adj_states;
-  SEXP ans   = PROTECT(Rf_allocVector(VECSXP, 6));
-  SEXP names = PROTECT(Rf_allocVector(STRSXP, 6));
-  const char* nm[6] = {"time", "h", "wt", "wdt", "eta", "lambda"};
-  for (int i = 0; i < 6; ++i) SET_STRING_ELT(names, i, Rf_mkChar(nm[i]));
+  SEXP ans   = PROTECT(Rf_allocVector(VECSXP, 4));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, 4));
+  const char* nm[4] = {"time", "h", "eta", "lambda"};
+  for (int i = 0; i < 4; ++i) SET_STRING_ELT(names, i, Rf_mkChar(nm[i]));
   Rf_setAttrib(ans, R_NamesSymbol, names);
   UNPROTECT(1);
 
@@ -469,19 +467,9 @@ inline SEXP build_adjoint_grid(const solve_result& r) {
   SET_VECTOR_ELT(ans, 1, hv);
   UNPROTECT(1);
 
-  SEXP wtm = PROTECT(Rf_allocMatrix(REALSXP, ns, nc));
-  if (!r.wt.empty()) std::memcpy(REAL(wtm), r.wt.data(), sizeof(double) * r.wt.size());
-  SET_VECTOR_ELT(ans, 2, wtm);
-  UNPROTECT(1);
-
-  SEXP wdm = PROTECT(Rf_allocMatrix(REALSXP, ns, nc));
-  if (!r.wdt.empty()) std::memcpy(REAL(wdm), r.wdt.data(), sizeof(double) * r.wdt.size());
-  SET_VECTOR_ELT(ans, 3, wdm);
-  UNPROTECT(1);
-
   SEXP em = PROTECT(Rf_allocMatrix(REALSXP, ns, nc));
   if (!r.eta.empty()) std::memcpy(REAL(em), r.eta.data(), sizeof(double) * r.eta.size());
-  SET_VECTOR_ELT(ans, 4, em);
+  SET_VECTOR_ELT(ans, 2, em);
   UNPROTECT(1);
 
   SEXP d = PROTECT(Rf_allocVector(INTSXP, 3));
@@ -489,7 +477,7 @@ inline SEXP build_adjoint_grid(const solve_result& r) {
   SEXP lm = PROTECT(Rf_allocArray(REALSXP, d));
   if (!r.lambda.empty())
     std::memcpy(REAL(lm), r.lambda.data(), sizeof(double) * r.lambda.size());
-  SET_VECTOR_ELT(ans, 5, lm);
+  SET_VECTOR_ELT(ans, 3, lm);
   UNPROTECT(2);
 
   UNPROTECT(1);

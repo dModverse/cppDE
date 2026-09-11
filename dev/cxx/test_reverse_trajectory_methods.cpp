@@ -417,9 +417,11 @@ static void run_method(const char* name, double tol)
 
   const std::size_t n_seed = store.n_obs() * NX;
   std::size_t max_nodes = 0;
+  std::vector<double> lam_taped, eta_taped, lam_written, eta_written;
   auto sweep_with = [&](const std::vector<double>& seeds, std::vector<double>& out) {
     cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
     cppde::reverse::trajectory_recorder<S, double> rev;
+    rev.trace_lambda(true);
     rev.sweep(store, pv,
               [](const std::vector<codual<double>>& pc) {
                 return make_system<codual<double>>(pc);
@@ -438,6 +440,8 @@ static void run_method(const char* name, double tol)
     check(rev.whistory0().empty(),
           std::string(name) + " the start's history cotangent is collapsed");
     for (std::size_t j = 0; j < NP; ++j) out[n_carry + j] = rev.wp()[j];
+    lam_taped = rev.lambda();
+    eta_taped = rev.eta();
   };
 
   // The written trajectory adjoint, for the multistep family. It walks the same
@@ -451,7 +455,10 @@ static void run_method(const char* name, double tol)
     cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
     cppde::adjoint::closed_multistep_trajectory<S> tr;
     adjoint_terms adj{pv};
+    tr.trace_lambda(true);
     tr.sweep(store, NX + NP, seeds.data(), adj, solver);
+    lam_written = tr.lambda();
+    eta_written = tr.eta();
     out.assign(nd, 0.0);
     for (std::size_t i = 0; i < NX; ++i) out[i] = tr.wx0()[i];
     check(tr.whistory0().empty() ||
@@ -476,6 +483,21 @@ static void run_method(const char* name, double tol)
       close(wS, got[d], std::string(name) + " " + what + tag, tol);
       if constexpr (multistep_here)
         close(wS, gotc[d], std::string(name) + " written " + what + tag, tol);
+    }
+    // The per-step trace is the same two quantities either way, and a
+    // lambda-weighted controller reads them rather than the gradient.
+    if constexpr (multistep_here) {
+      check(lam_written.size() == lam_taped.size() &&
+            eta_written.size() == eta_taped.size(),
+            std::string(name) + " " + what + " the traces have one length");
+      for (std::size_t k = 0; k < eta_taped.size(); ++k) {
+        close(eta_taped[k], eta_written[k],
+              std::string(name) + " " + what + " eta" + std::to_string(k), tol);
+        for (std::size_t i = 0; i < NX; ++i)
+          close(lam_taped[k * NX + i], lam_written[k * NX + i],
+                std::string(name) + " " + what + " lambda" +
+                std::to_string(k) + "," + std::to_string(i), tol);
+      }
     }
   };
 

@@ -83,6 +83,7 @@ struct multistep_operators {
   double rl1 = 0.0;     ///< the residual's coefficient on zn_pred[1]
   double gamma = 0.0;   ///< and on f
   double h = 0.0;
+  double err_scale = 1.0;  ///< what acor has to be multiplied by to be the error
   int q_in = 1, q_out = 1;
 };
 
@@ -100,7 +101,7 @@ struct multistep_operators {
 /// A: what the rescale and the Pascal shift do, plus the step's coefficients.
 template<class Stepper, class Carry>
 void probe_pre(Stepper& probe, const Carry& carry, double dt, slot_operator& A,
-               double& rl1, double& gamma, double& h)
+               double& rl1, double& gamma, double& h, double* err_scale = nullptr)
 {
   const int q = carry.q;
   const std::size_t m = static_cast<std::size_t>(q + 1);
@@ -114,6 +115,8 @@ void probe_pre(Stepper& probe, const Carry& carry, double dt, slot_operator& A,
   rl1   = static_cast<double>(probe.replay_predict(m, dt));
   gamma = static_cast<double>(probe.gamma());
   h     = static_cast<double>(probe.h());
+  // Set by the same call that set the coefficients, and only meaningful after.
+  if (err_scale) *err_scale = static_cast<double>(probe.error_constant());
 
   A.resize(q + 1, q + 1);
   for (int j = 0; j <= q; ++j)
@@ -209,7 +212,7 @@ struct multistep_probe {
                multistep_operators<Stepper>& ops)
   {
     ops.q_in = carry.q;
-    probe_pre(pre, carry, dt, ops.A, ops.rl1, ops.gamma, ops.h);
+    probe_pre(pre, carry, dt, ops.A, ops.rl1, ops.gamma, ops.h, &ops.err_scale);
     probe_tail(tail_probe, carry, dt, tail, ops.B, ops.c, ops.q_out);
     last = pending;
     valid = true;
@@ -348,6 +351,9 @@ void apply_multistep_adjoint(const multistep_operators<Stepper>& ops,
 template<class Stepper>
 class closed_multistep_trajectory {
 public:
+  /// Whether the sweep also keeps lambda and the refinement indicator per step.
+  void trace_lambda(bool on) { m_trace = on; }
+
   /// One seed column. `seeds` is [n_obs x n_states] row-major.
   template<class Store, class AdjTerms, class Solver>
   void sweep(const Store& store, std::size_t n_phi, const double* seeds,
@@ -359,6 +365,8 @@ public:
     m_wp.assign(n_phi, 0.0);
     m_wx.assign(n, 0.0);
     m_whist.clear();
+    m_lam.assign(m_trace ? n_steps * n : 0u, 0.0);
+    m_eta.assign(m_trace ? n_steps : 0u, 0.0);
     if (n_steps == 0) return;
 
     // The cotangent the step above hands down, on its own carry.
@@ -423,9 +431,26 @@ public:
       solver.prepare(cp.y, t_new, 1.0 / ops.gamma, ops.gamma);
 
       w_in.assign(nz_in, 0.0);
+      if (m_trace) m_wout.assign(n, 0.0);
       { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
         apply_multistep_adjoint_pre(ops, n, n_phi, cp.y.data(), t_new, solver,
-                                    adj, w_in.data(), m_wp.data(), m_ws); }
+                                    adj, w_in.data(), m_wp.data(), m_ws,
+                                    m_trace ? m_wout.data() : nullptr); }
+
+      // lambda is what this step hands the one below it, on the state slot.
+      // eta is that cotangent against the step's own error estimate, which for
+      // a corrector method is acor scaled by the order's error constant.
+      if (m_trace) {
+        for (std::size_t i = 0; i < n; ++i) m_lam[k * n + i] = w_in[i];
+        double e = 0.0;
+        for (std::size_t i = 0; i < n; ++i) {
+          double pred0 = 0.0;
+          for (int j = 0; j <= ops.q_in; ++j)
+            pred0 += ops.A(0, j) * cp.zn[static_cast<std::size_t>(j) * n + i];
+          e += m_wout[i] * (cp.y[i] - pred0);
+        }
+        m_eta[k] = e * ops.err_scale;
+      }
       w_carry.swap(w_in);
     }
 
@@ -465,6 +490,10 @@ public:
   const std::vector<double>& whistory0() const { return m_whist; }
   const std::vector<double>& wp() const { return m_wp; }
 
+  /// Under trace_lambda: [n_steps, n_states] step-major, and one per step.
+  const std::vector<double>& lambda() const { return m_lam; }
+  const std::vector<double>& eta() const { return m_eta; }
+
 private:
   // The tail reads the right-hand side only for an order-one restart, which
   // belongs to a boundary and not to a step.
@@ -478,7 +507,8 @@ private:
   cppde::profiler m_prof;
   multistep_probe<Stepper> m_probe;
   multistep_workspace m_ws;
-  std::vector<double> m_wx, m_whist, m_wp;
+  bool m_trace = false;
+  std::vector<double> m_wx, m_whist, m_wp, m_lam, m_eta, m_wout;
 };
 
 // ---------------------------------------------------------------------------
