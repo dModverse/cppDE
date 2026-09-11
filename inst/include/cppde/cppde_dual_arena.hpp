@@ -24,6 +24,7 @@
 #define CPPDE_DUAL_ARENA_HPP
 
 #include <cstddef>
+#include <limits>
 #include <cstdint>
 #include <cstdlib>
 #include <new>
@@ -71,7 +72,15 @@ public:
   T* alloc_trivial(std::size_t n) {
     static_assert(std::is_trivially_destructible_v<T>,
                   "alloc_trivial requires trivially-destructible T");
-    return static_cast<T*>(bump(alignof(T), n * sizeof(T)));
+    T* p = static_cast<T*>(bump(alignof(T), n * sizeof(T)));
+#ifdef CPPDE_POISON_ARENA
+    // Debug aid: a tangent read before its write shows up as NaN instead of as
+    // whatever the previous solve left at that address.
+    if constexpr (std::is_floating_point_v<T>)
+      for (std::size_t i = 0; i < n; ++i)
+        p[i] = std::numeric_limits<T>::quiet_NaN();
+#endif
+    return p;
   }
 
   // General alloc: default-constructs n elements of T and (if non-trivial)

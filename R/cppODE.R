@@ -51,15 +51,26 @@
 #'   `"rb4"`, or `"tsit5"`.
 #' @param useNDF Logical. Use Klopfenstein-Shampine NDF coefficients in
 #'   the BDF corrector. Applies to `method = "bdf"`; ignored otherwise.
-#' @param derivMode Direction the derivatives are taken in. `"forward"`, the
-#'   default, propagates tangents alongside the states, which is what `deriv`
-#'   and `deriv2` build. `"reverse"` compiles a different object: the states are
-#'   integrated in plain `double` and the derivatives come out of one backward
-#'   sweep over the recorded steps, so their cost does not grow with the number
-#'   of parameters. A reverse model takes a `seed` in [solveODE()] and answers
-#'   with `$adjoint`, one row per state and parameter; it carries no `sens1`,
-#'   and `deriv2` is not available for it. Only the dense-output path is
-#'   supported, which is what the multistep methods always use.
+#' @param derivMode Direction the derivatives are taken in, one of four.
+#'   `"forward"`, the default, propagates tangents alongside the states, which
+#'   is what `deriv` builds. `"reverse"` compiles a different object: the states
+#'   are integrated in plain `double` and the derivatives come out of one
+#'   backward sweep over the recorded steps, so their cost does not grow with
+#'   the number of parameters. A reverse model takes a `seed` in [solveODE()]
+#'   and answers with `$adjoint`, one row per state and parameter, and carries
+#'   no `sens1`.
+#'
+#'   The two second-order modes differ in how the inner derivative is taken.
+#'   `"forward-forward"` is `deriv2 = TRUE` on the forward mode and answers with
+#'   `$sens2`, the second derivatives of every state. `"forward-reverse"` runs
+#'   the backward sweep itself over tangents and answers with `$adjoint2`, the
+#'   derivatives of the gradient, which under the identity seeding is the
+#'   Hessian of the seeded functional. Both need a finite `nStack`; the first
+#'   scales with the square of the sensitivity count, the second with its
+#'   product with the seed count.
+#'
+#'   Reverse compiles only the dense-output path, which is what the multistep
+#'   methods always use.
 #' @param profile Logical. Compile with profiling counters.
 #' @param stepTrace Logical. Compile to record per-step diagnostics,
 #'   returned as `$trace` from [solveODE()].
@@ -86,20 +97,27 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
                    sparse = NULL,
                    method = c("bdf", "adams", "rb4", "tsit5"),
                    useNDF = TRUE,
-                   derivMode = c("forward", "reverse"),
+                   derivMode = c("forward", "reverse",
+                                 "forward-forward", "forward-reverse"),
                    profile = FALSE, stepTrace = FALSE, verbose = FALSE) {
 
   # --- Validate arguments ---
   derivMode <- match.arg(derivMode)
-  is_reverse <- identical(derivMode, "reverse")
+  # The two second-order modes are the two first-order ones with another layer.
+  # deriv2 is the older spelling of the forward one and still selects it; the
+  # name the caller asked for is what the object then carries.
+  if (identical(derivMode, "forward-forward")) deriv2 <- TRUE
+  if (deriv2 && identical(derivMode, "forward")) derivMode <- "forward-forward"
+  second_reverse <- identical(derivMode, "forward-reverse")
+  is_reverse <- second_reverse || identical(derivMode, "reverse")
   if (is_reverse) {
-    # A reverse model integrates in plain double and gets its derivatives from
-    # one backward sweep, so it carries no forward tangents at all. Second
-    # order is forward-over-reverse and is not this object.
-    if (deriv2)
-      stop("derivMode = \"reverse\" has no second order yet; use deriv2 = FALSE.",
-           call. = FALSE)
-    deriv  <- FALSE
+    # First order backwards integrates in plain double: no forward tangents at
+    # all. Forward over reverse integrates in a dual and sweeps in the same
+    # type, so the gradient comes out carrying its own derivatives.
+    if (deriv2 && !second_reverse)
+      stop("deriv2 = TRUE with derivMode = \"reverse\" is derivMode = ",
+           "\"forward-reverse\"; ask for that instead.", call. = FALSE)
+    deriv  <- second_reverse
     deriv2 <- FALSE
   }
   if (deriv2 && !deriv) {
@@ -218,6 +236,13 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   if (!deriv && is.numeric(nStack) && length(nStack) == 1L && is.infinite(nStack)) {
     nStack <- NULL  # heap AD is meaningful only with deriv = TRUE
   }
+  # Heap tangents live in an arena that is reset per solve. Second order keeps
+  # numbers across that boundary, deriv2 inside the nested dual and
+  # forward-reverse in the store it hands back, so both take a fixed width.
+  if ((deriv2 || second_reverse) && is.numeric(nStack) && length(nStack) == 1L &&
+      is.infinite(nStack)) {
+    nStack <- NULL
+  }
   if (is.null(nStack)) {
     nStack_width <- as.integer(n_total_sens)
     is_heap <- FALSE
@@ -279,8 +304,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     sparse = sparse_for_codegen,
     skip_jacobian = is_explicit(method),
     # A written step adjoint asks the model for two contractions rather than
-    # differentiating the step. They are plain double, so they ride with the
-    # value body and not with the reverse one.
+    # differentiating the step. They are emitted in the scalar the sweep runs
+    # in, which is the same one the model body is written in.
     emit_contractions = is_reverse,
     # A Rosenbrock stage solves against a matrix built from the Jacobian, so its
     # adjoint asks for the derivative of that matrix applied to a vector. No
@@ -492,9 +517,10 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
   # --- Sensitivity dimensions and index helpers (depends on is_runtime_fixed) ---
-  # The reverse pass carries no sensitivities but answers on the same rows, so
-  # it needs the shape and nothing else.
-  if (is_reverse) {
+  # First order backwards carries no sensitivities but answers on the same
+  # rows, so it needs the shape and nothing else. Forward over reverse has the
+  # full block below and would declare it twice.
+  if (is_reverse && !deriv) {
     externC <- c(
       externC,
       sprintf("  const int n_phi_rows   = %d;  // n_states + n_params, the adjoint's rows",
@@ -885,12 +911,18 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   tsit5_AD     <- sprintf("cppde::tsit5<%s>", ad1)
   tsit5_AD2    <- sprintf("cppde::tsit5<%s>", ad2)
 
-  # The value type the reverse pass integrates in is double, so its stepper
-  # type is the plain one whatever the forward emission picks.
+  # First order backwards integrates in plain double, so its stepper is the
+  # plain one whatever the forward emission picks. Forward over reverse
+  # integrates in the dual and sweeps in it too, so both halves are that type.
+  rev_num_type <- if (second_reverse) numType else "double"
   rev_stepper_type <- if (is_reverse) {
-    if (is_multistep(method)) ms_double
-    else if (method == "tsit5") tsit5_double
-    else rb4_double
+    if (second_reverse) {
+      if (is_multistep(method)) ms_AD else if (method == "tsit5") tsit5_AD else rb4_AD
+    } else {
+      if (is_multistep(method)) ms_double
+      else if (method == "tsit5") tsit5_double
+      else rb4_double
+    }
   } else NULL
 
   if (is_multistep(method)) {
@@ -942,9 +974,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     is_equilibrate <- identical(tolower(rootfunc), "equilibrate")
     termination_arg <- if (is_equilibrate) ", cppde::detail::no_dt_estimator{}, ss_termination" else ""
 
-    # Slab priming for the single-step path, as in the multistep branch: the call
-    # lands on the controller before the move into the dense wrapper, so the slabs
-    # reachable through it are primed for the whole solve. Gated on the value type.
+    # Slab priming for the single-step path. The dense wrapper holds the two
+    # state buffers a step reads and writes, so the call has to land on the
+    # wrapper and not only on the controller it was moved from: an unprimed
+    # buffer takes its tangents from the arena, which at second order means
+    # reading slots nothing has written. Gated on the value type.
     onestep_prep_line <- if (deriv) {
       "  controlledStepper.prepare_sensitivities(static_cast<unsigned>(n_sens));"
     } else {
@@ -954,8 +988,10 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     if (useDenseOutput) {
       stepper_line <- paste(
         c(sprintf("  auto controlledStepper = cppde::onestep_controller<%s>(abstol, reltol);", os_type),
-          onestep_prep_line,
-          "  auto denseStepper = cppde::onestep_dense_output<decltype(controlledStepper)>(std::move(controlledStepper));"),
+          "  auto denseStepper = cppde::onestep_dense_output<decltype(controlledStepper)>(std::move(controlledStepper));",
+          if (deriv)
+            "  denseStepper.prepare_sensitivities(static_cast<unsigned>(n_sens));"
+          else character()),
         collapse = "\n"
       )
       rev_arg <- if (is_reverse)
@@ -1099,9 +1135,10 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   rev_collector_block <- if (is_reverse) c(
     "",
-    sprintf(paste0("  cppde::reverse::step_collector<decltype(denseStepper), %s, double>",
-                   "\n      _rev_coll(_rev_store, denseStepper, static_cast<double>(dt));"),
-            rev_stepper_type)) else character(0)
+    sprintf(paste0("  cppde::reverse::step_collector<decltype(denseStepper), %s, %s>",
+                   "\n      _rev_coll(_rev_store, denseStepper,",
+                   " odeint_utils::scalar_value(dt));"),
+            rev_stepper_type, rev_num_type)) else character(0)
 
   externC <- c(externC,
                stepper_line, "",
@@ -1231,8 +1268,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     # The transposed solve a corrector needs. An explicit method has none, and
     # a Rosenbrock stage transposes the stepper's own factorisation.
     solver_decl <- if (written_onestep) character(0) else c(
-      sprintf("  cppde::reverse::equation_solver<jacobian, double, %s> _rev_solver(jac);",
-              if (use_sparse) "true" else "false"))
+      sprintf("  cppde::reverse::equation_solver<jacobian, %s, %s> _rev_solver(jac);",
+              rev_num_type, if (use_sparse) "true" else "false"))
 
     externC <- c(externC,
       "",
@@ -1266,11 +1303,18 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       sprintf("  if (args.n_seed_states != %d)", n_variables),
       "    return res.fail(cppde::RC_ILL_INPUT, \"seed has the wrong state count\");",
       "",
-      "  std::vector<double> _theta(full_params.begin(), full_params.end());",
+      sprintf("  std::vector<%s> _theta(full_params.begin(), full_params.end());",
+              rev_num_type),
       "  const int n_seed = args.n_seed_cols;",
       "  res.n_adj_rows = n_phi_rows;",
       "  res.n_adj_cols = n_seed;",
       "  res.adjoint.assign((size_t)n_phi_rows * n_seed, 0.0);",
+      # The sweep carries tangents only under forward over reverse, and then
+      # one block per sensitivity direction rides beside the gradient.
+      if (second_reverse) c(
+        "  res.n_adj_derivs = n_sens;",
+        "  res.adjoint2.assign((size_t)n_phi_rows * n_sens * n_seed, 0.0);")
+      else character(0),
       solver_decl,
       "  if (args.adj_trace) {",
       "    const int _ns = (int)_rev_store.n_steps();",
@@ -1284,7 +1328,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "      res.step_h[k] = _rev_store.step(k).dt;",
       "    }",
       "  }",
-      sprintf("  std::vector<double> _seed_col((size_t)n_out * %d);", n_variables),
+      sprintf("  std::vector<%s> _seed_col((size_t)n_out * %d);", rev_num_type,
+              n_variables),
       # The written adjoint, where it applies. The taped sweep below is what
       # a model with an intervention still takes.
       if (use_written) c(
@@ -1292,7 +1337,12 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         "    auto _cl_sys = std::make_pair(sys, jac);",
         if (written_onestep) c(
           sprintf("    cppde::adjoint::closed_onestep_trajectory<%s> _cl;", rev_stepper_type),
-          sprintf("    %s _cl_st;", rev_stepper_type))
+          sprintf("    %s _cl_st;", rev_stepper_type),
+          # The sweep re-runs each step on this stepper, so its own buffers
+          # need the tangent slab the forward one got.
+          if (second_reverse)
+            "    _cl_st.prepare_sensitivities(static_cast<unsigned>(n_sens));"
+          else character(0))
         else
           sprintf("    cppde::adjoint::closed_multistep_trajectory<%s> _cl;", rev_stepper_type),
         "    _cl.trace_lambda(args.adj_trace);",
@@ -1308,17 +1358,30 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         "      _cl.sweep(_rev_store, (size_t)n_phi_rows, _seed_col.data(),",
         if (written_onestep) "                _cl_sys, _adj, _cl_st, _cl_jmp);"
         else                 "                _adj, _rev_solver, _cl_jmp);",
-        sprintf("      for (int i = 0; i < %d; ++i)", n_variables),
-        "        res.adjoint[i + (size_t)n_phi_rows * c] = _cl.wx0()[i] + _cl.wp()[i];",
-        sprintf("      for (int j = %d; j < n_phi_rows; ++j)", n_variables),
-        "        res.adjoint[j + (size_t)n_phi_rows * c] = _cl.wp()[j];",
+        if (second_reverse) c(
+          "      for (int i = 0; i < n_phi_rows; ++i) {",
+          sprintf("        %s _a = (i < %d) ? %s : _cl.wp()[i];", rev_num_type,
+                  n_variables, "_cl.wx0()[i] + _cl.wp()[i]"),
+          "        res.adjoint[i + (size_t)n_phi_rows * c] = _a.x();",
+          "        const int _nd = (int)_a.size();",
+          "        for (int v = 0; v < n_sens; ++v)",
+          "          res.adjoint2[i + (size_t)n_phi_rows * (v + (size_t)n_sens * c)] =",
+          "              (v < _nd) ? _a.d(v) : 0.0;",
+          "      }")
+        else c(
+          sprintf("      for (int i = 0; i < %d; ++i)", n_variables),
+          "        res.adjoint[i + (size_t)n_phi_rows * c] = _cl.wx0()[i] + _cl.wp()[i];",
+          sprintf("      for (int j = %d; j < n_phi_rows; ++j)", n_variables),
+          "        res.adjoint[j + (size_t)n_phi_rows * c] = _cl.wp()[j];"),
         "      if (args.adj_trace) {",
         "        const int _ns = res.n_adj_steps;",
         "        for (int k = 0; k < _ns; ++k) {",
-        "          res.eta[k + (size_t)_ns * c] = _cl.eta()[k];",
+        sprintf("          res.eta[k + (size_t)_ns * c] = %s;",
+                if (second_reverse) "_cl.eta()[k].x()" else "_cl.eta()[k]"),
         sprintf("          for (int i = 0; i < %d; ++i)", n_variables),
         sprintf("            res.lambda[k + (size_t)_ns * (i + (size_t)%d * c)] =", n_variables),
-        sprintf("                _cl.lambda()[(size_t)k * %d + i];", n_variables),
+        sprintf("                _cl.lambda()[(size_t)k * %d + i]%s;", n_variables,
+                if (second_reverse) ".x()" else ""),
         "        }",
         "      }",
         "    }",
@@ -1476,8 +1539,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "// back with different times or parameters would produce a gradient at one",
     "// point reported at another, and nothing downstream could tell.",
     "struct rev_state {",
-    sprintf("  cppde::reverse::trajectory_store<%s, double> store;", rev_stepper_type),
-    "  std::vector<double> out_t, out_y;",
+    sprintf("  cppde::reverse::trajectory_store<%s, %s> store;", rev_stepper_type,
+            rev_num_type),
+    sprintf("  std::vector<%s> out_t, out_y;", rev_num_type),
     "  std::vector<double> fp_times, fp_params;",
     "  bool matches(const double* t, int nt, const double* p, int np) const {",
     "    if ((int)fp_times.size() != nt || (int)fp_params.size() != np) return false;",
@@ -1506,17 +1570,18 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "// plus the note to the store of where the observation fell.",
     "template<class Store>",
     "struct rev_observer {",
-    "  std::vector<double>& times;",
-    "  std::vector<double>& y;",
+    sprintf("  std::vector<%s>& times;", rev_num_type),
+    sprintf("  std::vector<%s>& y;", rev_num_type),
     "  Store& store;",
     "",
-    "  void operator()(const cppde::vector_t<double>& x, const double& t) {",
-    "    store.observe(t);",
+    sprintf("  void operator()(const cppde::vector_t<%s>& x, const %s& t) {",
+            rev_num_type, rev_num_type),
+    "    store.observe(odeint_utils::scalar_value(t));",
     "    times.push_back(t);",
     "    for (size_t i = 0; i < x.size(); ++i) y.push_back(x[i]);",
     "  }",
     "};",
-    event_builder("double", event_code)) else character(0)
+    event_builder(rev_num_type, event_code)) else character(0)
 
   cpp_text <- c(
     paste0("/** Code auto-generated by cppDE ", as.character(utils::packageVersion("cppDE")), " **/"),

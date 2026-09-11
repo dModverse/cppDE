@@ -212,7 +212,7 @@ static void closed_steps(const std::vector<cp_type>& cps,
   auto sys = make_system<double>(pv);
   adjoint_terms adj{pv};
   cppde::tsit5<double> st;
-  cppde::adjoint::onestep_workspace ws;
+  cppde::adjoint::onestep_workspace<> ws;
 
   std::vector<double> wphi(NX + NP, 0.0), win(NX, 0.0);
   for (std::size_t s = cps.size(); s-- > 0;) {

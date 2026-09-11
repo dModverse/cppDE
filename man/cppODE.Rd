@@ -21,7 +21,7 @@ cppODE(
   sparse = NULL,
   method = c("bdf", "adams", "rb4", "tsit5"),
   useNDF = TRUE,
-  derivMode = c("forward", "reverse"),
+  derivMode = c("forward", "reverse", "forward-forward", "forward-reverse"),
   profile = FALSE,
   stepTrace = FALSE,
   verbose = FALSE
@@ -81,15 +81,26 @@ forces dense. Sparse LU requires KLU at install time.}
 \item{useNDF}{Logical. Use Klopfenstein-Shampine NDF coefficients in
 the BDF corrector. Applies to \code{method = "bdf"}; ignored otherwise.}
 
-\item{derivMode}{Direction the derivatives are taken in. \code{"forward"}, the
-default, propagates tangents alongside the states, which is what \code{deriv}
-and \code{deriv2} build. \code{"reverse"} compiles a different object: the states are
-integrated in plain \code{double} and the derivatives come out of one backward
-sweep over the recorded steps, so their cost does not grow with the number
-of parameters. A reverse model takes a \code{seed} in \code{\link[=solveODE]{solveODE()}} and answers
-with \verb{$adjoint}, one row per state and parameter; it carries no \code{sens1},
-and \code{deriv2} is not available for it. Only the dense-output path is
-supported, which is what the multistep methods always use.}
+\item{derivMode}{Direction the derivatives are taken in, one of four.
+\code{"forward"}, the default, propagates tangents alongside the states, which
+is what \code{deriv} builds. \code{"reverse"} compiles a different object: the states
+are integrated in plain \code{double} and the derivatives come out of one
+backward sweep over the recorded steps, so their cost does not grow with
+the number of parameters. A reverse model takes a \code{seed} in \code{\link[=solveODE]{solveODE()}}
+and answers with \verb{$adjoint}, one row per state and parameter, and carries
+no \code{sens1}.
+
+The two second-order modes differ in how the inner derivative is taken.
+\code{"forward-forward"} is \code{deriv2 = TRUE} on the forward mode and answers with
+\verb{$sens2}, the second derivatives of every state. \code{"forward-reverse"} runs
+the backward sweep itself over tangents and answers with \verb{$adjoint2}, the
+derivatives of the gradient, which under the identity seeding is the
+Hessian of the seeded functional. Both need a finite \code{nStack}; the first
+scales with the square of the sensitivity count, the second with its
+product with the seed count.
+
+Reverse compiles only the dense-output path, which is what the multistep
+methods always use.}
 
 \item{profile}{Logical. Compile with profiling counters.}
 

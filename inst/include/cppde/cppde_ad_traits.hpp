@@ -88,6 +88,37 @@ inline double scalar_value(const cppde::dual2nd<T, N>& v) {
 }
 
 // ============================================================================
+//  store_as<T>(v): the value in the type a store keeps it in
+//
+//  A reverse trajectory checkpoints states in its own scalar type. In plain
+//  double that is the value alone; over the same type the run integrates in it
+//  is the whole number, tangents included, which is what forward over reverse
+//  needs.
+// ============================================================================
+
+// ============================================================================
+//  arm_tangents(v): bind v's tangent storage before a callee's arena scope
+//
+//  A generated model body opens a dual_arena::scope of its own, so a tangent
+//  it allocates for one of the caller's numbers dies when that scope pops. The
+//  stepper avoids this by holding its buffers in a tangent slab; a caller that
+//  hands the model a buffer of its own arms it instead. Nothing to do for a
+//  plain scalar.
+// ============================================================================
+
+template<class T>
+inline void arm_tangents(T&) {}
+
+template<class S, unsigned N>
+inline void arm_tangents(cppde::dual<S, N>& v) { v.arm(); }
+
+template<class T, class V>
+inline T store_as(const V& v) {
+  if constexpr (std::is_same<T, V>::value) return v;
+  else return static_cast<T>(scalar_value(v));
+}
+
+// ============================================================================
 //  step_coef<TimeArg>: the type the steppers combine their stages in.
 //
 //  The step size is a constant of the map being differentiated, the grid being

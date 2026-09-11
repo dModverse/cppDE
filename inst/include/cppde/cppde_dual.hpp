@@ -249,6 +249,16 @@ public:
     set_depend();
   }
 
+  // Bind a zeroed tangent buffer now, without claiming a dependence. A callee
+  // that opens its own dual_arena::scope and writes here would otherwise
+  // allocate inside that scope, and the buffer would be reclaimed when it
+  // pops; with one already bound the write reuses it. The slab does this for
+  // the stepper's own buffers; this is the same guarantee for a caller's.
+  void arm() {
+    if (tan_ == nullptr) tan_ = detail::arena_alloc_t<T>(N);
+    for (unsigned i = 0; i < N; ++i) tan_[i] = T();
+  }
+
   // Non-allocating bind onto an externally owned buffer, typically a row of
   // tangent_slab. The dual never frees tan_, so the owner has to outlive it.
   // depend_ goes to true: a slab-bound dual is always active.
@@ -473,6 +483,14 @@ public:
     } else {
       assert(size_ == n && "dual<T,0>: tangent size mismatch");
     }
+  }
+
+  // As the static-N form. A heap dual that has no width yet has nothing to
+  // bind, and the caller that armed it gets the arena behaviour it had before.
+  void arm() {
+    if (size_ == 0) return;
+    if (tan_ == nullptr) tan_ = detail::arena_alloc_t<T>(size_);
+    for (unsigned i = 0; i < size_; ++i) tan_[i] = T();
   }
 
   // Non-allocating bind onto an externally owned buffer, typically a row of

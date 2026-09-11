@@ -235,8 +235,11 @@ public:
       // dt_old() and not current_time() - previous_time(): the controller
       // advances t by dt, and fl(t + dt) - t is not dt. The replay has to step
       // the size the forward run stepped, not a rounded version of it.
+      // The grid is not differentiated, so the times a checkpoint keeps are
+      // values whatever the run integrates in.
       m_store.capture(ctl.stepper(), m_st.previous_state(),
-                      m_st.previous_time(), ctl.dt_old());
+                      ad_traits::scalar_value(m_st.previous_time()),
+                      ad_traits::scalar_value(ctl.dt_old()));
     }
   }
 
@@ -286,7 +289,7 @@ public:
   static void copy_state(const State& in, std::vector<T>& out) {
     out.resize(in.size());
     for (std::size_t i = 0; i < in.size(); ++i)
-      out[i] = static_cast<T>(ad_traits::scalar_value(in[i]));
+      out[i] = ad_traits::store_as<T>(in[i]);
   }
 
 private:

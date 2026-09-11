@@ -100,6 +100,7 @@ test_that("the reverse mode carries events, roots and forcings", {
 })
 
 test_that("a sparse model jumps backwards too", {
+  skip_if_not(isTRUE(cvodeConfig$klu_available), "KLU not available")
   ev <- data.frame(var = "A", time = "t_dose", value = "d_amt",
                    method = "add", stringsAsFactors = FALSE)
   pe <- c(pars, t_dose = 1.0, d_amt = 0.4)
@@ -151,7 +152,7 @@ test_that("the seed and the mode have to agree", {
                "state columns")
   expect_error(cppODE(eqns, modelname = "rev_no2nd", derivMode = "reverse",
                       deriv2 = TRUE),
-               "second order")
+               "forward-reverse")
 })
 
 test_that("a written Rosenbrock adjoint carries a multiplicative forcing", {
@@ -205,6 +206,7 @@ test_that("an equilibrated run goes backwards", {
 })
 
 test_that("rb4 goes backwards on a sparse Jacobian", {
+  skip_if_not(isTRUE(cvodeConfig$klu_available), "KLU not available")
   mf <- cppODE(eqns, modelname = "rev_rb4_sp_f", method = "rb4", sparse = TRUE,
                deriv = TRUE)
   mr <- cppODE(eqns, modelname = "rev_rb4_sp_r", method = "rb4", sparse = TRUE,
@@ -588,4 +590,94 @@ test_that("a store from another point is refused, not quietly used", {
   expect_error(solveODE(mr, times, pars, store = "not a pointer", seed = W),
                "element of an earlier solve")
   expect_error(solveODE(mr, times, pars), "needs a 'seed'")
+})
+
+# ---------------------------------------------------------------------------
+#  Second order: the same Hessian from both directions
+#
+#  forward-forward propagates a nested dual through the states and answers with
+#  sens2; forward-reverse runs the backward sweep itself over a dual and answers
+#  with adjoint2. Contracted against the same seed the two are the same matrix,
+#  so each is the other's oracle, and the gap is the discretisation gap the file
+#  header describes.
+# ---------------------------------------------------------------------------
+
+# The Hessian of w' x, from the forward second derivatives.
+hess_forward <- function(res, W) {
+  n_sens <- dim(res$sens2)[3]
+  outer(seq_len(n_sens), seq_len(n_sens),
+        Vectorize(function(a, b) sum(as.vector(W) * res$sens2[, , a, b])))
+}
+
+test_that("forward-reverse answers the Hessian forward-forward answers", {
+  for (m in c("bdf", "rb4", "tsit5")) {
+    mf <- cppODE(eqns, modelname = paste0("rev2_ff_", m), method = m,
+                 derivMode = "forward-forward", nStack = 5)
+    mr <- cppODE(eqns, modelname = paste0("rev2_fr_", m), method = m,
+                 derivMode = "forward-reverse", nStack = 5)
+
+    expect_identical(attr(mf, "derivMode"), "forward-forward")
+    expect_true(attr(mf, "deriv2"))
+    expect_identical(attr(mr, "derivMode"), "forward-reverse")
+    expect_true(attr(mr, "deriv"))
+    expect_false(attr(mr, "deriv2"))
+
+    ff <- do.call(solveODE, c(list(mf, times, pars), tol))
+    W  <- seed_for(ff)
+    fr <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
+
+    # The gradient first: forward-reverse keeps the first-order answer.
+    expect_equal(unname(fr$adjoint[, 1]),
+                 unname(contract(ff$sens1, W)[, 1]),
+                 tolerance = 1e-6, info = m)
+    expect_equal(unname(fr$adjoint2[, , 1]), unname(hess_forward(ff, W)),
+                 tolerance = 1e-6, info = m)
+  }
+})
+
+test_that("every method answers the same Hessian backwards", {
+  # Four discretisations of one Hessian. Sharper than it looks: the four adapt
+  # their own grids, so agreement at 1e-5 says the sweep differentiates what
+  # each of them actually did.
+  W <- NULL; ref <- NULL
+  for (m in c("bdf", "adams", "rb4", "tsit5")) {
+    mr <- cppODE(eqns, modelname = paste0("rev2_all_", m), method = m,
+                 derivMode = "forward-reverse", nStack = 5)
+    if (is.null(W)) {
+      W <- seed_for(do.call(solveODE, c(list(mr, times, pars,
+                                             seed = array(0, c(length(times), 2L, 1L))), tol)))
+    }
+    fr <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
+    if (is.null(ref)) ref <- unname(fr$adjoint2[, , 1])
+    else expect_equal(unname(fr$adjoint2[, , 1]), ref, tolerance = 1e-5, info = m)
+  }
+})
+
+test_that("forward-reverse names its answer and refuses the older spelling", {
+  mr <- cppODE(eqns, modelname = "rev2_names", derivMode = "forward-reverse",
+               nStack = 5)
+  ff <- do.call(solveODE, c(list(mr, times, pars,
+                                 seed = array(1, c(length(times), 2L, 1L))), tol))
+  expect_identical(dim(ff$adjoint2), c(5L, 5L, 1L))
+  expect_identical(dimnames(ff$adjoint2)[[1]], names(pars))
+  expect_identical(dimnames(ff$adjoint2)[[2]], names(pars))
+
+  expect_error(cppODE(eqns, modelname = "rev2_refused", derivMode = "reverse",
+                      deriv2 = TRUE),
+               "forward-reverse")
+})
+
+test_that("the second-order forward mode is repeatable on every method", {
+  # A solve must not depend on what ran before it. The dense-output wrapper owns
+  # the two state buffers a single-step method reads and writes, and while it
+  # went unprimed those buffers took their tangents from the arena: values and
+  # first derivatives were bit-identical between repeats, second derivatives
+  # were not. Found through cppODE's CPPDE_POISON_ARENA switch.
+  for (m in c("bdf", "adams", "rb4", "tsit5")) {
+    mm <- cppODE(eqns, modelname = paste0("rep2_", m), method = m, deriv2 = TRUE,
+                 nStack = 5)
+    a <- do.call(solveODE, c(list(mm, times, pars), tol))
+    b <- do.call(solveODE, c(list(mm, times, pars), tol))
+    expect_identical(a$sens2, b$sens2, info = m)
+  }
 })

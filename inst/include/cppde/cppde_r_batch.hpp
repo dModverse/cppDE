@@ -82,6 +82,11 @@ struct solve_result {
   // through `acquire`: it is one small matrix, not a per-step array.
   std::vector<double> adjoint;
   int n_adj_rows = 0, n_adj_cols = 0;
+  // Forward over reverse: the same sweep run over a dual, so every entry of
+  // `adjoint` carries its directional derivatives. [n_adj_rows, n_sens,
+  // n_adj_cols], and under the identity seeding that is the Hessian.
+  std::vector<double> adjoint2;
+  int n_adj_derivs = 0;
   // The grid the sweep ran on and what the adjoint says about it. Filled only
   // under args.adj_trace: lambda alone is n_steps * n_states doubles.
   //   step_t, step_h  [n_adj_steps]
@@ -490,9 +495,11 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
   const int n_out  = r.n_out;
   const int n_sens = r.n_sens;
   const bool adj   = (r.n_adj_cols > 0);
+  const bool adj2  = adj && r.n_adj_derivs > 0;
   const bool grid  = adj && r.n_adj_steps > 0;
   const bool keep  = (r.store_out != nullptr && r.wrap_store != nullptr);
   const int n_el   = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + (adj ? 1 : 0)
+                       + (adj2 ? 1 : 0)
                        + (grid ? 1 : 0) + (keep ? 1 : 0) + 1;
 
   SEXP ans   = PROTECT(Rf_allocVector(VECSXP, n_el));
@@ -503,6 +510,7 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
   if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("sens1"));
   if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("sens2"));
   if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint"));
+  if (adj2)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint2"));
   if (grid)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjointGrid"));
   if (keep)   SET_STRING_ELT(names, slot++, Rf_mkChar("store"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
@@ -544,6 +552,15 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
     std::memcpy(REAL(am), r.adjoint.data(), sizeof(double) * r.adjoint.size());
     SET_VECTOR_ELT(ans, slot++, am);
     UNPROTECT(1);
+  }
+  if (adj2) {
+    SEXP d = PROTECT(Rf_allocVector(INTSXP, 3));
+    INTEGER(d)[0] = r.n_adj_rows; INTEGER(d)[1] = r.n_adj_derivs;
+    INTEGER(d)[2] = r.n_adj_cols;
+    SEXP a = PROTECT(Rf_allocArray(REALSXP, d));
+    std::memcpy(REAL(a), r.adjoint2.data(), sizeof(double) * r.adjoint2.size());
+    SET_VECTOR_ELT(ans, slot++, a);
+    UNPROTECT(2);
   }
   if (grid) {
     SEXP g = PROTECT(build_adjoint_grid(r));
@@ -699,9 +716,11 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
   }
 
   const bool adj  = (r.n_adj_cols > 0);
+  const bool adj2 = adj && r.n_adj_derivs > 0;
   const bool grid = adj && r.n_adj_steps > 0;
   const bool keep = (r.store_out != nullptr && r.wrap_store != nullptr);
   const int n_el = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + (adj ? 1 : 0)
+                     + (adj2 ? 1 : 0)
                      + (grid ? 1 : 0) + (keep ? 1 : 0) + 1;
   SEXP ans   = PROTECT(Rf_allocVector(VECSXP, n_el));
   SEXP names = PROTECT(Rf_allocVector(STRSXP, n_el));
@@ -711,6 +730,7 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
   if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("sens1"));
   if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("sens2"));
   if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint"));
+  if (adj2)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint2"));
   if (grid)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjointGrid"));
   if (keep)   SET_STRING_ELT(names, slot++, Rf_mkChar("store"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
@@ -728,6 +748,14 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
     SEXP am = PROTECT(Rf_allocMatrix(REALSXP, r.n_adj_rows, r.n_adj_cols)); ++extra;
     std::memcpy(REAL(am), r.adjoint.data(), sizeof(double) * r.adjoint.size());
     SET_VECTOR_ELT(ans, slot++, am);
+  }
+  if (adj2) {
+    SEXP d = PROTECT(Rf_allocVector(INTSXP, 3)); ++extra;
+    INTEGER(d)[0] = r.n_adj_rows; INTEGER(d)[1] = r.n_adj_derivs;
+    INTEGER(d)[2] = r.n_adj_cols;
+    SEXP a = PROTECT(Rf_allocArray(REALSXP, d)); ++extra;
+    std::memcpy(REAL(a), r.adjoint2.data(), sizeof(double) * r.adjoint2.size());
+    SET_VECTOR_ELT(ans, slot++, a);
   }
   if (grid) {
     SEXP g = PROTECT(build_adjoint_grid(r)); ++extra;

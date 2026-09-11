@@ -222,7 +222,7 @@ static void closed_steps(const std::vector<cp_type>& cps,
   std::vector<double> pv(P, P + NP);
   auto sysd = make_system<double>(pv);
   adjoint_terms adj{pv};
-  cppde::adjoint::rosenbrock_workspace ws;
+  cppde::adjoint::rosenbrock_workspace<> ws;
   StepD st;
 
   std::vector<double> wphi(NX + NP, 0.0), w_in(NX, 0.0);

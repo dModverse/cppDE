@@ -294,7 +294,7 @@ static void closed_step(const checkpoint<M>& cp, const std::vector<double>& w,
   // allocates every slot it could need and would otherwise dominate.
   static cppde::adjoint::multistep_probe<stepper_d<M>> probe;
   static cppde::adjoint::multistep_operators<stepper_d<M>> ops;
-  static cppde::adjoint::multistep_workspace ws;
+  static cppde::adjoint::multistep_workspace<> ws;
   // The tail's own key: what the recorded ops will do to the history.
   const double tail_key = cp.q_next + 1e3 * cp.eta + 1e6 * cp.ops.size();
   probe.build(cp.carry, cp.dt, tail_key,

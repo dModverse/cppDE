@@ -389,9 +389,10 @@ Latent, weil jedes Beispiel und jeder Test sie additiv verwendet, wo sie aus
 Ableitung des ODE-Emitters geht jetzt durch denselben Guard, den
 `codegen_cppFUN.py` seit je hat. Regressionstest in `test-piecewise.R`.
 
-**Offen geblieben:** der CVODE-Emitter führt seine `df/dp`-Ableitung weiterhin
-selbst. Das Zusammenlegen gehört in Stufe 7, wenn ohnehin an beiden Emittern
-gearbeitet wird.
+**Nicht offen, sondern entschieden:** der CVODE-Emitter führt seine
+`df/dp`-Ableitung weiterhin selbst. Die beiden Backends werden fast immer einzeln
+benutzt, also trägt jedes seine eigene Ableitung; das Zusammenlegen spart nichts und
+koppelt zwei Emitter, die sonst unabhängig sind.
 
 ### Stufe 3. `adjoint_step<Stepper>`, Verfahren für Verfahren
 
@@ -686,16 +687,43 @@ Schritt, denn der Dense-Output-Adjungierte gehört der Trajektorie und wird dort
 geprüft; die Kotangenten nach Schrittzeit und Schrittweite; und der Vergleich
 der Lambda-Spur gegen eine zweite Quelle, die es nicht mehr gibt.
 
-*Offen geblieben:* der CVODE-Emitter führt seine `df/dp`-Ableitung weiterhin
-selbst. Das Zusammenlegen ist kein Teil des Löschens und wartet.
+*Nicht zusammengelegt, mit Absicht:* der CVODE-Emitter führt seine
+`df/dp`-Ableitung weiterhin selbst, siehe Stufe 2.
 
-### Stufe 8. Zweite Ordnung
+### Stufe 8. Zweite Ordnung. Erledigt am 2026-09-11
 
-Der geschlossene Adjungierte wird über den Skalartyp instanziiert, `dual<double,N>` statt
-`double`, und liefert Hesse-Vektor-Produkte über die vorhandenen Dual-Zahlen. Damit
-entfällt `codual<dual<...>>` als Weg dorthin. Offener Punkt bleibt der KLU-Solve mit
-dual-wertiger Iterationsmatrix: entweder ein dual-fähiger dünner Solve oder ein dichter
-Rückfall für zweite Ordnung.
+Der geschlossene Adjungierte ist über den Skalartyp instanziiert: `double` gibt den
+Gradienten, `dual<double,N>` gibt ihn samt seinen Richtungsableitungen, und das ist
+vorwärts über rückwärts. `codual<dual<...>>` entfällt damit als Weg dorthin.
+
+**Die Auswahl heißt jetzt so, wie sie ist.** `cppODE(derivMode = ...)` nimmt vier Werte:
+`"forward"`, `"reverse"`, `"forward-forward"` und `"forward-reverse"`. Die ersten beiden
+sind die erste Ordnung, die letzten beiden die zweite; `deriv2 = TRUE` bleibt die ältere
+Schreibweise für `"forward-forward"` und wählt es weiterhin. Der Vorwärts-über-vorwärts-Weg
+bleibt vollständig erhalten: die beiden zweiten Ordnungen sind zwei Angebote, nicht eine
+Ablösung.
+
+**Der offene Punkt war größer als vermutet und ist erledigt.** Nicht nur KLU, *kein*
+AD-Löser konnte transponiert lösen: `solve_transposed` gab es nur auf der Wertschicht.
+Beide Spezialisierungen haben es jetzt, dicht und dünn, mit der IFT-Schälung mit der
+Matrix mittransponiert; `dev/cxx/test_ad_transpose.cpp` prüft beide gegen denselben Löser
+auf der explizit transponierten Matrix. Ein dichter Rückfall war nicht nötig.
+
+**Die Arena war die eigentliche Arbeit.** Ein erzeugter Modellrumpf öffnet seinen eigenen
+`dual_arena::scope`; ein Tangens, den er für eine Zahl des Aufrufers anlegt, stirbt mit
+diesem Scope. Der Stepper umgeht das, indem seine Puffer im Tangenten-Slab liegen. Der
+Sweep tut es jetzt genauso: `adjoint::zero_armed` bindet den Tangentenspeicher, bevor der
+Puffer an das Modell oder an den Stepper geht, und `dual::arm()` ist das Primitiv dafür.
+Ohne das stimmte der Gradient und die Hesse-Matrix war um drei Zeilen verschoben.
+
+**Gemessen** an `tests/testthat/test-reverse.R`: `forward-reverse` fällt mit
+`forward-forward` auf 1e-6 zusammen, auf bdf, rb4 und tsit5, und die vier Verfahren
+geben rückwärts dieselbe Hesse-Matrix auf 1e-5.
+
+**Nebenbefund, nicht von dieser Stufe:** die zweite Ordnung war auf den
+Einschrittverfahren nicht wiederholbar, weil die Dense-Output-Hülle ihre eigenen Puffer
+nie an den Tangenten-Slab gebunden bekam. Der Fehler saß in der Vorwärtsrichtung, nicht
+im Adjungierten, und ist behoben; er steht unter `Nebenbefunde`.
 
 ---
 
@@ -768,7 +796,7 @@ dem Adjungierten. Stufe 5b misst sich daran.
 
 ## Nebenbefunde, die nicht in diesen Plan gehören
 
-Zwei echte Fehler, bei der Erkundung gefunden, beide unabhängig vom Umbau:
+Drei echte Fehler, bei der Erkundung gefunden, alle unabhängig vom Umbau:
 
 1. **Eine multiplikativ auftretende Forcing erzeugt nicht übersetzbaren C++.**
    `_generate_jac_code_plain` reicht `forcings_list = []` an `_to_cpp` für die
@@ -778,6 +806,30 @@ Zwei echte Fehler, bei der Erkundung gefunden, beide unabhängig vom Umbau:
    Beispiel und jeder Test Forcings additiv verwendet.
 2. **`Heaviside` bricht den ODE-Generator ab**, `PrintMethodNotImplementedError` für
    `DiracDelta`.
+3. **Die zweite Ordnung war auf den Einschrittverfahren nicht wiederholbar. Behoben.**
+   Derselbe Aufruf zweimal in derselben Sitzung gab bitgleiche Werte und bitgleiche
+   `sens1`, aber verschiedene `sens2`; mit `useDenseOutput = FALSE` war tsit5
+   deterministisch und traf bdf exakt.
+
+   Der Grund: `prepare_sensitivities` lag auf dem Controller und wurde von dort in die
+   Dense-Output-Hülle hineinbewegt, deren eigenes `m_n_sens` dabei null blieb. Damit
+   blieben ihre beiden Zustandspuffer ungebunden und nahmen ihre Tangenten aus der
+   Arena. In erster Ordnung fiel das nicht auf, weil jeder Schritt sie vollständig
+   schreibt; in zweiter las der Interpolant Felder, die niemand geschrieben hatte. Der
+   Aufruf liegt jetzt auf der Hülle, nach dem Move.
+
+   Gefunden mit `CPPDE_POISON_ARENA`, einem Schalter in `cppde_dual_arena.hpp`, der
+   jede uninitialisierte Tangente mit NaN füllt: damit zeigten sich 200 von 250
+   `sens2`-Einträgen auf tsit5 als NaN, auf bdf und rb4 keiner. Der Schalter bleibt,
+   standardmäßig aus.
+
+   Nebenbei behoben, an derselben Stelle und unabhängig davon: die FSAL-Umbuchung in
+   `cppde_tsit5.hpp` kopierte den Tangentenblock von Spalte 7 nach Spalte 1 mit
+   `std::memcpy`, was in zweiter Ordnung Zeiger kopiert statt Werte. Sie geht jetzt
+   durch `vec_copy_with_slab`, das genau davor warnt.
+
+   Regressionstest in `tests/testthat/test-reverse.R`: derselbe Aufruf zweimal, auf
+   allen vier Verfahren, bitgleich.
 
 ## Dokument
 

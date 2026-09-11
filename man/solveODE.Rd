@@ -148,7 +148,10 @@ when \code{attr(model, "deriv")} is \code{TRUE}, \code{sens1}, plus \code{sens2}
 \code{attr(model, "deriv2")} is \code{TRUE}. A model compiled with
 \code{derivMode = "reverse"} carries neither, and returns \code{adjoint} instead:
 \verb{[n_states + n_params, n_seed]}, indexed exactly as a forward \code{sens1ini}
-seeds. Output arrays are time-first:
+seeds. One compiled with \code{derivMode = "forward-reverse"} carries \code{sens1} and
+\code{adjoint} and adds \code{adjoint2}, \verb{[n_states + n_params, n_s, n_seed]}: the
+derivatives of each \code{adjoint} entry, which under the identity seeding are the
+columns of the Hessian of the seeded functional. Output arrays are time-first:
 \code{variable} is \verb{[n_t, n_x]}, \code{sens1} is \verb{[n_t, n_x, n_s]}, and
 \code{sens2} is \verb{[n_t, n_x, n_s, n_s]}. The dimension names of \code{sens1}
 and \code{sens2} reflect the active (non-fixed) sensitivity parameters.

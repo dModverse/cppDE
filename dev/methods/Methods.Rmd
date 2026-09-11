@@ -1233,13 +1233,40 @@ reason: its stages are direct solves, so its adjoint is the exact
 transpose of the discrete step, where a corrector's is the implicit
 function theorem applied to an iteration that stopped early.
 
-The reverse mode carries no \verb|sens1| and no \verb|sens2|; second
-derivatives remain a forward-mode facility. It supports all four
-time-stepping methods, time- and root-triggered events, forcings, the
-batch entry point and the sparse linear solver. The implementation
-resides in \texttt{cppde\_adjoint\_step.hpp},
-\texttt{cppde\_reverse\_step.hpp} and
-\texttt{cppde\_reverse\_trajectory.hpp}.
+The reverse mode supports all four time-stepping methods, time- and
+root-triggered events, forcings, the batch entry point and the sparse
+linear solver. The implementation resides in
+\texttt{cppde\_adjoint\_step.hpp}, \texttt{cppde\_reverse\_step.hpp}
+and \texttt{cppde\_reverse\_trajectory.hpp}.
+
+### Second derivatives, from either direction
+
+Nothing above names a scalar type. The adjoint sweep is written over
+the type the stepper carries, so instantiating it on
+$\mathtt{dual}\langle\mathtt{double}, N\rangle$ rather than
+\texttt{double} differentiates the sweep itself. What comes back is the
+gradient with $N$ directional derivatives attached, and under the
+identity seeding those are the columns of the Hessian of the seeded
+functional. That is forward over reverse, selected as
+\texttt{derivMode = "forward-reverse"}.
+
+It costs one sensitivity integration plus one sweep in dual arithmetic,
+against the $N$ sweeps a difference quotient of the gradient would take.
+The forward-over-forward route, \texttt{derivMode = "forward-forward"}
+and the older \texttt{deriv2 = TRUE}, remains and answers with
+\verb|sens2|, the second derivatives of every state rather than of one
+functional. The two are offers, not stages: which is cheaper depends on
+whether the quantity of interest is the states or a scalar built from
+them.
+
+Two things make the second order work that the first order did not need.
+The iteration matrix now carries tangents, so the transposed solve peels
+the implicit function theorem with the matrix transposed alongside;
+\texttt{cppde\_ad\_lu.hpp} and \texttt{cppde\_sparse\_ad\_lu.hpp}
+both provide it. And a generated model body opens its own arena scope,
+so every buffer the sweep hands to the model has its tangent storage
+bound before the call, the way the stepper's own buffers are bound by
+the tangent slab.
 
 ## Method selection
 

@@ -84,7 +84,7 @@
   ## --- Reverse mode: which direction the model was built for ---
   ## The mode is stamped on the model, not passed per call, exactly as `deriv`
   ## is: it decides which code was emitted and cannot be chosen afterwards.
-  is_reverse <- identical(attr(model, "derivMode"), "reverse")
+  is_reverse <- attr(model, "derivMode") %in% c("reverse", "forward-reverse")
   if (!is.null(seed) && !is_reverse)
     stop("'seed' supplied but the model was not compiled with derivMode = \"reverse\"")
   ## A seedless reverse call is the value half of the pair: it integrates,
@@ -486,6 +486,11 @@
   ## indexes the same way a forward sens1ini seeds.
   if (!is.null(result$adjoint) && is.null(dimnames(result$adjoint)))
     dimnames(result$adjoint) <- list(prep$theta_names, prep$seed_names)
+  ## Forward over reverse: the gradient's own derivatives, one block per
+  ## sensitivity direction. Under the identity seeding that block is a Hessian.
+  if (!is.null(result$adjoint2) && is.null(dimnames(result$adjoint2)))
+    dimnames(result$adjoint2) <- list(theta = prep$theta_names, sens = out_sens,
+                                      seed = prep$seed_names)
   ## The sweep's own grid. lambda is [step, state, seed]; eta carries one column
   ## per seed, so it names the way the adjoint's columns do.
   if (!is.null(result$adjointGrid)) {
@@ -727,7 +732,10 @@
 #' `attr(model, "deriv2")` is `TRUE`. A model compiled with
 #' `derivMode = "reverse"` carries neither, and returns `adjoint` instead:
 #' `[n_states + n_params, n_seed]`, indexed exactly as a forward `sens1ini`
-#' seeds. Output arrays are time-first:
+#' seeds. One compiled with `derivMode = "forward-reverse"` carries `sens1` and
+#' `adjoint` and adds `adjoint2`, `[n_states + n_params, n_s, n_seed]`: the
+#' derivatives of each `adjoint` entry, which under the identity seeding are the
+#' columns of the Hessian of the seeded functional. Output arrays are time-first:
 #' `variable` is `[n_t, n_x]`, `sens1` is `[n_t, n_x, n_s]`, and
 #' `sens2` is `[n_t, n_x, n_s, n_s]`. The dimension names of `sens1`
 #' and `sens2` reflect the active (non-fixed) sensitivity parameters.

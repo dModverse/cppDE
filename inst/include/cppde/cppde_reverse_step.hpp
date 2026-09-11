@@ -105,7 +105,7 @@ struct onestep_checkpoint {
   {
     x.resize(x_in.size());
     for (std::size_t i = 0; i < x_in.size(); ++i)
-      x[i] = static_cast<T>(ad_traits::scalar_value(x_in[i]));
+      x[i] = ad_traits::store_as<T>(x_in[i]);
     t  = t_in;
     dt = dt_in;
   }
@@ -191,7 +191,7 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern, Resiz
       const auto& slot = st.zn(j);
       for (std::size_t i = 0; i < n_states; ++i)
         zn[static_cast<std::size_t>(j) * n_states + i] =
-            static_cast<T>(ad_traits::scalar_value(slot[i]));
+            ad_traits::store_as<T>(slot[i]);
     }
     t  = t_in;
     dt = dt_in;

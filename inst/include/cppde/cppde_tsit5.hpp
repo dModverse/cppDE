@@ -156,25 +156,12 @@ public:
   // --- Stage 1 (FSAL: reuse k7 from the previous accepted step) ---
   //
   // The stage matrix binds m_k1's tangents to column 0 and m_k7's to column 6,
-  // and those bindings hold across steps. Reusing k7 as the next k1 is therefore
-  // a value copy plus a memcpy of the column slice; afterwards m_k1 is f(x, t).
+  // and those bindings hold across steps, so reusing k7 as the next k1 is a
+  // copy of the column slice rather than a rebinding. It goes through the
+  // slab-aware copy: at second order a tangent element carries a pointer of
+  // its own, which a flat memcpy would alias into column 0 instead of copying.
     if (m_fsal_valid && m_k1.m_v.size() == n) {
-      if constexpr (detail::is_dynamic_dual<value_type>::value) {
-        // Per-element value copy preserves the dual's tan_ binding to
-        // physical column 0 (operator=(const dual&) zeros tangents and
-        // copies values, but here we keep the slab-bound form intact :
-        // see dual<T,N>::operator=(const dual&)).
-        for (size_t i = 0; i < n; ++i) m_k1.m_v[i].x() = m_k7.m_v[i].x();
-        using inner = typename value_type::value_type;
-        const std::size_t per = m_K.slot_stride();
-        if (per > 0) {
-          std::memcpy(m_K.tangent_block_data() + 0 * per,
-                      m_K.tangent_block_data() + 6 * per,
-                      per * sizeof(inner));
-        }
-      } else {
-        for (size_t i = 0; i < n; ++i) m_k1.m_v[i] = m_k7.m_v[i];
-      }
+      vec_copy_with_slab(m_k1.m_v, m_K.slab(0), m_k7.m_v, m_K.slab(6));
     } else {
       deriv_func(x, m_k1.m_v, t);
       ++m_n_fevals;

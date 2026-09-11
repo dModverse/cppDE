@@ -69,6 +69,22 @@ inline double clamp_to_step(const Checkpoint& cp, double t) {
 }
 
 // ---------------------------------------------------------------------------
+//  n zeros with their tangent storage bound.
+//
+//  Everything the sweep hands to the model or to the stepper goes through
+//  this. Those open a dual_arena::scope of their own, and a tangent allocated
+//  inside one is reclaimed when it pops; a buffer that already has one bound
+//  is written in place instead. In plain double it is an assign and nothing
+//  more. Sizing to exactly what the callee writes matters: a later growth
+//  copy-constructs the new elements unarmed.
+// ---------------------------------------------------------------------------
+template<class T>
+inline void zero_armed(std::vector<T>& v, std::size_t n) {
+  v.assign(n, T(0.0));
+  for (std::size_t i = 0; i < n; ++i) cppde::ad_traits::arm_tangents(v[i]);
+}
+
+// ---------------------------------------------------------------------------
 //  A dense operator over Nordsieck slots, row-major [n_out x n_in].
 //
 //  Small by construction: the order never exceeds the stepper's own maximum,
@@ -85,14 +101,15 @@ struct slot_operator {
   /// out[j*n + i] += sum_k this(k, j) * w[k*n + i], the transposed apply.
   /// The two arrays are always distinct buffers, which the compiler cannot see
   /// and which decides whether the inner loop vectorises.
-  void apply_transposed(const double* CPPDE_RESTRICT w, std::size_t n,
-                        double* CPPDE_RESTRICT out) const {
+  template<class T>
+  void apply_transposed(const T* CPPDE_RESTRICT w, std::size_t n,
+                        T* CPPDE_RESTRICT out) const {
     for (int j = 0; j < cols; ++j)
       for (int k = 0; k < rows; ++k) {
         const double m = (*this)(k, j);
         if (m == 0.0) continue;
-        const double* CPPDE_RESTRICT wk = w + static_cast<std::size_t>(k) * n;
-        double* CPPDE_RESTRICT oj = out + static_cast<std::size_t>(j) * n;
+        const T* CPPDE_RESTRICT wk = w + static_cast<std::size_t>(k) * n;
+        T* CPPDE_RESTRICT oj = out + static_cast<std::size_t>(j) * n;
         for (std::size_t i = 0; i < n; ++i) oj[i] += m * wk[i];
       }
   }
@@ -195,7 +212,11 @@ void probe_tail(Stepper& probe, const Carry& carry, double dt, TailFn&& tail,
 /// whole cost of reading the operators off.
 template<class Stepper>
 struct multistep_probe {
-  Stepper pre, tail_probe;
+  // The operators are polynomials in the step-size history, which is a double
+  // whatever the run's scalar type is. So the probe is a double stepper even
+  // under a sweep that carries tangents, and the matrices come out double.
+  using probe_stepper = typename Stepper::template rebind_value<double>;
+  probe_stepper pre, tail_probe;
 
   // What the operators depend on. Long stretches of a run hold the order and
   // the step size, and then every step asks for the same matrices; comparing
@@ -285,36 +306,37 @@ multistep_operators<Stepper> build_multistep_operators(
 /// What the step above hands down, carried back through the tail onto the
 /// predicted history and onto acor. Separate from the step adjoint itself
 /// because a trajectory adds its observations to the same two.
-template<class Stepper>
+template<class Stepper, class T>
 void carry_into_pred(const multistep_operators<Stepper>& ops, std::size_t n,
-                     const double* CPPDE_RESTRICT w_out,
-                     double* CPPDE_RESTRICT w_pred,
-                     double* CPPDE_RESTRICT w_acor)
+                     const T* CPPDE_RESTRICT w_out,
+                     T* CPPDE_RESTRICT w_pred,
+                     T* CPPDE_RESTRICT w_acor)
 {
   ops.B.apply_transposed(w_out, n, w_pred);
   for (int k = 0; k <= ops.q_out; ++k) {
     const double m = ops.c[static_cast<std::size_t>(k)];
     if (m == 0.0) continue;
-    const double* CPPDE_RESTRICT wk = w_out + static_cast<std::size_t>(k) * n;
+    const T* CPPDE_RESTRICT wk = w_out + static_cast<std::size_t>(k) * n;
     for (std::size_t i = 0; i < n; ++i) w_acor[i] += m * wk[i];
   }
 }
 
 /// The buffers one step adjoint needs, kept across a sweep so a step allocates
 /// nothing.
+template<class T = double>
 struct multistep_workspace {
-  std::vector<double> w_pred, w_acor, mu, x, q;
+  std::vector<T> w_pred, w_acor, mu, x, q;
 };
 
 /// The step adjoint's first half: the right-hand side of its transposed solve,
 /// left in ws.mu. Split from the second so a caller can time the solve apart.
-template<class Stepper>
+template<class Stepper, class T>
 void multistep_adjoint_rhs(const multistep_operators<Stepper>& ops,
-                           std::size_t n, multistep_workspace& ws,
-                           double* w_out_state = nullptr)
+                           std::size_t n, multistep_workspace<T>& ws,
+                           T* w_out_state = nullptr)
 {
-  double* CPPDE_RESTRICT w_pred = ws.w_pred.data();
-  const double* CPPDE_RESTRICT w_acor = ws.w_acor.data();
+  T* CPPDE_RESTRICT w_pred = ws.w_pred.data();
+  const T* CPPDE_RESTRICT w_acor = ws.w_acor.data();
 
   ws.mu = ws.w_acor;
   for (std::size_t i = 0; i < n; ++i) w_pred[i] -= w_acor[i];
@@ -323,16 +345,16 @@ void multistep_adjoint_rhs(const multistep_operators<Stepper>& ops,
 }
 
 /// The second half, on a ws.mu the caller has already solved with.
-template<class Stepper, class AdjTerms>
+template<class Stepper, class AdjTerms, class T>
 void multistep_adjoint_finish(const multistep_operators<Stepper>& ops,
                               std::size_t n, std::size_t n_phi,
-                              const std::vector<double>& y, double t_new,
+                              const std::vector<T>& y, double t_new,
                               const AdjTerms& adj,
-                              double* w_in, double* w_theta,
-                              multistep_workspace& ws)
+                              T* w_in, T* w_theta,
+                              multistep_workspace<T>& ws)
 {
-  double* CPPDE_RESTRICT w_pred = ws.w_pred.data();
-  const double* CPPDE_RESTRICT mu = ws.mu.data();
+  T* CPPDE_RESTRICT w_pred = ws.w_pred.data();
+  const T* CPPDE_RESTRICT mu = ws.mu.data();
 
   for (std::size_t i = 0; i < n; ++i) w_pred[i] += mu[i];
   if (ops.q_in >= 1) {
@@ -347,35 +369,35 @@ void multistep_adjoint_finish(const multistep_operators<Stepper>& ops,
 
 /// The step adjoint proper, on a predicted-history cotangent that the caller
 /// has already assembled.
-template<class Stepper, class Solver, class AdjTerms>
+template<class Stepper, class Solver, class AdjTerms, class T>
 void apply_multistep_adjoint_pre(const multistep_operators<Stepper>& ops,
                                  std::size_t n, std::size_t n_phi,
-                                 const std::vector<double>& y, double t_new,
+                                 const std::vector<T>& y, double t_new,
                                  Solver& solver, const AdjTerms& adj,
-                                 double* w_in, double* w_theta,
-                                 multistep_workspace& ws,
-                                 double* w_out_state = nullptr)
+                                 T* w_in, T* w_theta,
+                                 multistep_workspace<T>& ws,
+                                 T* w_out_state = nullptr)
 {
   multistep_adjoint_rhs(ops, n, ws, w_out_state);
   solver.transposed(ws.mu);
   multistep_adjoint_finish(ops, n, n_phi, y, t_new, adj, w_in, w_theta, ws);
 }
 
-template<class Stepper, class Solver, class AdjTerms>
+template<class Stepper, class Solver, class AdjTerms, class T>
 void apply_multistep_adjoint(const multistep_operators<Stepper>& ops,
                              std::size_t n, std::size_t n_phi,
-                             const std::vector<double>& y, double t_new,
-                             const double* w_out,
+                             const std::vector<T>& y, double t_new,
+                             const T* w_out,
                              Solver& solver, const AdjTerms& adj,
-                             double* w_in, double* w_theta,
-                             multistep_workspace& ws,
-                             double* w_out_state = nullptr)
+                             T* w_in, T* w_theta,
+                             multistep_workspace<T>& ws,
+                             T* w_out_state = nullptr)
 {
   const std::size_t nz_in = static_cast<std::size_t>(ops.q_in + 1) * n;
-  std::vector<double>& w_pred = ws.w_pred;
-  std::vector<double>& w_acor = ws.w_acor;
-  w_pred.assign(nz_in, 0.0);
-  w_acor.assign(n, 0.0);
+  std::vector<T>& w_pred = ws.w_pred;
+  std::vector<T>& w_acor = ws.w_acor;
+  w_pred.assign(nz_in, T(0.0));
+  w_acor.assign(n, T(0.0));
   carry_into_pred(ops, n, w_out, w_pred.data(), w_acor.data());
   apply_multistep_adjoint_pre(ops, n, n_phi, y, t_new, solver, adj,
                               w_in, w_theta, ws, w_out_state);
@@ -404,14 +426,14 @@ make_jump_terms(System& s, const EvAdj& e, const FixedEvents& f,
 /// of one state, zn[0] = x and zn[1] = h f(x, t) with the rest zero, so the
 /// history's cotangent collapses onto that state and nothing is left above it.
 /// The trajectory start and every event boundary apply the same map.
-template<class AdjTerms>
-void collapse_restart(const std::vector<double>& w_carry, std::size_t n,
-                      const std::vector<double>& x0, double t0, double h0,
-                      const AdjTerms& adj, double* w_state, double* w_theta,
-                      std::vector<double>& mu, std::vector<double>& jv)
+template<class AdjTerms, class T>
+void collapse_restart(const std::vector<T>& w_carry, std::size_t n,
+                      const std::vector<T>& x0, double t0, double h0,
+                      const AdjTerms& adj, T* w_state, T* w_theta,
+                      std::vector<T>& mu, std::vector<T>& jv)
 {
   for (std::size_t i = 0; i < n; ++i)
-    w_state[i] = (i < w_carry.size()) ? w_carry[i] : 0.0;
+    w_state[i] = (i < w_carry.size()) ? w_carry[i] : T(0.0);
   if (w_carry.size() < 2 * n) return;
   mu.assign(w_carry.begin() + static_cast<std::ptrdiff_t>(n),
             w_carry.begin() + static_cast<std::ptrdiff_t>(2 * n));
@@ -441,9 +463,10 @@ void collapse_restart(const std::vector<double>& w_carry, std::size_t n,
 //  own derivatives of the event expressions. It needs no Jacobian: every term
 //  the shifts would have contributed carries a factor that is zero.
 // ---------------------------------------------------------------------------
+template<class T = double>
 struct jump_workspace {
-  std::vector<double> fb, fa, g, wy;
-  std::vector<std::vector<double> > path;
+  std::vector<T> fb, fa, g, wy;
+  std::vector<std::vector<T> > path;
 };
 
 /// One reset, transposed. `w_z` is the cotangent on the state it wrote, `w_y`
@@ -451,62 +474,64 @@ struct jump_workspace {
 ///     Replace   z[k] = h(y, t)
 ///     Add       z[k] = y[k] + h(y, t)
 ///     Multiply  z[k] = y[k] * h(y, t)
-template<class GradX, class GradP>
-void reset_transpose(int k, cppde::detail::EventMethod method, double h,
+template<class GradX, class GradP, class T>
+void reset_transpose(int k, cppde::detail::EventMethod method, const T& h,
                      int idx,
-                     const std::vector<double>& y, double t, std::size_t n,
-                     const double* w_z, double* w_y, double* w_theta,
-                     GradX&& dh_dx, GradP&& dh_dp_axpy, std::vector<double>& g)
+                     const std::vector<T>& y, double t, std::size_t n,
+                     const T* w_z, T* w_y, T* w_theta,
+                     GradX&& dh_dx, GradP&& dh_dp_axpy, std::vector<T>& g)
 {
   if (k < 0) return;
-  const double wk = w_z[k];
-  double c = 1.0;
+  const T wk = w_z[k];
+  T c = T(1.0);
   using cppde::detail::EventMethod;
   switch (method) {
     case EventMethod::Replace:  w_y[k] -= wk; break;
     case EventMethod::Add:      break;
-    case EventMethod::Multiply: w_y[k] += wk * (h - 1.0); c = y[k]; break;
+    case EventMethod::Multiply: w_y[k] += wk * (h - T(1.0)); c = y[k]; break;
   }
-  if (wk == 0.0) return;
+  // A zero cotangent contributes nothing, and asking is not free of the
+  // scalar type: under tangents the value alone does not say so.
+  zero_armed(g, n);
   dh_dx(idx, y, t, g);
   for (std::size_t i = 0; i < n; ++i) w_y[i] += wk * c * g[i];
   dh_dp_axpy(idx, y, t, wk * c, w_theta);
 }
 
 /// A batch of root events, which share one surface and one dt*.
-template<class System, class RootEvents, class EvAdj>
-void apply_root_jump_adjoint(const std::vector<double>& x_before,
-                             const std::vector<double>& x_after,
+template<class System, class RootEvents, class EvAdj, class T>
+void apply_root_jump_adjoint(const std::vector<T>& x_before,
+                             const std::vector<T>& x_after,
                              double t, const RootEvents& root_events,
                              const std::vector<cppde::detail::TriggeredEvent>& triggered,
                              System& sys, const EvAdj& eadj, std::size_t n,
-                             const double* w_out, double* w_in, double* w_theta,
-                             jump_workspace& ws)
+                             const T* w_out, T* w_in, T* w_theta,
+                             jump_workspace<T>& ws)
 {
-  ws.fb.assign(n, 0.0);
+  zero_armed(ws.fb, n);
   sys.first(x_before, ws.fb, t);
 
   // Which event dt* came from, picked the way the forward run picks it: the
   // first triggered, non-terminal one whose gradients are there.
   std::size_t src = triggered.size();
-  double g_dot = 0.0;
+  T g_dot = T(0.0);
   for (std::size_t j = 0; j < triggered.size(); ++j) {
     const auto& evt = root_events[triggered[j].index];
     if (evt.terminal) continue;
     if (evt.dg_dx && evt.dg_dt) {
-      ws.g.assign(n, 0.0);
+      zero_armed(ws.g, n);
       evt.dg_dx(x_before, t, ws.g);
-      double gd = evt.dg_dt(x_before, t);
+      T gd = evt.dg_dt(x_before, t);
       for (std::size_t i = 0; i < n; ++i) gd += ws.g[i] * ws.fb[i];
-      if (std::abs(gd) >= 1e-15) { src = j; g_dot = gd; }
+      if (std::abs(ad_traits::scalar_value(gd)) >= 1e-15) { src = j; g_dot = gd; }
       break;
     }
   }
   const bool shifted = (src < triggered.size());
 
-  double w_s = 0.0;
+  T w_s = T(0.0);
   if (shifted) {
-    ws.fa.assign(n, 0.0);
+    zero_armed(ws.fa, n);
     sys.first(x_after, ws.fa, t);
     for (std::size_t i = 0; i < n; ++i) w_s -= ws.fa[i] * w_out[i];
   }
@@ -517,14 +542,14 @@ void apply_root_jump_adjoint(const std::vector<double>& x_before,
     const std::size_t idx = triggered[j].index;
     const auto& evt = root_events[idx];
     if (evt.terminal) continue;
-    const double h = (evt.state_index >= 0 && evt.value_func)
-                   ? evt.value_func(x_before, t) : 0.0;
+    const T h = (evt.state_index >= 0 && evt.value_func)
+                   ? evt.value_func(x_before, t) : T(0.0);
     reset_transpose(
         evt.state_index, evt.method, h, static_cast<int>(idx), x_before, t, n,
         w_out, w_in, w_theta,
-        [&](int e, const std::vector<double>& y, double tt, std::vector<double>& o)
+        [&](int e, const std::vector<T>& y, double tt, std::vector<T>& o)
           { eadj.root_dh_dx(e, y, tt, o); },
-        [&](int e, const std::vector<double>& y, double tt, double sc, double* o)
+        [&](int e, const std::vector<T>& y, double tt, const T& sc, T* o)
           { eadj.root_dh_dp_axpy(e, y, tt, sc, o); },
         ws.g);
   }
@@ -534,8 +559,8 @@ void apply_root_jump_adjoint(const std::vector<double>& x_before,
 
   // s = -(grad g . dx + dg/dp . dp) / g_dot
   const std::size_t idx = triggered[src].index;
-  const double c = -w_s / g_dot;
-  ws.g.assign(n, 0.0);
+  const T c = -w_s / g_dot;
+  zero_armed(ws.g, n);
   root_events[idx].dg_dx(x_before, t, ws.g);
   for (std::size_t i = 0; i < n; ++i) w_in[i] += c * ws.g[i];
   eadj.root_dg_dp_axpy(static_cast<int>(idx), x_before, t, c, w_theta);
@@ -543,55 +568,57 @@ void apply_root_jump_adjoint(const std::vector<double>& x_before,
 
 /// The fixed events at one time, each its own sandwich, applied in order. The
 /// last of them carries the root resets a jump switched on.
-template<class System, class FixedEvents, class RootEvents, class EvAdj>
-void apply_fixed_jump_adjoint(const std::vector<double>& x_before,
+template<class System, class FixedEvents, class RootEvents, class EvAdj, class T>
+void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
                               double t, const FixedEvents& fixed_events,
                               const RootEvents& root_events,
                               const std::vector<std::size_t>& switched,
                               System& sys, const EvAdj& eadj, std::size_t n,
-                              const double* w_out, double* w_in, double* w_theta,
-                              jump_workspace& ws)
+                              const T* w_out, T* w_in, T* w_theta,
+                              jump_workspace<T>& ws)
 {
   // Which of them fire here, and which is last: the same test the engine makes.
   std::vector<int> fired;
   for (std::size_t j = 0; j < fixed_events.size(); ++j)
-    if (std::abs(static_cast<double>(fixed_events[j].time) - t) < 1e-14)
+    if (std::abs(ad_traits::scalar_value(fixed_events[j].time) - t) < 1e-14)
       fired.push_back(static_cast<int>(j));
 
   // The value path through the resets, which the store does not keep: a jump of
   // several events runs one sandwich each, and every one reads what the last
   // left. In value a sandwich is its reset, so this is the reset chain.
   const std::size_t n_steps = fired.size() + switched.size();
-  ws.path.assign(n_steps + 1, std::vector<double>());
+  ws.path.assign(n_steps + 1, std::vector<T>());
   ws.path[0] = x_before;
   std::size_t s = 0;
   for (std::size_t j = 0; j < fired.size(); ++j, ++s) {
+    zero_armed(ws.path[s + 1], n);
     ws.path[s + 1] = ws.path[s];
     cppde::detail::apply_event_action_fixed(ws.path[s + 1], ws.path[s],
                                             fixed_events[fired[j]]);
   }
   for (std::size_t j = 0; j < switched.size(); ++j, ++s) {
+    zero_armed(ws.path[s + 1], n);
     ws.path[s + 1] = ws.path[s];
-    cppde::detail::apply_event_action(ws.path[s + 1], ws.path[s], t,
+    cppde::detail::apply_event_action(ws.path[s + 1], ws.path[s], T(t),
                                       root_events[switched[j]]);
   }
 
   // Backwards through the same chain. The switched resets ride on the last
   // sandwich's surface, so they sit inside its shift rather than beside it.
-  std::vector<double> w(w_out, w_out + n);
-  ws.wy.assign(n, 0.0);
+  std::vector<T> w(w_out, w_out + n);
+  ws.wy.assign(n, T(0.0));
   for (std::size_t j = switched.size(); j-- > 0;) {
     const std::size_t p = fired.size() + j;
     const auto& evt = root_events[switched[j]];
-    const double h = (evt.state_index >= 0 && evt.value_func)
-                   ? evt.value_func(ws.path[p], t) : 0.0;
+    const T h = (evt.state_index >= 0 && evt.value_func)
+                   ? evt.value_func(ws.path[p], t) : T(0.0);
     ws.wy = w;
     reset_transpose(
         evt.state_index, evt.method, h, static_cast<int>(switched[j]),
         ws.path[p], t, n, w.data(), ws.wy.data(), w_theta,
-        [&](int e, const std::vector<double>& y, double tt, std::vector<double>& o)
+        [&](int e, const std::vector<T>& y, double tt, std::vector<T>& o)
           { eadj.root_dh_dx(e, y, tt, o); },
-        [&](int e, const std::vector<double>& y, double tt, double sc, double* o)
+        [&](int e, const std::vector<T>& y, double tt, const T& sc, T* o)
           { eadj.root_dh_dp_axpy(e, y, tt, sc, o); },
         ws.g);
     w.swap(ws.wy);
@@ -599,28 +626,28 @@ void apply_fixed_jump_adjoint(const std::vector<double>& x_before,
 
   for (std::size_t j = fired.size(); j-- > 0;) {
     const auto& evt = fixed_events[fired[j]];
-    const std::vector<double>& y = ws.path[j];
-    const std::vector<double>& z = ws.path[j + 1];
+    const std::vector<T>& y = ws.path[j];
+    const std::vector<T>& z = ws.path[j + 1];
 
-    ws.fb.assign(n, 0.0); ws.fa.assign(n, 0.0);
+    zero_armed(ws.fb, n); zero_armed(ws.fa, n);
     sys.first(y, ws.fb, t);
     // The last sandwich ends on the surface the switched resets left.
-    const std::vector<double>& zz =
+    const std::vector<T>& zz =
         (j + 1 == fired.size()) ? ws.path[n_steps] : z;
     sys.first(zz, ws.fa, t);
 
-    double w_s = 0.0;
+    T w_s = T(0.0);
     for (std::size_t i = 0; i < n; ++i) w_s -= ws.fa[i] * w[i];
 
-    const double h = (evt.state_index >= 0 && evt.value_func)
-                   ? evt.value_func(y, evt.time) : 0.0;
+    const T h = (evt.state_index >= 0 && evt.value_func)
+                   ? evt.value_func(y, evt.time) : T(0.0);
     ws.wy = w;
     reset_transpose(
         evt.state_index, evt.method, h, fired[j], y, t, n,
         w.data(), ws.wy.data(), w_theta,
-        [&](int e, const std::vector<double>& yy, double tt, std::vector<double>& o)
+        [&](int e, const std::vector<T>& yy, double tt, std::vector<T>& o)
           { eadj.fixed_dh_dx(e, yy, tt, o); },
-        [&](int e, const std::vector<double>& yy, double tt, double sc, double* o)
+        [&](int e, const std::vector<T>& yy, double tt, const T& sc, T* o)
           { eadj.fixed_dh_dp_axpy(e, yy, tt, sc, o); },
         ws.g);
     w.swap(ws.wy);
@@ -653,36 +680,45 @@ void apply_fixed_jump_adjoint(const std::vector<double>& x_before,
 template<class Stepper>
 class closed_multistep_trajectory {
 public:
+  // The sweep runs in the stepper's own scalar type. In plain double that is
+  // the gradient; over a dual it is the gradient and its directional
+  // derivatives, which is forward over reverse.
+  using scalar_type = typename Stepper::value_type;
+
   /// Whether the sweep also keeps lambda and the refinement indicator per step.
   void trace_lambda(bool on) { m_trace = on; }
 
   /// One seed column. `seeds` is [n_obs x n_states] row-major.
   template<class Store, class AdjTerms, class Solver, class Jumps = no_jumps>
-  void sweep(const Store& store, std::size_t n_phi, const double* seeds,
+  void sweep(const Store& store, std::size_t n_phi, const scalar_type* seeds,
              const AdjTerms& adj, Solver& solver, const Jumps& jumps = Jumps())
   {
+    using T = scalar_type;
     const std::size_t n = store.n_states();
     const std::size_t n_steps = store.n_steps();
 
-    m_wp.assign(n_phi, 0.0);
-    m_wx.assign(n, 0.0);
+    zero_armed(m_wp, n_phi);
+    m_wx.assign(n, T(0.0));
     m_whist.clear();
-    m_lam.assign(m_trace ? n_steps * n : 0u, 0.0);
-    m_eta.assign(m_trace ? n_steps : 0u, 0.0);
+    m_lam.assign(m_trace ? n_steps * n : 0u, T(0.0));
+    m_eta.assign(m_trace ? n_steps : 0u, T(0.0));
     if (n_steps == 0) return;
 
     // The cotangent the step above hands down, on its own carry. Across an
     // intervention it is instead a cotangent on a point inside the step below,
     // because the restart threw the carry away.
-    std::vector<double> w_carry, pending, w_after, w_before;
+    std::vector<T> w_carry, pending, w_after, w_before;
     bool pending_interp = false;
     double pending_t = 0.0;
     std::size_t next_obs = store.n_obs();
 
     multistep_operators<Stepper> ops;
     // A dense row is one entry per Nordsieck slot, a contraction one per
-    // state. Two lengths, two buffers.
-    std::vector<double> dense_row, w_in, jtv;
+    // state. Two lengths, two buffers, and the row is the interpolant's own
+    // coefficients, which are double whatever the sweep carries.
+    std::vector<double> dense_row;
+    std::vector<T> w_in, jtv;
+    zero_armed(jtv, n);
 
     for (std::size_t k = n_steps; k-- > 0;) {
       const auto& cp = store.step(k);
@@ -700,18 +736,19 @@ public:
       if (!m_probe.matches(cp.carry, cp.dt, tail_key)) {
         auto _tp = m_prof.timer(cppde::prof_cat::rev_operators);
         m_probe.rebuild(cp.carry, cp.dt,
-                        [&](Stepper& pr) { cp.apply_tail(pr, m_null); }, ops);
+                        [&](typename multistep_probe<Stepper>::probe_stepper& pr)
+                          { cp.apply_tail(pr, m_null); }, ops);
       }
 
       const std::size_t nz_in = static_cast<std::size_t>(ops.q_in + 1) * n;
       const std::size_t nz_out = static_cast<std::size_t>(ops.q_out + 1) * n;
-      m_ws.w_pred.assign(nz_in, 0.0);
-      m_ws.w_acor.assign(n, 0.0);
+      m_ws.w_pred.assign(nz_in, T(0.0));
+      m_ws.w_acor.assign(n, T(0.0));
 
       // A cotangent at a time inside this step, through its own interpolant.
       // The probe's states are the slots plus one for acor, so the row it
       // writes is d x_interp / d (zn_pred[0..q], acor).
-      auto seed_dense = [&](double t_obs, const double* w) {
+      auto seed_dense = [&](double t_obs, const T* w) {
         auto _tp = m_prof.timer(cppde::prof_cat::rev_interp);
         dense_row.assign(static_cast<std::size_t>(ops.q_in + 2), 0.0);
         m_probe.tail_probe.eval_dense_into(clamp_to_step(cp, t_obs), dense_row);
@@ -732,7 +769,7 @@ public:
         pending_interp = false;
       } else if (!w_carry.empty()) {
         auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
-        w_carry.resize(nz_out, 0.0);
+        w_carry.resize(nz_out, T(0.0));
         carry_into_pred(ops, n, w_carry.data(), m_ws.w_pred.data(),
                         m_ws.w_acor.data());
       }
@@ -748,8 +785,8 @@ public:
       const double t_new = cp.t + ops.h;
       solver.prepare(cp.y, t_new, 1.0 / ops.gamma, ops.gamma);
 
-      w_in.assign(nz_in, 0.0);
-      if (m_trace) m_wout.assign(n, 0.0);
+      w_in.assign(nz_in, T(0.0));
+      if (m_trace) m_wout.assign(n, T(0.0));
       // Timed either side of the solve, which reports itself.
       { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
         multistep_adjoint_rhs(ops, n, m_ws,
@@ -764,9 +801,9 @@ public:
       // a corrector method is acor scaled by the order's error constant.
       if (m_trace) {
         for (std::size_t i = 0; i < n; ++i) m_lam[k * n + i] = w_in[i];
-        double e = 0.0;
+        T e = T(0.0);
         for (std::size_t i = 0; i < n; ++i) {
-          double pred0 = 0.0;
+          T pred0 = T(0.0);
           for (int j = 0; j <= ops.q_in; ++j)
             pred0 += ops.A(0, j) * cp.zn[static_cast<std::size_t>(j) * n + i];
           e += m_wout[i] * (cp.y[i] - pred0);
@@ -783,7 +820,7 @@ public:
         const std::size_t ei = store.event_before(k);
         if (ei < store.n_events()) {
           const auto& e = store.event(ei);
-          w_after.assign(n, 0.0);
+          w_after.assign(n, T(0.0));
           m_ws.x.assign(e.x_after.begin(), e.x_after.end());
           collapse_restart(w_carry, n, m_ws.x, e.t,
                            e.restart ? e.dt_restart
@@ -796,7 +833,7 @@ public:
               for (std::size_t i = 0; i < n; ++i)
                 w_after[i] += seeds[o * n + i];
 
-          w_before.assign(n, 0.0);
+          w_before.assign(n, T(0.0));
           if (e.root)
             apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
                                     e.triggered, jumps.sys, jumps.eadj, n,
@@ -826,7 +863,7 @@ public:
     // The trajectory start, which is the same restart with no jump under it.
     if (!w_carry.empty()) {
       const auto& cp0 = store.step(0);
-      w_after.assign(n, 0.0);
+      w_after.assign(n, T(0.0));
       m_ws.x.assign(cp0.start_state(), cp0.start_state() + n);
       collapse_restart(w_carry, n, m_ws.x, cp0.t,
                        static_cast<double>(cp0.carry.h), adj, w_after.data(),
@@ -837,7 +874,7 @@ public:
     // Anything observed before the first step is the initial state itself.
     while (next_obs > 0) {
       --next_obs;
-      const double* w = seeds + next_obs * n;
+      const T* w = seeds + next_obs * n;
       for (std::size_t i = 0; i < n; ++i) m_wx[i] += w[i];
     }
   }
@@ -846,13 +883,13 @@ public:
   /// CPPDE_PROFILE. The transposed algebra reports itself, from the solver.
   void report_profile() const { m_prof.report("cppDE written adjoint"); }
 
-  const std::vector<double>& wx0() const { return m_wx; }
-  const std::vector<double>& whistory0() const { return m_whist; }
-  const std::vector<double>& wp() const { return m_wp; }
+  const std::vector<scalar_type>& wx0() const { return m_wx; }
+  const std::vector<scalar_type>& whistory0() const { return m_whist; }
+  const std::vector<scalar_type>& wp() const { return m_wp; }
 
   /// Under trace_lambda: [n_steps, n_states] step-major, and one per step.
-  const std::vector<double>& lambda() const { return m_lam; }
-  const std::vector<double>& eta() const { return m_eta; }
+  const std::vector<scalar_type>& lambda() const { return m_lam; }
+  const std::vector<scalar_type>& eta() const { return m_eta; }
 
 private:
   // The tail reads the right-hand side only for an order-one restart, which
@@ -865,11 +902,11 @@ private:
 
   null_sys m_null;
   cppde::profiler m_prof;
-  jump_workspace m_jws;
+  jump_workspace<scalar_type> m_jws;
   multistep_probe<Stepper> m_probe;
-  multistep_workspace m_ws;
+  multistep_workspace<scalar_type> m_ws;
   bool m_trace = false;
-  std::vector<double> m_wx, m_whist, m_wp, m_lam, m_eta, m_wout;
+  std::vector<scalar_type> m_wx, m_whist, m_wp, m_lam, m_eta, m_wout;
 };
 
 // ---------------------------------------------------------------------------
@@ -889,38 +926,40 @@ private:
 //  and it is why an explicit method's adjoint costs about twice its step
 //  rather than the three hundred right-hand sides a tape costs.
 // ---------------------------------------------------------------------------
+template<class T = double>
 struct onestep_workspace {
-  std::vector<double> xout, xerr, m, u, x_stage, q;
-  std::vector<std::vector<double> > mm;
+  std::vector<T> xout, xerr, m, u, x_stage, q;
+  std::vector<std::vector<T> > mm;
 };
 
 /// The backward recursion alone, on a stepper that has just run the step. A
 /// trajectory runs the step itself, because its interpolant reads the stages
 /// before the recursion consumes them.
-template<class Stepper, class AdjTerms>
+template<class Stepper, class AdjTerms, class T>
 void onestep_recurse(Stepper& st,
-                     const double* x0, double t, double dt,
+                     const T* x0, double t, double dt,
                      std::size_t n, std::size_t n_phi,
-                     const double* w_out,
+                     const T* w_out,
                      const AdjTerms& adj,
-                     double* w_in, double* w_theta,
-                     onestep_workspace& ws,
-                     double* w_out_state = nullptr)
+                     T* w_in, T* w_theta,
+                     onestep_workspace<T>& ws,
+                     T* w_out_state = nullptr)
 {
   constexpr int S = Stepper::n_stages_used;
 
   if (w_out_state) for (std::size_t i = 0; i < n; ++i) w_out_state[i] = w_out[i];
 
   if (ws.mm.size() < static_cast<std::size_t>(S) + 1) ws.mm.resize(S + 1);
-  std::vector<std::vector<double> >& U = ws.mm;
-  for (int i = 1; i <= S; ++i) U[i].assign(n, 0.0);
+  std::vector<std::vector<T> >& U = ws.mm;
+  for (int i = 1; i <= S; ++i) U[i].assign(n, T(0.0));
+  zero_armed(ws.u, n);
 
   for (std::size_t i = 0; i < n; ++i) w_in[i] = w_out[i];
 
   // Newest stage first: u_j is needed by every earlier stage and by nothing
   // later, so one pass suffices.
   for (int i = S; i >= 1; --i) {
-    ws.m.assign(n, 0.0);
+    ws.m.assign(n, T(0.0));
     const double bi = Stepper::tableau_b(i);
     for (std::size_t k = 0; k < n; ++k) ws.m[k] = dt * bi * w_out[k];
     for (int j = i + 1; j <= S; ++j) {
@@ -948,19 +987,19 @@ void onestep_recurse(Stepper& st,
 }
 
 /// Step and recursion in one, for a caller with one step to adjoint.
-template<class Stepper, class System, class AdjTerms>
+template<class Stepper, class System, class AdjTerms, class T>
 void apply_onestep_adjoint(Stepper& st, System& sys,
-                           const double* x0, double t, double dt,
+                           const T* x0, double t, double dt,
                            std::size_t n, std::size_t n_phi,
-                           const double* w_out,
+                           const T* w_out,
                            const AdjTerms& adj,
-                           double* w_in, double* w_theta,
-                           onestep_workspace& ws,
-                           double* w_out_state = nullptr)
+                           T* w_in, T* w_theta,
+                           onestep_workspace<T>& ws,
+                           T* w_out_state = nullptr)
 {
-  ws.xout.assign(n, 0.0);
-  ws.xerr.assign(n, 0.0);
-  std::vector<double> x(x0, x0 + n);
+  zero_armed(ws.xout, n);
+  zero_armed(ws.xerr, n);
+  std::vector<T> x(x0, x0 + n);
   st.do_step(sys, x, t, ws.xout, dt, ws.xerr);
   onestep_recurse(st, x0, t, dt, n, n_phi, w_out, adj, w_in, w_theta, ws,
                   w_out_state);
@@ -989,29 +1028,31 @@ void apply_onestep_adjoint(Stepper& st, System& sys,
 //  iteration matrix being stale by design; a Rosenbrock stage is a direct solve
 //  and the matrix it used is the matrix its derivative needs.
 // ---------------------------------------------------------------------------
+template<class T = double>
 struct rosenbrock_workspace {
-  std::vector<double> xout, xerr, x, lam, wx, wD, jv, xs;
-  std::vector<std::vector<double> > mu, wX;
+  std::vector<T> xout, xerr, x, lam, wx, wD, jv, xs;
+  std::vector<std::vector<T> > mu, wX;
 };
 
-template<class Stepper, class System, class AdjTerms>
+template<class Stepper, class System, class AdjTerms, class T>
 void apply_rosenbrock_adjoint(Stepper& st, System& sys,
-                              const double* x0, double t, double dt,
+                              const T* x0, double t, double dt,
                               std::size_t n, std::size_t n_phi,
-                              const double* w_out,
+                              const T* w_out,
                               const AdjTerms& adj,
-                              double* w_in, double* w_theta,
-                              rosenbrock_workspace& ws,
-                              const double* mu_seed = nullptr,
-                              double* w_out_state = nullptr)
+                              T* w_in, T* w_theta,
+                              rosenbrock_workspace<T>& ws,
+                              const T* mu_seed = nullptr,
+                              T* w_out_state = nullptr)
 {
   constexpr int S = Stepper::n_stages_used;   // five stages, then the error
 
   // The step once forward, to recover the stages and the factorisation. An
   // accepted step rebuilds the Jacobian at its own start, so this is the same
   // matrix and the same stages the run produced.
-  ws.xout.assign(n, 0.0);
-  ws.xerr.assign(n, 0.0);
+  zero_armed(ws.xout, n);
+  zero_armed(ws.xerr, n);
+  zero_armed(ws.jv, n);
   ws.x.assign(x0, x0 + n);
   st.do_step(sys, ws.x, t, ws.xout, dt, ws.xerr);
 
@@ -1020,11 +1061,12 @@ void apply_rosenbrock_adjoint(Stepper& st, System& sys,
   if (ws.mu.size() < static_cast<std::size_t>(S) + 2) ws.mu.resize(S + 2);
   if (ws.wX.size() < static_cast<std::size_t>(S) + 2) ws.wX.resize(S + 2);
   for (int i = 1; i <= S + 1; ++i) {
-    ws.mu[i].assign(n, 0.0);
-    ws.wX[i].assign(n, 0.0);
+    ws.mu[i].assign(n, T(0.0));
+    ws.wX[i].assign(n, T(0.0));
   }
-  ws.wx.assign(n, 0.0);
-  ws.wD.assign(n, 0.0);
+  ws.wx.assign(n, T(0.0));
+  ws.wD.assign(n, T(0.0));
+  bool wD_touched = false;
 
   // An observation inside the step reaches the stages directly: the continuous
   // extension is linear in them.
@@ -1053,7 +1095,7 @@ void apply_rosenbrock_adjoint(Stepper& st, System& sys,
 
   // One solved stage: the matrix term, the right-hand side's couplings, and
   // the stage's own evaluation of f.
-  auto sweep_stage = [&](int i, const std::vector<double>& gi, double* wXi) {
+  auto sweep_stage = [&](int i, const std::vector<T>& gi, T* wXi) {
     ws.lam = ws.mu[i];
     st.stage_solve_transposed(ws.lam);
 
@@ -1067,8 +1109,10 @@ void apply_rosenbrock_adjoint(Stepper& st, System& sys,
       for (std::size_t k = 0; k < n; ++k) ws.mu[j][k] += c * ws.lam[k];
     }
     const double d = Stepper::stage_d(i);
-    if (d != 0.0)
+    if (d != 0.0) {
       for (std::size_t k = 0; k < n; ++k) ws.wD[k] += dt * d * ws.lam[k];
+      wD_touched = true;
+    }
 
     const double ti = t + Stepper::stage_node(i) * dt;
     if (i == 1) {
@@ -1084,7 +1128,7 @@ void apply_rosenbrock_adjoint(Stepper& st, System& sys,
   };
 
   // The cotangent on X_i, spread onto the step start and the stages it reads.
-  auto spread_stage_state = [&](int i, const double* wXi) {
+  auto spread_stage_state = [&](int i, const T* wXi) {
     for (std::size_t k = 0; k < n; ++k) ws.wx[k] += wXi[k];
     for (int j = 1; j < i; ++j) {
       const double a = Stepper::stage_a(i, j);
@@ -1113,9 +1157,7 @@ void apply_rosenbrock_adjoint(Stepper& st, System& sys,
 
   // D = df/dt(x, t), which the Jacobian evaluation filled and every early
   // stage reads.
-  bool any = false;
-  for (std::size_t k = 0; k < n && !any; ++k) any = (ws.wD[k] != 0.0);
-  if (any) {
+  if (wD_touched) {
     adj.dfdt_x_t_vec(ws.x, ws.wD, t, ws.jv);
     for (std::size_t k = 0; k < n; ++k) ws.wx[k] += ws.jv[k];
     adj.dfdt_p_t_vec_axpy(ws.x, ws.wD, t, 1.0, w_theta);
@@ -1149,29 +1191,34 @@ struct has_stage_vectors<S, std::void_t<decltype(std::declval<const S&>().stage_
 template<class Stepper>
 class closed_onestep_trajectory {
 public:
+  // As in the multistep form: the sweep runs in the stepper's scalar type.
+  using scalar_type = typename Stepper::value_type;
+
   /// Whether the sweep also keeps lambda and the refinement indicator per step.
   void trace_lambda(bool on) { m_trace = on; }
 
   /// One seed column. `seeds` is [n_obs x n_states] row-major.
   template<class Store, class System, class AdjTerms, class Jumps = no_jumps>
-  void sweep(const Store& store, std::size_t n_phi, const double* seeds,
+  void sweep(const Store& store, std::size_t n_phi, const scalar_type* seeds,
              System& sys, const AdjTerms& adj, Stepper& st,
              const Jumps& jumps = Jumps())
   {
+    using T = scalar_type;
     constexpr bool rosen = has_stage_vectors<Stepper>::value;
     const std::size_t n = store.n_states();
     const std::size_t n_steps = store.n_steps();
 
-    m_wp.assign(n_phi, 0.0);
-    m_wx.assign(n, 0.0);
+    zero_armed(m_wp, n_phi);
+    m_wx.assign(n, T(0.0));
     m_whist.clear();
-    m_lam.assign(m_trace ? n_steps * n : 0u, 0.0);
-    m_eta.assign(m_trace ? n_steps : 0u, 0.0);
+    m_lam.assign(m_trace ? n_steps * n : 0u, T(0.0));
+    m_eta.assign(m_trace ? n_steps : 0u, T(0.0));
     if (n_steps == 0) return;
 
     std::size_t next_obs = store.n_obs();
-    std::vector<double> w_out(n, 0.0), w_in(n, 0.0), w_start(n, 0.0), jv, x0,
-                        mu_seed, pending, w_after, w_before;
+    std::vector<T> w_out(n, T(0.0)), w_in(n, T(0.0)), w_start(n, T(0.0)), jv,
+                   x0, mu_seed, pending, w_after, w_before;
+    zero_armed(jv, n);
     bool pending_interp = false;
     double pending_t = 0.0;
 
@@ -1188,16 +1235,16 @@ public:
       // be seeded. A Rosenbrock interpolant is linear in its own stage vectors
       // with constant weights, and needs nothing but the weights.
       if constexpr (!rosen) {
-        m_ws.xout.assign(n, 0.0);
-        m_ws.xerr.assign(n, 0.0);
+        zero_armed(m_ws.xout, n);
+        zero_armed(m_ws.xerr, n);
         st.do_step(sys, x0, cp.t, m_ws.xout, cp.dt, m_ws.xerr);
       }
 
-      w_start.assign(n, 0.0);
-      if constexpr (rosen) mu_seed.assign(stage_slots(n), 0.0);
+      w_start.assign(n, T(0.0));
+      if constexpr (rosen) mu_seed.assign(stage_slots(n), T(0.0));
 
       // A cotangent at a time inside this step, through its interpolant.
-      auto seed_at = [&](double t_raw, const double* w) {
+      auto seed_at = [&](double t_raw, const T* w) {
         auto _tp = m_prof.timer(cppde::prof_cat::rev_interp);
         const double t_obs = clamp_to_step(cp, t_raw);
         const double s = (t_obs - cp.t) / cp.dt;
@@ -1215,7 +1262,7 @@ public:
             const double c = Stepper::dense_stage_weight(3, j) * cw[2]
                            + Stepper::dense_stage_weight(4, j) * cw[3];
             if (c == 0.0) continue;
-            double* mj = mu_seed.data() + static_cast<std::size_t>(j - 1) * n;
+            T* mj = mu_seed.data() + static_cast<std::size_t>(j - 1) * n;
             for (std::size_t i = 0; i < n; ++i) mj[i] += c * w[i];
           }
         } else {
@@ -1236,7 +1283,7 @@ public:
       }
       next_obs = obs_lo;
 
-      w_in.assign(n, 0.0);
+      w_in.assign(n, T(0.0));
       { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
         if constexpr (rosen)
           apply_rosenbrock_adjoint(st, sys, x0.data(), cp.t, cp.dt, n, n_phi,
@@ -1252,8 +1299,8 @@ public:
       // one-step method reports already scaled.
       if (m_trace) {
         for (std::size_t i = 0; i < n; ++i) m_lam[k * n + i] = w_in[i];
-        const std::vector<double>& xe = rosen ? m_rws.xerr : m_ws.xerr;
-        double e = 0.0;
+        const std::vector<T>& xe = rosen ? m_rws.xerr : m_ws.xerr;
+        T e = T(0.0);
         for (std::size_t i = 0; i < n; ++i) e += w_out[i] * xe[i];
         m_eta[k] = e;
       }
@@ -1272,7 +1319,7 @@ public:
               for (std::size_t i = 0; i < n; ++i)
                 w_after[i] += seeds[o * n + i];
 
-          w_before.assign(n, 0.0);
+          w_before.assign(n, T(0.0));
           if (e.root)
             apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
                                     e.triggered, jumps.sys, jumps.eadj, n,
@@ -1284,7 +1331,7 @@ public:
                                      w_after.data(), w_before.data(),
                                      m_wp.data(), m_jws);
 
-          w_out.assign(n, 0.0);
+          w_out.assign(n, T(0.0));
           if (e.after_step > 0) {
             pending = w_before;
             pending_t = e.t_before;
@@ -1301,30 +1348,31 @@ public:
     // Anything observed before the first step is the initial state itself.
     while (next_obs > 0) {
       --next_obs;
-      const double* w = seeds + next_obs * n;
+      const T* w = seeds + next_obs * n;
       for (std::size_t i = 0; i < n; ++i) m_wx[i] += w[i];
     }
   }
 
   void report_profile() const { m_prof.report("cppDE written adjoint"); }
 
-  const std::vector<double>& wx0() const { return m_wx; }
-  const std::vector<double>& whistory0() const { return m_whist; }
-  const std::vector<double>& wp() const { return m_wp; }
+  const std::vector<scalar_type>& wx0() const { return m_wx; }
+  const std::vector<scalar_type>& whistory0() const { return m_whist; }
+  const std::vector<scalar_type>& wp() const { return m_wp; }
 
   /// Under trace_lambda: [n_steps, n_states] step-major, and one per step.
-  const std::vector<double>& lambda() const { return m_lam; }
-  const std::vector<double>& eta() const { return m_eta; }
+  const std::vector<scalar_type>& lambda() const { return m_lam; }
+  const std::vector<scalar_type>& eta() const { return m_eta; }
 
 private:
   /// A cotangent `w` scaled by `c` on f(x, t), put onto x and theta.
   template<class AdjTerms>
-  void seed_through_rhs(const AdjTerms& adj, const std::vector<double>& x,
-                        double t, const double* w, double c, std::size_t n,
-                        std::size_t n_phi, double* w_x, std::vector<double>& jv)
+  void seed_through_rhs(const AdjTerms& adj, const std::vector<scalar_type>& x,
+                        double t, const scalar_type* w, double c, std::size_t n,
+                        std::size_t n_phi, scalar_type* w_x,
+                        std::vector<scalar_type>& jv)
   {
     if (c == 0.0) return;
-    m_ws.m.assign(n, 0.0);
+    m_ws.m.assign(n, scalar_type(0.0));
     for (std::size_t i = 0; i < n; ++i) m_ws.m[i] = c * w[i];
     adj.jac_t_vec(x, m_ws.m, t, jv);
     for (std::size_t i = 0; i < n; ++i) w_x[i] += jv[i];
@@ -1341,11 +1389,11 @@ private:
   }
 
   cppde::profiler m_prof;
-  jump_workspace m_jws;
-  onestep_workspace m_ws;
-  rosenbrock_workspace m_rws;
+  jump_workspace<scalar_type> m_jws;
+  onestep_workspace<scalar_type> m_ws;
+  rosenbrock_workspace<scalar_type> m_rws;
   bool m_trace = false;
-  std::vector<double> m_wx, m_whist, m_wp, m_lam, m_eta;
+  std::vector<scalar_type> m_wx, m_whist, m_wp, m_lam, m_eta;
 };
 
 }  // namespace adjoint
