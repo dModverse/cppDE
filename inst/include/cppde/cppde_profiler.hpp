@@ -69,6 +69,8 @@ enum class prof_cat : unsigned {
   rev_prepare,      // Jacobian + factorisation for the step's transposed solve
   rev_solve,        // The transposed solve itself
   rev_interp,       // Dense output recorded for an observation inside a step
+  rev_operators,    // Reading one step's slot operators off the probe stepper
+  rev_adjoint,      // The written step adjoint, excluding prepare and solve
   COUNT             // sentinel: number of categories
 };
 
@@ -95,6 +97,8 @@ inline const char* prof_cat_name(prof_cat c) {
     case prof_cat::rev_prepare:     return "rev_prepare";
     case prof_cat::rev_solve:       return "rev_solve";
     case prof_cat::rev_interp:      return "rev_interp";
+    case prof_cat::rev_operators:   return "rev_operators";
+    case prof_cat::rev_adjoint:     return "rev_adjoint";
     default:                        return "unknown";
   }
 }

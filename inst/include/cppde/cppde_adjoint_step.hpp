@@ -23,7 +23,9 @@
  * it.
  *
  * The model supplies two contractions, which the code generator emits:
- * `jac_t_vec` for J' lambda and `dfdp_t_vec` for (df/dp)' lambda.
+ * `jac_t_vec` for J' lambda and `dfdp_t_vec` for (df/dp)' lambda. Both size
+ * their own output, so nothing here has to know the model's dimensions to hand
+ * one a buffer.
  *
  * Copyright (C) 2026 Simon Beyer
  */
@@ -33,6 +35,8 @@
 
 #include <cstddef>
 #include <vector>
+
+#include <cppde/cppde_profiler.hpp>
 
 namespace cppde {
 namespace adjoint {
@@ -163,41 +167,60 @@ struct multistep_probe {
   // What the operators depend on. Long stretches of a run hold the order and
   // the step size, and then every step asks for the same matrices; comparing
   // is a handful of doubles against reading them off again.
+  //
+  // The carry's qwait is deliberately not here. It counts down to the next
+  // order decision and so moves almost every step, but it reaches only the
+  // error constants for going up or down an order, never l, gamma or the
+  // Nordsieck shift. Those constants belong to the controller, which is not
+  // differentiated. Keeping it in would cost every hit in the cache.
   struct key {
-    int q = -1, L = 0, qwait = 0;
+    int q = -1, L = 0;
     bool started = false;
     double dt = 0.0, h = 0.0, hscale = 0.0, eta = 0.0;
     double tail = 0.0;
     std::vector<double> tau;
     bool operator==(const key& o) const {
-      return q == o.q && L == o.L && qwait == o.qwait && started == o.started &&
+      return q == o.q && L == o.L && started == o.started &&
              dt == o.dt && h == o.h && hscale == o.hscale && eta == o.eta &&
              tail == o.tail && tau == o.tau;
     }
   };
-  key last;
+  key last, pending;
   bool valid = false;
 
-  /// Build A, B and c for one step. `tail` applies whatever the run recorded
-  /// between this step's acceptance and the next one's; `tail_key` stands for
-  /// what it will do, so a repeat is recognised without running it.
+  /// Whether the operators already in hand are this step's. The key it built
+  /// to answer stays, so the rebuild that may follow does not build it twice.
+  template<class Carry>
+  bool matches(const Carry& carry, double dt, double tail_key) {
+    pending.q = carry.q; pending.L = carry.L;
+    pending.started = carry.nst > 0;
+    pending.dt = dt; pending.h = carry.h;
+    pending.hscale = carry.hscale; pending.eta = carry.eta;
+    pending.tail = tail_key;
+    pending.tau.assign(carry.tau.begin(), carry.tau.begin() + (carry.q + 1));
+    return valid && pending == last;
+  }
+
+  /// Read A, B and c off the stepper. `tail` applies whatever the run recorded
+  /// between this step's acceptance and the next one's. Call after a matches()
+  /// that said no, whose key this commits.
+  template<class Carry, class TailFn>
+  void rebuild(const Carry& carry, double dt, TailFn&& tail,
+               multistep_operators<Stepper>& ops)
+  {
+    ops.q_in = carry.q;
+    probe_pre(pre, carry, dt, ops.A, ops.rl1, ops.gamma, ops.h);
+    probe_tail(tail_probe, carry, dt, tail, ops.B, ops.c, ops.q_out);
+    last = pending;
+    valid = true;
+  }
+
+  /// Both at once, for a caller with nothing to time between them.
   template<class Carry, class TailFn>
   void build(const Carry& carry, double dt, double tail_key, TailFn&& tail,
              multistep_operators<Stepper>& ops)
   {
-    key k;
-    k.q = carry.q; k.L = carry.L; k.qwait = carry.qwait;
-    k.started = carry.nst > 0;
-    k.dt = dt; k.h = carry.h; k.hscale = carry.hscale; k.eta = carry.eta;
-    k.tail = tail_key;
-    k.tau.assign(carry.tau.begin(), carry.tau.begin() + (carry.q + 1));
-    if (valid && k == last) return;
-
-    ops.q_in = carry.q;
-    probe_pre(pre, carry, dt, ops.A, ops.rl1, ops.gamma, ops.h);
-    probe_tail(tail_probe, carry, dt, tail, ops.B, ops.c, ops.q_out);
-    last = k;
-    valid = true;
+    if (!matches(carry, dt, tail_key)) rebuild(carry, dt, tail, ops);
   }
 };
 
@@ -343,7 +366,9 @@ public:
     std::size_t next_obs = store.n_obs();
 
     multistep_operators<Stepper> ops;
-    std::vector<double> dense_row, w_in;
+    // A dense row is one entry per Nordsieck slot, a contraction one per
+    // state. Two lengths, two buffers.
+    std::vector<double> dense_row, w_in, jtv;
 
     for (std::size_t k = n_steps; k-- > 0;) {
       const auto& cp = store.step(k);
@@ -357,8 +382,12 @@ public:
 
       const double tail_key =
           cp.q_next + 1e3 * cp.eta + 1e6 * static_cast<double>(cp.ops.size());
-      m_probe.build(cp.carry, cp.dt, tail_key,
-                    [&](Stepper& pr) { cp.apply_tail(pr, m_null); }, ops);
+      // Timed on the rebuild alone, so the call count is the miss count.
+      if (!m_probe.matches(cp.carry, cp.dt, tail_key)) {
+        auto _tp = m_prof.timer(cppde::prof_cat::rev_operators);
+        m_probe.rebuild(cp.carry, cp.dt,
+                        [&](Stepper& pr) { cp.apply_tail(pr, m_null); }, ops);
+      }
 
       const std::size_t nz_in = static_cast<std::size_t>(ops.q_in + 1) * n;
       const std::size_t nz_out = static_cast<std::size_t>(ops.q_out + 1) * n;
@@ -366,6 +395,7 @@ public:
       m_ws.w_acor.assign(n, 0.0);
 
       if (!w_carry.empty()) {
+        auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
         w_carry.resize(nz_out, 0.0);
         carry_into_pred(ops, n, w_carry.data(), m_ws.w_pred.data(),
                         m_ws.w_acor.data());
@@ -373,6 +403,7 @@ public:
 
       // The observations this step carries, through its own interpolant.
       for (std::size_t o = obs_lo; o < next_obs; ++o) {
+        auto _tp = m_prof.timer(cppde::prof_cat::rev_interp);
         // The probe's states are the slots plus one for acor, so the row it
         // writes is d x_interp / d (zn_pred[0..q], acor).
         dense_row.assign(static_cast<std::size_t>(ops.q_in + 2), 0.0);
@@ -392,8 +423,9 @@ public:
       solver.prepare(cp.y, t_new, 1.0 / ops.gamma, ops.gamma);
 
       w_in.assign(nz_in, 0.0);
-      apply_multistep_adjoint_pre(ops, n, n_phi, cp.y.data(), t_new, solver,
-                                  adj, w_in.data(), m_wp.data(), m_ws);
+      { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
+        apply_multistep_adjoint_pre(ops, n, n_phi, cp.y.data(), t_new, solver,
+                                    adj, w_in.data(), m_wp.data(), m_ws); }
       w_carry.swap(w_in);
     }
 
@@ -409,8 +441,9 @@ public:
       m_ws.x.assign(cp0.start_state(), cp0.start_state() + n);
       m_ws.mu.assign(w_carry.begin() + static_cast<std::ptrdiff_t>(n),
                      w_carry.begin() + static_cast<std::ptrdiff_t>(2 * n));
-      adj.jac_t_vec(m_ws.x, m_ws.mu, cp0.t, dense_row);
-      for (std::size_t i = 0; i < n; ++i) m_wx[i] += h0 * dense_row[i];
+      jtv.assign(n, 0.0);
+      adj.jac_t_vec(m_ws.x, m_ws.mu, cp0.t, jtv);
+      for (std::size_t i = 0; i < n; ++i) m_wx[i] += h0 * jtv[i];
       m_ws.q.assign(n_phi, 0.0);
       adj.dfdp_t_vec(m_ws.x, m_ws.mu, cp0.t, m_ws.q);
       for (std::size_t k = 0; k < n_phi; ++k) m_wp[k] += h0 * m_ws.q[k];
@@ -423,6 +456,10 @@ public:
       for (std::size_t i = 0; i < n; ++i) m_wx[i] += w[i];
     }
   }
+
+  /// Per-category timings of the sweep, to stderr. Compiled away without
+  /// CPPDE_PROFILE. The transposed algebra reports itself, from the solver.
+  void report_profile() const { m_prof.report("cppDE written adjoint"); }
 
   const std::vector<double>& wx0() const { return m_wx; }
   const std::vector<double>& whistory0() const { return m_whist; }
@@ -438,6 +475,7 @@ private:
   struct null_sys { null_rhs first; };
 
   null_sys m_null;
+  cppde::profiler m_prof;
   multistep_probe<Stepper> m_probe;
   multistep_workspace m_ws;
   std::vector<double> m_wx, m_whist, m_wp;
