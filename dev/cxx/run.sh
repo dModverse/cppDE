@@ -7,7 +7,7 @@
 #
 # A leading --reverse-step, --reverse-step-rb4, --reverse-step-multistep,
 # --reverse-trajectory-methods, --reverse-events, --reverse-forcing,
-# --reverse-sparse, --err-weights or --sparse-transpose selects a reverse-AD
+# --reverse-sparse, --err-weights, --ad-transpose or --sparse-transpose selects a reverse-AD
 # harness; --bench-adjoint-step selects a bench rather than a test.
 #
 # The output is the assertion: two revisions that compute the same thing must
@@ -63,6 +63,13 @@ case "${1:-}" in
   --err-weights)
     SRC="$REPO/dev/cxx/test_err_weights.cpp"
     OUT=${TMPDIR:-/tmp}/cppde_err_weights
+    shift
+    ;;
+  --ad-transpose)
+    SRC="$REPO/dev/cxx/test_ad_transpose.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_ad_transpose
+    # As for --sparse-transpose: without KLU the sparse half is skipped.
+    KLU=$(Rscript -e 'cfg <- try(get("cvodeConfig", envir = asNamespace("cppDE")), silent = TRUE); if (!inherits(cfg, "try-error") && isTRUE(cfg$klu_available)) cat("-DKLU", cfg$klu_cflags, cfg$klu_libs)' 2>/dev/null || true)
     shift
     ;;
   --sparse-transpose)
