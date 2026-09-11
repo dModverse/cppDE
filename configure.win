@@ -309,8 +309,15 @@ fi
 openmp_available=0
 openmp_cxxflags=""
 openmp_libs=""
-omp_flag=$(sed -n 's/^[[:space:]]*SHLIB_OPENMP_CXXFLAGS[[:space:]]*=[[:space:]]*//p' \
-             "${R_HOME}/etc/Makeconf" 2>/dev/null | head -n1)
+# Windows has no ${R_HOME}/etc/Makeconf: it sits in the arch subdir (etc/x64).
+omp_flag=""
+for mk in "${R_HOME}/etc${R_ARCH}/Makeconf" "${R_HOME}/etc/x64/Makeconf" \
+          "${R_HOME}/etc/Makeconf"; do
+  [ -f "$mk" ] || continue
+  omp_flag=$(sed -n 's/^[[:space:]]*SHLIB_OPENMP_CXXFLAGS[[:space:]]*=[[:space:]]*//p' \
+               "$mk" | head -n1)
+  [ -n "$omp_flag" ] && break
+done
 if [ -n "$omp_flag" ]; then
   omp_snippet='#include <omp.h>
 int main(){ int n = 0;
@@ -343,7 +350,7 @@ openmp_cxxflags: $openmp_cxxflags
 openmp_libs: $openmp_libs
 EOF
 
-log "Summary:  CVODE=$([ "$available" = TRUE ] && echo ON || echo off), KLU=$([ "$klu_available" = TRUE ] && echo ON || echo off)"
+log "Summary:  CVODE=$([ "$available" = TRUE ] && echo ON || echo off), KLU=$([ "$klu_available" = TRUE ] && echo ON || echo off), OPENMP=$([ "$openmp_available" = "1" ] && echo ON || echo off)"
 if [ -n "$runtime_dll_path" ]; then
   log "Runtime DLL path recorded: $runtime_dll_path"
 fi
