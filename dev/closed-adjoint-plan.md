@@ -449,7 +449,7 @@ eingefrorene Dual-Referenz. Der Prüfstand beißt: eine relative Störung von 1e
 an einem einzigen Koeffizienten bricht vierzehn Zusicherungen.
 
 **3d. Die Verdrahtung in die Trajektorie. Fehlte im Plan. Mehrschritt erledigt
-am 2026-09-10, Einschritt offen.**
+am 2026-09-10, tsit5 am 2026-09-11, rb4 wartet auf 3b.**
 
 Die Stufenliste sprang von den Schritt-Adjungierten zu den Ereignissen, aber
 dazwischen liegt das Stück, ohne das kein Solve den geschriebenen Adjungierten
@@ -469,14 +469,18 @@ wieder nichts wiederholt.
 Zuerst ohne Ereignisse, was für die Abnahmemessung reicht, denn Bachmann hat
 keine. Die Ereignisgrenzen kommen mit Stufe 4.
 
-*Offen:* dasselbe für die Einschrittverfahren. Deren Dense-Output wird
-hingeschrieben statt probiert: tsit5 interpoliert Hermite-kubisch über `x_alt`,
-`x_neu`, `k1` und `k7`, eine Beobachtung verteilt sich also über je eine `J'`-
-und eine `(df/dp)'`-Kontraktion an beiden Enden auf den Kotangens am Schrittende,
-den am Schrittanfang und auf θ. rb4 interpoliert linear in seinen Stufenvektoren
-und seedet die Stufen-Kotangenten unmittelbar. Der Probe-Stepper bleibt damit der
-Sonderfall des Mehrschrittverfahrens, dessen Nordsieck-Operatoren man sonst
-abschreiben müsste.
+*Einschritt, erledigt am 2026-09-11.* `closed_onestep_trajectory` läuft denselben
+Speicher, mit einfacherem Carry: ein Einschrittverfahren reicht nur den Zustand
+über eine Schrittgrenze, es gibt also keine Historie zu kollabieren und keine
+Startgrenze. Der Dense-Output wird hingeschrieben statt probiert: tsit5
+interpoliert Hermite-kubisch über `x_alt`, `x_neu`, `k1` und `k7` und gibt seine
+vier Gewichte heraus, wie es schon seine Tableau herausgibt, also steht die Basis
+einmal da und wird zweimal gelesen. Zwei der vier Gewichte sitzen auf `f`, eine
+Beobachtung kostet damit je eine `J'`- und eine `(df/dp)'`-Kontraktion an beiden
+Enden ihres Schritts. Der Probe-Stepper bleibt der Sonderfall des
+Mehrschrittverfahrens, dessen Nordsieck-Operatoren man sonst abschreiben müsste.
+
+rb4 hat noch keinen Schritt-Adjungierten und bleibt bis 3b auf dem Tape.
 
 **3b rb4: braucht zweite Ableitungen. Der Plan hat das nicht gesehen.**
 
@@ -514,16 +518,19 @@ auf diesen Zustand. Das steht seit 3d geschrieben, als Startgrenze der
 Trajektorie (`cppde_adjoint_step.hpp`, das Ende von `sweep`). Nach einem Ereignis
 gilt dieselbe Abbildung, Stufe 5 ist damit ein Aufrufer und kein Baustein.
 
-### Stufe 5b. `rev_prepare`
+### Stufe 5b. `rev_prepare`. Abgeschlossen am 2026-09-11, ohne den Vorschlag
 
-39 Prozent des Rückwärtslaufs: Jacobi plus Faktorisierung, je Schritt, gegen
-einen Vorwärtslauf, der dieselbe Matrix bis zu zwanzig Schritte lang
-weiterbenutzt. **Frisch muss sie sein**, denn die IFT verlangt `J` am
-konvergierten `y`, und die Staleness des Vorwärtslaufs gehört seiner Iteration.
-**Neu faktorisiert muss sie nicht sein**: eine gehaltene Faktorisierung plus
-iterative Nachkorrektur gegen das echte `W` kostet zwei Dreieckslösungen und ein
-Matvec statt `n³/3`. Bei 25 Zuständen ein knapper Gewinn, bei 124 ein großer.
-Neu faktorisieren, sobald zwei Durchgänge die Korrektortoleranz nicht erreichen.
+Der Vorschlag war eine gehaltene Faktorisierung plus iterative Nachkorrektur.
+**Er trägt nicht**, und das steht in der Leistungsrunde oben: die Nachkorrektur
+konvergiert linear mit der relativen Änderung von `W` über einen Schritt, braucht
+damit drei Durchgänge für die Genauigkeit eines Gradienten, und drei Durchgänge
+kosten mehr als neu zu faktorisieren.
+
+Was geblieben ist: die Montage von `W` ging durch einen BLAS-Aufruf für ein paar
+hundert Doubles. Jetzt `memcpy`, und `lu_factor` ist zu 92 Prozent KLU selbst.
+Bei dieser Modellgröße sind 0,44 µs für 150 Flops fast nur Aufwand; das hebt nur
+eine erzeugte LU mit fester Pivotfolge, und die tauscht Genauigkeit gegen Zeit.
+Bleibt draußen, solange das Kriterium lautet: keine Genauigkeit einbüßen.
 
 ### Stufe 6. `cppFUN` bekommt einen symbolischen vjp
 
@@ -534,12 +541,14 @@ ein zweites Mal über `codual`. Ersetzt durch eine erzeugte Kontraktion `w' ∂f
 
 ### Stufe 7. Umschalten und löschen
 
-**Vorbedingung, aus 3d gelernt, und sie wiegt mehr als Bitgleichheit:** die
-Lambda-Spur (`adjointGrid`, `wt`, `wdt`, `eta`) hängt heute am Tape, und
-`adjointGrid` wählt darum die Implementierung. dMod2 schaltet die Spur ein,
-sobald `optionsReverse$gradtol` gesetzt ist, **also schließen sich der
-adjoint-gewichtete Regler und der geschriebene Pfad heute aus**. Das ist kein
-Randfall der Löschung, sondern ein Feature ohne den Umbau.
+**Vorbedingung, aus 3d gelernt: erledigt am 2026-09-11.** Die Lambda-Spur hing am
+Tape, und `adjointGrid` wählte darum die Implementierung. dMod2 schaltet die Spur
+ein, sobald `optionsReverse$gradtol` gesetzt ist, also schlossen sich der
+adjoint-gewichtete Regler und der geschriebene Pfad aus. Beide Trajektorien
+halten `lambda` und `eta` jetzt selbst; `wt` und `wdt` sind weg, sie waren die
+Ableitungen nach Schrittzeit und Schrittweite, die das eingefrorene Gitter aus
+der Kettenregel nimmt. Auf Bachmann kostet die gewichtete Zielfunktion 131 ms
+gegen 122 ungewichtet, statt auf das Tape zurückzufallen.
 
 Zu schreiben: `lambda` ist der Kotangens am Schrittende, den
 `apply_multistep_adjoint_pre` als `w_out_state` schon herausgibt; `eta` ist er
