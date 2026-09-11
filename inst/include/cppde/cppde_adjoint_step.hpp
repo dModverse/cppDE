@@ -23,9 +23,9 @@
  * it.
  *
  * The model supplies two contractions, which the code generator emits:
- * `jac_t_vec` for J' lambda and `dfdp_t_vec` for (df/dp)' lambda. Both size
- * their own output, so nothing here has to know the model's dimensions to hand
- * one a buffer.
+ * `jac_t_vec` for J' lambda, which sizes its own output, and
+ * `dfdp_t_vec_axpy` for (df/dp)' lambda, scaled and added into what the caller
+ * already holds. So nothing here has to know the model's dimensions.
  *
  * Copyright (C) 2026 Simon Beyer
  */
@@ -37,6 +37,16 @@
 #include <vector>
 
 #include <cppde/cppde_profiler.hpp>
+
+// The hot loops here run over buffers that are always distinct. Saying so is
+// what lets them vectorise.
+#if defined(__GNUC__) || defined(__clang__)
+#  define CPPDE_RESTRICT __restrict__
+#elif defined(_MSC_VER)
+#  define CPPDE_RESTRICT __restrict
+#else
+#  define CPPDE_RESTRICT
+#endif
 
 namespace cppde {
 namespace adjoint {
@@ -69,13 +79,16 @@ struct slot_operator {
   double        operator()(int i, int j) const { return a[static_cast<std::size_t>(i) * cols + j]; }
 
   /// out[j*n + i] += sum_k this(k, j) * w[k*n + i], the transposed apply.
-  void apply_transposed(const double* w, std::size_t n, double* out) const {
+  /// The two arrays are always distinct buffers, which the compiler cannot see
+  /// and which decides whether the inner loop vectorises.
+  void apply_transposed(const double* CPPDE_RESTRICT w, std::size_t n,
+                        double* CPPDE_RESTRICT out) const {
     for (int j = 0; j < cols; ++j)
       for (int k = 0; k < rows; ++k) {
         const double m = (*this)(k, j);
         if (m == 0.0) continue;
-        const double* wk = w + static_cast<std::size_t>(k) * n;
-        double* oj = out + static_cast<std::size_t>(j) * n;
+        const double* CPPDE_RESTRICT wk = w + static_cast<std::size_t>(k) * n;
+        double* CPPDE_RESTRICT oj = out + static_cast<std::size_t>(j) * n;
         for (std::size_t i = 0; i < n; ++i) oj[i] += m * wk[i];
       }
   }
@@ -270,13 +283,15 @@ multistep_operators<Stepper> build_multistep_operators(
 /// because a trajectory adds its observations to the same two.
 template<class Stepper>
 void carry_into_pred(const multistep_operators<Stepper>& ops, std::size_t n,
-                     const double* w_out, double* w_pred, double* w_acor)
+                     const double* CPPDE_RESTRICT w_out,
+                     double* CPPDE_RESTRICT w_pred,
+                     double* CPPDE_RESTRICT w_acor)
 {
   ops.B.apply_transposed(w_out, n, w_pred);
   for (int k = 0; k <= ops.q_out; ++k) {
     const double m = ops.c[static_cast<std::size_t>(k)];
     if (m == 0.0) continue;
-    const double* wk = w_out + static_cast<std::size_t>(k) * n;
+    const double* CPPDE_RESTRICT wk = w_out + static_cast<std::size_t>(k) * n;
     for (std::size_t i = 0; i < n; ++i) w_acor[i] += m * wk[i];
   }
 }
@@ -287,46 +302,65 @@ struct multistep_workspace {
   std::vector<double> w_pred, w_acor, mu, x, q;
 };
 
+/// The step adjoint's first half: the right-hand side of its transposed solve,
+/// left in ws.mu. Split from the second so a caller can time the solve apart.
+template<class Stepper>
+void multistep_adjoint_rhs(const multistep_operators<Stepper>& ops,
+                           std::size_t n, multistep_workspace& ws,
+                           double* w_out_state = nullptr)
+{
+  double* CPPDE_RESTRICT w_pred = ws.w_pred.data();
+  const double* CPPDE_RESTRICT w_acor = ws.w_acor.data();
+
+  ws.mu = ws.w_acor;
+  for (std::size_t i = 0; i < n; ++i) w_pred[i] -= w_acor[i];
+  if (w_out_state) for (std::size_t i = 0; i < n; ++i) w_out_state[i] = w_acor[i];
+  (void)ops;
+}
+
+/// The second half, on a ws.mu the caller has already solved with.
+template<class Stepper, class AdjTerms>
+void multistep_adjoint_finish(const multistep_operators<Stepper>& ops,
+                              std::size_t n, std::size_t n_phi,
+                              const std::vector<double>& y, double t_new,
+                              const AdjTerms& adj,
+                              double* w_in, double* w_theta,
+                              multistep_workspace& ws)
+{
+  double* CPPDE_RESTRICT w_pred = ws.w_pred.data();
+  const double* CPPDE_RESTRICT mu = ws.mu.data();
+
+  for (std::size_t i = 0; i < n; ++i) w_pred[i] += mu[i];
+  if (ops.q_in >= 1) {
+    const double rl1 = ops.rl1;
+    for (std::size_t i = 0; i < n; ++i) w_pred[n + i] -= rl1 * mu[i];
+  }
+
+  adj.dfdp_t_vec_axpy(y, ws.mu, t_new, ops.gamma, w_theta);
+  ops.A.apply_transposed(ws.w_pred.data(), n, w_in);
+  (void)n_phi;
+}
+
 /// The step adjoint proper, on a predicted-history cotangent that the caller
 /// has already assembled.
 template<class Stepper, class Solver, class AdjTerms>
 void apply_multistep_adjoint_pre(const multistep_operators<Stepper>& ops,
                                  std::size_t n, std::size_t n_phi,
-                                 const double* y, double t_new,
+                                 const std::vector<double>& y, double t_new,
                                  Solver& solver, const AdjTerms& adj,
                                  double* w_in, double* w_theta,
                                  multistep_workspace& ws,
                                  double* w_out_state = nullptr)
 {
-  std::vector<double>& w_pred = ws.w_pred;
-  std::vector<double>& w_acor = ws.w_acor;
-
-  std::vector<double>& mu = ws.mu;
-  mu = w_acor;
-  for (std::size_t i = 0; i < n; ++i) w_pred[i] -= w_acor[i];
-
-  if (w_out_state) for (std::size_t i = 0; i < n; ++i) w_out_state[i] = mu[i];
-
-  solver.transposed(mu);
-
-  for (std::size_t i = 0; i < n; ++i) w_pred[i] += mu[i];
-  if (ops.q_in >= 1)
-    for (std::size_t i = 0; i < n; ++i) w_pred[n + i] -= ops.rl1 * mu[i];
-
-  {
-    ws.x.assign(y, y + n);
-    ws.q.assign(n_phi, 0.0);
-    adj.dfdp_t_vec(ws.x, mu, t_new, ws.q);
-    for (std::size_t k = 0; k < ws.q.size(); ++k) w_theta[k] += ops.gamma * ws.q[k];
-  }
-
-  ops.A.apply_transposed(w_pred.data(), n, w_in);
+  multistep_adjoint_rhs(ops, n, ws, w_out_state);
+  solver.transposed(ws.mu);
+  multistep_adjoint_finish(ops, n, n_phi, y, t_new, adj, w_in, w_theta, ws);
 }
 
 template<class Stepper, class Solver, class AdjTerms>
 void apply_multistep_adjoint(const multistep_operators<Stepper>& ops,
                              std::size_t n, std::size_t n_phi,
-                             const double* y, double t_new,
+                             const std::vector<double>& y, double t_new,
                              const double* w_out,
                              Solver& solver, const AdjTerms& adj,
                              double* w_in, double* w_theta,
@@ -446,10 +480,14 @@ public:
 
       w_in.assign(nz_in, 0.0);
       if (m_trace) m_wout.assign(n, 0.0);
+      // Timed either side of the solve, which reports itself.
       { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
-        apply_multistep_adjoint_pre(ops, n, n_phi, cp.y.data(), t_new, solver,
-                                    adj, w_in.data(), m_wp.data(), m_ws,
-                                    m_trace ? m_wout.data() : nullptr); }
+        multistep_adjoint_rhs(ops, n, m_ws,
+                              m_trace ? m_wout.data() : nullptr); }
+      solver.transposed(m_ws.mu);
+      { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
+        multistep_adjoint_finish(ops, n, n_phi, cp.y, t_new, adj, w_in.data(),
+                                 m_wp.data(), m_ws); }
 
       // lambda is what this step hands the one below it, on the state slot.
       // eta is that cotangent against the step's own error estimate, which for
@@ -483,9 +521,7 @@ public:
       jtv.assign(n, 0.0);
       adj.jac_t_vec(m_ws.x, m_ws.mu, cp0.t, jtv);
       for (std::size_t i = 0; i < n; ++i) m_wx[i] += h0 * jtv[i];
-      m_ws.q.assign(n_phi, 0.0);
-      adj.dfdp_t_vec(m_ws.x, m_ws.mu, cp0.t, m_ws.q);
-      for (std::size_t k = 0; k < n_phi; ++k) m_wp[k] += h0 * m_ws.q[k];
+      adj.dfdp_t_vec_axpy(m_ws.x, m_ws.mu, cp0.t, h0, m_wp.data());
     }
 
     // Anything observed before the first step is the initial state itself.
@@ -596,9 +632,7 @@ void onestep_recurse(Stepper& st,
     U[i] = ws.u;
     for (std::size_t k = 0; k < n; ++k) w_in[k] += ws.u[k];
 
-    ws.q.assign(n_phi, 0.0);
-    adj.dfdp_t_vec(ws.x_stage, ws.m, ti, ws.q);
-    for (std::size_t k = 0; k < ws.q.size(); ++k) w_theta[k] += ws.q[k];
+    adj.dfdp_t_vec_axpy(ws.x_stage, ws.m, ti, 1.0, w_theta);
   }
 }
 
@@ -743,9 +777,8 @@ private:
     for (std::size_t i = 0; i < n; ++i) m_ws.m[i] = c * w[i];
     adj.jac_t_vec(x, m_ws.m, t, jv);
     for (std::size_t i = 0; i < n; ++i) w_x[i] += jv[i];
-    m_ws.q.assign(n_phi, 0.0);
-    adj.dfdp_t_vec(x, m_ws.m, t, m_ws.q);
-    for (std::size_t i = 0; i < n_phi; ++i) m_wp[i] += m_ws.q[i];
+    adj.dfdp_t_vec_axpy(x, m_ws.m, t, 1.0, m_wp.data());
+    (void)n_phi;
   }
 
   cppde::profiler m_prof;

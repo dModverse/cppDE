@@ -108,12 +108,13 @@ struct adjoint_terms {
     out[2] = (p[1] * x[1]) * lam[0] + (-p[1] * x[1]) * lam[1];
   }
 
-  void dfdp_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
-                  const double& t, std::vector<double>& out) const {
-    out.assign(NX + NP, 0.0);
-    out[NX + 0] = (-x[0]) * lam[0] + (x[0]) * lam[1];
-    out[NX + 1] = (x[1] * x[2]) * lam[0] + (-x[1] * x[2]) * lam[1];
-    out[NX + 2] = (-x[1] * x[1]) * lam[1] + (x[1] * x[1] * std::cos(t)) * lam[2];
+  void dfdp_t_vec_axpy(const std::vector<double>& x,
+                       const std::vector<double>& lam,
+                       const double& t, const double& sc,
+                       double* out) const {
+    out[NX + 0] += sc*((-x[0]) * lam[0] + (x[0]) * lam[1]);
+    out[NX + 1] += sc*((x[1] * x[2]) * lam[0] + (-x[1] * x[2]) * lam[1]);
+    out[NX + 2] += sc*((-x[1] * x[1]) * lam[1] + (x[1] * x[1] * std::cos(t)) * lam[2]);
   }
 };
 

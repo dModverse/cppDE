@@ -21,6 +21,7 @@
 #define CPPDE_LU_HPP
 
 #include <cstddef>
+#include <cstring>
 #include <type_traits>
 #include <algorithm>
 #include <cmath>
@@ -109,11 +110,21 @@ public:
 
   void factorize_W(size_t n, value_type inv_gamma_dt)
   {
-    if constexpr (is_sparse) {
-      factorize_W_sparse(n, inv_gamma_dt);
-    } else {
-      factorize_W_dense(n, inv_gamma_dt);
-    }
+    build_W(n, inv_gamma_dt);
+    factorize_built_W();
+  }
+
+  // The two halves apart, for a caller that times them apart. The dense path
+  // swaps its matrix into the solver and has nothing left to hand over, so its
+  // factorisation happens in the first half and the second is empty.
+  void build_W(size_t n, value_type inv_gamma_dt)
+  {
+    if constexpr (is_sparse) assemble_W_sparse(n, inv_gamma_dt);
+    else                     factorize_W_dense(n, inv_gamma_dt);
+  }
+  void factorize_built_W()
+  {
+    if constexpr (is_sparse) m_sparse_lu.factorize(m_W_work);
   }
 
   // ====================================================================
@@ -354,7 +365,7 @@ private:
   //  Sparse factorize_W implementation (allocation-free after first call)
   // ====================================================================
 
-  void factorize_W_sparse(size_t n, value_type inv_gamma_dt)
+  void assemble_W_sparse(size_t n, value_type inv_gamma_dt)
   {
     const int nnz = m_W_sparse.nnz;
 
@@ -383,13 +394,12 @@ private:
       }
     }
 
-    // Hot path: copy pre-negated Jacobian + diagonal add
+    // Hot path: copy pre-negated Jacobian + diagonal add. A contiguous copy of
+    // a few hundred doubles, so memcpy rather than a BLAS call whose dispatch
+    // costs more than the copy.
     if constexpr (!ad_lu::is_ad<value_type>::value) {
-      int nnz_i = nnz;
-      int inc = 1;
-      F77_CALL(dcopy)(&nnz_i,
-               const_cast<double*>(m_W_sparse.Ax.data()), &inc,
-               m_W_work.Ax.data(), &inc);
+      std::memcpy(m_W_work.Ax.data(), m_W_sparse.Ax.data(),
+                  static_cast<std::size_t>(nnz) * sizeof(double));
     } else {
       for (int k = 0; k < nnz; ++k)
         m_W_work.Ax[k] = m_W_sparse.Ax[k];
@@ -399,7 +409,6 @@ private:
       m_W_work.Ax[m_diag_offsets[i]] += inv_gamma_dt;
 
     m_last_inv_gamma_dt = inv_gamma_dt;
-    m_sparse_lu.factorize(m_W_work);
   }
 
   // ====================================================================

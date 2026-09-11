@@ -323,10 +323,13 @@ public:
   explicit equation_solver(JacFunc& jac) : m_jac(&jac) {}
 
   void prepare(const std::vector<T>& x, T t, T inv_gamma_dt, T res_scale = T(1)) {
-    auto _tp = m_prof.timer(cppde::prof_cat::rev_prepare);
     m_lu.resize(x);
-    m_lu.call_jacobian(*m_jac, const_cast<std::vector<T>&>(x), t);
-    m_lu.factorize_W(x.size(), inv_gamma_dt);
+    { auto _tp = m_prof.timer(cppde::prof_cat::jac_eval);
+      m_lu.call_jacobian(*m_jac, const_cast<std::vector<T>&>(x), t); }
+    { auto _tp = m_prof.timer(cppde::prof_cat::w_build);
+      m_lu.build_W(x.size(), inv_gamma_dt); }
+    { auto _tp = m_prof.timer(cppde::prof_cat::lu_factor);
+      m_lu.factorize_built_W(); }
     m_scale = res_scale;
   }
 
@@ -342,7 +345,8 @@ public:
   }
 
   // Per-category timings to stderr: the per-step Jacobian and factorisation
-  // against the transposed solves. Compiled away without CPPDE_PROFILE.
+  // against the transposed solves, which is what a step's linear algebra is.
+  // Compiled away without CPPDE_PROFILE.
   void report_profile() const {
     m_prof.report("cppDE reverse linear algebra");
   }

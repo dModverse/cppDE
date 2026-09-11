@@ -91,13 +91,14 @@ struct adjoint_terms {
     out[2] = (p[1] * x[1]) * lam[0] + (-p[1] * x[1]) * lam[1];
   }
 
-  void dfdp_t_vec(const std::vector<double>& x, const std::vector<double>& lam,
-                  const double& t, std::vector<double>& out) const {
-    out.assign(NX + NP, 0.0);
-    out[NX + 0] = (-x[0]) * lam[0] + (x[0]) * lam[1];
-    out[NX + 1] = (x[1] * x[2]) * lam[0] + (-x[1] * x[2]) * lam[1];
-    out[NX + 2] = (-x[1] * x[1]) * lam[1]
-                + (x[1] * x[1] * std::cos(t)) * lam[2];
+  void dfdp_t_vec_axpy(const std::vector<double>& x,
+                       const std::vector<double>& lam,
+                       const double& t, const double& sc,
+                       double* out) const {
+    out[NX + 0] += sc*((-x[0]) * lam[0] + (x[0]) * lam[1]);
+    out[NX + 1] += sc*((x[1] * x[2]) * lam[0] + (-x[1] * x[2]) * lam[1]);
+    out[NX + 2] += sc*((-x[1] * x[1]) * lam[1]
+                + (x[1] * x[1] * std::cos(t)) * lam[2]);
   }
 };
 
@@ -376,7 +377,7 @@ static void closed_step(const checkpoint<M>& cp, const std::vector<double>& w,
   wz.assign(static_cast<std::size_t>(cp.carry.q + 1) * n, 0.0);
   std::vector<double> wphi(NX + NP, 0.0);
   cppde::adjoint::apply_multistep_adjoint<stepper_d<M>>(
-      ops, n, NX + NP, cp.y.data(), t_new, w_out.data(), solver, adj,
+      ops, n, NX + NP, cp.y, t_new, w_out.data(), solver, adj,
       wz.data(), wphi.data(), ws);
 
   wp.assign(NP, 0.0);

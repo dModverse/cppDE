@@ -1004,14 +1004,15 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
                                n_states, num_type, forcings_list):
     """The two contractions a written step adjoint asks the model for.
 
-    `jac_t_vec` is J' lambda over the states, `dfdp_t_vec` is (df/dp)' lambda
-    over the flat parameter vector, whose first n_states slots belong to the
-    initial values and stay zero. Both are grouped by output slot, so a slot is
-    written once rather than accumulated into.
+    `jac_t_vec` is J' lambda over the states and sizes its own output; a caller
+    that has to size it first has to know the model's dimensions at the call
+    site, and one that gets it wrong writes past the end with nothing to say so.
 
-    Both size their own output. A caller that has to size it first has to know
-    the model's state and parameter counts at the call site, and one that gets
-    it wrong writes past the end of a vector with nothing to say so.
+    `dfdp_t_vec_axpy` is (df/dp)' lambda over the flat parameter vector, scaled
+    and added into what the caller already has. Every caller accumulates, and
+    the first n_states slots belong to the initial values and never move, so the
+    added form touches only the slots that carry a term: no buffer to clear, no
+    second pass to add.
     """
     zero = sp.Integer(0)
     n_params = len(params_list)
@@ -1071,12 +1072,12 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
         by_par.setdefault(k, []).append((i, e))
 
     lines += [
-        f"  void dfdp_t_vec(const std::vector<{num_type}>& x,",
-        f"                  const std::vector<{num_type}>& lam,",
-        f"                  const {num_type}& t,",
-        f"                  std::vector<{num_type}>& out) const {{",
+        f"  void dfdp_t_vec_axpy(const std::vector<{num_type}>& x,",
+        f"                       const std::vector<{num_type}>& lam,",
+        f"                       const {num_type}& t,",
+        f"                       const {num_type}& sc,",
+        f"                       {num_type}* out) const {{",
         "    (void)x; (void)t;",
-        f"    out.assign({n_phi}u, {num_type}(0.0));",
     ]
     lines += _arena_scope_lines(num_type)
     flat = [e for k in sorted(by_par) for _, e in by_par[k]]
@@ -1087,7 +1088,6 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
     for k in range(n_params):
         slot = n_states + k
         if k not in by_par:
-            lines.append(f"    out[{slot}] = {num_type}(0.0);")
             continue
         terms = []
         for (i, _) in by_par[k]:
@@ -1095,8 +1095,8 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
                           num_type, forcings_list)
             terms.append(f"({cpp})*lam[{i}]")
             pos += 1
-        lines.append(f"    out[{slot}] = " + " + ".join(terms) + ";")
-    lines += ["  }", "};", f"// adjoint_terms writes {n_phi} slots"]
+        lines.append(f"    out[{slot}] += sc*(" + " + ".join(terms) + ");")
+    lines += ["  }", "};", f"// adjoint_terms writes into {n_phi} slots"]
     return lines
 
 
