@@ -39,6 +39,7 @@
 #include <cppde/cppde_event_engine.hpp>
 #include <cppde/cppde_onestep_controller.hpp>
 #include <cppde/cppde_profiler.hpp>
+#include <cppde/cppde_adjoint_step.hpp>
 #include <cppde/cppde_reverse_step.hpp>
 #include <cppde/cppde_saltation.hpp>
 
@@ -418,7 +419,8 @@ public:
         --next_obs;
         if (store.obs(next_obs).event != event_record<T>::npos) continue;
         auto _tp = m_prof.timer(cppde::prof_cat::rev_interp);
-        m_rec.interpolate(clamp_to_step(store.step(k), store.obs(next_obs).t),
+        m_rec.interpolate(static_cast<T>(cppde::adjoint::clamp_to_step(
+                              store.step(k), store.obs(next_obs).t)),
                           x_interp);
         const T* w = seeds.data() + next_obs * n_x;
         for (std::size_t i = 0; i < n_x && i < x_interp.size(); ++i) {
@@ -432,7 +434,8 @@ public:
       // replay put on a point inside this step, and the carry is not read at
       // all, because the restart threw it away.
       if (m_pending_interp) {
-        m_rec.interpolate(clamp_to_step(store.step(k), m_pending_t), x_interp);
+        m_rec.interpolate(static_cast<T>(cppde::adjoint::clamp_to_step(
+                              store.step(k), m_pending_t)), x_interp);
         for (std::size_t i = 0; i < x_interp.size() && i < m_pending.size(); ++i)
           x_interp[i].seed(m_pending[i]);
         m_pending_interp = false;
@@ -688,17 +691,6 @@ private:
       cppde::detail::apply_fixed_events_at_time(x, rev_type(e.t), ev.fixed,
                                                 sys, at_surface);
     }
-  }
-
-  // The forward loop observes a time before the step bracket at the bracket
-  // start instead, which happens after an event restart. Clamping reproduces
-  // that branch; inside the bracket, which is every other case, it does nothing.
-  template<class Checkpoint>
-  static T clamp_to_step(const Checkpoint& cp, double t) {
-    const double a = cp.t, b = cp.t + cp.dt;
-    const double lo = a < b ? a : b;
-    const double hi = a < b ? b : a;
-    return static_cast<T>(t < lo ? lo : (t > hi ? hi : t));
   }
 
   recorder_type  m_rec;

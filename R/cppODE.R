@@ -1250,9 +1250,10 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
 
-  # A written step adjoint replaces the tape where it is complete: the
-  # multistep family, and no intervention, whose boundary map is stage 4.
-  use_written <- is_reverse && is_multistep(method) &&
+  # A written step adjoint replaces the tape where it is complete: the multistep
+  # family and tsit5, and no intervention, whose boundary map is stage 4. rb4
+  # keeps the tape until its stage solves are written.
+  use_written <- is_reverse && (is_multistep(method) || is_explicit(method)) &&
     is.null(events) && is.null(rootfunc)
 
   # --- The backward sweep ---
@@ -1344,7 +1345,12 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       # a model with an intervention still takes.
       if (use_written) c(
         "  {",
-        sprintf("    cppde::adjoint::closed_multistep_trajectory<%s> _cl;", rev_stepper_type),
+        if (is_explicit(method)) c(
+          sprintf("    cppde::adjoint::closed_onestep_trajectory<%s> _cl;", rev_stepper_type),
+          sprintf("    %s _cl_st;", rev_stepper_type),
+          "    auto _cl_sys = std::make_pair(sys, jac);")
+        else
+          sprintf("    cppde::adjoint::closed_multistep_trajectory<%s> _cl;", rev_stepper_type),
         "    _cl.trace_lambda(args.adj_trace);",
         "    adjoint_terms _adj(_theta, F);",
         "    for (int c = 0; c < n_seed; ++c) {",
@@ -1353,7 +1359,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         sprintf("          _seed_col[(size_t)o * %d + i] =", n_variables),
         sprintf("              args.seed[o + (size_t)n_out * (i + (size_t)%d * c)];", n_variables),
         "      _cl.sweep(_rev_store, (size_t)n_phi_rows, _seed_col.data(),",
-        "                _adj, _rev_solver);",
+        if (is_explicit(method)) "                _cl_sys, _adj, _cl_st);"
+        else                     "                _adj, _rev_solver);",
         sprintf("      for (int i = 0; i < %d; ++i)", n_variables),
         "        res.adjoint[i + (size_t)n_phi_rows * c] = _cl.wx0()[i] + _cl.wp()[i];",
         sprintf("      for (int j = %d; j < n_phi_rows; ++j)", n_variables),
@@ -1370,7 +1377,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         "    }",
         "#ifdef CPPDE_PROFILE",
         "    _cl.report_profile();",
-        "    _rev_solver.report_profile();",
+        if (!is_explicit(method)) "    _rev_solver.report_profile();" else "",
         "#endif",
         "    return res.return_code;",
         "  }") else character(0),

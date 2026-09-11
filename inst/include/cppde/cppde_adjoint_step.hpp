@@ -42,6 +42,19 @@ namespace cppde {
 namespace adjoint {
 
 // ---------------------------------------------------------------------------
+//  The forward loop observes a time before the step bracket at the bracket
+//  start instead, which happens after an event restart. Clamping reproduces
+//  that branch; inside the bracket, which is every other case, it does nothing.
+// ---------------------------------------------------------------------------
+template<class Checkpoint>
+inline double clamp_to_step(const Checkpoint& cp, double t) {
+  const double a = cp.t, b = cp.t + cp.dt;
+  const double lo = a < b ? a : b;
+  const double hi = a < b ? b : a;
+  return t < lo ? lo : (t > hi ? hi : t);
+}
+
+// ---------------------------------------------------------------------------
 //  A dense operator over Nordsieck slots, row-major [n_out x n_in].
 //
 //  Small by construction: the order never exceeds the stepper's own maximum,
@@ -415,7 +428,8 @@ public:
         // The probe's states are the slots plus one for acor, so the row it
         // writes is d x_interp / d (zn_pred[0..q], acor).
         dense_row.assign(static_cast<std::size_t>(ops.q_in + 2), 0.0);
-        m_probe.tail_probe.eval_dense_into(store.obs(o).t, dense_row);
+        m_probe.tail_probe.eval_dense_into(clamp_to_step(cp, store.obs(o).t),
+                                          dense_row);
         const double* w = seeds + o * n;
         for (int j = 0; j <= ops.q_in; ++j)
           for (std::size_t i = 0; i < n; ++i)
@@ -533,22 +547,20 @@ struct onestep_workspace {
   std::vector<std::vector<double> > mm;
 };
 
-template<class Stepper, class System, class AdjTerms>
-void apply_onestep_adjoint(Stepper& st, System& sys,
-                           const double* x0, double t, double dt,
-                           std::size_t n, std::size_t n_phi,
-                           const double* w_out,
-                           const AdjTerms& adj,
-                           double* w_in, double* w_theta,
-                           onestep_workspace& ws,
-                           double* w_out_state = nullptr)
+/// The backward recursion alone, on a stepper that has just run the step. A
+/// trajectory runs the step itself, because its interpolant reads the stages
+/// before the recursion consumes them.
+template<class Stepper, class AdjTerms>
+void onestep_recurse(Stepper& st,
+                     const double* x0, double t, double dt,
+                     std::size_t n, std::size_t n_phi,
+                     const double* w_out,
+                     const AdjTerms& adj,
+                     double* w_in, double* w_theta,
+                     onestep_workspace& ws,
+                     double* w_out_state = nullptr)
 {
   constexpr int S = Stepper::n_stages_used;
-
-  ws.xout.assign(n, 0.0);
-  ws.xerr.assign(n, 0.0);
-  std::vector<double> x(x0, x0 + n);
-  st.do_step(sys, x, t, ws.xout, dt, ws.xerr);
 
   if (w_out_state) for (std::size_t i = 0; i < n; ++i) w_out_state[i] = w_out[i];
 
@@ -589,6 +601,158 @@ void apply_onestep_adjoint(Stepper& st, System& sys,
     for (std::size_t k = 0; k < ws.q.size(); ++k) w_theta[k] += ws.q[k];
   }
 }
+
+/// Step and recursion in one, for a caller with one step to adjoint.
+template<class Stepper, class System, class AdjTerms>
+void apply_onestep_adjoint(Stepper& st, System& sys,
+                           const double* x0, double t, double dt,
+                           std::size_t n, std::size_t n_phi,
+                           const double* w_out,
+                           const AdjTerms& adj,
+                           double* w_in, double* w_theta,
+                           onestep_workspace& ws,
+                           double* w_out_state = nullptr)
+{
+  ws.xout.assign(n, 0.0);
+  ws.xerr.assign(n, 0.0);
+  std::vector<double> x(x0, x0 + n);
+  st.do_step(sys, x, t, ws.xout, dt, ws.xerr);
+  onestep_recurse(st, x0, t, dt, n, n_phi, w_out, adj, w_in, w_theta, ws,
+                  w_out_state);
+}
+
+// ---------------------------------------------------------------------------
+//  A whole trajectory backwards on a one-step method, without a tape.
+//
+//  The same store, the same order, the same outputs as the multistep form, and
+//  a simpler shape: a one-step method carries only the state across a step
+//  boundary, so there is no history to collapse and no start boundary.
+//
+//  An observation inside a step reaches it through the continuous extension,
+//  which for tsit5 is a Hermite cubic over (x_old, x_new, h k1, h k7) and whose
+//  weights the stepper hands out. Two of those four are right-hand sides, so an
+//  observation puts a cotangent on f at both ends of the step, and that is one
+//  J' and one (df/dp)' contraction apiece.
+// ---------------------------------------------------------------------------
+template<class Stepper>
+class closed_onestep_trajectory {
+public:
+  /// Whether the sweep also keeps lambda and the refinement indicator per step.
+  void trace_lambda(bool on) { m_trace = on; }
+
+  /// One seed column. `seeds` is [n_obs x n_states] row-major.
+  template<class Store, class System, class AdjTerms>
+  void sweep(const Store& store, std::size_t n_phi, const double* seeds,
+             System& sys, const AdjTerms& adj, Stepper& st)
+  {
+    const std::size_t n = store.n_states();
+    const std::size_t n_steps = store.n_steps();
+
+    m_wp.assign(n_phi, 0.0);
+    m_wx.assign(n, 0.0);
+    m_whist.clear();
+    m_lam.assign(m_trace ? n_steps * n : 0u, 0.0);
+    m_eta.assign(m_trace ? n_steps : 0u, 0.0);
+    if (n_steps == 0) return;
+
+    std::size_t next_obs = store.n_obs();
+    std::vector<double> w_out(n, 0.0), w_in(n, 0.0), w_start(n, 0.0), jv;
+
+    for (std::size_t k = n_steps; k-- > 0;) {
+      const auto& cp = store.step(k);
+
+      std::size_t obs_lo = next_obs;
+      while (obs_lo > 0 && store.obs(obs_lo - 1).step == k + 1) --obs_lo;
+
+      // The step runs forward once in plain double to recover its stages. The
+      // interpolant reads two of them, so this has to come before the seeding.
+      m_ws.xout.assign(n, 0.0);
+      m_ws.xerr.assign(n, 0.0);
+      std::vector<double> x0(cp.start_state(), cp.start_state() + n);
+      st.do_step(sys, x0, cp.t, m_ws.xout, cp.dt, m_ws.xerr);
+
+      w_start.assign(n, 0.0);
+      for (std::size_t o = obs_lo; o < next_obs; ++o) {
+        auto _tp = m_prof.timer(cppde::prof_cat::rev_interp);
+        const double t_obs = clamp_to_step(cp, store.obs(o).t);
+        const double s = (t_obs - cp.t) / cp.dt;
+        double cw[4];
+        Stepper::dense_weights(s, cw);
+        const double* w = seeds + o * n;
+
+        for (std::size_t i = 0; i < n; ++i) {
+          w_start[i] += cw[0] * w[i];
+          w_out[i]   += cw[1] * w[i];
+        }
+        // k1 = f(x_old, t) and k7 = f(x_new, t + dt), so the two derivative
+        // weights land on the states at the two ends and on theta.
+        seed_through_rhs(adj, x0, cp.t, w, cp.dt * cw[2], n, n_phi,
+                         w_start.data(), jv);
+        seed_through_rhs(adj, m_ws.xout, cp.t + cp.dt, w, cp.dt * cw[3], n,
+                         n_phi, w_out.data(), jv);
+      }
+      next_obs = obs_lo;
+
+      w_in.assign(n, 0.0);
+      { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
+        onestep_recurse(st, x0.data(), cp.t, cp.dt, n, n_phi, w_out.data(),
+                        adj, w_in.data(), m_wp.data(), m_ws); }
+      for (std::size_t i = 0; i < n; ++i) w_in[i] += w_start[i];
+
+      // lambda is what this step hands the one below it. eta is the cotangent
+      // at the step end against the step's own embedded error, which a
+      // one-step method reports already scaled.
+      if (m_trace) {
+        for (std::size_t i = 0; i < n; ++i) m_lam[k * n + i] = w_in[i];
+        double e = 0.0;
+        for (std::size_t i = 0; i < n; ++i) e += w_out[i] * m_ws.xerr[i];
+        m_eta[k] = e;
+      }
+      w_out.swap(w_in);
+    }
+
+    for (std::size_t i = 0; i < n; ++i) m_wx[i] = w_out[i];
+
+    // Anything observed before the first step is the initial state itself.
+    while (next_obs > 0) {
+      --next_obs;
+      const double* w = seeds + next_obs * n;
+      for (std::size_t i = 0; i < n; ++i) m_wx[i] += w[i];
+    }
+  }
+
+  void report_profile() const { m_prof.report("cppDE written adjoint"); }
+
+  const std::vector<double>& wx0() const { return m_wx; }
+  const std::vector<double>& whistory0() const { return m_whist; }
+  const std::vector<double>& wp() const { return m_wp; }
+
+  /// Under trace_lambda: [n_steps, n_states] step-major, and one per step.
+  const std::vector<double>& lambda() const { return m_lam; }
+  const std::vector<double>& eta() const { return m_eta; }
+
+private:
+  /// A cotangent `w` scaled by `c` on f(x, t), put onto x and theta.
+  template<class AdjTerms>
+  void seed_through_rhs(const AdjTerms& adj, const std::vector<double>& x,
+                        double t, const double* w, double c, std::size_t n,
+                        std::size_t n_phi, double* w_x, std::vector<double>& jv)
+  {
+    if (c == 0.0) return;
+    m_ws.m.assign(n, 0.0);
+    for (std::size_t i = 0; i < n; ++i) m_ws.m[i] = c * w[i];
+    adj.jac_t_vec(x, m_ws.m, t, jv);
+    for (std::size_t i = 0; i < n; ++i) w_x[i] += jv[i];
+    m_ws.q.assign(n_phi, 0.0);
+    adj.dfdp_t_vec(x, m_ws.m, t, m_ws.q);
+    for (std::size_t i = 0; i < n_phi; ++i) m_wp[i] += m_ws.q[i];
+  }
+
+  cppde::profiler m_prof;
+  onestep_workspace m_ws;
+  bool m_trace = false;
+  std::vector<double> m_wx, m_whist, m_wp, m_lam, m_eta;
+};
 
 }  // namespace adjoint
 }  // namespace cppde

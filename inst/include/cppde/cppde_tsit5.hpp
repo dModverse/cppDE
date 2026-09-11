@@ -292,26 +292,38 @@ public:
     const TimeArg h = t_new - t_old;
     const TimeArg s = (t - t_old) / h;   // theta in [0, 1]
 
-    // Hermite cubic interpolation using endpoint values and derivatives.
-
-    const TimeArg s1 = TimeArg(1) - s;
-    const TimeArg s2 = s * s;
-    const TimeArg s1_2 = s1 * s1;
+    TimeArg w[4];
+    dense_weights(s, w);
 
     for (size_t i = 0; i < n; ++i) {
-      // Hermite basis functions:
-      //   H00 = (1 + 2s)(1-s)^2 = 1 - 3s^2 + 2s^3
-      //   H10 = s(1-s)^2         = s - 2s^2 + s^3
-      //   H01 = s^2(3 - 2s)      = 3s^2 - 2s^3
-      //   H11 = s^2(s - 1)       = s^3 - s^2
       value_type f_old = m_k1.m_v[i];   // f(x_old, t_old) = step-start k1
       value_type f_new = m_k7.m_v[i];   // f(x_new, t_new) = step-end k7
 
-      x[i] = x_old[i] * (s1_2 * (TimeArg(1) + TimeArg(2) * s))
-           + x_new[i] * (s2 * (TimeArg(3) - TimeArg(2) * s))
-           + h * f_old * (s * s1_2)
-           + h * f_new * (s2 * (s - TimeArg(1)));
+      x[i] = x_old[i] * w[0]
+           + x_new[i] * w[1]
+           + h * f_old * w[2]
+           + h * f_new * w[3];
     }
+  }
+
+  // ====================================================================
+  //  The continuous extension's four weights at theta, over
+  //  (x_old, x_new, h k1, h k7). Hermite cubic:
+  //    H00 = (1 + 2s)(1-s)^2,  H01 = s^2(3 - 2s)
+  //    H10 = s(1-s)^2,         H11 = s^2(s - 1)
+  //
+  //  One statement of the basis, two readers: calc_state contracts it forward,
+  //  the written adjoint transposes it.
+  // ====================================================================
+  template<class TimeArg>
+  static void dense_weights(const TimeArg& s, TimeArg* w) {
+    const TimeArg s1 = TimeArg(1) - s;
+    const TimeArg s2 = s * s;
+    const TimeArg s1_2 = s1 * s1;
+    w[0] = s1_2 * (TimeArg(1) + TimeArg(2) * s);
+    w[1] = s2 * (TimeArg(3) - TimeArg(2) * s);
+    w[2] = s * s1_2;
+    w[3] = s2 * (s - TimeArg(1));
   }
 
   // ====================================================================

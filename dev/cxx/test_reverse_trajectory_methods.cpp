@@ -45,6 +45,12 @@ static void check(bool ok, const std::string& what) {
   if (!ok) { std::printf("FAIL  %s\n", what.c_str()); ++g_failures; }
 }
 
+// Whether a stepper states its own tableau, which is what a written explicit
+// adjoint reads. rb4 does not, and keeps the tape until stage 3b.
+template<class T, class = void> struct has_tableau : std::false_type {};
+template<class T>
+struct has_tableau<T, std::void_t<decltype(T::n_stages_used)>> : std::true_type {};
+
 static void close(double a, double b, const std::string& what, double tol) {
   const double scale = std::fabs(a) > 1.0 ? std::fabs(a) : 1.0;
   char buf[160];
@@ -448,6 +454,7 @@ static void run_method(const char* name, double tol)
   // store without a tape; an explicit method has no Nordsieck carry and comes
   // with its own path.
   constexpr bool multistep_here = cppde::reverse::has_step_snapshot<S>::value;
+  constexpr bool onestep_here = has_tableau<S>::value;
   // Generic, so its body is instantiated at the call and not at the
   // definition: an explicit method has no Nordsieck checkpoint to read.
   auto sweep_closed = [&](const std::vector<double>& seeds,
@@ -468,11 +475,26 @@ static void run_method(const char* name, double tol)
     for (std::size_t j = 0; j < NP; ++j) out[n_carry + j] = tr.wp()[NX + j];
   };
 
+  // The same for a one-step method, whose carry is the state alone. rb4 has no
+  // written step adjoint yet, so the tableau is what says who can take this.
+  auto sweep_closed_one = [&](const std::vector<double>& seeds,
+                              std::vector<double>& out, auto) {
+    auto sysd = make_system<double>(pv);
+    S st;
+    cppde::adjoint::closed_onestep_trajectory<S> tr;
+    adjoint_terms adj{pv};
+    tr.sweep(store, NX + NP, seeds.data(), sysd, adj, st);
+    out.assign(nd, 0.0);
+    for (std::size_t i = 0; i < NX; ++i) out[i] = tr.wx0()[i];
+    for (std::size_t j = 0; j < NP; ++j) out[n_carry + j] = tr.wp()[NX + j];
+  };
+
   auto compare = [&](const char* what, const std::vector<double>& seeds) {
     std::vector<double> got;
     sweep_with(seeds, got);
     std::vector<double> gotc;
     if constexpr (multistep_here) sweep_closed(seeds, gotc, std::true_type{});
+    else if constexpr (onestep_here) sweep_closed_one(seeds, gotc, std::true_type{});
     for (unsigned d = 0; d < nd; ++d) {
       double wS = 0.0;
       for (std::size_t o = 0; o < store.n_obs(); ++o)
@@ -481,7 +503,7 @@ static void run_method(const char* name, double tol)
       const std::string tag = (d < n_carry) ? "  dz" + std::to_string(d)
                                             : "  dp" + std::to_string(d - n_carry);
       close(wS, got[d], std::string(name) + " " + what + tag, tol);
-      if constexpr (multistep_here)
+      if constexpr (multistep_here || onestep_here)
         close(wS, gotc[d], std::string(name) + " written " + what + tag, tol);
     }
     // The per-step trace is the same two quantities either way, and a
