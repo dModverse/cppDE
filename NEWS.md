@@ -12,6 +12,12 @@
   it carries, and `max_deriv_size` had overloads for a vector and for a dense
   matrix but not for a compressed-column one. Only the nested-dual branch needs
   it, and that branch had never been compiled.
+* `store` and `keepStore` are refused under `derivMode = "forward-reverse"`. A
+  checkpoint keeps its value inline and its tangents behind a pointer into the
+  arena, and the arena is reset when the solve that filled it returns. Handing
+  such a store to a later solve gave exact values, an exact gradient and a wrong
+  Hessian, with nothing to show for it. Until the store owns its tangents, the
+  second solve integrates.
 * The methods vignette covers the reverse mode as it now stands. It derives
   the adjoint equation and its quadrature, separates the discrete adjoint from
   the continuous one, gives the transposed saltation relation and the restart

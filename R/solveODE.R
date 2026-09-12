@@ -395,6 +395,16 @@
       stop("'", what, "' is not available on the CVODE backend: CVODES holds ",
            "its checkpoints itself. Use cppODE() for a pair of solves that ",
            "share one integration.", call. = FALSE)
+    ## A checkpoint keeps its value inline and its tangents behind a pointer
+    ## into the arena, and the arena is reset when the solve that filled it
+    ## returns. The values would come back exact and the tangents as whatever
+    ## now occupies that memory, which is a wrong Hessian and no error. Until
+    ## the store owns its tangents, second order integrates twice.
+    if (identical(attr(model, "derivMode"), "forward-reverse"))
+      stop("'", what, "' is not available under derivMode = ",
+           "\"forward-reverse\": a checkpoint's tangents live in the arena of ",
+           "the solve that took them and do not outlive it. Let the second ",
+           "solve integrate.", call. = FALSE)
   }
   if (isTRUE(keepStore)) attr(times, "keepStore") <- TRUE
   if (!is.null(store)) {
