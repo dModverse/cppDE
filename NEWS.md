@@ -1,5 +1,10 @@
 # cppDE (development version)
 
+* `derivMode = "forward-forward"` compiles with a sparse Jacobian. The sparse
+  AD solver keeps its iteration matrix and asks how many derivative directions
+  it carries, and `max_deriv_size` had overloads for a vector and for a dense
+  matrix but not for a compressed-column one. Only the nested-dual branch needs
+  it, and that branch had never been compiled.
 * The methods vignette covers the reverse mode as it now stands. It derives
   the adjoint equation and its quadrature, separates the discrete adjoint from
   the continuous one, gives the transposed saltation relation and the restart

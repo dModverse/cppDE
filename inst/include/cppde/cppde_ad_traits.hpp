@@ -218,6 +218,21 @@ inline unsigned max_deriv_size(const dense_matrix<AD>& M)
   return mx;
 }
 
+// Max number of active derivative directions in a csc_matrix. The sparse
+// solver's dual specialisation reads the entries' derivatives contiguously and
+// never asks; the nested-dual one keeps the matrix and does.
+template<class AD,
+         std::enable_if_t<is_ad<AD>::value, int> = 0>
+inline unsigned max_deriv_size(const csc_matrix<AD>& M)
+{
+  unsigned mx = 0;
+  for (std::size_t k = 0; k < M.Ax.size(); ++k) {
+    unsigned sz = const_cast<AD&>(M.Ax[k]).size();
+    if (sz > mx) mx = sz;
+  }
+  return mx;
+}
+
 // Whether any element carries active derivative directions, returning on the
 // first hit unlike max_deriv_size(). A static width needs only that
 // distinction: a reparametrisation without sensitivity columns seeds nothing.
