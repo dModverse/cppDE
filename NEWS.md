@@ -49,6 +49,12 @@
   a corrector sums in a different order over the AD type than over `double`.
   And the step count stops growing with the direction count. `derivMode = "forward"`
   and `"forward-forward"` are untouched and keep the sensitivity error control.
+* `cppODE(..., nStack = "auto")` asks the machine. `chunkWidth()` derives the
+  number of tangent directions a second-order model carries from the checkpoint
+  store it would have to hold and the L2 cache its step arithmetic sweeps. A
+  parameter set wider than the width is answered in blocks of directions, and
+  since the step sequence no longer depends on the width, those blocks ride one
+  grid.
 * The methods vignette covers the reverse mode as it now stands. It derives
   the adjoint equation and its quadrature, separates the discrete adjoint from
   the continuous one, gives the transposed saltation relation and the restart

@@ -348,3 +348,65 @@ matchDerivMode <- function(x, choices) {
          '. There is no symbolic vector-Jacobian product.', call. = FALSE)
   choices[choices %in% x]
 }
+
+
+# Size of the L2 cache in bytes, 0 when it cannot be read. Linux exposes one
+# directory per cache level; macOS answers a sysctl. Anywhere else the caller
+# falls back to its own constant.
+.l2CacheBytes <- function() {
+  idx <- Sys.glob("/sys/devices/system/cpu/cpu0/cache/index*")
+  for (d in idx) {
+    lvl <- tryCatch(readLines(file.path(d, "level"), warn = FALSE),
+                    error = function(e) character())
+    if (!length(lvl) || lvl[1] != "2") next
+    sz <- tryCatch(readLines(file.path(d, "size"), warn = FALSE),
+                   error = function(e) character())
+    if (!length(sz)) next
+    n <- suppressWarnings(as.numeric(sub("[KMG]?$", "", sz[1])))
+    if (is.na(n)) next
+    mult <- switch(sub("^[0-9]+", "", sz[1]), K = 1024, M = 1024^2, G = 1024^3, 1)
+    return(n * mult)
+  }
+  if (identical(Sys.info()[["sysname"]], "Darwin")) {
+    out <- suppressWarnings(tryCatch(
+      system2("sysctl", c("-n", "hw.l2cachesize"), stdout = TRUE, stderr = FALSE),
+      error = function(e) character()))
+    n <- suppressWarnings(as.numeric(out[1]))
+    if (!is.na(n)) return(n)
+  }
+  0
+}
+
+#' How many tangent directions a second-order model should carry at once
+#'
+#' Second order fixes the width of the AD slab when the model is compiled, so a
+#' parameter set wider than that is answered in blocks of directions. Since the
+#' step sequence of `derivMode = "forward-reverse"` does not depend on the
+#' width, the blocks all ride one grid and the width is a memory and cache
+#' question rather than an accuracy one. Two bounds decide it: the checkpoint
+#' store, which is what actually runs out, and the L2 cache the step arithmetic
+#' sweeps.
+#'
+#' @param n_states Number of state variables.
+#' @param n_steps Expected number of accepted steps. The store holds one
+#'   checkpoint per step per condition, so this is the term that dominates.
+#' @param q_max Highest method order, 5 for BDF and 12 for Adams.
+#' @param budget Bytes the checkpoint store of one condition may take. Divide
+#'   the machine's budget by the number of conditions and forked workers that
+#'   will hold one at the same time.
+#' @param min_width,max_width Bounds on the answer.
+#' @return One integer, the number of directions.
+#' @export
+chunkWidth <- function(n_states, n_steps = 2000, q_max = 5L,
+                       budget = getOption("cppDE.storeBudget", 256e6),
+                       min_width = 8L, max_width = 256L) {
+  stopifnot(n_states >= 1, n_steps >= 1, q_max >= 1, budget > 0,
+            min_width >= 1, max_width >= min_width)
+  # The step's working set is the Nordsieck block plus acor, tempv, ftemp and y.
+  per_dir_cache <- 8 * n_states * (q_max + 5)
+  l2 <- .l2CacheBytes()
+  b_cache <- if (l2 > 0) floor(l2 * 0.5 / per_dir_cache) else max_width
+  # The store keeps the Nordsieck slots of every accepted step.
+  b_store <- floor(budget / (8 * n_states * (q_max + 1) * n_steps))
+  as.integer(max(min_width, min(max_width, b_cache, b_store)))
+}

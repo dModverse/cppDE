@@ -35,8 +35,12 @@
 #'   heap-allocated AD; the per-call sensitivity dimension is taken at
 #'   run time from `ncol(sens1ini)` in [solveODE()]. A positive integer
 #'   `K` fixes the width to `K` at compile time. `NULL` selects
-#'   `length(c(variables, parameters)) - length(fixed)`. `deriv2 = TRUE`
-#'   requires a finite width and silently demotes `Inf` to `NULL`.
+#'   `length(c(variables, parameters)) - length(fixed)`. `"auto"` asks
+#'   [chunkWidth()] what this machine can afford, which is the sensible
+#'   choice for a second-order model whose parameter set is wider than the
+#'   width: those are answered in blocks of directions on one grid.
+#'   `deriv2 = TRUE` requires a finite width and silently demotes `Inf` to
+#'   `NULL`.
 #' @param includeTimeZero Logical. Ensure that `0` is part of the
 #'   integration times.
 #' @param useDenseOutput Logical. Use Hermite dense output for
@@ -233,6 +237,15 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # --- Resolve nStack (compile-time AD slab width) ---
   # Inf heap-allocates and takes the width from ncol(sens1ini) at run time,
   # NULL stacks it at n_total_sens, K fixes it and every call has to fit K.
+  # "auto" lets the machine decide, from the store it would have to hold and the
+  # cache the step arithmetic sweeps. Second order answers a wider parameter set
+  # in blocks, and since its step sequence does not depend on the width, the
+  # blocks ride one grid: the width costs memory and cache, never accuracy.
+  if (identical(nStack, "auto")) {
+    if (!deriv) stop("'nStack = \"auto\"' requires deriv = TRUE")
+    nStack <- chunkWidth(n_variables, q_max = if (is_multistep(method) &&
+                                                 !useNDF) 12L else 5L)
+  }
   if (!deriv && is.numeric(nStack) && length(nStack) == 1L && is.infinite(nStack)) {
     nStack <- NULL  # heap AD is meaningful only with deriv = TRUE
   }
@@ -256,7 +269,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     nStack_width <- as.integer(nStack)
     is_heap <- FALSE
   } else {
-    stop("'nStack' must be NULL, a non-negative integer, or Inf")
+    stop("'nStack' must be NULL, a non-negative integer, Inf, or \"auto\"")
   }
   # Codegen helper: under heap AD, every diff() seeding call must pass the
   # runtime size as a second arg so the tangent slab is allocated. Stack AD

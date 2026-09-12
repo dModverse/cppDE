@@ -2,6 +2,7 @@
 
 S3method(diagnostics,default)
 export(batchAvailable)
+export(chunkWidth)
 export(clearNativeSymbols)
 export(compile)
 export(cppFUN)

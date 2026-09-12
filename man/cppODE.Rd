@@ -59,8 +59,12 @@ implies \code{deriv = TRUE}.}
 heap-allocated AD; the per-call sensitivity dimension is taken at
 run time from \code{ncol(sens1ini)} in \code{\link[=solveODE]{solveODE()}}. A positive integer
 \code{K} fixes the width to \code{K} at compile time. \code{NULL} selects
-\code{length(c(variables, parameters)) - length(fixed)}. \code{deriv2 = TRUE}
-requires a finite width and silently demotes \code{Inf} to \code{NULL}.}
+\code{length(c(variables, parameters)) - length(fixed)}. \code{"auto"} asks
+\code{\link[=chunkWidth]{chunkWidth()}} what this machine can afford, which is the sensible
+choice for a second-order model whose parameter set is wider than the
+width: those are answered in blocks of directions on one grid.
+\code{deriv2 = TRUE} requires a finite width and silently demotes \code{Inf} to
+\code{NULL}.}
 
 \item{includeTimeZero}{Logical. Ensure that \code{0} is part of the
 integration times.}
