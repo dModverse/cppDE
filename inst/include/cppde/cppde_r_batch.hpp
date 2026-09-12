@@ -70,6 +70,12 @@ struct solve_args {
   // so the step sequence is the one a value run takes. Rides on `times` for the
   // same reason the store does: it belongs to a solve, seeded or not.
   bool sens_err_con = true;
+  // The seed's own tangents, [n_out, n_states, n_seed, n_sens]. A cotangent
+  // handed down by a node above the ODE moves with theta, and forward over
+  // reverse has to see that: the sweep carries the seed as a dual, so this is
+  // what fills its derivative slots. Rides on the seed, like errWeights.
+  const double* seed_tan = nullptr;
+  int n_seed_tan = 0;
   // lambda from an earlier sweep, read back as a step-size weight. Empty is the
   // shipped state and costs nothing. See cppde_err_weights.hpp.
   cppde::err_weights weights;
@@ -331,6 +337,14 @@ inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
     SEXP tr = Rf_getAttrib(seedSEXP, Rf_install("adjointGrid"));
     a.adj_trace = (!Rf_isNull(tr) && Rf_asLogical(tr) == TRUE);
     read_err_weights(Rf_getAttrib(seedSEXP, Rf_install("errWeights")), a.weights);
+    SEXP stg = Rf_getAttrib(seedSEXP, Rf_install("seedTangent"));
+    if (!Rf_isNull(stg) && TYPEOF(stg) == REALSXP) {
+      SEXP sd = Rf_getAttrib(stg, R_DimSymbol);
+      if (TYPEOF(sd) == INTSXP && Rf_length(sd) == 4) {
+        a.seed_tan   = REAL(stg);
+        a.n_seed_tan = INTEGER(sd)[3];
+      }
+    }
   }
 
   // On `times` rather than on the seed: the call that *makes* a store has no

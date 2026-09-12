@@ -1366,6 +1366,19 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         sprintf("        for (int i = 0; i < %d; ++i)", n_variables),
         sprintf("          _seed_col[(size_t)o * %d + i] =", n_variables),
         sprintf("              args.seed[o + (size_t)n_out * (i + (size_t)%d * c)];", n_variables),
+        if (second_reverse) c(
+          "      if (args.seed_tan != nullptr && args.n_seed_tan > 0) {",
+          "        const int _ntg = args.n_seed_tan < n_sens ? args.n_seed_tan : n_sens;",
+          "        for (int o = 0; o < n_out; ++o)",
+          sprintf("          for (int i = 0; i < %d; ++i) {", n_variables),
+          sprintf("            auto& _sc = _seed_col[(size_t)o * %d + i];", n_variables),
+          "            _sc.diff(0, n_sens);",
+          "            for (int v = 0; v < _ntg; ++v)",
+          "              _sc.d(v) = args.seed_tan[o + (size_t)n_out *",
+          sprintf("                  (i + (size_t)%d * ((size_t)c + (size_t)n_seed * v))];", n_variables),
+          "          }",
+          "      }")
+        else character(0),
         "      _cl.sweep(_rev_store, (size_t)n_phi_rows, _seed_col.data(),",
         if (written_onestep) "                _cl_sys, _adj, _cl_st, _cl_jmp);"
         else                 "                _adj, _rev_solver, _cl_jmp);",

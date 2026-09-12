@@ -1,5 +1,12 @@
 # cppDE (development version)
 
+* A reverse seed can carry its own tangents. `solveODE(..., seedTangent = )`
+  takes `[n_out, n_states, n_seed, n_sens]` beside the seed, and forward over
+  reverse fills the sweep's dual seed from it. A cotangent handed down by
+  something sitting above the ODE moves with the parameters, and without this
+  the second order silently dropped that motion: the gradient was right and the
+  Hessian was wrong in the columns of whatever the node above depended on. Rides
+  as an attribute of the seed, for the same reason `errWeights` does.
 * `derivMode = "reverse"` on `cppFUN()` builds `vjp2` beside `vjp`. The written
   vector-Jacobian product no longer names a scalar type, and instantiated over a
   dual it returns `J' dW` and `W' H V` in one pass, so an observation function

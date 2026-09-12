@@ -114,6 +114,21 @@
              "is CVODES' own backward solve and reports no grid.", call. = FALSE)
       attr(seed, "adjointGrid") <- TRUE
     }
+    ## A cotangent handed down by a node above the ODE moves with theta. Its own
+    ## tangents ride here, [n_out, n_states, n_seed, n_sens], and only forward
+    ## over reverse has slots to put them in.
+    stg <- attr(seed, "seedTangent")
+    if (!is.null(stg)) {
+      if (!identical(attr(model, "derivMode"), "forward-reverse"))
+        stop("a seed tangent needs derivMode = \"forward-reverse\"; the first ",
+             "order has no slot for it", call. = FALSE)
+      sd <- dim(stg)
+      if (length(sd) != 4L || !identical(sd[1:3], d[1:3]))
+        stop("'seedTangent' must be [n_out, n_states, n_seed, n_sens] on the ",
+             "seed's own first three dimensions", call. = FALSE)
+      storage.mode(stg) <- "double"
+      attr(seed, "seedTangent") <- stg
+    }
     if (!is.null(errWeights)) {
       if (is_cvode)
         stop("'errWeights' is not available on the CVODE backend: the backward ",
