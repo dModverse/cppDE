@@ -50,7 +50,8 @@
                          maxattemps = 50L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
                          seed = NULL, adjointGrid = FALSE,
-                         errWeights = NULL, keepStore = FALSE, store = NULL) {
+                         errWeights = NULL, keepStore = FALSE, store = NULL,
+                         sensErrCon = TRUE) {
 
   ## --- Unpack model attributes ---
   stopifnot(is.character(model), length(model) == 1L)
@@ -406,6 +407,24 @@
            "the solve that took them and do not outlive it. Let the second ",
            "solve integrate.", call. = FALSE)
   }
+  ## Whether the step size, the order and the corrector's convergence test see
+  ## the tangents. Off is a cheaper and coarser forward mode: the sensitivity
+  ## error stops being controlled, and the step count stops growing with the
+  ## direction count. Under derivMode = "forward-reverse" it is off already,
+  ## because that mode differentiates the grid a value run takes.
+  if (!is.logical(sensErrCon) || length(sensErrCon) != 1L || is.na(sensErrCon))
+    stop("'sensErrCon' must be TRUE or FALSE", call. = FALSE)
+  if (!sensErrCon) {
+    if (identical(attr(model, "derivMode"), "forward-reverse"))
+      stop("'sensErrCon' is off already under derivMode = \"forward-reverse\": ",
+           "that mode differentiates the grid a value run takes", call. = FALSE)
+    if (!isTRUE(attr(model, "deriv")))
+      stop("'sensErrCon' weighs the sensitivity error against the state error, ",
+           "and this model carries no sensitivities", call. = FALSE)
+    if (is_cvode)
+      stop("'sensErrCon' is not available on the CVODE backend", call. = FALSE)
+    attr(times, "sensErrCon") <- FALSE
+  }
   if (isTRUE(keepStore)) attr(times, "keepStore") <- TRUE
   if (!is.null(store)) {
     if (!inherits(store, "externalptr"))
@@ -731,6 +750,15 @@
 #'   `times` and `parms`. The solve integrates nothing and goes straight to the
 #'   sweep. A store from a different point is an error, not a silent reuse. It
 #'   may be reused any number of times and is freed with its last reference.
+#' @param sensErrCon Whether the step size, the order and the corrector's
+#'   convergence test see the sensitivities. `TRUE`, the default, takes the
+#'   maximum over the state and each direction, so the worst-resolved direction
+#'   sets the step. `FALSE` leaves every control decision to value arithmetic:
+#'   the step sequence is then the one a value-only run takes, whatever the
+#'   direction count, and the sensitivities come back on a coarser grid than
+#'   `abstol` and `reltol` would give them. Cheaper and less accurate, and the
+#'   convention SUNDIALS ships (`CVodeSetSensErrCon`). Needs a model with
+#'   sensitivities; under `derivMode = "forward-reverse"` it is off already.
 #' @param adjointGrid Whether the sweep also reports the grid it ran on, as
 #'   `$adjointGrid`. `FALSE` by default; requires a `seed` and the native
 #'   backend. Costs one
@@ -775,13 +803,15 @@ solveODE <- function(model, times, parms,
                      hini = 0, roottol = 1e-6, maxroot = 1L,
                      onFailure = c("stop", "warn", "silent"),
                      traceFile = NULL, seed = NULL, adjointGrid = FALSE,
-                     errWeights = NULL, keepStore = FALSE, store = NULL) {
+                     errWeights = NULL, keepStore = FALSE, store = NULL,
+                     sensErrCon = TRUE) {
 
   onFailure <- match.arg(onFailure)
 
   prep <- .odeCallArgs(model, times, parms, sens1ini, sens2ini, fixed, forcings,
                        abstol, reltol, maxattemps, maxsteps, hini, roottol, maxroot,
-                       seed, adjointGrid, errWeights, keepStore, store)
+                       seed, adjointGrid, errWeights, keepStore, store,
+                       sensErrCon)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model)))
   if (is.null(SYM)) stop("Model not loaded. Run compile() first.", call. = FALSE)
@@ -858,13 +888,14 @@ solveODEBatch <- function(model, conditions,
                           traceFile = NULL,
                           onFailure = c("stop", "warn", "silent"),
                           seed = NULL, adjointGrid = FALSE,
-                          errWeights = NULL, keepStore = FALSE, store = NULL) {
+                          errWeights = NULL, keepStore = FALSE, store = NULL,
+                          sensErrCon = TRUE) {
 
   onFailure <- match.arg(onFailure)
   preps <- .batchPreps(model, conditions, times, parms, sens1ini, sens2ini,
                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
                        hini, roottol, maxroot, seed, adjointGrid, errWeights,
-                       keepStore, store)
+                       keepStore, store, sensErrCon)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   .batchRun(model, preps, SYM, .batchDimnames(preps, SYM), names(conditions),
@@ -889,7 +920,8 @@ solveODEBatch <- function(model, conditions,
 .batchPreps <- function(model, conditions, times, parms, sens1ini, sens2ini,
                         fixed, forcings, abstol, reltol, maxattemps, maxsteps,
                         hini, roottol, maxroot, seed = NULL, adjointGrid = FALSE,
-                        errWeights = NULL, keepStore = FALSE, store = NULL) {
+                        errWeights = NULL, keepStore = FALSE, store = NULL,
+                        sensErrCon = TRUE) {
 
   if (!is.list(conditions) || !length(conditions))
     stop("'conditions' must be a non-empty list", call. = FALSE)
@@ -899,7 +931,7 @@ solveODEBatch <- function(model, conditions,
   known <- c("times", "parms", "sens1ini", "sens2ini", "fixed", "forcings",
              "abstol", "reltol", "maxattemps", "maxsteps", "hini", "roottol",
              "maxroot", "seed", "adjointGrid", "errWeights", "keepStore",
-             "store")
+             "store", "sensErrCon")
   bad <- setdiff(unlist(lapply(conditions, names)), known)
   if (length(bad))
     stop("unknown per-condition argument(s): ", paste(unique(bad), collapse = ", "),
@@ -911,7 +943,8 @@ solveODEBatch <- function(model, conditions,
                  abstol = abstol, reltol = reltol, maxattemps = maxattemps,
                  maxsteps = maxsteps, hini = hini, roottol = roottol,
                  maxroot = maxroot, seed = seed, adjointGrid = adjointGrid,
-                 errWeights = errWeights, keepStore = keepStore, store = store)
+                 errWeights = errWeights, keepStore = keepStore, store = store,
+                 sensErrCon = sensErrCon)
 
   lapply(seq_along(conditions), function(i) {
     a <- utils::modifyList(shared, conditions[[i]])
@@ -921,7 +954,7 @@ solveODEBatch <- function(model, conditions,
     .odeCallArgs(model, a$times, a$parms, a$sens1ini, a$sens2ini, a$fixed,
                  a$forcings, a$abstol, a$reltol, a$maxattemps, a$maxsteps,
                  a$hini, a$roottol, a$maxroot, a$seed, a$adjointGrid,
-                 a$errWeights, a$keepStore, a$store)
+                 a$errWeights, a$keepStore, a$store, a$sensErrCon)
   })
 }
 
@@ -1032,12 +1065,13 @@ prepareBatch <- function(model, conditions,
                          maxattemps = 50L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
                          seed = NULL, adjointGrid = FALSE,
-                         errWeights = NULL, keepStore = FALSE, store = NULL) {
+                         errWeights = NULL, keepStore = FALSE, store = NULL,
+                         sensErrCon = TRUE) {
 
   preps <- .batchPreps(model, conditions, times, parms, sens1ini, sens2ini,
                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
                        hini, roottol, maxroot, seed, adjointGrid, errWeights,
-                       keepStore, store)
+                       keepStore, store, sensErrCon)
 
   sym <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   structure(list(

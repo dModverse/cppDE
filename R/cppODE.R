@@ -925,6 +925,12 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     }
   } else NULL
 
+  # The switch that decides whether a control decision may read a tangent.
+  # Under forward over reverse it is fixed: that mode differentiates the grid a
+  # value run takes, and a caller who changed it would get a Hessian assembled
+  # from several discretisations. Everywhere else the caller owns it.
+  sens_err_con_arg <- if (second_reverse) "false" else "args.sens_err_con"
+
   if (is_multistep(method)) {
     # ---- Multistep stepper (bdf / adams) ----
     # cppde::multistepper_controller is templated on the stepper type and works
@@ -933,6 +939,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     stepper_setup_lines <- c(
       sprintf("  controlledStepper.stepper().set_use_ndf_kappa(%s);",
               if (useNDF) "true" else "false"),
+      sprintf("  controlledStepper.stepper().set_sens_err_con(%s);",
+              sens_err_con_arg),
       # Slab priming for any AD path (heap dual<T,0> or static-N dual<T,N>),
       # a no-op for non-AD and nested-AD types. Emitted before the
       # std::move into denseStepper.
@@ -988,6 +996,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     if (useDenseOutput) {
       stepper_line <- paste(
         c(sprintf("  auto controlledStepper = cppde::onestep_controller<%s>(abstol, reltol);", os_type),
+          sprintf("  controlledStepper.set_sens_err_con(%s);", sens_err_con_arg),
           "  auto denseStepper = cppde::onestep_dense_output<decltype(controlledStepper)>(std::move(controlledStepper));",
           if (deriv)
             "  denseStepper.prepare_sensitivities(static_cast<unsigned>(n_sens));"
@@ -1002,6 +1011,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     } else {
       stepper_line <- paste(
         c(sprintf("  auto controlledStepper = cppde::onestep_controller<%s>(abstol, reltol);", os_type),
+          sprintf("  controlledStepper.set_sens_err_con(%s);", sens_err_con_arg),
           onestep_prep_line),
         collapse = "\n"
       )
@@ -1063,7 +1073,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       sprintf("    dt = odeint_utils::cppde_hin<%s>(", numType),
       "      sys, x, times.front(),",
       "      odeint_utils::scalar_value(times.back()),",
-      "      abstol, reltol);",
+      sprintf("      abstol, reltol, /*sens_err_con=*/%s);", sens_err_con_arg),
       "  } else {",
       "    dt = hini;",
       "  }"
@@ -1110,7 +1120,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       sprintf("    dt = odeint_utils::estimate_initial_dt<%s>(", numType),
       "      sys, compute_ydd, x, times.front(),",
       "      odeint_utils::scalar_value(times.back()),",
-      sprintf("      abstol, reltol, /*order=*/%d);", method_order),
+      sprintf("      abstol, reltol, /*order=*/%d, /*sens_err_con=*/%s);",
+              method_order, sens_err_con_arg),
       "  } else {",
       "    dt = hini;",
       "  }"
@@ -1128,7 +1139,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       sprintf("    return odeint_utils::cppde_hin<%s>(", numType),
       "      sys, x_ev, t_ev,",
       "      odeint_utils::scalar_value(times.back()),",
-      "      abstol, reltol);",
+      sprintf("      abstol, reltol, %s);", sens_err_con_arg),
       "  };"
     )
   }

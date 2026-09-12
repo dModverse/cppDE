@@ -24,7 +24,8 @@ prepareBatch(
   adjointGrid = FALSE,
   errWeights = NULL,
   keepStore = FALSE,
-  store = NULL
+  store = NULL,
+  sensErrCon = TRUE
 )
 }
 \arguments{
@@ -131,6 +132,16 @@ only: CVODES holds its checkpoints itself.}
 \code{times} and \code{parms}. The solve integrates nothing and goes straight to the
 sweep. A store from a different point is an error, not a silent reuse. It
 may be reused any number of times and is freed with its last reference.}
+
+\item{sensErrCon}{Whether the step size, the order and the corrector's
+convergence test see the sensitivities. \code{TRUE}, the default, takes the
+maximum over the state and each direction, so the worst-resolved direction
+sets the step. \code{FALSE} leaves every control decision to value arithmetic:
+the step sequence is then the one a value-only run takes, whatever the
+direction count, and the sensitivities come back on a coarser grid than
+\code{abstol} and \code{reltol} would give them. Cheaper and less accurate, and the
+convention SUNDIALS ships (\code{CVodeSetSensErrCon}). Needs a model with
+sensitivities; under \code{derivMode = "forward-reverse"} it is off already.}
 }
 \value{
 An object of class \code{"cppDEbatch"} for \code{\link[=solveBatch]{solveBatch()}}.

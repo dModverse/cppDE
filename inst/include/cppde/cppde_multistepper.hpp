@@ -364,7 +364,8 @@ pece_result adams_pece_solve(
     std::vector<Value>& ftemp,
     const detail::tangent_slab<Value>& ftemp_slab,
     double& crate,
-    cppde::profiler& prof)
+    cppde::profiler& prof,
+    bool sens_err_con = true)
 {
   using newton_detail::wrms_norm;
   using cppde::ad_traits::scalar_value;
@@ -430,7 +431,7 @@ pece_result adams_pece_solve(
     }
 
     { auto _t = prof.timer(prof_cat::error_norm);
-      del = wrms_norm(tempv, y, n, atol, rtol); }
+      del = wrms_norm(tempv, y, n, atol, rtol, sens_err_con); }
 
     // y = zn[0]_pred + acor; both take the same increment.
     { auto _t = prof.timer(prof_cat::newton_overhead);
@@ -456,7 +457,7 @@ pece_result adams_pece_solve(
       // Converged: compute acnrm AD-aware, same convention as Newton.
       double acnrm;
       { auto _t = prof.timer(prof_cat::error_norm);
-        acnrm = wrms_norm(acor, zn0, n, atol, rtol); }
+        acnrm = wrms_norm(acor, zn0, n, atol, rtol, sens_err_con); }
 
       // Final E: re-evaluate at corrected y so next step has fresh data.
       { auto _t = prof.timer(prof_cat::f_eval);
@@ -725,6 +726,12 @@ public:
   // ====================================================================
 
   void set_use_ndf_kappa(bool v) { m_use_ndf_kappa = v; }
+
+  // With the tangents out of the error test, the corrector test and the order
+  // choice, every control decision reads value arithmetic only, so the step
+  // sequence is the one a scalar run takes whatever the tangent count is.
+  void set_sens_err_con(bool v) { m_sens_err_con = v; }
+  bool sens_err_con() const { return m_sens_err_con; }
   bool use_ndf_kappa() const { return m_use_ndf_kappa; }
 
   // ====================================================================
@@ -1006,7 +1013,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         m_crate,
         m_gamrat,
         m_prof,
-        m_ewt
+        m_ewt,
+        m_sens_err_con
   );
 
   m_acnrm = result.acnrm;
@@ -1182,7 +1190,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         m_ftemp.m_v,
         m_ftemp_slab,
         m_crate,
-        m_prof);
+        m_prof,
+        m_sens_err_con);
 
     m_acnrm     = result.acnrm;
     m_n_fevals += result.n_fevals;
@@ -1428,8 +1437,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     if constexpr (ad_lu::is_ad<value_type>::value) {
       if (n > 0) nd = const_cast<value_type&>(m_acor.m_v[0]).size();
     }
+    const unsigned nw = m_sens_err_con ? nd : 0u;
     std::vector<double>& sens_sumsq = cppde::detail::tls_scratch_f64<3>();
-    sens_sumsq.assign(nd, 0.0);
+    sens_sumsq.assign(nw, 0.0);
 
     size_t ew = 0;  // ewt index (interleaved for AD)
     for (size_t i = 0; i < n; ++i) {
@@ -1441,6 +1451,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
       // Derivative components (compiles to nothing for double)
       if constexpr (ad_lu::is_ad<value_type>::value) {
+        if (nw == 0) { ew += nd; continue; }
         auto& acor_i = const_cast<value_type&>(m_acor.m_v[i]);
         auto& znqm_i = const_cast<value_type&>(m_zn[max_order].m_v[i]);
         for (unsigned j = 0; j < nd; ++j) {
@@ -1454,7 +1465,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
     // Max-norm over (state, each sens vector): CVODES convention.
     double dup = (n > 0) ? std::sqrt(state_sumsq / n) : 0.0;
-    for (unsigned j = 0; j < nd; ++j) {
+    for (unsigned j = 0; j < nw; ++j) {
       double sens_norm = std::sqrt(sens_sumsq[j] / n);
       if (sens_norm > dup) dup = sens_norm;
     }
@@ -2542,6 +2553,7 @@ public:
   std::array<int, max_order + 1> m_steps_at_order = {};
 
   bool m_use_ndf_kappa = true;   // NDF kappa coefficients (runtime, default: NDF)
+  bool m_sens_err_con = true;    // tangents count in the error and corrector tests
 
 #ifdef CPPDE_STEP_TRACE
   // Scratch state populated by step_bdf_family / step_adams and read by

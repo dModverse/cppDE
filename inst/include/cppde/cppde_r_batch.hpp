@@ -65,6 +65,11 @@ struct solve_args {
   // nothing. Opaque here: only the model knows the store's type.
   void* store_in  = nullptr;
   bool  want_store = false;
+  // Whether the step size, the order and the corrector's convergence test see
+  // the tangents. Off makes every control decision read value arithmetic only,
+  // so the step sequence is the one a value run takes. Rides on `times` for the
+  // same reason the store does: it belongs to a solve, seeded or not.
+  bool sens_err_con = true;
   // lambda from an earlier sweep, read back as a step-size weight. Empty is the
   // shipped state and costs nothing. See cppde_err_weights.hpp.
   cppde::err_weights weights;
@@ -336,6 +341,8 @@ inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
     SEXP st = Rf_getAttrib(timesSEXP, Rf_install("store"));
     if (!Rf_isNull(st) && TYPEOF(st) == EXTPTRSXP)
       a.store_in = R_ExternalPtrAddr(st);
+    SEXP se = Rf_getAttrib(timesSEXP, Rf_install("sensErrCon"));
+    if (!Rf_isNull(se)) a.sens_err_con = (Rf_asLogical(se) == TRUE);
   }
 
   a.abstol      = REAL(abstolSEXP)[0];

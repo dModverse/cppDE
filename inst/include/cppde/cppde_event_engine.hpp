@@ -240,10 +240,12 @@ private:
    } else if constexpr (has_controlled_stepper_method<Stepper>::value) {
      dt = Time(odeint_utils::cppde_hin<value_type>(
          m_sys.first, x, t, m_t_final,
-         m_st.controlled_stepper().atol(), m_st.controlled_stepper().rtol()));
+         m_st.controlled_stepper().atol(), m_st.controlled_stepper().rtol(),
+         m_st.controlled_stepper().sens_err_con()));
    } else if constexpr (has_tolerances<Stepper>::value) {
      dt = Time(odeint_utils::cppde_hin<value_type>(
-         m_sys.first, x, t, m_t_final, m_st.atol(), m_st.rtol()));
+         m_sys.first, x, t, m_t_final, m_st.atol(), m_st.rtol(),
+         m_st.sens_err_con()));
    }
  }
 

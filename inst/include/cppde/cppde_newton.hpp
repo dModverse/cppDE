@@ -68,7 +68,9 @@ struct newton_result {
   //
   //    wrms_norm_scalar     : double vectors, for scalar Newton convergence
   //    wrms_norm_correction : value components only, for Newton convergence
-  //    wrms_norm            : all derivative components, for error control
+  //    wrms_norm            : all derivative components, for error control.
+  //                           sens_err_con = false drops them, which makes the
+  //                           step sequence independent of the tangent count.
   // ============================================================================
 
 namespace newton_detail {
@@ -113,14 +115,15 @@ double wrms_norm_correction(const std::vector<T>& b,
 template<class T>
 double wrms_norm(const std::vector<T>& v,
                  const std::vector<T>& y0,
-                 size_t n, double atol, double rtol)
+                 size_t n, double atol, double rtol,
+                 bool sens_err_con = true)
 {
   if (n == 0) return 0.0;
 
   double state_sumsq = 0.0;
   unsigned nd = 0;
   if constexpr (ad_lu::is_ad<T>::value) {
-    nd = const_cast<T&>(v[0]).size();
+    if (sens_err_con) nd = const_cast<T&>(v[0]).size();
   }
   // Per-sensitivity accumulator, reused across calls.  Not reentrant.
   std::vector<double>& sens_sumsq = cppde::detail::tls_scratch_f64<0>();
@@ -159,20 +162,24 @@ template<class T>
 double wrms_max_ewt(const std::vector<T>& v,
                     const detail::tangent_slab<T>& slab,
                     size_t n,
-                    const std::vector<double>& ewt)
+                    const std::vector<double>& ewt,
+                    bool sens_err_con = true)
 {
   if (n == 0) return 0.0;
 
   unsigned nd = 0;
   if constexpr (ad_lu::is_ad<T>::value) nd = const_cast<T&>(v[0]).size();
+  // ewt stays interleaved at nd tangents per state, whatever the norm may see,
+  // so the stride and the slice count are two numbers.
+  const unsigned nw = sens_err_con ? nd : 0u;
 
   std::vector<double>& sens_sumsq = cppde::detail::tls_scratch_f64<1>();
-  sens_sumsq.assign(nd, 0.0);
+  sens_sumsq.assign(nw, 0.0);
   double state_sumsq = 0.0;
 
   auto finish = [&]() {
     double max_norm = std::sqrt(state_sumsq / n);
-    for (unsigned j = 0; j < nd; ++j) {
+    for (unsigned j = 0; j < nw; ++j) {
       double sens_norm = std::sqrt(sens_sumsq[j] / n);
       if (sens_norm > max_norm) max_norm = sens_norm;
     }
@@ -193,7 +200,7 @@ double wrms_max_ewt(const std::vector<T>& v,
         double r = std::abs(scalar_value(v[i])) * w[0];
         state_sumsq += r * r;
         const S* ti = tan + i * static_cast<size_t>(nd);
-        for (unsigned j = 0; j < nd; ++j) {
+        for (unsigned j = 0; j < nw; ++j) {
           double rd = std::abs(scalar_value(ti[j])) * w[j + 1];
           sens_sumsq[j] += rd * rd;
         }
@@ -207,6 +214,7 @@ double wrms_max_ewt(const std::vector<T>& v,
     double r = std::abs(scalar_value(v[i])) * ewt[ew++];
     state_sumsq += r * r;
     if constexpr (ad_lu::is_ad<T>::value) {
+      if (nw == 0) { ew += nd; continue; }
       auto& v_ad = const_cast<T&>(v[i]);
       for (unsigned j = 0; j < nd; ++j) {
         double rd = std::abs(scalar_value(v_ad.d(j))) * ewt[ew++];
@@ -254,7 +262,8 @@ newton_result ndf_newton_solve(
     double& crate,
     double gamrat,
     cppde::profiler& prof,
-    const std::vector<double>& ewt = {})
+    const std::vector<double>& ewt = {},
+    bool sens_err_con = true)
 {
   using newton_detail::wrms_norm_correction;
   using newton_detail::wrms_norm;
@@ -328,9 +337,9 @@ newton_result ndf_newton_solve(
     // the controller sees the worst: matching CVODES cvSensUpdateNorm.
     { auto _t = prof.timer(prof_cat::error_norm);
       if (use_ewt) {
-        del = wrms_max_ewt(tempv, tempv_slab, n, ewt);
+        del = wrms_max_ewt(tempv, tempv_slab, n, ewt, sens_err_con);
       } else {
-        del = wrms_norm(tempv, y, n, atol, rtol);
+        del = wrms_norm(tempv, y, n, atol, rtol, sens_err_con);
       }
     }
 
@@ -360,9 +369,9 @@ newton_result ndf_newton_solve(
       double acnrm;
       { auto _t = prof.timer(prof_cat::error_norm);
         if (use_ewt) {
-          acnrm = wrms_max_ewt(acor, acor_slab, n, ewt);
+          acnrm = wrms_max_ewt(acor, acor_slab, n, ewt, sens_err_con);
         } else {
-          acnrm = wrms_norm(acor, zn0, n, atol, rtol);
+          acnrm = wrms_norm(acor, zn0, n, atol, rtol, sens_err_con);
         }
       }
       return { true, acnrm, n_fevals };

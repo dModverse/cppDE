@@ -381,7 +381,7 @@ public:
         double h_est = odeint_utils::cppde_hin<value_type>(
             deriv_func,
             x_cur, t, tn_abs,  // no t_final known here: use |t0| as upper hint
-            m_atol, m_rtol);
+            m_atol, m_rtol, m_stepper.sens_err_con());
 
         // Clamp: don't exceed the h that just failed, stay above floor.
         h_est = std::min(h_est, h_cur);
@@ -525,6 +525,7 @@ public:
   const stepper_type& stepper() const { return m_stepper; }
 
   double atol() const { return m_atol; }
+  bool sens_err_con() const { return m_stepper.sens_err_con(); }
   double rtol() const { return m_rtol; }
   void set_tolerances(double atol, double rtol)
   {

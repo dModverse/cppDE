@@ -258,7 +258,8 @@ public:
         [](const value_type& v) { return scalar_value(v); });
 
     if constexpr (ad_lu::is_ad<value_type>::value) {
-      const unsigned nd = const_cast<value_type&>(xerr[0]).size();
+      const unsigned nd = m_sens_err_con
+        ? const_cast<value_type&>(xerr[0]).size() : 0u;
       std::vector<double> sens_sumsq(nd, 0.0);
       for (size_t i = 0; i < n; ++i) {
         auto& xerr_ad = const_cast<value_type&>(xerr[i]);
@@ -443,6 +444,12 @@ public:
   double rtol() const { return m_rtol; }
   void set_tolerances(double atol, double rtol) { m_atol = atol; m_rtol = rtol; }
 
+  // With the tangents out of the error test the step sequence reads value
+  // arithmetic only, so it is the one a scalar run takes whatever the tangent
+  // count is. The goal-oriented term below is unaffected; it is a double.
+  void set_sens_err_con(bool v) { m_sens_err_con = v; }
+  bool sens_err_con() const { return m_sens_err_con; }
+
   // PI controller parameter accessors
   double alpha() const { return m_alpha; }
   double beta() const { return m_beta; }
@@ -545,6 +552,7 @@ private:
   unsigned m_n_sens = 0;
 
   double m_atol, m_rtol;
+  bool m_sens_err_con = true;   // tangents count in the error test
   double m_max_dt;
 
   // PI controller parameters

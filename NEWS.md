@@ -18,6 +18,30 @@
   such a store to a later solve gave exact values, an exact gradient and a wrong
   Hessian, with nothing to show for it. Until the store owns its tangents, the
   second solve integrates.
+* `solveODE(..., sensErrCon = FALSE)` is a cheaper and coarser forward mode.
+  The step size, the order and the corrector's convergence test then read value
+  arithmetic only, so the sensitivities ride the grid a value run takes instead
+  of the finer one their own error would ask for. Worth it where the step count
+  matters more than the last digits of a tangent: the maximum is taken over the
+  state and every direction, so on a wide sensitivity set the worst-resolved
+  direction otherwise sets the step for all of them, and the step count grows
+  by about a factor of three before it saturates. This is the convention
+  SUNDIALS ships, where the same switch is off by default. It carries through
+  `solveODEBatch()` and `prepareBatch()`, batch-wide or per condition, and
+  needs a model that has sensitivities.
+* A model built with `derivMode = "forward-reverse"` differentiates the grid a
+  value run takes. The error test, the order choice, the corrector's
+  convergence test and the first step now read value arithmetic only, so the
+  step sequence no longer depends on how many tangent directions ride along or
+  on what they contain. Three things follow. A Hessian assembled from several
+  blocks of directions is one matrix rather than several: `sens1ini` may be
+  split into chunks of any width and the result is the same to the last bit.
+  Such a model now takes the same grid as `derivMode = "reverse"`, so its
+  gradient belongs to the trajectory a value run produces rather than to a
+  finer one of its own; the two agree to rounding rather than exactly, because
+  a corrector sums in a different order over the AD type than over `double`.
+  And the step count stops growing with the direction count. `derivMode = "forward"`
+  and `"forward-forward"` are untouched and keep the sensitivity error control.
 * The methods vignette covers the reverse mode as it now stands. It derives
   the adjoint equation and its quadrature, separates the discrete adjoint from
   the continuous one, gives the transposed saltation relation and the restart
