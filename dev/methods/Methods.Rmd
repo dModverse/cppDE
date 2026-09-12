@@ -55,8 +55,8 @@ Table \ref{tab:entry-points} summarises their scope.
 Problem class              & ODE                              & ODE                           & algebraic $y = g(x, p)$       \\
 Methods                    & \texttt{bdf, adams, rb4, tsit5}  & \texttt{bdf, adams}           &                             \\
 First-order sensitivities  & in-tree dual-number AD           & SUNDIALS analytic RHS         & dual AD or symbolic           \\
-Reverse-mode gradient      & yes (discrete adjoint)           & no                            & yes                           \\
-Second-order sensitivities & yes (nested duals)               & no                            & yes (nested duals or symbolic)\\
+Reverse-mode gradient      & yes (discrete adjoint)           & yes (CVODES ASA)              & yes                           \\
+Second-order sensitivities & yes (nested duals, fwd-over-rev) & no                            & yes (nested duals or symbolic)\\
 External dependencies      & LAPACK; KLU optional             & SUNDIALS $\ge 6.0$; KLU opt.  & none                          \\
 Codegen                    & SymPy + \texttt{R CMD SHLIB}     & SymPy + \texttt{R CMD SHLIB}  & SymPy + \texttt{R CMD SHLIB}  \\
 \bottomrule
@@ -89,10 +89,12 @@ sensitivities, the reverse-mode discrete adjoint that computes a
 gradient at a cost independent of the number of parameters, and the
 transport of sensitivities across events.
 Section \ref{sec:cvode} describes the SUNDIALS-backed
-\texttt{cvode()} integrator. Section \ref{sec:funcpp} describes the
-algebraic-function compiler \texttt{cppFUN()}, which compiles a
-system of expressions $y = g(x, p)$ together with optional first-
-and second-order derivatives, with no time integration. The
+\texttt{cvode()} integrator and the adjoint sensitivity
+analysis it reaches the same gradient by. Section
+\ref{sec:funcpp} describes the algebraic-function compiler
+\texttt{cppFUN()}, which compiles a system of expressions
+$y = g(x, p)$ together with optional first- and second-order
+derivatives, with no time integration. The
 principal use cases of \texttt{cppFUN()} are observation maps that
 link integrator output to data in likelihood-based inference and
 reparametrisation Jacobians $\partial p/\partial \theta$ that seed
@@ -1108,130 +1110,410 @@ attached to the observed trajectory, the reverse mode returns
   \qquad j = 1,\dots,n_x+n_p,
   \label{eq:adjoint-contraction}
 \end{equation}
-in one sweep. For a least-squares objective $W$ is the residual
-weighted by the error model, and $\bar\theta$ is $\nabla_\theta J$
-exactly. Several cotangents may be supplied as columns of a
-three-dimensional array, one sweep each.
+in one sweep. The row index $o$ runs over the observation times and the
+column index $i$ over the state components. Write $w_o \in
+\mathbb{R}^{n_x}$ for the vector formed from row $o$, the cotangent
+attached to the trajectory at $t_o$. For a least-squares objective $W$
+is the residual weighted by the error
+model, and $\bar\theta$ is $\nabla_\theta J$ exactly. Several cotangents
+may be supplied as columns of a three-dimensional array, one sweep
+each.
+
+### The adjoint equation
+
+The contraction in \eqref{eq:adjoint-contraction} can be evaluated
+without forming $S_p$ at all. The construction is classical and is
+given here because both backends implement it, each with a different
+discretisation. Let $S_p$ be the forward sensitivity of
+\eqref{eq:sensitivity-p}. Define
+$\lambda(t) \in \mathbb{R}^{n_x}$ backwards from the end of the
+observed interval by
+\begin{equation}
+  \dot\lambda = -J(x, p, t)^{\mathsf T}\lambda,
+  \qquad \lambda(T^+) = 0,
+  \qquad \lambda(t_o^-) = \lambda(t_o^+) + w_o,
+  \label{eq:adjoint-ode}
+\end{equation}
+so that $\lambda$ evolves continuously between observation times and
+jumps by the cotangent row at each one. Along the solution
+\begin{equation}
+  \frac{\mathrm{d}}{\mathrm{d}t}
+    \left(\lambda^{\mathsf T} S_p\right)
+    = -\lambda^{\mathsf T} J S_p
+      + \lambda^{\mathsf T}\!
+        \left(J S_p + \frac{\partial f}{\partial p}\right)
+    = \lambda^{\mathsf T} \frac{\partial f}{\partial p},
+  \label{eq:adjoint-identity}
+\end{equation}
+where the two Jacobian terms cancel. That cancellation is what allows
+$\lambda$ to be defined without reference to $\theta$, and it is the
+reason the construction is independent of the number of parameters.
+Integrating \eqref{eq:adjoint-identity} over $[t_0, T]$ and collecting
+the jumps, whose contributions are exactly the terms of
+\eqref{eq:adjoint-contraction}, gives
+\begin{equation}
+  \bar\theta
+    = \left(\frac{\partial x_0}{\partial \theta}\right)^{\!\mathsf T}\!
+      \lambda(t_0)
+    + \left(\frac{\partial p}{\partial \theta}\right)^{\!\mathsf T}\!
+      \int_{t_0}^{T}
+      \left(\frac{\partial f}{\partial p}\right)^{\!\mathsf T}\!\lambda(t)\,
+      \mathrm{d}t .
+  \label{eq:adjoint-result}
+\end{equation}
+Taking $\theta$ to be the initial state and the parameters themselves
+makes both outer factors identities and splits the answer in two,
+\begin{equation}
+  \bar x_0 = \lambda(t_0),
+  \qquad
+  \bar p = \int_{t_0}^{T}
+    \left(\frac{\partial f}{\partial p}\right)^{\!\mathsf T}\!\lambda(t)\,
+    \mathrm{d}t,
+  \label{eq:adjoint-quadrature}
+\end{equation}
+which is the pair a reverse solve reports. A reparametrisation
+$p = \Phi(\theta)$ is applied afterwards through the outer factors of
+\eqref{eq:adjoint-result}, which is the chain rule of
+\eqref{eq:sensitivity-theta} applied on the left instead of on the
+right.
+
+The gradient is therefore obtained from one backward solve of a linear
+system of the dimension of the state, together with a quadrature of the
+dimension of $p$. Neither \eqref{eq:adjoint-ode} nor
+\eqref{eq:adjoint-quadrature} involves $M$, since $\partial f/\partial p$
+enters only through its contraction with $\lambda$ and is never formed
+as a matrix. The two parts of \eqref{eq:adjoint-quadrature} are returned
+stacked in the order in which a forward seed matrix is indexed, states
+first and parameters second.
+
+### Discrete and continuous adjoints
+
+Equation \eqref{eq:adjoint-ode} describes the exact trajectory. Two
+discretisations of it are in common use, and cppDE provides both.
+
+The \emph{continuous} adjoint differentiates first and discretises
+afterwards: \eqref{eq:adjoint-ode} is handed to an integrator of its
+own and solved backwards over forward states recovered by
+interpolation [@cao2003adjoint]. This is the route CVODES takes, and
+Section \ref{sec:asa} describes the form in which \texttt{cvode()}
+exposes it.
+
+The \emph{discrete} adjoint reverses that order. It transposes the map
+the forward run applied, one accepted step at a time, and is what
+\texttt{cppODE()} implements. Both approximate the same gradient, and
+their results converge as the tolerance is lowered, but they differ in
+three respects that matter in practice.
+
+\textbf{Consistency of value and gradient.} The discrete adjoint
+differentiates the trajectory that was actually computed, so it returns
+the derivative of the value the forward run reported, up to rounding.
+The continuous adjoint approximates the derivative of the exact
+solution, which no run computes, so its gradient and the accompanying
+value are consistent only to $O(\mathrm{tol})$. Tightening the backward
+tolerance alone does not remove that difference.
+
+\textbf{Discontinuities.} A jump in the state implies a jump in
+$\lambda$, given by the transposed saltation matrix of the event. A
+continuous adjoint has to restart its backward integration with that
+matrix, which requires an interface through which the solver can be
+informed of the discontinuity. In the discrete adjoint the jump is the
+transpose of arithmetic the forward run performed, and is handled by
+the same replay as every other step.
+
+\textbf{Linear algebra per step.} The adjoint of an implicit step is a
+single transposed solve against the iteration matrix of that step,
+evaluated at the state stored in its checkpoint, without a Newton
+iteration and without error control of its own. The continuous adjoint
+integrates a stiff linear ODE instead, with a step-size controller and
+a step count of its own that need not resemble those of the forward
+run.
 
 ### The step map and its adjoint
 
-Reverse-mode differentiation cannot be realised by an augmented
-arithmetic alone. A dual number carries its derivative forward through
-each operation, so the derivative is available the moment the value is;
-a reverse derivative is a sum over all downstream uses of a quantity,
-and none of them has happened yet when the operation executes.
+Reverse accumulation cannot be obtained from an augmented arithmetic in
+the way forward sensitivities are. A dual number carries its derivative
+alongside its value, so the derivative of an operation is available as
+soon as the operation has executed. An adjoint is a sum over all later
+uses of a quantity, none of which has occurred at that point in the
+computation.
 
-One way out is to record the computation and traverse the recording
-backwards, and cppDE did that until 2026-09-11. The other is to observe
-that the map being differentiated is not an arbitrary computation: it is
-one accepted step of a known method on a grid that is frozen. Its adjoint
-can therefore be stated rather than discovered, and that is what the
-library now does.
+Two implementations are possible. The first records the operations of a
+step and traverses the record backwards; cppDE used this until
+2026-09-11. The second uses the fact that the map to be differentiated
+is not arbitrary. It is one accepted step of a known method on a grid
+that is held fixed, so its adjoint can be written in closed form. cppDE
+uses the second implementation.
 
-An accepted step of the multistep family decomposes into three pieces:
+An accepted step of the multistep family decomposes into three parts:
 \begin{align}
   z^{\text{pred}} &= A\, z^{\text{in}}, \label{eq:step-pred}\\
   r(y, z^{\text{pred}}, \theta) &= 0, \label{eq:step-corr}\\
   z^{\text{out}} &= B\, z^{\text{pred}} + c\, a, \qquad a = y - z^{\text{pred}}_0,
   \label{eq:step-tail}
 \end{align}
-the Nordsieck rescale and Pascal shift, the corrector, and the tail the
-controller applies between this step's acceptance and the next one's.
-$A$, $B$ and $c$ act on the slot index alone, with coefficients that
-follow from the carry and are the same for every state component. They
-are therefore not transposed by hand but read off the stepper itself: a
-probe whose states are the slots is driven through the very routines the
-forward step runs, with the identity in the
-$[\text{slot} \times \text{component}]$ array, and every column comes
-back in one pass. Nothing about the step is restated, so nothing can
-drift from it.
+namely the Nordsieck rescale and Pascal shift, the corrector, and the
+tail that the controller applies between the acceptance of this step and
+that of the next. The operators $A$, $B$ and $c$ act on the slot index
+only; their coefficients follow from the carry and are identical for
+every state component. They are therefore not transposed by hand but
+read off the stepper: a probe whose states are the Nordsieck slots is
+driven through the routines the forward step runs, carrying the identity
+in the $[\text{slot} \times \text{component}]$ array, and one pass
+returns every column. Since no coefficient is restated, the adjoint
+cannot drift from the step it belongs to.
 
-The corrector is closed by the implicit function theorem, which is what
-makes the adjoint of an implicit step cheap: $\partial r/\partial y$ is
-the very iteration matrix $W = I - \gamma J$ the forward step
-factorises, and one transposed solve against it replaces the whole
-Newton iteration. The Rosenbrock family is a transposed stage recursion
-instead, six solves against one factorisation, and an explicit method is
-the textbook backward recursion over its tableau.
+The corrector is differentiated by the implicit function theorem, which
+is what makes the adjoint of an implicit step inexpensive. The
+derivative $\partial r/\partial y$ is the iteration matrix
+$W = I - \gamma J$ that the forward step factorises, so one transposed
+solve against $W$ replaces the entire Newton iteration. For the
+Rosenbrock family the corresponding object is a transposed stage
+recursion, six solves against one factorisation; for an explicit method
+it is the backward recursion over the tableau.
 
-The model supplies the contractions the adjoint needs, emitted by the
-code generator beside the right-hand side: $J^{\mathsf T}\lambda$,
-$(\partial f/\partial p)^{\mathsf T}\lambda$ and, for a Rosenbrock
-method, the same two over $J v$, whose derivative is a second one
-because its stages solve against a matrix built from the Jacobian.
+The contractions the adjoint requires are supplied by the model and
+emitted by the code generator beside the right-hand side:
+$J^{\mathsf T}\lambda$, $(\partial f/\partial p)^{\mathsf T}\lambda$
+and, for a Rosenbrock method, the same two applied to $J v$, which
+carries a second derivative because its stages solve against a matrix
+built from the Jacobian.
 
 ### Checkpoint per step
 
-The backward walk still needs the state the forward run passed through.
-An adaptive run takes hundreds to thousands of steps, so the states are
-not kept as a tape of operations but as one checkpoint per accepted
-step: the step-start state, the carry, the time and the size the
-controller chose, and the record of what the controller did to the carry
-afterwards. Memory is linear in the number of steps and holds no
-derivative information at all.
+The backward pass requires the states the forward run passed through.
+An adaptive run takes hundreds to thousands of steps, so these are
+stored not as a tape of operations but as one checkpoint per accepted
+step, holding the step-start state, the carry, the time, the step size
+the controller chose, and a record of the operations the controller
+applied to the carry afterwards. The memory required is linear in the
+number of steps and contains no derivative information.
 
-Observations sit at interpolated times, not at step ends. Each step's
-own continuous extension carries them, and its adjoint falls out of the
-same probe: after the tail the probe holds a valid interpolant, so
-evaluating it at the observation time gives the row
+Observations lie at interpolated times rather than at step ends, and are
+evaluated through the continuous extension of the step that contains
+them. The adjoint of that evaluation is obtained from the same probe:
+after the tail has been applied the probe holds a valid interpolant, and
+evaluating it at the observation time yields the row
 $\partial x_{\text{interp}} / \partial (z^{\text{pred}}, a)$ directly.
 
-### Events backwards
+### Checkpoint reuse
+
+The sweep reads nothing but the checkpoints, so the forward pass and the
+backward pass can be issued as separate calls. A reverse solve with
+\texttt{keepStore = TRUE} returns its checkpoints as \verb|$store|, and
+a later solve of the same model at the same times and parameters accepts
+them through \texttt{store}; that solve performs no integration and
+proceeds directly to the sweep. A store created at a different parameter
+value is rejected rather than reused. The seed may be omitted on the
+call that creates a store, which then performs a value-only run and
+retains its checkpoints.
+
+A gradient requires two solves at the same parameter value, one to
+provide the values from which the seed is formed and one to perform the
+sweep, and the store removes the second integration. Several cotangents
+are handled in the same way: the columns of a three-dimensional seed
+sweep the one store in turn, so $n_{\text{seed}}$ cotangents cost
+$n_{\text{seed}}$ sweeps and a single integration.
+
+Table \ref{tab:adjoint-cost} compares the routes on one objective chain,
+\texttt{Bachmann\_MSB2011} from the collection of Section
+\ref{sec:bench}, with $n_x = 25$ over $36$ experimental conditions,
+including the observation map and the residual sum of squares, and
+differentiated in $M = 113$ parameters.
+
+\begin{table}[h]
+\centering
+\begin{tabular}{@{} l r r @{}}
+\toprule
+Route & ms & in value runs \\
+\midrule
+Value only                    &  34.8 &  1.00 \\
+Forward sensitivities         & 974.6 & 28.00 \\
+Discrete adjoint              & 106.6 &  3.06 \\
+CVODES adjoint sensitivities  & 201.1 &  5.77 \\
+\bottomrule
+\end{tabular}
+\caption{One gradient of one objective chain, $n_x = 25$ over $36$
+conditions, $M = 113$, at fixed tolerances on one core. The value run
+is the same chain without derivatives. The forward column is the cost
+the adjoint is meant to remove, and grows with $M$ where the other two
+do not.}
+\label{tab:adjoint-cost}
+\end{table}
+
+Per step, the backward pass costs about $1.7$ times the forward
+integration, measured over the $721$ accepted steps of the longest
+condition. Roughly half of that is linear algebra: the sweep re-forms
+and refactorises the iteration matrix at each checkpoint, the
+factorisation of the forward run having been discarded long before the
+sweep reaches that step. The slot operators are cached rather than
+rebuilt, keyed on the carry and the step size, so the probe described
+above is invoked only where the controller changed the control state,
+which occurs at roughly one step in five.
+
+### The adjoint of an event
 
 An intervention is a map of its own between two steps. The engine
-carries a discontinuity across on a Heun sandwich: a shift to the event
-surface, the resets, a shift back to the grid time. The shift is by the
-event time's own residual, and that residual has its value subtracted
-off before it is used, so it is numerically zero and only its derivative
-survives. In value the jump is therefore a jump, and the sandwich
-collapses to the classical saltation,
+transports the discontinuity with a Heun sandwich: a shift to the event
+surface, the resets, and a shift back to the grid time. Each shift is
+taken over the residual of the event time, whose own value is subtracted
+before it is used, so the residual is numerically zero and only its
+derivative survives. In value the jump is therefore a plain jump, and
+the sandwich reduces to the classical saltation relation,
 \begin{equation}
   \mathrm{d}x = R'\!\left(\mathrm{d}x_{\text{before}} + f_{\text{before}}\, s\right)
               - f_{\text{after}}\, s,
   \label{eq:saltation}
 \end{equation}
-with $R$ the resets and $s$ the differential of the event time. For a
-root event $s = -(\nabla g \cdot \mathrm{d}x + \partial g/\partial p
-\cdot \mathrm{d}p)/\dot g$, the implicit function theorem on the root
-condition; for a fixed event it is the differential of the event's own
-time expression. A jump's adjoint therefore needs the right-hand side at
-the two ends and the model's derivatives of the event expressions, and
-no Jacobian: every term the shifts would have contributed carries a
-factor that is zero.
+with $R$ the resets, $R'$ their Jacobian and $s$ the differential of the
+event time. For a root event $g(x, t, p) = 0$ the implicit function
+theorem gives
+$s = -(\nabla g \cdot \mathrm{d}x + \partial g/\partial p \cdot
+\mathrm{d}p) / \dot g$, and for a fixed event at $t = \tau(p)$ it is
+$s = (\partial \tau/\partial p)\cdot \mathrm{d}p$.
 
-After a jump the multistepper restarts, and \verb|initialize| builds the
-whole Nordsieck history out of one state, so the history's cotangent
-collapses onto that state. The trajectory's own start applies the same
-map, which is why it is written once and called twice.
+Since \eqref{eq:saltation} is linear in $\mathrm{d}x_{\text{before}}$
+and $\mathrm{d}p$, its transpose can be read off directly. Contracting
+it with a cotangent $\lambda_{\text{after}}$ and collecting the terms
+that multiply $s$ leaves one scalar,
+\begin{equation}
+  \kappa = \lambda_{\text{after}}^{\mathsf T}
+           \left(R' f_{\text{before}} - f_{\text{after}}\right),
+  \qquad
+  \lambda_{\text{before}}
+    = R'^{\mathsf T}\lambda_{\text{after}}
+    + \kappa \left(\frac{\partial s}{\partial x}\right)^{\!\mathsf T},
+  \label{eq:saltation-adjoint}
+\end{equation}
+and the parameter cotangent receives
+$\kappa\,(\partial s/\partial p)^{\mathsf T}$ in addition. For a root
+event both derivatives of $s$ carry the factor $-\kappa/\dot g$, so the
+state picks up $-(\kappa/\dot g)\nabla g$ and the parameters
+$-(\kappa/\dot g)\,\partial g/\partial p$. For a fixed event
+$\partial s/\partial x = 0$ and the parameters pick up
+$\kappa\,\partial\tau/\partial p$.
 
-### The step grid is not differentiated
+The transpose $R'^{\mathsf T}$ is applied reset by reset and in reverse
+order. A reset that replaces a state removes the incoming cotangent of
+that component, one that adds to it leaves the cotangent unchanged, and
+one that multiplies it by $h$ scales it by $h$; where the reset value
+$h$ depends on the state or on the parameters, its derivatives enter the
+same transpose. The adjoint of a jump therefore requires the right-hand
+side at the two ends, $\nabla g$ and $\dot g$, and the model's
+derivatives of the reset and event-time expressions. It requires no
+Jacobian of $f$, because every term the two shifts would contribute
+carries the residual as a factor and that factor is zero.
 
-The sizes the controller chose are constants of the map being
+After a jump the multistepper restarts. \verb|initialize| builds the
+Nordsieck history from a single state as $z_0 = x$ and
+$z_1 = h\, f(x, t)$, with the remaining slots zero, so the cotangent of
+the history collapses onto that one state. Writing $w_j$ for the
+cotangent of slot $j$, the restart contributes
+\begin{equation}
+  \bar x = w_0 + h\, J^{\mathsf T} w_1,
+  \qquad
+  \bar p = h \left(\frac{\partial f}{\partial p}\right)^{\!\mathsf T} w_1,
+  \label{eq:restart-collapse}
+\end{equation}
+and slots above the first contribute nothing. The start of the
+trajectory applies the same map, and both are served by one routine.
+
+### The step grid as a constant
+
+The step sizes the controller selected are constants of the map that is
 differentiated. This is Bock's internal numerical differentiation: the
 nominal run adapts freely, and the derivative is taken of the scheme
-that run actually applied. Differentiating the control law instead puts
-spurious derivatives of the time steps into the chain rule and makes the
-discrete adjoint inconsistent with the adjoint ODE; the term was
+that run applied. Differentiating the control law instead introduces
+derivatives of the step sizes into the chain rule, which makes the
+discrete adjoint inconsistent with the adjoint ODE. That term was
 measured at $O(\text{tol})$ and is deliberately absent.
+
+### Goal-oriented step-size control
+
+A grid selected from the state error alone need not be fine enough for
+the gradient. Since $\lambda$ is solved backwards, a step at which
+$\lambda$ is large contributes strongly to the error in $J$ even where
+its own state error is small; the gradient inherits the order of the
+state error but not its constant. In the forward mode this is settled
+within the run, by maximising the error norm over the sensitivity
+columns as in \eqref{eq:wrms-sens}. In the reverse mode it cannot be,
+because $\lambda$ at step $k$ depends on every step after it and is not
+available while step $k$ is being taken.
+
+It is available across runs, and the \texttt{errWeights} argument of
+\texttt{solveODE()} accepts it: the $\lambda$ left by an earlier sweep,
+sampled on that sweep's grid, is read back by linear interpolation and
+entered into the error norm as
+\begin{equation}
+  \mathrm{err} = \max\!\left(
+    \mathrm{err}_{\text{state}},\;
+    \frac{\left|\lambda(t_{n+1})^{\mathsf T} e_n\right|}{\mathtt{gradtol}}
+  \right),
+  \label{eq:goal-oriented}
+\end{equation}
+where $e_n$ is the embedded error estimate the controller forms in any
+case. The numerator estimates the contribution of this step to the error
+in the objective, and \texttt{gradtol} is the tolerance to which that
+contribution is held. Without a tolerance of its own the two terms of
+\eqref{eq:goal-oriented} would not be comparable.
+
+The use of a maximum has two consequences. The grid can only become
+finer than \texttt{abstol} and \texttt{reltol} require, never coarser,
+so the accuracy of the trajectory is unaffected and the weighting is
+safe to leave enabled. And since a weight can only reduce a step size,
+an inaccurate $\lambda$ costs at most computing time: if it is too large
+the steps are unnecessarily small, and if it is too small the state term
+governs as before. An estimate of $\lambda$ taken at a neighbouring
+parameter value is therefore admissible, which is the case of practical
+interest, since an optimiser can pass the sweep of iteration $i-1$ to
+iteration $i$ and pay for one pass rather than two.
+
+The weight is an input to the controller and is held in plain
+\texttt{double}. The controller is not differentiated, and a weight
+carried into the derivative would reintroduce the step-size term
+discussed above. The interpolation is linear rather than PCHIP for the
+same reason and for two further ones: $\lambda$ jumps where the
+objective seeds it and where an event resets the state, so
+\texttt{breaks} names the sample indices an interpolant must not span,
+and a query inside such an interval takes the nearer endpoint; and shape
+preservation is of no value for a weight whose overshoots cost only
+time. A \texttt{floor} raises weights that fall below a given fraction
+of the largest, which is a precaution rather than a necessity, since
+$\lambda$ measures a linearised influence and a state it weights near
+zero may still move nonlinearly.
+
+The indicator can be inspected directly. With
+\texttt{adjointGrid = TRUE} a reverse solve also returns the grid the
+sweep ran on, $\lambda$ at the start of each step, and
+$\eta_n = \lambda(t_{n+1})^{\mathsf T} e_n$ for each step, which is the
+numerator of \eqref{eq:goal-oriented} and estimates that step's
+contribution to the error in $J$. The estimate is of first order, since
+it evaluates $\lambda$ at the computed rather than the exact state, and
+what the adaptation requires of it is the ranking of the steps rather
+than the magnitude.
 
 ### Relation to the forward mode
 
-Forward and reverse do not agree to machine precision and should not. A
-sensitivity run lets the step-size controller take the maximum over the
-state error and every tangent column, so it adapts on a finer grid than
-a value-only run. The two differentiate two different discretisations,
-each exactly, and their gap falls with the tolerance.
+Forward and reverse derivatives of the same model do not agree to
+machine precision. A sensitivity run maximises its error norm over the
+state error and every tangent column, so at equal tolerances its
+controller selects a finer grid than a value-only run. The two modes
+therefore differentiate two different discretisations, each of them
+exactly, and the difference between the results falls with the
+tolerance. On the chain of Table \ref{tab:adjoint-cost} the angle
+between the two gradients is $3.6 \times 10^{-7}$ radians.
 
-The corollary favours reverse beyond its cost: its gradient belongs to
-the trajectory a value-only solve produces, so the value and the
-gradient a caller receives are consistent with each other. That matters
-where a trust-region step compares a predicted reduction with an
+One consequence favours the reverse mode independently of its cost. Its
+gradient is the derivative of the trajectory that a value-only solve
+produces, so the value and the gradient returned to the caller are
+consistent with each other. This is of practical importance in a
+trust-region method, which compares a predicted reduction with an
 achieved one.
 
-A Rosenbrock adjoint is the sharpest of them, and for a structural
-reason: its stages are direct solves, so its adjoint is the exact
-transpose of the discrete step, where a corrector's is the implicit
-function theorem applied to an iteration that stopped early.
+Of the four methods, the Rosenbrock adjoint is the most accurate, for a
+structural reason: its stages are direct solves, so its adjoint is the
+exact transpose of the discrete step, whereas the adjoint of a corrector
+is the implicit function theorem applied to an iteration that was
+stopped at a finite tolerance.
 
 The reverse mode supports all four time-stepping methods, time- and
 root-triggered events, forcings, the batch entry point and the sparse
@@ -1239,34 +1521,106 @@ linear solver. The implementation resides in
 \texttt{cppde\_adjoint\_step.hpp}, \texttt{cppde\_reverse\_step.hpp}
 and \texttt{cppde\_reverse\_trajectory.hpp}.
 
-### Second derivatives, from either direction
+### Second derivatives: forward over reverse
 
-Nothing above names a scalar type. The adjoint sweep is written over
-the type the stepper carries, so instantiating it on
-$\mathtt{dual}\langle\mathtt{double}, N\rangle$ rather than
-\texttt{double} differentiates the sweep itself. What comes back is the
-gradient with $N$ directional derivatives attached, and under the
-identity seeding those are the columns of the Hessian of the seeded
-functional. That is forward over reverse, selected as
-\texttt{derivMode = "forward-reverse"}.
+For a fixed cotangent, \eqref{eq:adjoint-contraction} defines the
+gradient map
+\begin{equation}
+  \bar\theta : \mathbb{R}^{M} \to \mathbb{R}^{M},
+  \qquad \theta \mapsto \nabla_\theta J(\theta),
+  \label{eq:gradient-map}
+\end{equation}
+whose Jacobian is the Hessian $\nabla^2_\theta J$. Nothing in the sweep
+that evaluates \eqref{eq:gradient-map} depends on the scalar type, so
+instantiating it on $\mathtt{dual}\langle\mathtt{double}, N\rangle$
+rather than on \texttt{double} differentiates the sweep itself. Seeded
+with directions $V \in \mathbb{R}^{M \times N}$ it returns the pair
+$(\nabla_\theta J,\; \nabla^2_\theta J\,V)$, both computed exactly
+rather than by a difference quotient; for $V = I_M$ the second member is
+the Hessian. This is selected
+by \texttt{derivMode = "forward-reverse"} and reported as
+\verb|adjoint2|, of shape $[n_x + n_p, N, n_{\text{seed}}]$, beside the
+\verb|adjoint| and \verb|sens1| of the same run.
 
-It costs one sensitivity integration plus one sweep in dual arithmetic,
-against the $N$ sweeps a difference quotient of the gradient would take.
-The forward-over-forward route, \texttt{derivMode = "forward-forward"}
-and the older \texttt{deriv2 = TRUE}, remains and answers with
-\verb|sens2|, the second derivatives of every state rather than of one
-functional. The two are offers, not stages: which is cheaper depends on
-whether the quantity of interest is the states or a scalar built from
-them.
+What the tangents satisfy is the second-order adjoint system. Write
+$v = (v_0, v_p)$ for one direction in $\theta$, let $\sigma$ be the
+directional sensitivity and $\mu$ the tangent of $\lambda$ along $v$.
+Then $\sigma$ solves \eqref{eq:sensitivity-p} contracted with $v$,
+\begin{equation}
+  \dot\sigma = \frac{\partial f}{\partial x}\,\sigma
+             + \frac{\partial f}{\partial p}\,v_p,
+  \qquad \sigma(t_0) = v_0,
+  \label{eq:soa-tangent}
+\end{equation}
+and differentiating \eqref{eq:adjoint-ode} along $v$ gives $\mu$
+backwards from $\mu(T^+) = 0$,
+\begin{equation}
+  \dot\mu_i = -\sum_k \frac{\partial f_k}{\partial x_i}\,\mu_k
+            - \sum_k \lambda_k \left(
+                \sum_j \frac{\partial^2 f_k}{\partial x_i\, \partial x_j}\,\sigma_j
+              + \sum_m \frac{\partial^2 f_k}{\partial x_i\, \partial p_m}\,v_m
+              \right),
+  \label{eq:soa-adjoint}
+\end{equation}
+with the same jumps as $\lambda$, which vanish here because the
+cotangent rows do not depend on $\theta$. Differentiating
+\eqref{eq:adjoint-quadrature} along $v$ then gives the two halves of
+$\nabla^2_\theta J\,v$, the state half as $\mu(t_0)$ and the parameter
+half as
+\begin{equation}
+  \int_{t_0}^{T}\left(
+      \sum_k \frac{\partial f_k}{\partial p_m}\,\mu_k
+    + \sum_k \lambda_k \left(
+        \sum_j \frac{\partial^2 f_k}{\partial p_m\, \partial x_j}\,\sigma_j
+      + \sum_l \frac{\partial^2 f_k}{\partial p_m\, \partial p_l}\,v_l
+      \right)\right)\mathrm{d}t .
+  \label{eq:soa-quadrature}
+\end{equation}
+cppDE does not integrate \eqref{eq:soa-tangent} to
+\eqref{eq:soa-quadrature}. It obtains their discrete counterpart from
+the dual instantiation: the tangent carried alongside $\lambda$ is $\mu$
+on the grid the forward run chose, and the tangent of the parameter
+accumulator is \eqref{eq:soa-quadrature}. The second derivatives of $f$
+that appear in \eqref{eq:soa-adjoint} and \eqref{eq:soa-quadrature} are
+supplied by differentiating the first-order contractions
+$J^{\mathsf T}\lambda$ and $(\partial f/\partial p)^{\mathsf T}\lambda$
+in dual arithmetic, so the code generator emits no second-derivative
+expression of its own.
 
-Two things make the second order work that the first order did not need.
-The iteration matrix now carries tangents, so the transposed solve peels
+The tangents have to be present in the forward pass as well, since the
+sweep reads its checkpoints, which makes that pass a sensitivity run in
+the same $N$ directions. The cost is one sensitivity integration and one
+sweep, both of width $N$, and therefore linear in $N$. Forward over
+forward, selected by \texttt{derivMode = "forward-forward"} or by the
+older \texttt{deriv2 = TRUE}, propagates the full second-order
+sensitivity tensor through the integration at a cost quadratic in $M$. A
+difference quotient of the gradient would cost $N$ further gradient
+evaluations and lose half of the available digits.
+
+The quadratic route is not superseded, because it answers a different
+question. It returns \verb|sens2|, the second derivatives of every state
+with respect to every pair of parameters, from which the Hessian of any
+functional can be contracted afterwards. Forward over reverse returns
+the Hessian of one functional. Where that functional is a likelihood the
+mixed route is the cheaper by a factor of $M$; where the states
+themselves are of interest, only \verb|sens2| answers.
+
+Two facilities are required that the first order does not need. The
+iteration matrix now carries tangents, so the transposed solve applies
 the implicit function theorem with the matrix transposed alongside;
 \texttt{cppde\_ad\_lu.hpp} and \texttt{cppde\_sparse\_ad\_lu.hpp}
-both provide it. And a generated model body opens its own arena scope,
-so every buffer the sweep hands to the model has its tangent storage
-bound before the call, the way the stepper's own buffers are bound by
-the tangent slab.
+provide this in the dense and the sparse case. And a generated model
+body opens an arena scope of its own, in which a tangent allocated for
+one of the caller's numbers would be destroyed, so the sweep binds the
+tangent storage of every buffer before passing it to the model, as the
+stepper does for its own buffers through the tangent slab.
+
+Verification is against the forward mode. The two second-order routes
+agree to $10^{-6}$ on \texttt{bdf}, \texttt{rb4} and \texttt{tsit5}, and
+all four methods return the same Hessian backwards to $10^{-5}$. The
+second comparison is the stronger one, since the four methods adapt
+grids of their own, so agreement implies that each sweep differentiated
+the discretisation its own method applied.
 
 ## Method selection
 
@@ -1371,6 +1725,84 @@ $S_\theta = S_p\,\partial p / \partial \theta$ of equation
 case. \texttt{solveODE()} accepts the same \texttt{sens1ini} matrix
 shapes (legacy, full, and partial) and the same row-name conventions;
 only second-order $S_\theta$ is unavailable.
+
+## Adjoint sensitivity analysis \label{sec:asa}
+
+\texttt{cvode(..., derivMode = "reverse")} compiles the CVODES adjoint
+sensitivity analysis (ASA) in place of the forward sensitivities and
+returns the same \verb|$adjoint| as a native reverse solve, namely the
+contraction \eqref{eq:adjoint-contraction} of a seed, stacked states
+first and parameters second. The remainder of the call is unchanged,
+including the batch entry point.
+
+\textbf{The backward problem.} Where \texttt{cppODE()} transposes the
+steps the forward run took, CVODES integrates \eqref{eq:adjoint-ode} as
+an ODE in its own right [@cao2003adjoint]. The generated glue emits the
+two transposed contractions from the symbolic Jacobian the forward path
+already uses,
+\begin{equation}
+  \dot\lambda = -\left(\frac{\partial f}{\partial x}\right)^{\!\mathsf T}\!\lambda,
+  \qquad
+  \dot q = -\left(\frac{\partial f}{\partial p}\right)^{\!\mathsf T}\!\lambda,
+  \label{eq:asa-system}
+\end{equation}
+the second of which is the quadrature of
+\eqref{eq:adjoint-quadrature} with $q(T) = 0$. CVODES carries it
+alongside the backward state, and the generated glue places it inside
+the error test rather than leaving it uncontrolled. Both equations are
+integrated from $T$ down to $t_0$, and the minus signs of
+\eqref{eq:asa-system} cancel against the reversed limits, so $q(t_0)$
+is the parameter part of the gradient and $\lambda(t_0)$ the state
+part. Both right-hand sides are contractions of quantities the forward
+path already builds; only the index order differs.
+
+\textbf{Checkpoints and the forward state.} The backward right-hand
+side needs $x(t)$, which the forward pass no longer holds. CVODES
+stores a checkpoint every \texttt{asaCheckpoints} accepted steps, $200$
+by default, and recovers the states between two checkpoints by
+re-integrating forward from the earlier one and interpolating. The
+argument trades memory against that repeated re-integration. This is
+also the substantive difference between the two discretisations: the
+states the adjoint sees are interpolated rather than the ones the
+forward run stepped through, so the resulting gradient is the
+derivative of no discretisation that was actually carried out. It
+approximates the exact gradient to $O(\mathrm{tol})$ and differs by the
+same order from the derivative of the value the call reported.
+
+\textbf{The seed enters as a sequence of jumps.} $\lambda$ is
+initialised with the seed row of the last observation, and the sweep
+stops at every earlier observation time to add that row, which is the
+jump condition in \eqref{eq:adjoint-ode}. Since a jump constitutes a
+new initial condition, the backward problem is re-initialised wherever a
+row is nonzero. Re-initialising at every output time would instead
+reduce the method to first order at times the objective does not
+observe. The backward problem is a BDF solve with a dense linear
+solver, run at the caller's tolerances and with the caller's step
+budget rather than the CVODES default.
+
+\textbf{One backward solve per cotangent.} Several seed columns reuse
+the same backward problem, but each requires a separate backward
+integration: the checkpoints are shared, the trajectory is not. The
+native mode sweeps its stored checkpoints once per column instead, and
+its \texttt{keepStore}, \texttt{store}, \texttt{adjointGrid} and
+\texttt{errWeights} arguments have no counterpart here, since CVODES
+holds its own checkpoints and runs its own backward controller.
+
+\textbf{Restrictions.} Events and root functions are rejected at
+code-generation time rather than approximated, since a jump in the state
+implies a jump in $\lambda$ and ASA provides no point at which the
+backward solver can be informed of one. Forward sensitivities cannot be
+requested for the same model, and there is no second-order mode. An
+event model, a Hessian, or a gradient consistent with the value it
+accompanies therefore requires the native backend.
+
+\textbf{Role.} ASA is an independent implementation of the same
+mathematics, which makes it a check on the in-tree adjoint: a systematic
+error in either would appear as a disagreement between them, and the two
+agree to $10^{-6}$ on the test models. As a production route it is the
+slower of the two, by a factor of $1.9$ on the chain of Table
+\ref{tab:adjoint-cost}, where it remains a factor of five below the
+forward sensitivities it replaces.
 
 # \texttt{cppFUN()} \label{sec:funcpp}
 

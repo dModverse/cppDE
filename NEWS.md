@@ -1,5 +1,13 @@
 # cppDE (development version)
 
+* The methods vignette covers the reverse mode as it now stands. It derives
+  the adjoint equation and its quadrature, separates the discrete adjoint from
+  the continuous one, gives the transposed saltation relation and the restart
+  collapse for events, and states the second-order adjoint system that forward
+  over reverse discretises. The checkpoint store and the lambda-weighted
+  controller are documented, and the CVODE chapter gains a section on CVODES
+  adjoint sensitivity analysis: the backward problem, the checkpoint
+  interpolation, the seeded jumps and the restrictions.
 * **Bug fix.** A forcing that multiplies a state produced a source that did not
   compile. The Jacobian entries were printed without the forcing list, so a
   forcing surviving differentiation came out as a bare identifier that nothing
