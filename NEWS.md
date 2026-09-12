@@ -1,5 +1,12 @@
 # cppDE (development version)
 
+* `derivMode = "reverse"` on `cppFUN()` builds `vjp2` beside `vjp`. The written
+  vector-Jacobian product no longer names a scalar type, and instantiated over a
+  dual it returns `J' dW` and `W' H V` in one pass, so an observation function
+  contributes its curvature to a backward chain without a symbolic Hessian ever
+  being formed. `vjp2(vars, params, w, vx, vp, dw)` takes the tangents the
+  inputs carry and those of the cotangent, and answers with `dwx` and `dwp`
+  beside what `vjp` returns.
 * `derivMode = "forward-forward"` compiles with a sparse Jacobian. The sparse
   AD solver keeps its iteration matrix and asks how many derivative directions
   it carries, and `max_deriv_size` had overloads for a vector and for a dense

@@ -38,15 +38,20 @@
 #'   * `"forward"`: forward-mode AD on `cppde::dual`, delivering `jac`,
 #'     `hess` and `evaluate`.
 #'   * `"reverse"`: the vector-Jacobian product `vjp`, a contraction of the
-#'     symbolic Jacobian. Naming one direction alone omits the other's
-#'     entries, and its compile time with them.
+#'     symbolic Jacobian, and `vjp2`, the same contraction over a dual.
+#'     Naming one direction alone omits the other's entries, and its compile
+#'     time with them.
 #'   * `"symbolic"`: an analytic SymPy-derived Jacobian and Hessian
 #'     contracted via BLAS, in place of forward AD. It is a backend for the
 #'     forward direction rather than a direction of its own, so it cannot be
 #'     combined with the other two; there is no symbolic `vjp`.
 #'
 #' @return A list with components `func`, `jac`, `hess`, `evaluate` and,
-#'   under `derivMode = "reverse"`, `vjp` (`NULL` when not generated). `vjp(vars,
+#'   under `derivMode = "reverse"`, `vjp` and `vjp2` (`NULL` when not
+#'   generated). `vjp2(vars, params, w, vx, vp, dw)` runs the same contraction
+#'   over a dual, which is forward over reverse: `vx` and `vp` are the tangents
+#'   the inputs carry, `dw` those of the cotangent, and it returns `dwx` and
+#'   `dwp` beside `y`, `wx` and `wp`. `vjp(vars,
 #'   params, w)` is the reverse counterpart of `evaluate`: it contracts the
 #'   Jacobian with a cotangent `w` of the outputs, at a cost independent of the
 #'   number of upstream parameters, and returns `y`, `wx` and `wp`. `w` is
@@ -146,6 +151,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   evaluate_impl <- if (fwd)     function(...) .evaluate_impl(st, ...)
   evaluateBatch_impl <- if (fwd) function(...) .evaluateBatch_impl(st, ...)
   vjp_impl      <- if (use_vjp) function(...) .vjp_impl(st, ...)
+  vjp2_impl     <- if (use_vjp) function(...) .vjp2_impl(st, ...)
 
   # --- Output ---
   ## Installed with keep.source, cppFUN's body carries srcrefs, so the wrappers
@@ -157,12 +163,14 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     hess     = if (convenient) .makeDerivWrapper(st, hess_impl, TRUE) else hess_impl,
     evaluate = if (convenient) .makeEvalWrapper(st, evaluate_impl) else evaluate_impl,
     evaluateBatch = evaluateBatch_impl,
-    vjp      = vjp_impl
+    vjp      = vjp_impl,
+    vjp2     = vjp2_impl
   )
   attr(outfn, "equations") <- eqns; attr(outfn, "variables") <- variables; attr(outfn, "parameters") <- parameters
   attr(outfn, "fixed") <- fixed; attr(outfn, "modelname") <- modelname; attr(outfn, "srcfile") <- normalizePath(cpp_file, "/", FALSE)
   attr(outfn, "derivMode") <- derivMode
-  for (nm in c("func", "jac", "hess", "evaluate", "evaluateBatch", "vjp")) {
+  for (nm in c("func", "jac", "hess", "evaluate", "evaluateBatch", "vjp",
+               "vjp2")) {
     if (!is.null(outfn[[nm]])) {
       attr(outfn[[nm]], "modelname") <- modelname
       attr(outfn[[nm]], "srcfile")   <- attr(outfn, "srcfile")
@@ -465,6 +473,41 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   list(y  = matrix(out$y, n_obs, n_out, dimnames = list(NULL, st$outnames)),
        wx = array(out$wx, c(n_obs, n_vars, n_seed), dimnames = dn_x),
        wp = matrix(out$wp, n_params, n_seed, dimnames = dn_p))
+}
+
+# The same contraction over a dual: forward over reverse. `vx`, `vp` are the
+# tangents the inputs carry, `dw` those of the cotangent, and both terms of
+# d/dv (w' J) come back in one pass. Compiled entry only, like `vjp` itself.
+.vjp2_impl <- function(st, vars, params = numeric(0), w,
+                       vx = NULL, vp = NULL, dw = NULL, n_dir = NULL) {
+  chk <- .checkInputs(st, vars, params); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
+  n_vars <- length(st$innames); n_params <- length(st$parameters)
+  n_out  <- length(st$outnames)
+
+  if (is.null(dim(w))) w <- matrix(w, n_obs, n_out)
+  n_seed <- if (length(dim(w)) == 3L) dim(w)[3L] else 1L
+  if (dim(w)[1L] != n_obs || dim(w)[2L] != n_out)
+    stop("w must be [n_obs, n_out] or [n_obs, n_out, n_seed].")
+  if (is.null(n_dir))
+    n_dir <- if (!is.null(vx)) utils::tail(dim(vx), 1L)
+             else if (!is.null(vp)) utils::tail(dim(vp), 1L)
+             else if (!is.null(dw)) utils::tail(dim(dw), 1L) else 0L
+  n_dir <- as.integer(n_dir)
+
+  symc <- .nativeSym(paste0(st$modelname, "_vjp_ad_c"))
+  if (is.null(symc))
+    stop("Reverse entry '", st$modelname, "_vjp_ad' is not loaded. Second order ",
+         "backwards has no interpreted fallback, so the model needs ",
+         "cppFUN(compile = TRUE).", call. = FALSE)
+  r <- .callSym(symc, .asdbl(M), .asdbl(p), .asdbl(w),
+                if (is.null(vx)) NULL else .asdbl(vx),
+                if (is.null(vp)) NULL else .asdbl(vp),
+                if (is.null(dw)) NULL else .asdbl(dw),
+                as.integer(n_obs), as.integer(n_seed), n_dir)
+  y <- r[[1L]]; dimnames(y) <- list(NULL, st$outnames)
+  wx <- r[[2L]]; dimnames(wx) <- list(NULL, st$innames, NULL)
+  wp <- r[[3L]]; dimnames(wp) <- list(st$parameters, NULL)
+  list(y = y, wx = wx, wp = wp, dwx = r[[4L]], dwp = r[[5L]])
 }
 
 # --- Dual-path .C() helpers ---

@@ -58,8 +58,9 @@ named, and the default \code{c("forward", "reverse")} builds both.
 \item \code{"forward"}: forward-mode AD on \code{cppde::dual}, delivering \code{jac},
 \code{hess} and \code{evaluate}.
 \item \code{"reverse"}: the vector-Jacobian product \code{vjp}, a contraction of the
-symbolic Jacobian. Naming one direction alone omits the other's
-entries, and its compile time with them.
+symbolic Jacobian, and \code{vjp2}, the same contraction over a dual.
+Naming one direction alone omits the other's entries, and its compile
+time with them.
 \item \code{"symbolic"}: an analytic SymPy-derived Jacobian and Hessian
 contracted via BLAS, in place of forward AD. It is a backend for the
 forward direction rather than a direction of its own, so it cannot be
@@ -68,7 +69,11 @@ combined with the other two; there is no symbolic \code{vjp}.
 }
 \value{
 A list with components \code{func}, \code{jac}, \code{hess}, \code{evaluate} and,
-under \code{derivMode = "reverse"}, \code{vjp} (\code{NULL} when not generated). \code{vjp(vars, params, w)} is the reverse counterpart of \code{evaluate}: it contracts the
+under \code{derivMode = "reverse"}, \code{vjp} and \code{vjp2} (\code{NULL} when not
+generated). \code{vjp2(vars, params, w, vx, vp, dw)} runs the same contraction
+over a dual, which is forward over reverse: \code{vx} and \code{vp} are the tangents
+the inputs carry, \code{dw} those of the cotangent, and it returns \code{dwx} and
+\code{dwp} beside \code{y}, \code{wx} and \code{wp}. \code{vjp(vars, params, w)} is the reverse counterpart of \code{evaluate}: it contracts the
 Jacobian with a cotangent \code{w} of the outputs, at a cost independent of the
 number of upstream parameters, and returns \code{y}, \code{wx} and \code{wp}. \code{w} is
 \verb{[n_obs, n_out]} or \verb{[n_obs, n_out, n_seed]}, and \code{wp} sums over

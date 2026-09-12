@@ -547,7 +547,12 @@ std::fill(dy, dy + ny_ * (size_t)(*n_theta_p), {NAN_});""",
         )
         _write_eval_ad_batch(buf, modelname)
     if emit_vjp:
+        # The contraction is a template now, and a template cannot have C
+        # linkage, so it and its dual instantiation sit outside the block.
+        buf.write("} // extern \"C\"\n\n")
         _write_vjp_impl(buf, jacobian, exprs, out_names, ctx, modelname)
+        _write_vjp_ad_impl(buf, modelname, ctx, out_names)
+        buf.write("extern \"C\" {\n\n")
         _write_guarded(
             buf,
             lambda b: _write_vjp_function(b, modelname),
@@ -899,13 +904,48 @@ def _write_call_entries(buf, modelname, n_vars, n_params, n_out,
   INTEGER(d)[0] = n_obs; INTEGER(d)[1] = n_vars; INTEGER(d)[2] = ns1;
   SEXP wx = PROTECT(Rf_allocArray(REALSXP, d));
   SEXP wp = PROTECT(Rf_allocMatrix(REALSXP, n_params, ns1));
-  {modelname}_vjp_impl(REAL(xS), Rf_isNull(pS) ? nullptr : REAL(pS), REAL(wS),
+  {modelname}_vjp_impl<double>(REAL(xS), Rf_isNull(pS) ? nullptr : REAL(pS), REAL(wS),
       REAL(y), REAL(wx), REAL(wp), n_obs, n_vars, n_params, n_out, n_seed);
   SEXP out = PROTECT(Rf_allocVector(VECSXP, 3));
   SET_VECTOR_ELT(out, 0, y);
   SET_VECTOR_ELT(out, 1, wx);
   SET_VECTOR_ELT(out, 2, wp);
   UNPROTECT(5);
+  return out;
+}}
+
+SEXP {modelname}_vjp_ad_c(SEXP xS, SEXP pS, SEXP wS, SEXP vxS, SEXP vpS,
+                   SEXP dwS, SEXP nS, SEXP nsS, SEXP ndS) {{
+  const int n_obs = INTEGER(nS)[0], n_seed = INTEGER(nsS)[0];
+  const int n_dir = INTEGER(ndS)[0];
+  const int n_vars = {n_vars}, n_params = {n_params}, n_out = {n_out};
+  const int ns1 = n_seed > 0 ? n_seed : 1;
+  const int nd1 = n_dir > 0 ? n_dir : 1;
+  SEXP y = PROTECT(Rf_allocMatrix(REALSXP, n_obs, n_out));
+  SEXP d3 = PROTECT(Rf_allocVector(INTSXP, 3));
+  INTEGER(d3)[0] = n_obs; INTEGER(d3)[1] = n_vars; INTEGER(d3)[2] = ns1;
+  SEXP wx = PROTECT(Rf_allocArray(REALSXP, d3));
+  SEXP wp = PROTECT(Rf_allocMatrix(REALSXP, n_params, ns1));
+  SEXP d4 = PROTECT(Rf_allocVector(INTSXP, 4));
+  INTEGER(d4)[0] = n_obs; INTEGER(d4)[1] = n_vars;
+  INTEGER(d4)[2] = ns1;   INTEGER(d4)[3] = nd1;
+  SEXP dwx = PROTECT(Rf_allocArray(REALSXP, d4));
+  SEXP d3p = PROTECT(Rf_allocVector(INTSXP, 3));
+  INTEGER(d3p)[0] = n_params; INTEGER(d3p)[1] = ns1; INTEGER(d3p)[2] = nd1;
+  SEXP dwp = PROTECT(Rf_allocArray(REALSXP, d3p));
+  {modelname}_vjp_ad_impl(REAL(xS), Rf_isNull(pS) ? nullptr : REAL(pS), REAL(wS),
+      Rf_isNull(vxS) ? nullptr : REAL(vxS),
+      Rf_isNull(vpS) ? nullptr : REAL(vpS),
+      Rf_isNull(dwS) ? nullptr : REAL(dwS),
+      REAL(y), REAL(wx), REAL(wp), REAL(dwx), REAL(dwp),
+      n_obs, n_vars, n_params, n_out, n_seed, n_dir);
+  SEXP out = PROTECT(Rf_allocVector(VECSXP, 5));
+  SET_VECTOR_ELT(out, 0, y);
+  SET_VECTOR_ELT(out, 1, wx);
+  SET_VECTOR_ELT(out, 2, wp);
+  SET_VECTOR_ELT(out, 3, dwx);
+  SET_VECTOR_ELT(out, 4, dwp);
+  UNPROTECT(9);
   return out;
 }}
 
@@ -968,17 +1008,33 @@ def _write_vjp_impl(buf, jacobian, exprs, out_names, ctx, modelname):
     n_out = len(out_names)
 
     buf.write(
-        f"static void {modelname}_vjp_impl(const double* x, const double* p,\n"
-        f"                         const double* w,\n"
-        f"                         double* y, double* wx, double* wp,\n"
+        f"template<class T>\n"
+        f"static void {modelname}_vjp_impl(const T* x, const T* p,\n"
+        f"                         const T* w,\n"
+        f"                         T* y, T* wx, T* wp,\n"
         f"                         int n_obs, int n_vars, int n_params,\n"
         f"                         int n_out, int n_seed) {{\n"
     )
+    buf.write("    using std::exp; using std::log; using std::sqrt; using std::pow;\n")
+    buf.write("    using std::sin; using std::cos; using std::tan;\n")
+    buf.write("    using std::asin; using std::acos; using std::atan; using std::atan2;\n")
+    buf.write("    using std::sinh; using std::cosh; using std::tanh;\n")
+    buf.write("    using std::asinh; using std::acosh; using std::atanh;\n")
+    buf.write("    using std::floor; using std::ceil;\n")
+    buf.write("    using std::abs; using std::max; using std::min;\n")
+    buf.write("    using cppde::exp; using cppde::log; using cppde::sqrt; using cppde::pow;\n")
+    buf.write("    using cppde::sin; using cppde::cos; using cppde::tan;\n")
+    buf.write("    using cppde::asin; using cppde::acos; using cppde::atan;\n")
+    buf.write("    using cppde::sinh; using cppde::cosh; using cppde::tanh;\n")
+    buf.write("    using cppde::asinh; using cppde::acosh; using cppde::atanh;\n")
+    buf.write("    using cppde::abs; using cppde::max; using cppde::min;\n")
     buf.write("    (void)n_vars; (void)n_params; (void)n_out; (void)x; (void)p;\n\n")
 
     buf.write("    const size_t ns_ = (size_t)(n_seed > 0 ? n_seed : 1);\n")
-    buf.write("    std::fill(wx, wx + (size_t)n_obs * (size_t)n_vars * ns_, 0.0);\n")
-    buf.write("    std::fill(wp, wp + (size_t)n_params * ns_, 0.0);\n\n")
+    buf.write("    for (size_t i_ = 0; i_ < (size_t)n_obs * (size_t)n_vars * ns_; ++i_)\n")
+    buf.write("        wx[i_] = T(0.0);\n")
+    buf.write("    for (size_t i_ = 0; i_ < (size_t)n_params * ns_; ++i_)\n")
+    buf.write("        wp[i_] = T(0.0);\n\n")
 
     # The nonzero entries of the Jacobian, in the order _jacobian emits them.
     # A caller in dual mode passes none, so it is derived here: the reverse
@@ -1002,13 +1058,13 @@ def _write_vjp_impl(buf, jacobian, exprs, out_names, ctx, modelname):
 
     buf.write("    for (int obs = 0; obs < n_obs; ++obs) {\n")
     if n_vars > 0:
-        buf.write(f"        double x_obs_buf[{n_vars}];\n")
+        buf.write(f"        T x_obs_buf[{n_vars}];\n")
         buf.write("        for (int j = 0; j < n_vars; ++j)\n")
         buf.write("            x_obs_buf[j] = x[obs + (size_t)n_obs * j];\n")
-        buf.write("        const double* x_obs = x_obs_buf;\n")
+        buf.write("        const T* x_obs = x_obs_buf;\n")
         buf.write("        (void)x_obs;\n")
-    buf.write(f"        double y_obs[{max(n_out, 1)}];\n")
-    buf.write(f"        {modelname}_eval_one<double>("
+    buf.write(f"        T y_obs[{max(n_out, 1)}];\n")
+    buf.write(f"        {modelname}_eval_one<T>("
               f"{'x_obs' if n_vars > 0 else 'nullptr'}, p, y_obs);\n")
     buf.write("        for (int i = 0; i < n_out; ++i)\n")
     buf.write("            y[obs + (size_t)n_obs * i] = y_obs[i];\n\n")
@@ -1016,16 +1072,18 @@ def _write_vjp_impl(buf, jacobian, exprs, out_names, ctx, modelname):
     if entries:
         temps, simplified = _cse_exprs([e for _, _, e in entries], prefix='_cse_vt')
         for sym, sub in temps:
-            buf.write(f"        const double {sym.name} = {ctx.to_cpp(sub)};\n")
+            t_ = "bool" if is_boolean(sub) else "T"
+            buf.write(f"        const {t_} {sym.name} = "
+                      f"{_strip_std_prefix(ctx.to_cpp(sub))};\n")
         if temps:
             buf.write("\n")
-        buf.write(f"        const double _jv[{len(entries)}] = {{\n")
+        buf.write(f"        const T _jv[{len(entries)}] = {{\n")
         for e in simplified:
-            buf.write(f"            {ctx.to_cpp(e)},\n")
+            buf.write(f"            {_strip_std_prefix(ctx.to_cpp(e))},\n")
         buf.write("        };\n\n")
 
         buf.write("        for (int s = 0; s < n_seed; ++s) {\n")
-        buf.write("            const double* w_s = w + (size_t)n_obs * (size_t)n_out * s;\n")
+        buf.write("            const T* w_s = w + (size_t)n_obs * (size_t)n_out * s;\n")
         for k, (i, j, _) in enumerate(entries):
             wi = f"w_s[obs + (size_t)n_obs * {i}]"
             if j < n_vars:
@@ -1036,13 +1094,73 @@ def _write_vjp_impl(buf, jacobian, exprs, out_names, ctx, modelname):
         buf.write("        }\n")
     buf.write("    }\n}\n\n")
 
+def _write_vjp_ad_impl(buf, modelname, ctx, out_names):
+    """The same contraction over a dual, which is forward over reverse.
+
+    Both terms of d/dv (w' J) fall out of one pass: the Jacobian differentiated
+    along the tangents the inputs carry, and the Jacobian contracted with the
+    tangents the cotangent carries. No Hessian is emitted and none is stored.
+    """
+    n_vars = len(ctx.variables)
+    n_params = len(ctx.parameters)
+    n_out = len(out_names)
+    buf.write(f"""static void {modelname}_vjp_ad_impl(
+    const double* x, const double* p, const double* w,
+    const double* vx, const double* vp, const double* dw,
+    double* y, double* wx, double* wp, double* dwx, double* dwp,
+    int n_obs, int n_vars, int n_params, int n_out, int n_seed, int n_dir) {{
+  using AD = cppde::dual<double, 0>;
+  // One scope for the whole call: the vectors below outlive any per-obs one.
+  cppde::dual_arena::scope _vjp_ad_scope;
+  const size_t ns1 = (size_t)(n_seed > 0 ? n_seed : 1);
+  const size_t nw  = (size_t)n_obs * (size_t)n_out * ns1;
+  std::vector<AD> x_ad((size_t)n_obs * (size_t)n_vars);
+  std::vector<AD> p_ad((size_t)n_params);
+  std::vector<AD> w_ad(nw);
+  std::vector<AD> y_ad((size_t)n_obs * (size_t)n_out);
+  std::vector<AD> wx_ad((size_t)n_obs * (size_t)n_vars * ns1);
+  std::vector<AD> wp_ad((size_t)n_params * ns1);
+
+  auto seed = [&](AD& a, double v, const double* tan, size_t stride) {{
+    a.x() = v;
+    if (n_dir > 0) {{
+      a.diff(0, n_dir);
+      for (int k = 0; k < n_dir; ++k) a[k] = tan ? tan[stride * (size_t)k] : 0.0;
+    }}
+  }};
+
+  for (size_t i = 0; i < x_ad.size(); ++i)
+    seed(x_ad[i], x[i], vx ? vx + i : nullptr, (size_t)n_obs * (size_t)n_vars);
+  for (size_t j = 0; j < p_ad.size(); ++j)
+    seed(p_ad[j], p[j], vp ? vp + j : nullptr, (size_t)n_params);
+  for (size_t i = 0; i < nw; ++i)
+    seed(w_ad[i], w[i], dw ? dw + i : nullptr, nw);
+
+  {modelname}_vjp_impl<AD>(x_ad.data(), p_ad.data(), w_ad.data(),
+                           y_ad.data(), wx_ad.data(), wp_ad.data(),
+                           n_obs, n_vars, n_params, n_out, n_seed);
+
+  for (size_t i = 0; i < y_ad.size(); ++i) y[i] = y_ad[i].val();
+  for (size_t i = 0; i < wx_ad.size(); ++i) {{
+    wx[i] = wx_ad[i].val();
+    for (int k = 0; k < n_dir; ++k) dwx[i + wx_ad.size() * (size_t)k] = wx_ad[i].d(k);
+  }}
+  for (size_t i = 0; i < wp_ad.size(); ++i) {{
+    wp[i] = wp_ad[i].val();
+    for (int k = 0; k < n_dir; ++k) dwp[i + wp_ad.size() * (size_t)k] = wp_ad[i].d(k);
+  }}
+}}
+
+""")
+
+
 def _write_vjp_function(buf, modelname):
     buf.write(
         f"void {modelname}_vjp(double* x, double* p, double* w,\n"
         f"                     double* y, double* wx, double* wp,\n"
         f"                     int* n_obs_p, int* n_vars_p, int* n_params_p,\n"
         f"                     int* n_out_p, int* n_seed_p) {{\n"
-        f"    {modelname}_vjp_impl(x, p, w, y, wx, wp, *n_obs_p, *n_vars_p,\n"
+        f"    {modelname}_vjp_impl<double>(x, p, w, y, wx, wp, *n_obs_p, *n_vars_p,\n"
         f"                         *n_params_p, *n_out_p, *n_seed_p);\n"
         "}\n\n"
     )

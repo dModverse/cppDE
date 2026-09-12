@@ -324,3 +324,93 @@ test_that("derivMode builds exactly the directions it names", {
   expect_equal(unname(fr$vjp(NULL, p, w)$wp[1, 1]),
                unname(fb$jac(NULL, p)[1, 1, "a"]), tolerance = 1e-12)
 })
+
+# ---------------------------------------------------------------------------
+#  vjp over a dual: forward over reverse on an observation function.
+#
+#  Oracle is the forward Hessian of the same object, contracted with the
+#  cotangent and read along the tangents the inputs carry. Both are exact
+#  derivatives of the same expressions, so the gap is rounding.
+# ---------------------------------------------------------------------------
+
+# One compilation for the three tests below: rebuilding under the same name
+# warns, and a warning is a failure here.
+.vjp2_fx <- local({
+  f <- NULL
+  function() {
+    if (is.null(f)) {
+      eq <- c(y1 = "a * x1^2 + b * x1 * x2", y2 = "sin(a * x2) + b^2 * x1")
+      f <<- cppFUN(eq, variables = c("x1", "x2"), parameters = c("a", "b"),
+                   deriv2 = TRUE, derivMode = c("forward", "reverse"),
+                   compile = TRUE, modelname = "cf_vjp2")
+    }
+    f
+  }
+})
+
+test_that("the dual vjp keeps the first order it already answered", {
+  f <- .vjp2_fx()
+  set.seed(3)
+  X <- matrix(rnorm(8), 4L, 2L, dimnames = list(NULL, c("x1", "x2")))
+  P <- c(a = 0.7, b = -0.4)
+  W <- matrix(rnorm(8), 4L, 2L)
+
+  r1 <- f$vjp(X, P, W)
+  r2 <- f$vjp2(X, P, W, vx = array(rnorm(24), c(4L, 2L, 3L)),
+               vp = matrix(rnorm(6), 2L, 3L))
+  expect_identical(r2$wx, r1$wx)
+  expect_identical(r2$wp, r1$wp)
+  expect_identical(dim(r2$dwx), c(4L, 2L, 1L, 3L))
+  expect_identical(dim(r2$dwp), c(2L, 1L, 3L))
+})
+
+test_that("the dual vjp answers the curvature the forward Hessian carries", {
+  f <- .vjp2_fx()
+  set.seed(3)
+  n <- 4L; nd <- 3L
+  X <- matrix(rnorm(n * 2), n, 2L, dimnames = list(NULL, c("x1", "x2")))
+  P <- c(a = 0.7, b = -0.4)
+  W <- matrix(rnorm(n * 2), n, 2L)
+  VX <- array(rnorm(n * 2 * nd), c(n, 2L, nd))
+  VP <- matrix(rnorm(2 * nd), 2L, nd)
+
+  r <- f$vjp2(X, P, W, vx = VX, vp = VP)
+  H <- f$hess(x1 = X[, 1], x2 = X[, 2], a = P[["a"]], b = P[["b"]])
+  nsym <- dim(H)[3L]
+
+  V <- array(0, c(n, nsym, nd))
+  V[, 1:2, ] <- VX
+  for (k in seq_len(nd)) for (q in 1:2) V[, 2L + q, k] <- VP[q, k]
+
+  ref_x <- array(0, c(n, 2L, 1L, nd))
+  ref_p <- array(0, c(2L, 1L, nd))
+  for (k in seq_len(nd)) for (o in seq_len(n)) {
+    M <- W[o, 1L] * H[o, 1L, , ] + W[o, 2L] * H[o, 2L, , ]
+    contrib <- as.numeric(M %*% V[o, , k])
+    ref_x[o, , 1L, k] <- contrib[1:2]
+    ref_p[, 1L, k] <- ref_p[, 1L, k] + contrib[3:4]
+  }
+  expect_equal(r$dwx, ref_x, tolerance = 1e-12)
+  expect_equal(r$dwp, ref_p, tolerance = 1e-12)
+})
+
+test_that("a cotangent's own tangents go through linearly", {
+  # The vjp is linear in w, so seeding only dw has to reproduce a first-order
+  # vjp taken with that direction as the cotangent.
+  f <- .vjp2_fx()
+  set.seed(5)
+  n <- 4L; nd <- 2L
+  X <- matrix(rnorm(n * 2), n, 2L, dimnames = list(NULL, c("x1", "x2")))
+  P <- c(a = 0.7, b = -0.4)
+  W <- matrix(rnorm(n * 2), n, 2L)
+  DW <- array(rnorm(n * 2 * nd), c(n, 2L, 1L, nd))
+
+  r <- f$vjp2(X, P, W, dw = DW)
+  for (k in seq_len(nd)) {
+    rk <- f$vjp(X, P, matrix(DW[, , 1L, k], n, 2L))
+    expect_identical(unname(r$dwx[, , 1L, k]), unname(rk$wx[, , 1L]),
+                     info = as.character(k))
+    expect_identical(unname(r$dwp[, 1L, k]), unname(rk$wp[, 1L]),
+                     info = as.character(k))
+  }
+})
