@@ -935,7 +935,9 @@ elif $CC $CFLAGS conftest_dl.c -o conftest_dl -ldl >/dev/null 2>&1; then
 else
   log "dlsym: unavailable; the BLAS fork guard will find no entry points"
 fi
-rm -f conftest_dl.c conftest_dl
+# clang leaves a conftest_dl.dSYM directory beside the binary, which R CMD
+# check then reports as a non-standard file at top level.
+rm -rf conftest_dl.c conftest_dl conftest_dl.dSYM
 
 sed -e "s|@DLLIB@|$dllib|" src/Makevars.in > src/Makevars
 

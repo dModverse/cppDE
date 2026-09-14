@@ -37,9 +37,13 @@ test_that("a forward-reverse solve lands on the value run's grid at any width", 
                 derivMode = "forward-reverse")
     fr <- do.call(solveODE,
                   c(list(m, times, pars, sens1ini = block_dirs(B), seed = W), tol))
+    # The grid is the exact claim. The numbers on it are not bit-identical:
+    # a corrector sums in a different order over the AD type than over double.
     expect_identical(fr$time, rr$time, info = paste("B =", B))
-    expect_identical(unname(fr$variable), unname(rr$variable), info = paste("B =", B))
-    expect_identical(unname(fr$adjoint), unname(rr$adjoint), info = paste("B =", B))
+    expect_equal(unname(fr$variable), unname(rr$variable),
+                 tolerance = 1e-9, info = paste("B =", B))
+    expect_equal(unname(fr$adjoint), unname(rr$adjoint),
+                 tolerance = 1e-8, info = paste("B =", B))
   }
 })
 
@@ -108,10 +112,14 @@ test_that("blocks ride one grid on every method", {
       S <- matrix(0, n_phi, length(idx))
       for (j in seq_along(idx)) S[idx[j], j] <- 1
       blk <- do.call(solveODE, c(list(m, times, pars, sens1ini = S, seed = W), tol))
-      expect_identical(unname(blk$adjoint), unname(one$adjoint), info = meth)
+      # One grid is the exact claim; the block width changes the order the same
+      # arithmetic runs in, so the numbers agree to rounding.
+      expect_identical(blk$time, one$time, info = meth)
+      expect_equal(unname(blk$adjoint), unname(one$adjoint),
+                   tolerance = 1e-12, info = meth)
       H[, idx] <- blk$adjoint2[, seq_along(idx), 1L]
     }
-    expect_identical(H, unname(one$adjoint2[, , 1L]), info = meth)
+    expect_equal(H, unname(one$adjoint2[, , 1L]), tolerance = 1e-12, info = meth)
   }
 })
 
@@ -132,11 +140,12 @@ test_that("a Hessian assembled from blocks is the one a single pass gives", {
     for (j in seq_along(idx)) S[idx[j], j] <- 1
     blk <- do.call(solveODE,
                    c(list(m2, times, pars, sens1ini = S, seed = W), tol))
-    expect_identical(unname(blk$adjoint), unname(one$adjoint),
-                     info = as.character(start))
+    expect_identical(blk$time, one$time, info = as.character(start))
+    expect_equal(unname(blk$adjoint), unname(one$adjoint),
+                 tolerance = 1e-12, info = as.character(start))
     H[, idx] <- blk$adjoint2[, seq_along(idx), 1L]
   }
-  expect_identical(H, unname(one$adjoint2[, , 1L]))
+  expect_equal(H, unname(one$adjoint2[, , 1L]), tolerance = 1e-12)
   # Symmetric by construction on one grid, though not bit for bit: each column
   # is a different sequence of the same arithmetic.
   expect_equal(H, t(H), tolerance = 1e-9)
@@ -228,26 +237,99 @@ test_that("a jump whose time is a parameter goes backwards at second order", {
   expect_second_order(ff, fr, W, "parameter event time", tol_h = 1e-6)
 })
 
-test_that("a root event carries its own jump but not its own time", {
-  # The jump itself is exact. dev/jump-adjoint-check.cpp runs the sandwich over
-  # a nested dual against its transpose over a flat one, with no solver, store
-  # or engine around them, and they agree to 9e-16 in the Hessian, with a
-  # cotangent that carries tangents of its own. An identity reset is exact
-  # end to end too, 1e-07 against the same model without the event.
-  #
-  # Over a whole trajectory a rank-one term survives, the same to three digits
-  # on bdf, adams, rb4 and tsit5, so algebra and not discretisation. Fitting it
-  # against sens1 at the pre-jump row identifies it to four digits as
-  #
-  #   kappa * ( J' grad g  on the state,  (df/dtheta)' grad g  on theta ),
-  #
-  # which is the vector the jump adjoint already injects for the second half of
-  # ds/dx. The vector is right and the scalar the trajectory hands it is not,
-  # so what is left is between the store and the sweep, not in the algebra.
-  skip(paste("root event second order: the trajectory scales the shift's own",
-             "derivative wrongly, see dev/jump-adjoint-check.cpp, which clears",
-             "the jump itself. Fixed and parameter-valued event times fall with",
-             "the tolerance, 1e-10 at rtol 1e-12."))
+test_that("a root event goes backwards at second order", {
+  # A root's t* moves with theta, and the grid carries the state either side of
+  # the jump at that time. A seed there is not the same functional at two
+  # parameter values, so both rows are zeroed.
+  eq <- c(A = "-k1 * A + k2 * B", B = "k1 * A - k2 * B - k3 * B * B")
+  ev <- data.frame(var = "A", time = NA, value = "d_amt", root = "B - 0.55",
+                   method = "add", stringsAsFactors = FALSE)
+  p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, d_amt = 0.4)
+  tl <- list(abstol = 1e-12, reltol = 1e-12)
+
+  for (m in c("bdf", "adams", "rb4", "tsit5")) {
+    mf <- cppODE(eq, events = ev, method = m,
+                 modelname = paste0("g2_rt_ff_", m),
+                 derivMode = "forward-forward")
+    mr <- cppODE(eq, events = ev, method = m,
+                 modelname = paste0("g2_rt_fr_", m),
+                 derivMode = "forward-reverse")
+    ff <- do.call(solveODE, c(list(mf, times, p), tl))
+    # The jump has to be in the run, or the test proves nothing.
+    expect_gt(nrow(ff$variable), length(times))
+
+    W <- seed_for(nrow(ff$variable))
+    moving <- which(vapply(ff$time, function(x) min(abs(x - times)) > 1e-9, TRUE))
+    expect_length(moving, 2L)
+    W[moving, , ] <- 0
+
+    fr <- do.call(solveODE, c(list(mr, times, p, seed = W), tl))
+    expect_second_order(ff, fr, W, m)
+  }
+})
+
+test_that("an event's root, time and value may be any expression", {
+  # Every slot at once, because each leaves different terms at zero: a root
+  # linear in x and blind to the clock zeroes two thirds of grad g_dot. Here g
+  # is quadratic in B, reads A and carries t, the event time is nonlinear in a
+  # parameter, and both heights read the state, a parameter and the clock.
+  # A clock-reading height rides on roottol rather than reltol.
+  eq <- c(A = "-k1 * A + k2 * B", B = "k1 * A - k2 * B - k3 * B * B")
+  ev <- data.frame(
+    var    = c("A", "B"),
+    time   = c("0.5 * t_ev + 0.4 * t_ev * t_ev", NA),
+    value  = c("k1 * A + d_amt * time", "0.3 * B + 0.2 * d_amt * A * time"),
+    root   = c(NA, "B * B + 0.1 * A - 0.40 - 0.02 * time"),
+    method = c("add", "add"),
+    stringsAsFactors = FALSE)
+  p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1,
+          d_amt = 0.4, t_ev = 1.0)
+  tl <- list(abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
+
+  for (m in c("bdf", "adams", "rb4", "tsit5")) {
+    mf <- cppODE(eq, events = ev, method = m,
+                 modelname = paste0("g2_gen_ff_", m),
+                 derivMode = "forward-forward")
+    mr <- cppODE(eq, events = ev, method = m,
+                 modelname = paste0("g2_gen_fr_", m),
+                 derivMode = "forward-reverse")
+    ff <- do.call(solveODE, c(list(mf, times, p), tl))
+
+    W <- seed_for(nrow(ff$variable))
+    moving <- which(vapply(ff$time, function(x) min(abs(x - times)) > 1e-9, TRUE))
+    # One row for the fixed jump and the pair a root emits, or the test proves
+    # nothing: both events have to be in the run.
+    expect_length(moving, 3L)
+    W[moving, , ] <- 0
+
+    fr <- do.call(solveODE, c(list(mr, times, p, seed = W), tl))
+    expect_second_order(ff, fr, W, m)
+  }
+})
+
+test_that("a clock-reading jump height rides on roottol", {
+  # It reads t* itself, where a height blind to the clock only reads the state
+  # there, so the localisation error reaches it undamped. Not a missing term:
+  # the gap falls with roottol and floors at reltol.
+  eq <- c(A = "-k1 * A + k2 * B", B = "k1 * A - k2 * B - k3 * B * B")
+  ev <- data.frame(var = "A", time = NA, value = "d_amt * time",
+                   root = "B - 0.55", method = "add", stringsAsFactors = FALSE)
+  p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, d_amt = 0.4)
+  mf <- cppODE(eq, events = ev, method = "bdf", modelname = "g2_rtol_ff",
+               derivMode = "forward-forward")
+  mr <- cppODE(eq, events = ev, method = "bdf", modelname = "g2_rtol_fr",
+               derivMode = "forward-reverse")
+
+  gap <- vapply(c(1e-6, 1e-9), function(rt) {
+    tl <- list(abstol = 1e-12, reltol = 1e-12, roottol = rt)
+    ff <- do.call(solveODE, c(list(mf, times, p), tl))
+    W  <- seed_for(nrow(ff$variable))
+    W[vapply(ff$time, function(x) min(abs(x - times)) > 1e-9, TRUE), , ] <- 0
+    fr <- do.call(solveODE, c(list(mr, times, p, seed = W), tl))
+    max(abs(unname(fr$adjoint2[, , 1]) - hess_forward(ff, W)))
+  }, numeric(1))
+
+  expect_lt(gap[2], gap[1] * 1e-2)
 })
 
 test_that("every direction runs on the heap and blocks ride one grid", {
@@ -268,11 +350,12 @@ test_that("every direction runs on the heap and blocks ride one grid", {
     S <- matrix(0, n_phi, length(idx))
     for (j in seq_along(idx)) S[idx[j], j] <- 1
     blk <- do.call(solveODE, c(list(mh, times, pars, sens1ini = S, seed = W), tol))
-    expect_identical(unname(blk$adjoint), unname(one$adjoint),
-                     info = as.character(start))
+    expect_identical(blk$time, one$time, info = as.character(start))
+    expect_equal(unname(blk$adjoint), unname(one$adjoint),
+                 tolerance = 1e-12, info = as.character(start))
     H[, idx] <- blk$adjoint2[, seq_along(idx), 1L]
   }
-  expect_identical(H, unname(one$adjoint2[, , 1L]))
+  expect_equal(H, unname(one$adjoint2[, , 1L]), tolerance = 1e-12)
 })
 
 test_that("a seed that moves with theta carries its own tangents", {

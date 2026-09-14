@@ -151,6 +151,30 @@ report <- function(df, title) {
   }
 }
 
+## The reverse mode returns w' dx/dtheta and w' d2x/dtheta2, contracted over the
+## output rows, so the symbolic side is contracted the same way. A row a root
+## inserts moves with theta and is not the same functional at two parameter
+## values, so the seed is carried by the requested times alone.
+reverseReport <- function(expr, at, res, model, pars, var, states,
+                          opts = list()) {
+  i <- rowsAt(res, at$times)
+  set.seed(1)
+  w <- rnorm(length(at$times))
+  W <- array(0, c(nrow(res$variable), length(states), 1L))
+  W[i, match(var, states), 1L] <- w
+  rev <- do.call(solveODE, c(list(model, at$times, pars, seed = W), opts))
+
+  np <- length(at$syms)
+  g <- vapply(seq_len(np), function(a) sum(w * series(expr, at, at$syms[a])), 0)
+  H <- outer(seq_len(np), seq_len(np), Vectorize(function(a, b)
+        sum(w * series(expr, at, at$syms[c(a, b)]))))
+  cat(sprintf("  %-13s max |adjoint  - symbolic| = %.2e\n", "reverse 1st",
+              max(abs(rev$adjoint[at$names, 1L] - g))))
+  cat(sprintf("  %-13s max |adjoint2 - symbolic| = %.2e\n", "reverse 2nd",
+              max(abs(rev$adjoint2[at$names, at$names, 1L] - H))))
+  invisible(rev)
+}
+
 comparisonPlot <- function(df, orders, title)
   ggplot(df[df$order %in% orders, ], aes(x = time)) +
     ## A quantity that vanishes identically leaves the solver a cancellation
@@ -203,6 +227,11 @@ C_of_t    <- composed(list(C_before, C_after), list(fire_pair))
 
 cmp_pair <- comparison(C_of_t, point_pair, res_pair, "C")
 report(cmp_pair, "1. root event on a coupled pair")
+model_pair_r <- cppODE(c(S = "a", C = "-b * C"), events = events_pair,
+                       derivMode = "forward-reverse", modelname = "saltation_pair_r")
+reverseReport(C_of_t, point_pair, res_pair, model_pair_r, pars_pair, "C",
+              c("S", "C"), opts = list(abstol = 1e-12, reltol = 1e-12,
+                                       roottol = 1e-12))
 
 plot_pair_1 <- comparisonPlot(cmp_pair, 0:1, "C and its gradient across a root event")
 plot_pair_1
@@ -236,6 +265,10 @@ x_dose   <- composed(list(x_before, x_after), list(te))
 
 cmp_dose <- comparison(x_dose, point_dose, res_dose, "x")
 report(cmp_dose, "2. time-triggered event")
+model_dose_r <- cppODE(c(x = "-k * x"), events = events_dose,
+                       derivMode = "forward-reverse", modelname = "saltation_dose_r")
+reverseReport(x_dose, point_dose, res_dose, model_dose_r, pars_dose, "x", "x",
+              opts = list(abstol = 1e-12, reltol = 1e-12))
 
 plot_dose_1 <- comparisonPlot(cmp_dose, 0:1, "x and its gradient across a timed dose")
 plot_dose_1
@@ -387,5 +420,86 @@ plot_wall_3 <- comparisonPlot(cmp_wall_v, 0:1, "Velocity and its gradient over 8
 plot_wall_3
 plot_wall_4 <- comparisonPlot(cmp_wall_v, 2L, "Second derivatives of the velocity")
 plot_wall_4
+
+## =================================================================
+## 6. A jump whose time and height are expressions
+## =================================================================
+
+## Nothing here is a bare parameter: the firing time is a nonlinear function of
+## one, and the height reads the clock and the state it lands on. Each slot
+## leaves different terms of the transport at zero, so only generality reaches
+## them.
+events_expr <- data.frame(var = "x", time = "0.5*te + 0.4*te*te",
+                          value = "v * time + q * x", method = "add",
+                          root = NA, stringsAsFactors = FALSE)
+model_expr  <- cppODE(c(x = "-k * x"), events = events_expr, deriv = TRUE,
+                      deriv2 = TRUE, modelname = "saltation_expr")
+model_expr_r <- cppODE(c(x = "-k * x"), events = events_expr,
+                       derivMode = "forward-reverse", modelname = "saltation_expr_r")
+
+pars_expr  <- c(x = 1, k = 0.3, v = 0.5, q = 0.4, te = 1.6)
+times_expr <- seq(0, 10, len = 1000)
+res_expr   <- solveODE(model_expr, times_expr, pars_expr,
+                       abstol = 1e-12, reltol = 1e-12)
+
+vv <- sym("v"); qq <- sym("q"); tev <- sym("te")
+point_expr <- point(list(x0, k, vv, qq, tev),
+                    pars_expr[c("x", "k", "v", "q", "te")], times_expr)
+fire_expr  <- sp$Rational(1L, 2L) * tev + sp$Rational(2L, 5L) * pow(tev, 2)
+expr_before <- segment(xfun, -k * xfun(tSym), sp$Integer(0L), x0)
+at_fire     <- expr_before$subs(tSym, fire_expr)
+expr_after  <- segment(xfun, -k * xfun(tSym), fire_expr,
+                       at_fire + vv * fire_expr + qq * at_fire)
+x_expr      <- composed(list(expr_before, expr_after), list(fire_expr))
+
+cmp_expr <- comparison(x_expr, point_expr, res_expr, "x")
+report(cmp_expr, "6. a jump whose time and height are expressions")
+reverseReport(x_expr, point_expr, res_expr, model_expr_r, pars_expr, "x", "x",
+              opts = list(abstol = 1e-12, reltol = 1e-12))
+
+plot_expr_1 <- comparisonPlot(cmp_expr, 0:1, "x and its gradient, expression-valued jump")
+plot_expr_1
+plot_expr_2 <- comparisonPlot(cmp_expr, 2L, "Second derivatives, expression-valued jump")
+plot_expr_2
+
+## =================================================================
+## 7. A root nonlinear in the state and explicit in time
+## =================================================================
+
+## ds/dx carries grad g_dot, which is grad g_t + (hess g) f + J' grad g. A root
+## linear in the state and blind to the clock leaves the first two at zero, so
+## this is the case that tests them. Quadratic in t, so the crossing stays
+## closed form.
+events_quad <- data.frame(var = "x", time = NA, value = "v * time",
+                          method = "add", root = "x*x - xc - b*time",
+                          stringsAsFactors = FALSE)
+model_quad  <- cppODE(c(x = "r"), events = events_quad, deriv = TRUE,
+                      deriv2 = TRUE, modelname = "saltation_quad")
+model_quad_r <- cppODE(c(x = "r"), events = events_quad,
+                       derivMode = "forward-reverse", modelname = "saltation_quad_r")
+
+pars_quad  <- c(x = 0.5, r = 0.8, v = 0.3, xc = 1.2, b = 0.25)
+times_quad <- seq(0, 4, len = 1000)
+res_quad   <- solveODE(model_quad, times_quad, pars_quad,
+                       abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
+
+rr <- sym("r"); bb <- sym("b")
+point_quad <- point(list(x0, rr, vv, xc, bb),
+                    pars_quad[c("x", "r", "v", "xc", "b")], times_quad)
+quad_before <- segment(xfun, rr, sp$Integer(0L), x0)
+fire_quad   <- crossing(pow(quad_before, 2) - xc - bb * tSym, point_quad)
+quad_after  <- segment(xfun, rr, fire_quad,
+                       quad_before$subs(tSym, fire_quad) + vv * fire_quad)
+x_quad      <- composed(list(quad_before, quad_after), list(fire_quad))
+
+cmp_quad <- comparison(x_quad, point_quad, res_quad, "x")
+report(cmp_quad, "7. a root nonlinear in the state and explicit in time")
+reverseReport(x_quad, point_quad, res_quad, model_quad_r, pars_quad, "x", "x",
+              opts = list(abstol = 1e-12, reltol = 1e-12, roottol = 1e-12))
+
+plot_quad_1 <- comparisonPlot(cmp_quad, 0:1, "x and its gradient, nonlinear root")
+plot_quad_1
+plot_quad_2 <- comparisonPlot(cmp_quad, 2L, "Second derivatives, nonlinear root")
+plot_quad_2
 
 if (!interactive()) dev.off()

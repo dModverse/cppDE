@@ -461,13 +461,14 @@ void collapse_restart(const std::vector<T>& w_carry, std::size_t n,
 //  dt* multiplies dt* itself and drops with it.
 //
 //  So a jump's adjoint needs the right-hand side at the two ends and the model's
-//  own derivatives of the event expressions. It needs no Jacobian: every term
-//  the shifts would have contributed carries a factor that is zero.
+//  own derivatives of the event expressions.
 // ---------------------------------------------------------------------------
 template<class T = double>
 struct jump_workspace {
   std::vector<T> fb, fa, g, wy;
   std::vector<std::vector<T> > path;
+  // The reset chain on one sandwich's surface, rebuilt per event.
+  std::vector<std::vector<T> > micro;
 };
 
 /// One reset, transposed. `w_z` is the cotangent on the state it wrote, `w_y`
@@ -475,12 +476,14 @@ struct jump_workspace {
 ///     Replace   z[k] = h(y, t)
 ///     Add       z[k] = y[k] + h(y, t)
 ///     Multiply  z[k] = y[k] * h(y, t)
-template<class GradX, class GradP, class T>
+/// `w_time` takes what the reset contributes to the event time's cotangent.
+template<class GradX, class GradP, class GradT, class T>
 void reset_transpose(int k, cppde::detail::EventMethod method, const T& h,
                      int idx,
-                     const std::vector<T>& y, double t, std::size_t n,
+                     const std::vector<T>& y, const T& t, std::size_t n,
                      const T* w_z, T* w_y, T* w_theta,
-                     GradX&& dh_dx, GradP&& dh_dp_axpy, std::vector<T>& g)
+                     GradX&& dh_dx, GradP&& dh_dp_axpy, std::vector<T>& g,
+                     GradT&& dh_dt_axpy, T& w_time)
 {
   if (k < 0) return;
   const T wk = w_z[k];
@@ -497,6 +500,9 @@ void reset_transpose(int k, cppde::detail::EventMethod method, const T& h,
   dh_dx(idx, y, t, g);
   for (std::size_t i = 0; i < n; ++i) w_y[i] += wk * c * g[i];
   dh_dp_axpy(idx, y, t, wk * c, w_theta);
+  // A reset that reads the clock moves with the event time, so dh/dt belongs
+  // on the scalar the shift is scaled by.
+  dh_dt_axpy(idx, y, t, wk * c, &w_time);
 }
 
 /// A batch of root events, which share one surface and one dt*.
@@ -561,6 +567,9 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   std::vector<T> xe, xa, fe, fa, wa, jva, jvb;
   zero_armed(xe, n); zero_armed(xa, n);
   zero_armed(fe, n); zero_armed(fa, n); zero_armed(wa, n);
+  // jvb is filled twice and the scalars between the fills take the arena the
+  // first fill used, so unarmed the second write lands on their tangents.
+  zero_armed(jva, n); zero_armed(jvb, n);
   for (std::size_t i = 0; i < n; ++i) xe[i] = x_before[i] + ws.fb[i] * s;
   for (std::size_t i = 0; i < n; ++i) xa[i] = x_after[i] + ws.fa[i] * s;
   sys.first(xe, fe, t_s);
@@ -588,15 +597,18 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
     const auto& evt = root_events[idx];
     if (evt.terminal) continue;
     const T h = (evt.state_index >= 0 && evt.value_func)
-                   ? evt.value_func(xe, t) : T(0.0);
+                   ? evt.value_func(xe, t_s) : T(0.0);
     reset_transpose(
-        evt.state_index, evt.method, h, static_cast<int>(idx), xe, t, n,
+        evt.state_index, evt.method, h, static_cast<int>(idx), xe, t_s, n,
         wa.data(), w_in, w_theta,
-        [&](int e, const std::vector<T>& y, double tt, std::vector<T>& o)
+        [&](int e, const std::vector<T>& y, const T& tt, std::vector<T>& o)
           { eadj.root_dh_dx(e, y, tt, o); },
-        [&](int e, const std::vector<T>& y, double tt, const T& sc, T* o)
+        [&](int e, const std::vector<T>& y, const T& tt, const T& sc, T* o)
           { eadj.root_dh_dp_axpy(e, y, tt, sc, o); },
-        ws.g);
+        ws.g,
+        [&](int e, const std::vector<T>& y, const T& tt, const T& sc, T* o)
+          { eadj.root_dh_dt_axpy(e, y, tt, sc, o); },
+        w_s);
   }
 
   // Entering it: the forward Heun average, and the same pair the other way.
@@ -628,13 +640,14 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   //
   //   ds/dx = -grad g / g_dot - (s / g_dot) grad g_dot,
   //
-  // carrying g, which is zero in value, so it is absent from the gradient and
-  // full strength in the Hessian. Only the value of grad g_dot is needed, and
-  // grad g_dot = grad g_t + (hess g) f + J' grad g.
+  // carrying g, which is zero in value: absent from the gradient and full
+  // strength in the Hessian. The model differentiates g_dot whole, because
+  // J' grad g alone holds only for a g linear in x and blind to the clock.
   const T cs = c * s;
-  adj.jac_t_vec(x_before, ws.g, t, jvb);
+  zero_armed(jvb, n);
+  eadj.root_gdot_dx(static_cast<int>(idx), x_before, t, jvb);
   for (std::size_t i = 0; i < n; ++i) w_in[i] += cs * jvb[i];
-  adj.dfdp_t_vec_axpy(x_before, ws.g, t, cs, w_theta);
+  eadj.root_gdot_dp_axpy(static_cast<int>(idx), x_before, t, cs, w_theta);
 }
 
 /// The fixed events at one time, each its own sandwich, applied in order. The
@@ -656,104 +669,134 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
     if (std::abs(ad_traits::scalar_value(fixed_events[j].time) - t) < 1e-14)
       fired.push_back(static_cast<int>(j));
 
-  // The path through the resets, which the store does not keep: one sandwich
-  // per event, each reading what the last left. Rebuilt with the sandwich and
-  // not the bare reset, which agrees in value and not in the tangents: a reset
-  // says the post-jump state does not move with the event time, when it moves
-  // by f_before - f_after.
-  const std::size_t n_steps = fired.size() + switched.size();
-  ws.path.assign(n_steps + 1, std::vector<T>());
+  // The path the forward took, which the store does not keep: one whole
+  // sandwich per event, the switched resets on the surface of the last. A bare
+  // reset agrees in value and misses dx_after/dt* = f_before - f_after.
+  const std::size_t nf = fired.size();
+  std::vector<T> tmp;
+  zero_armed(tmp, n);
+  auto at_surface = [&](std::vector<T>& xs, const T& te) {
+    for (std::size_t q = 0; q < switched.size(); ++q) {
+      tmp = xs;
+      cppde::detail::apply_event_action(xs, tmp, te, root_events[switched[q]]);
+    }
+  };
+  ws.path.assign(nf + 1, std::vector<T>());
   ws.path[0] = x_before;
-  std::size_t s = 0;
-  for (std::size_t j = 0; j < fired.size(); ++j, ++s) {
-    zero_armed(ws.path[s + 1], n);
-    ws.path[s + 1] = ws.path[s];
-    if constexpr (std::is_arithmetic<T>::value)
-      cppde::detail::apply_event_action_fixed(ws.path[s + 1], ws.path[s],
-                                              fixed_events[fired[j]]);
-    else
-      cppde::detail::saltation_fixed_analytical(ws.path[s + 1], ws.path[s], sys,
-                                                fixed_events[fired[j]]);
-  }
-  for (std::size_t j = 0; j < switched.size(); ++j, ++s) {
-    zero_armed(ws.path[s + 1], n);
-    ws.path[s + 1] = ws.path[s];
-    cppde::detail::apply_event_action(ws.path[s + 1], ws.path[s], T(t),
-                                      root_events[switched[j]]);
+  for (std::size_t j = 0; j < nf; ++j) {
+    zero_armed(ws.path[j + 1], n);
+    ws.path[j + 1] = ws.path[j];
+    const auto& evt = fixed_events[fired[j]];
+    if constexpr (std::is_arithmetic<T>::value) {
+      cppde::detail::apply_event_action_fixed(ws.path[j + 1], ws.path[j], evt);
+      if (j + 1 == nf) at_surface(ws.path[j + 1], evt.time);
+    } else if (j + 1 == nf) {
+      cppde::detail::saltation_fixed_analytical(ws.path[j + 1], ws.path[j], sys,
+                                                evt, at_surface);
+    } else {
+      cppde::detail::saltation_fixed_analytical(ws.path[j + 1], ws.path[j], sys,
+                                                evt);
+    }
   }
 
-  // Backwards through the same chain. The switched resets ride on the last
-  // sandwich's surface, so they sit inside its shift rather than beside it.
+  // Backwards through the same chain: the root path's sandwich with the event
+  // time's residual tau in place of the shift, and the same pruning rule.
   std::vector<T> w(w_out, w_out + n);
+  std::vector<T> f1, f2, g1, g2, xe, xk, jv;
+  zero_armed(f1, n); zero_armed(f2, n);
+  zero_armed(g1, n); zero_armed(g2, n);
+  zero_armed(xe, n); zero_armed(xk, n); zero_armed(jv, n);
   ws.wy.assign(n, T(0.0));
-  for (std::size_t j = switched.size(); j-- > 0;) {
-    const std::size_t p = fired.size() + j;
-    const auto& evt = root_events[switched[j]];
-    const T h = (evt.state_index >= 0 && evt.value_func)
-                   ? evt.value_func(ws.path[p], t) : T(0.0);
-    ws.wy = w;
-    reset_transpose(
-        evt.state_index, evt.method, h, static_cast<int>(switched[j]),
-        ws.path[p], t, n, w.data(), ws.wy.data(), w_theta,
-        [&](int e, const std::vector<T>& y, double tt, std::vector<T>& o)
-          { eadj.root_dh_dx(e, y, tt, o); },
-        [&](int e, const std::vector<T>& y, double tt, const T& sc, T* o)
-          { eadj.root_dh_dp_axpy(e, y, tt, sc, o); },
-        ws.g);
-    w.swap(ws.wy);
-  }
+  zero_armed(ws.wy, n);
 
-  for (std::size_t j = fired.size(); j-- > 0;) {
+  for (std::size_t j = nf; j-- > 0;) {
     const auto& evt = fixed_events[fired[j]];
     const std::vector<T>& y = ws.path[j];
-    const std::vector<T>& z = ws.path[j + 1];
+    const T tau = evt.time - T(ad_traits::scalar_value(evt.time));
 
-    zero_armed(ws.fb, n); zero_armed(ws.fa, n);
-    sys.first(y, ws.fb, t);
-    // The last sandwich ends on the surface the switched resets left.
-    const std::vector<T>& zz =
-        (j + 1 == fired.size()) ? ws.path[n_steps] : z;
-    sys.first(zz, ws.fa, t);
-
-    T w_s = T(0.0);
-    for (std::size_t i = 0; i < n; ++i) w_s -= ws.fa[i] * w[i];
-
-    const T h = (evt.state_index >= 0 && evt.value_func)
-                   ? evt.value_func(y, evt.time) : T(0.0);
-    ws.wy = w;
-    reset_transpose(
-        evt.state_index, evt.method, h, fired[j], y, t, n,
-        w.data(), ws.wy.data(), w_theta,
-        [&](int e, const std::vector<T>& yy, double tt, std::vector<T>& o)
-          { eadj.fixed_dh_dx(e, yy, tt, o); },
-        [&](int e, const std::vector<T>& yy, double tt, const T& sc, T* o)
-          { eadj.fixed_dh_dp_axpy(e, yy, tt, sc, o); },
-        ws.g);
-    w.swap(ws.wy);
-
-    for (std::size_t i = 0; i < n; ++i) w_s += ws.fb[i] * w[i];
-    eadj.fixed_dtime_dp_axpy(fired[j], w_s, w_theta);
-
-    // The same term the root path carries: each Heun shift reads f at theta
-    // over the width it travels. Read as a quadrature, w_theta is an integral
-    // split at the event and a split point that moves drags its jump along:
-    //
-    //   d w_theta[p] / dv += ( G_p(t*-) - G_p(t*+) ) dt*/dv,
-    //   G_p = (df/dtheta_p)' lambda.
-    //
-    // tau is zero in value and carries dt*/dv, so only the Hessian moves. Only
-    // parameters whose df/dtheta reads a state the reset changed contribute.
-    {
-      const T tau = evt.time - T(ad_traits::scalar_value(evt.time));
-      ws.wy.assign(n, T(0.0));
-      zero_armed(ws.wy, n);
-      for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w[i];
-      adj.dfdp_t_vec_axpy(y, ws.wy, t, tau, w_theta);
-      ws.wy.assign(n, T(0.0));
-      zero_armed(ws.wy, n);
-      for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w_out[i];
-      adj.dfdp_t_vec_axpy(zz, ws.wy, t, T(0.0) - tau, w_theta);
+    // The half that reaches the surface, replayed so the resets are
+    // transposed where the forward applied them.
+    sys.first(y, f1, t);
+    for (std::size_t i = 0; i < n; ++i) xe[i] = y[i] + f1[i] * tau;
+    sys.first(xe, f2, evt.time);
+    const std::size_t n_res = 1 + ((j + 1 == nf) ? switched.size() : 0);
+    ws.micro.assign(n_res + 1, std::vector<T>());
+    zero_armed(ws.micro[0], n);
+    for (std::size_t i = 0; i < n; ++i)
+      ws.micro[0][i] = y[i] + T(0.5) * (f1[i] + f2[i]) * tau;
+    zero_armed(ws.micro[1], n);
+    ws.micro[1] = ws.micro[0];
+    cppde::detail::apply_event_action_fixed(ws.micro[1], ws.micro[0], evt);
+    for (std::size_t q = 1; q < n_res; ++q) {
+      zero_armed(ws.micro[q + 1], n);
+      ws.micro[q + 1] = ws.micro[q];
+      cppde::detail::apply_event_action(ws.micro[q + 1], ws.micro[q], evt.time,
+                                        root_events[switched[q - 1]]);
     }
+    const std::vector<T>& xa = ws.micro[n_res];
+
+    // Leaving the surface: x_out = x_a - (g1 + g2) tau / 2, g1 at the event
+    // time and g2 at the grid time.
+    sys.first(xa, g1, evt.time);
+    for (std::size_t i = 0; i < n; ++i) xk[i] = xa[i] - g1[i] * tau;
+    sys.first(xk, g2, t);
+    for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w[i];
+    adj.jac_t_vec(xa, ws.wy, t, jv);
+    adj.dfdp_t_vec_axpy(xa, ws.wy, t, T(0.0) - tau, w_theta);
+    T w_s = T(0.0);
+    for (std::size_t i = 0; i < n; ++i)
+      w_s += T(0.5) * (tau * (g1[i] * jv[i]) - (g1[i] + g2[i]) * w[i]);
+    for (std::size_t i = 0; i < n; ++i) w[i] -= tau * jv[i];
+
+    // The resets on that surface, switched ones first because they came last.
+    for (std::size_t q = n_res; q-- > 1;) {
+      const auto& re = root_events[switched[q - 1]];
+      const std::vector<T>& yy = ws.micro[q];
+      const T h = (re.state_index >= 0 && re.value_func)
+                     ? re.value_func(yy, evt.time) : T(0.0);
+      ws.wy = w;
+      reset_transpose(
+          re.state_index, re.method, h, static_cast<int>(switched[q - 1]), yy,
+          evt.time, n, w.data(), ws.wy.data(), w_theta,
+          [&](int e, const std::vector<T>& yv, const T& tt, std::vector<T>& o)
+            { eadj.root_dh_dx(e, yv, tt, o); },
+          [&](int e, const std::vector<T>& yv, const T& tt, const T& sc, T* o)
+            { eadj.root_dh_dp_axpy(e, yv, tt, sc, o); },
+          ws.g,
+          [&](int e, const std::vector<T>& yv, const T& tt, const T& sc, T* o)
+            { eadj.root_dh_dt_axpy(e, yv, tt, sc, o); },
+          w_s);
+      w.swap(ws.wy);
+    }
+    {
+      const std::vector<T>& yy = ws.micro[0];
+      const T h = (evt.state_index >= 0 && evt.value_func)
+                     ? evt.value_func(yy, evt.time) : T(0.0);
+      ws.wy = w;
+      reset_transpose(
+          evt.state_index, evt.method, h, fired[j], yy, evt.time, n,
+          w.data(), ws.wy.data(), w_theta,
+          [&](int e, const std::vector<T>& yv, const T& tt, std::vector<T>& o)
+            { eadj.fixed_dh_dx(e, yv, tt, o); },
+          [&](int e, const std::vector<T>& yv, const T& tt, const T& sc, T* o)
+            { eadj.fixed_dh_dp_axpy(e, yv, tt, sc, o); },
+          ws.g,
+          [&](int e, const std::vector<T>& yv, const T& tt, const T& sc, T* o)
+            { eadj.fixed_dh_dt_axpy(e, yv, tt, sc, o); },
+          w_s);
+      w.swap(ws.wy);
+    }
+
+    // Entering it: x_* = x_b + (f1 + f2) tau / 2, the same pair the other way.
+    for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w[i];
+    adj.jac_t_vec(y, ws.wy, t, jv);
+    adj.dfdp_t_vec_axpy(xe, ws.wy, t, tau, w_theta);
+    for (std::size_t i = 0; i < n; ++i)
+      w_s += T(0.5) * ((f1[i] + f2[i]) * w[i] + tau * (f1[i] * jv[i]));
+    for (std::size_t i = 0; i < n; ++i) w[i] += tau * jv[i];
+
+    // kappa scales the event time's derivative, which reads the parameters.
+    eadj.fixed_dtime_dp_axpy(fired[j], w_s, w_theta);
   }
 
   for (std::size_t i = 0; i < n; ++i) w_in[i] = w[i];

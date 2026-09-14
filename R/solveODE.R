@@ -717,7 +717,8 @@
 #' @param hini Initial step size; `0` (default) triggers automatic
 #'   estimation.
 #' @param roottol Tolerance for root finding in root-triggered events.
-#'   Default `1e-6`.
+#'   Default `1e-6`. A jump height that reads `time` reads the firing time
+#'   itself, so its derivatives inherit this rather than `reltol`.
 #' @param maxroot Maximum number of triggers per root event. Default `1`.
 #' @param onFailure How to react when the solver returns a non-zero
 #'   return code. One of `"stop"` (default; raise an error with the solver

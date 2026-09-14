@@ -1958,18 +1958,21 @@ def fixed_event_time_exprs(events_df, states_list, params_list, n_states,
 
 
 def _event_grad_case(expr, states_list, params_list, n_states, num_type,
-                     forcings_list, local_symbols):
+                     forcings_list, local_symbols, vectors=()):
     """One event expression's two gradients, as the body of a switch case.
 
     The state side writes a gradient, the parameter side accumulates a scaled
     one into the flat vector, which is the shape every other contraction here
-    takes.
+    takes. `vectors` names slots this generator invents, such as a forcing's
+    time derivative.
     """
     zero = sp.Integer(0)
     n_sl = len(states_list)
     xs, ps = [], []
     if expr is None or expr == zero:
         return xs, ps
+    cpp = lambda d: _to_cpp(d, states_list, params_list, n_sl, num_type,
+                            forcings_list, vectors=vectors)
     free = expr.free_symbols
     for j, s in enumerate(states_list):
         sym = local_symbols.get(s)
@@ -1978,7 +1981,7 @@ def _event_grad_case(expr, states_list, params_list, n_states, num_type,
         d = _replace_dirac_delta(sp.diff(expr, sym))
         if d == 0:
             continue
-        xs.append(f"      out[{j}] = {_to_cpp(d, states_list, params_list, n_sl, num_type, forcings_list)};")
+        xs.append(f"      out[{j}] = {cpp(d)};")
     for k, p in enumerate(params_list):
         sym = local_symbols.get(p)
         if sym is None or sym not in free:
@@ -1986,7 +1989,7 @@ def _event_grad_case(expr, states_list, params_list, n_states, num_type,
         d = _replace_dirac_delta(sp.diff(expr, sym))
         if d == 0:
             continue
-        ps.append(f"      out[{n_states + k}] += sc*({_to_cpp(d, states_list, params_list, n_sl, num_type, forcings_list)});")
+        ps.append(f"      out[{n_states + k}] += sc*({cpp(d)});")
     # An initial value reads as a parameter slot of its own.
     for j, s in enumerate(states_list):
         sym = local_symbols.get(f"{s}_0")
@@ -1995,8 +1998,68 @@ def _event_grad_case(expr, states_list, params_list, n_states, num_type,
         d = _replace_dirac_delta(sp.diff(expr, sym))
         if d == 0:
             continue
-        ps.append(f"      out[{j}] += sc*({_to_cpp(d, states_list, params_list, n_sl, num_type, forcings_list)});")
+        ps.append(f"      out[{j}] += sc*({cpp(d)});")
     return xs, ps
+
+
+def _event_time_grad_case(expr, states_list, params_list, n_states, num_type,
+                          forcings_list, local_symbols):
+    """One event expression's explicit time derivative, as a switch case body.
+
+    A forcing inside h carries its own rate, which SymPy cannot take in t.
+    """
+    if expr is None or expr == sp.Integer(0):
+        return []
+    t = local_symbols["time"]
+    d = sp.diff(expr, t)
+    vectors = []
+    free = expr.free_symbols
+    for k, fname in enumerate(forcings_list):
+        f_sym = local_symbols.get(fname)
+        if f_sym is None or f_sym not in free:
+            continue
+        dh_df = sp.diff(expr, f_sym)
+        if dh_df == 0:
+            continue
+        rate = sp.Symbol(f"_dFdt{k}", real=True)
+        d += dh_df * rate
+        vectors.append((rate.name, f"(*F[{k}]).derivative(t)"))
+    d = _replace_dirac_delta(d)
+    if d == 0:
+        return []
+    cpp = _to_cpp(d, states_list, params_list, len(states_list), num_type,
+                  forcings_list, vectors=tuple(vectors))
+    return [f"      out[0] += sc*({cpp});"]
+
+
+def _root_gdot_sym(root_expr, states_list, forcings_list, local_symbols,
+                   rhs_exprs):
+    """g_dot = dg/dt + grad g . f, symbolically, with the slots it needs.
+
+    A forcing's rate enters as an invented symbol printing as the interpolant's
+    derivative. Returns (None, ()) when the right-hand side did not parse.
+    """
+    if rhs_exprs is None:
+        return None, ()
+    t = local_symbols["time"]
+    g_dot = sp.diff(root_expr, t)
+    free = root_expr.free_symbols
+    for i, s in enumerate(states_list):
+        s_sym = local_symbols[s]
+        if s_sym in free:
+            g_dot += sp.diff(root_expr, s_sym) * rhs_exprs[i]
+    vectors = []
+    for k, fname in enumerate(forcings_list):
+        f_sym = local_symbols[fname]
+        if f_sym not in free:
+            continue
+        dg_df = sp.diff(root_expr, f_sym)
+        if dg_df == 0:
+            continue
+        rate = sp.Symbol(f"_dFdt{k}", real=True)
+        g_dot += dg_df * rate
+        vectors.append((rate.name, f"(*F[{k}]).derivative(t)"))
+    return g_dot, tuple(vectors)
 
 
 def _emit_event_switch(name, cases, num_type, args, head):
@@ -2040,7 +2103,11 @@ def _empty_event_adjoint_terms(n_states, n_params, num_type):
                              ("fixed_dh_dp_axpy", pargs, phead),
                              ("root_dh_dx", xargs, xhead),
                              ("root_dh_dp_axpy", pargs, phead),
-                             ("root_dg_dp_axpy", pargs, phead)):
+                             ("root_dg_dp_axpy", pargs, phead),
+                             ("root_gdot_dx", xargs, xhead),
+                             ("root_gdot_dp_axpy", pargs, phead),
+                             ("fixed_dh_dt_axpy", pargs, phead),
+                             ("root_dh_dt_axpy", pargs, phead)):
         out += [f"  void {name}({args}) const {{"] + head + ["  }", ""]
     out += [f"  void fixed_dtime_dp_axpy(int ev, const {num_type}& sc, {num_type}* out) const {{",
             "    (void)ev; (void)sc; (void)out;", "  }", ""]
@@ -2151,6 +2218,8 @@ def generate_event_code(events_df, states_list, params_list, n_states,
     # sides. Only filled under emit_adjoint.
     adj_fixed_hx, adj_fixed_hp, adj_fixed_tp = [], [], []
     adj_root_hx, adj_root_hp, adj_root_gp = [], [], []
+    adj_root_gdx, adj_root_gdp = [], []
+    adj_fixed_ht, adj_root_ht = [], []
     n_fixed = n_root = 0
 
     for i in range(n_events):
@@ -2223,6 +2292,11 @@ def generate_event_code(events_df, states_list, params_list, n_states,
                     _safe_sympify(str(time_raw), local_symbols),
                     states_list, params_list, n_states, num_type, forcings_list,
                     local_symbols)
+                adj_fixed_ht.append((n_fixed, _event_time_grad_case(
+                    _safe_sympify(str(value_raw), local_symbols)
+                    if value_raw is not None else None,
+                    states_list, params_list, n_states, num_type,
+                    forcings_list, local_symbols)))
                 adj_fixed_hx.append((n_fixed, hx))
                 adj_fixed_hp.append((n_fixed, hp))
                 adj_fixed_tp.append((n_fixed, tp))
@@ -2295,13 +2369,29 @@ def generate_event_code(events_df, states_list, params_list, n_states,
                     if value_raw is not None else None,
                     states_list, params_list, n_states, num_type, forcings_list,
                     local_symbols)
+                root_sym = _safe_sympify(str(root_raw), local_symbols)
                 _, gp = _event_grad_case(
-                    _safe_sympify(str(root_raw), local_symbols),
+                    root_sym,
                     states_list, params_list, n_states, num_type, forcings_list,
                     local_symbols)
+                # ds/dx carries grad g_dot whole, so it is one derivative of
+                # g_dot and not three assembled terms.
+                g_dot_sym, gd_vec = _root_gdot_sym(
+                    root_sym, states_list, forcings_list, local_symbols,
+                    rhs_exprs_parsed)
+                gdx, gdp = _event_grad_case(
+                    g_dot_sym, states_list, params_list, n_states, num_type,
+                    forcings_list, local_symbols, vectors=gd_vec)
+                adj_root_ht.append((n_root, _event_time_grad_case(
+                    _safe_sympify(str(value_raw), local_symbols)
+                    if value_raw is not None else None,
+                    states_list, params_list, n_states, num_type,
+                    forcings_list, local_symbols)))
                 adj_root_hx.append((n_root, hx))
                 adj_root_hp.append((n_root, hp))
                 adj_root_gp.append((n_root, gp))
+                adj_root_gdx.append((n_root, gdx))
+                adj_root_gdp.append((n_root, gdp))
             n_root += 1
 
         else:
@@ -2343,6 +2433,10 @@ def generate_event_code(events_df, states_list, params_list, n_states,
     out += _emit_event_switch("root_dh_dx", adj_root_hx, num_type, xargs, xhead)
     out += _emit_event_switch("root_dh_dp_axpy", adj_root_hp, num_type, pargs, phead)
     out += _emit_event_switch("root_dg_dp_axpy", adj_root_gp, num_type, pargs, phead)
+    out += _emit_event_switch("root_gdot_dx", adj_root_gdx, num_type, xargs, xhead)
+    out += _emit_event_switch("root_gdot_dp_axpy", adj_root_gdp, num_type, pargs, phead)
+    out += _emit_event_switch("fixed_dh_dt_axpy", adj_fixed_ht, num_type, pargs, phead)
+    out += _emit_event_switch("root_dh_dt_axpy", adj_root_ht, num_type, pargs, phead)
     out += ["};", f"// event_adjoint_terms writes into {n_phi} slots"]
     return out
 # =====================================================================

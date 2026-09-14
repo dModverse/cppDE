@@ -358,8 +358,10 @@ test_that("the dual vjp keeps the first order it already answered", {
   r1 <- f$vjp(X, P, W)
   r2 <- f$vjp2(X, P, W, vx = array(rnorm(24), c(4L, 2L, 3L)),
                vp = matrix(rnorm(6), 2L, 3L))
-  expect_identical(r2$wx, r1$wx)
-  expect_identical(r2$wp, r1$wp)
+  # The dual instantiation sums the same expressions in its own order, so the
+  # first order comes back to rounding rather than to the last bit.
+  expect_equal(r2$wx, r1$wx, tolerance = 1e-12)
+  expect_equal(r2$wp, r1$wp, tolerance = 1e-12)
   expect_identical(dim(r2$dwx), c(4L, 2L, 1L, 3L))
   expect_identical(dim(r2$dwp), c(2L, 1L, 3L))
 })
@@ -408,9 +410,9 @@ test_that("a cotangent's own tangents go through linearly", {
   r <- f$vjp2(X, P, W, dw = DW)
   for (k in seq_len(nd)) {
     rk <- f$vjp(X, P, matrix(DW[, , 1L, k], n, 2L))
-    expect_identical(unname(r$dwx[, , 1L, k]), unname(rk$wx[, , 1L]),
-                     info = as.character(k))
-    expect_identical(unname(r$dwp[, 1L, k]), unname(rk$wp[, 1L]),
-                     info = as.character(k))
+    expect_equal(unname(r$dwx[, , 1L, k]), unname(rk$wx[, , 1L]),
+                 tolerance = 1e-12, info = as.character(k))
+    expect_equal(unname(r$dwp[, 1L, k]), unname(rk$wp[, 1L]),
+                 tolerance = 1e-12, info = as.character(k))
   }
 })

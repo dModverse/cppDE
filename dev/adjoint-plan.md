@@ -1385,6 +1385,42 @@ gefunden wurde, in der Reihenfolge, in der es auffiel:
 `dev/cxx/run.sh --reverse-events`, ein fester Reset und ein wurzelgetriggerter auf demselben Lauf,
 auf `bdf` bei 1e-6 und auf `tsit5` bei 1e-9, jede Beobachtung einzeln geseedet und alle zusammen.
 
+**Nachtrag 2026-09-14: die zweite Ordnung der Wurzelereignisse steht auch, und die Ursache war
+nicht die Algebra.** Der Rang-1-Term, der über eine ganze Trajektorie überlebte, kam aus zwei
+ungearmten Ausgabepuffern im Sprung-Adjoint. Ein generiertes `J' lambda` öffnet eine eigene
+`dual_arena::scope` und schreibt darin, ein vom Sweep nicht gearmter Ausgang behält also einen
+Tangenten-Zeiger in Speicher, den die Scope beim Verlassen wieder freigibt. Der Puffer wird zweimal
+gefüllt, und `kappa` und `kappa s` entstehen zwischen den beiden Füllungen genau in diesem Fenster.
+Jede Lesestelle des Puffers ist mit einem im Wert verschwindenden `s` multipliziert, darum kosteten
+die verlorenen Tangenten nichts und das überschriebene `kappa s` alles: Gradient bitgleich, Hesse um
+einen Rang-1-Term daneben. Feste Ereignisse rufen die Kontraktion gar nicht auf und waren nie
+betroffen.
+
+Drei Vorwärts-Rückwärts-Abweichungen, die als Kandidaten aussahen, sind bei einer Tangentenlage
+**exakt null** und wurden nicht angefasst: der lineare IFT-Quotient gegen `dt_star + c2 dt_star^2`,
+der Reset am Euler-Punkt statt am Heun-Mittelpunkt, und der gespeicherte `x_out` als `x_k`. Jede
+ist eine Differenz aus zwei im Wert verschwindenden Faktoren, also eine Schuld gegenüber der
+dritten Ableitung und nicht gegenüber der zweiten.
+
+**Danach hat die Verallgemeinerung vier weitere Fehler freigelegt**, jeden erst dort, wo ein
+Ausdruck allgemein genug war. `ds/dx` trug nur `J' grad g`, was für ein `g` linear im Zustand und
+blind für die Uhr genügt und sonst nie; der Generator differenziert jetzt `g_dot` als Ganzes.
+Feste Ereignisse hatten die Sandwich-Transponierte gar nicht, nur die klassische Saltation, also
+fehlten die `(I -+ tau J)'`-Korrekturen, und jede mit einem Parameter ziehende Sprunghöhe war in
+der Hesse um 1.5e-1 daneben. Eine Sprunghöhe, die die Uhr liest, trägt `dh/dt` auf `kappa`, und
+ohne das war der **Gradient** falsch, nicht erst die Hesse. Und der Vorwärtslauf selbst wertete
+den Wurzel-Reset bei `t_event` aus statt bei `t*`.
+
+Was dabei methodisch zählt: der Skalar `kappa` und der Rang-1-Term sahen aus wie fehlende Analysis,
+und Nachrechnen der Herleitung hätte sie nie gefunden. Getrennt hat die beiden Möglichkeiten die
+Prüfung, die an der Algebra nichts ändert: derselbe Transponierte, einmal mit den Puffern des
+Sweeps und einmal mit denen, die der generierte Code übergibt.
+
+**Offen bleibt hier nichts.** `root`, `time` und `value` nehmen beliebige Ausdrücke, gemessen gegen
+forward over forward auf allen vier Verfahren bei 1e-10. Eine uhrlesende Sprunghöhe hängt an
+`roottol` statt an `reltol`, weil sie `t*` selbst liest; das ist kein fehlender Term, es skaliert
+eins zu eins mit `roottol` und liegt als eigener Test fest.
+
 **Es gibt keine transponierte Saltation, und das ist der Punkt.** Der Plan hat sie als eigene
 Herleitung vorgesehen. `cppde_saltation.hpp` ist aber über den Skalartyp templatisiert und
 verzweigt nur auf `std::is_arithmetic_v<value_type>`, also nimmt `codual` denselben AD-Zweig wie

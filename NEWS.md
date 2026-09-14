@@ -13,12 +13,36 @@
   and the parameter quadrature is split at the event without the boundary term a
   moving split point contributes. A parameter-valued event time went from a
   floor of 1e-1 to 1e-10 at `rtol = 1e-12`.
-* A root event's jump is transposed over the whole Heun sandwich, not over its
-  linear part, and `dev/jump-adjoint-check.cpp` holds it to the nested-dual
-  sandwich without a solver around it: 9e-16 in the Hessian. An identity reset
-  is exact end to end, 1e-07 where it was 7e-1. Root events stay first order:
-  over a whole trajectory a rank-one term survives, identified against `sens1`
-  as the scalar in front of the shift's own derivative.
+* **Events carry any expression through the second order: `root`, `time` and
+  `value`.** Each slot leaves different terms at zero, so only generality
+  reaches them. Against forward over forward on all four methods, a nonlinear
+  time-dependent root, a nonlinear event time and a state- and clock-reading
+  jump height now agree to 1e-10, where the worst stood at 2.4.
+* **Bug fix.** The jump adjoint left two contraction outputs unarmed. A
+  generated `J' lambda` writes inside an arena scope of its own, so an unarmed
+  output keeps a tangent pointer into storage the scope reclaims. The buffer is
+  filled twice and `kappa` and `kappa s` are formed between the fills, in that
+  reclaimed window. Every read of the buffer is multiplied by a shift that is
+  zero in value, so the gradient stayed bit-identical and only the Hessian
+  moved: rank one, on a vector the algebra does contain, which is why it read as
+  missing analysis. `dev/jump-adjoint-check.cpp` runs both buffer bindings side
+  by side and prints the arena offset that separates them.
+* `ds/dx` carries `grad g_dot` whole. The sweep assembled `J' grad g` and its
+  parameter partner, which holds for a `g` linear in the state and blind to the
+  clock and for nothing else; the model differentiates `g_dot` itself instead.
+* A fixed event is transposed over its whole Heun sandwich, as a root event
+  already was. It carried the classical saltation alone, so the `(I -+ tau J)'`
+  corrections were missing and a jump height that moved with a parameter was
+  wrong in the Hessian by 1.5e-1.
+* **Bug fix.** A jump height that reads the clock contributes `dh/dt` to the
+  scalar the shift is scaled by. Without it a fixed event was wrong in the
+  gradient, not only in the Hessian. The transposed reset also reads the event
+  time as the differentiable type, or `dh/dp` cannot carry how `t*` moves.
+* **Bug fix.** A root event applied its reset at the grid time, not at `t*`. The
+  reset happens on the surface, so a `value` that reads `time` reads it there.
+  Fixed events already did.
+* A jump height that reads the clock rides on `roottol`, not on `reltol`: it
+  reads `t*` itself, where one blind to the clock reads only the state there.
 * `saltation_fixed_analytical()` splits into `saltation_fixed_to_surface()` and
   `saltation_shift_back()`. A backward sweep needs the state on the surface.
 * A reverse seed can carry its own tangents, as `attr(seed, "seedTangent")` of

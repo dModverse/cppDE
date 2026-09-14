@@ -181,7 +181,9 @@ inline void saltation_root_analytical_batch(
     if (evt.terminal) continue;
     const int k = evt.state_index;
     if (k >= 0) {
-      value_type h = evt.value_func(x_star, t_event);
+      // The reset happens on the surface, so a value that reads the clock
+      // reads t*. Same scalar time either way, different AD components.
+      value_type h = evt.value_func(x_star, t_star);
       switch (evt.method) {
       case EventMethod::Replace:  x_after[k] = h; break;
       case EventMethod::Add:      x_after[k] = x_star[k] + h; break;
