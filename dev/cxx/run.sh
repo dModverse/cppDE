@@ -6,7 +6,8 @@
 #   dev/cxx/run.sh --against F  diff this build's output against F
 #
 # A leading --reverse-step, --reverse-step-rb4, --reverse-step-multistep,
-# --reverse-trajectory-methods, --reverse-events, --reverse-forcing,
+# --reverse-trajectory-methods, --reverse-events, --reverse-events2,
+# --reverse-forcing,
 # --reverse-sparse, --err-weights, --ad-transpose or --sparse-transpose selects a reverse-AD
 # harness; --bench-adjoint-step selects a bench rather than a test.
 #
@@ -42,6 +43,11 @@ case "${1:-}" in
   --reverse-events)
     SRC="$REPO/dev/cxx/test_reverse_events.cpp"
     OUT=${TMPDIR:-/tmp}/cppde_reverse_events
+    shift
+    ;;
+  --reverse-events2)
+    SRC="$REPO/dev/cxx/test_reverse_events2.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_reverse_events2
     shift
     ;;
   --reverse-forcing)

@@ -215,6 +215,11 @@ struct adjoint_terms {
                          double* out) const {
     out[NX + 2] += sc * ((-x[1] * x[1] * std::sin(t)) * lam[2]);
   }
+
+  double dfdt_dot(const std::vector<double>& x, const std::vector<double>& lam,
+                  const double& t) const {
+    return (-p[2] * x[1] * x[1] * std::sin(t)) * lam[2];
+  }
 };
 
 // And what it emits for the jump: the derivatives of the event expressions
@@ -239,6 +244,26 @@ struct event_adjoint_terms {
   }
   void root_dg_dp_axpy(int, const std::vector<double>&, const double&,
                        const double&, double*) const {}
+
+  // Neither reset reads the clock.
+  void fixed_dh_dt_axpy(int, const std::vector<double>&, const double&,
+                        const double&, double*) const {}
+  void root_dh_dt_axpy(int, const std::vector<double>&, const double&,
+                       const double&, double*) const {}
+
+  // g = x0 - level, so g_dot = f0 and grad g_dot is its row.
+  void root_gdot_dx(int, const std::vector<double>& x, const double&,
+                    std::vector<double>& out) const {
+    out.assign(NX, 0.0);
+    out[0] = -p[0];
+    out[1] =  p[1] * x[2];
+    out[2] =  p[1] * x[1];
+  }
+  void root_gdot_dp_axpy(int, const std::vector<double>& x, const double&,
+                         const double& sc, double* out) const {
+    out[NX + 0] += sc * (-x[0]);
+    out[NX + 1] += sc * (x[1] * x[2]);
+  }
 };
 
 template<class S> struct pipeline;

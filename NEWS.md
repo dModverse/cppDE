@@ -13,6 +13,18 @@
   and the parameter quadrature is split at the event without the boundary term a
   moving split point contributes. A parameter-valued event time went from a
   floor of 1e-1 to 1e-10 at `rtol = 1e-12`.
+* **Bug fix.** A root event whose right-hand side reads the clock was wrong in
+  the second order by a rank-one term on `dt*/dtheta`. The jump adjoint
+  collected a closed form of the Heun sandwich and pruned it by order in the
+  shift, which is sound for the gradient and not for the Hessian: `s^2` has no
+  value and no first derivative but `d2(s^2) = 2 (ds)^2`. It now reverses the
+  forward program assignment by assignment, and `f_e` and `f_a`, both read at
+  `t*`, hand the shift their own `df/dt`. Zero for an autonomous right-hand
+  side, which is why every earlier test missed it.
+* `adjoint_terms` gains `dfdt_dot`, and an explicit method now derives its time
+  derivatives too. They were zeroed there because only a Rosenbrock stage
+  needed them; a jump needs them whatever the stepper is, so `tsit5` kept the
+  gap after the sandwich was fixed.
 * **Events carry any expression through the second order: `root`, `time` and
   `value`.** Each slot leaves different terms at zero, so only generality
   reaches them. Against forward over forward on all four methods, a nonlinear

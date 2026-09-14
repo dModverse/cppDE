@@ -547,7 +547,9 @@ def generate_ode_cpp(
         # Only parse RHS + generate ODE code; emit a no-op Jacobian stub.
         exprs = [_safe_sympify(expr, local_symbols) for expr in odes_list]
         jac_matrix = None
-        time_derivs = [sp.Integer(0)] * n_states
+        # The stepper never asks for these; a jump does, since it evaluates
+        # f at a time that moves with theta.
+        time_derivs = [_replace_dirac_delta(sp.diff(expr, t)) for expr in exprs]
 
         ode_cpp_lines = _generate_ode_code_plain(
             exprs, states_list, params_list, n_states, num_type, forcings_list
@@ -609,7 +611,21 @@ def generate_ode_cpp(
         param_syms_list = [params_syms[p] for p in params_list]
         dfdp_nnz = _compute_ode_dfdp(exprs, param_syms_list, set(param_syms_list))
         jvp_matrix = jvp_dfdp_nnz = dfdt_matrix = dfdt_dfdp_nnz = None
-        v_slots = fd_slots = ()
+        v_slots = ()
+        # df/dt as the model computes it: the explicit time derivative plus,
+        # for every forcing, the chain term through its own rate. Needed by every
+        # jump, so it is built whatever the stepper is.
+        fd_syms = [sp.Symbol(f"_fd{j}") for j in range(len(forcings_list))]
+        fd_slots = tuple((str(fd), f"F[{j}]->derivative(t)")
+                         for j, fd in enumerate(fd_syms))
+        dfdt_exprs = []
+        for i, expr in enumerate(exprs):
+            d = time_derivs[i]
+            for j, fname in enumerate(forcings_list):
+                df_dF = sp.diff(expr, forcing_syms[fname])
+                if df_dF != 0:
+                    d = d + df_dF * fd_syms[j]
+            dfdt_exprs.append(d)
         if emit_jvp:
             # A Rosenbrock stage solves against a matrix built from J and adds a
             # multiple of df/dt, so its adjoint needs the derivative of both.
@@ -628,22 +644,6 @@ def generate_ode_cpp(
             jvp_dfdp_nnz = _compute_ode_dfdp(jv, param_syms_list,
                                              set(param_syms_list))
 
-            # df/dt as the model really computes it: the explicit time
-            # derivative plus, for every forcing, the chain term the Jacobian
-            # emitter appends as text. A forcing's own time derivative is a
-            # constant here, so it rides as an invented symbol and differentiates
-            # like one.
-            fd_syms = [sp.Symbol(f"_fd{j}") for j in range(len(forcings_list))]
-            fd_slots = tuple((str(fd), f"F[{j}]->derivative(t)")
-                             for j, fd in enumerate(fd_syms))
-            dfdt_exprs = []
-            for i, expr in enumerate(exprs):
-                d = time_derivs[i]
-                for j, fname in enumerate(forcings_list):
-                    df_dF = sp.diff(expr, forcing_syms[fname])
-                    if df_dF != 0:
-                        d = d + df_dF * fd_syms[j]
-                dfdt_exprs.append(d)
             dfdt_matrix = _compute_ode_jacobian_serial(
                 dfdt_exprs, states_syms_list, set(states_syms_list)
             )
@@ -652,7 +652,7 @@ def generate_ode_cpp(
         adj_cpp_lines = _generate_contraction_code(
             jac_matrix, dfdp_nnz, states_list, params_list, n_states, num_type,
             forcings_list, jvp_matrix, jvp_dfdp_nnz, v_slots,
-            dfdt_matrix, dfdt_dfdp_nnz, fd_slots
+            dfdt_matrix, dfdt_dfdp_nnz, fd_slots, dfdt_exprs
         )
 
     # Sparsity analysis: decide dense vs sparse
@@ -1143,7 +1143,7 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
                                n_states, num_type, forcings_list,
                                jvp_matrix=None, jvp_dfdp_nnz=None, v_slots=(),
                                dfdt_matrix=None, dfdt_dfdp_nnz=None,
-                               fd_slots=()):
+                               fd_slots=(), dfdt_exprs=None):
     """The contractions a written step adjoint asks the model for.
 
     `jac_t_vec` is J' lambda over the states and sizes its own output; a caller
@@ -1185,6 +1185,23 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
             dfdt_matrix, dfdt_dfdp_nnz, states_list, params_list, n_states,
             num_type, forcings_list, "dfdt_x_t_vec", "dfdt_p_t_vec_axpy",
             False, tuple(fd_slots), "d")
+    if dfdt_exprs is not None:
+        # (df/dt)' lambda, a scalar. A jump evaluates f at t*, which moves
+        # with theta, so the shift's cotangent takes this term.
+        lines += [f"  {num_type} dfdt_dot(const std::vector<{num_type}>& x,",
+                  f"                  const std::vector<{num_type}>& lam,",
+                  f"                  const {num_type}& t) const {{",
+                  "    (void)x; (void)t; (void)lam;"]
+        terms = []
+        for i, d in enumerate(dfdt_exprs):
+            if d == 0:
+                continue
+            cpp = _to_cpp(d, states_list, params_list, n_states, num_type,
+                          forcings_list, vectors=tuple(fd_slots))
+            terms.append(f"({cpp})*lam[{i}]")
+        lines.append("    return " + (" + ".join(terms) if terms
+                                      else f"{num_type}(0.0)") + ";")
+        lines += ["  }", ""]
     n_phi = n_states + len(params_list)
     lines += ["};", f"// adjoint_terms writes into {n_phi} slots"]
     return lines

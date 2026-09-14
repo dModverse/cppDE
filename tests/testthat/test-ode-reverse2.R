@@ -307,6 +307,32 @@ test_that("an event's root, time and value may be any expression", {
   }
 })
 
+test_that("a right-hand side that reads the clock goes backwards too", {
+  # f_e and f_a are evaluated at t*, which moves, so df/dt reaches the shift.
+  # Every other model here is autonomous and leaves that term at zero.
+  eq <- c(A = "-k1 * time * A + k2 * B", B = "k1 * A - k2 * B - k3 * B * B")
+  ev <- data.frame(var = "A", time = NA, value = "d_amt", root = "B - 0.55",
+                   method = "add", stringsAsFactors = FALSE)
+  p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, d_amt = 0.4)
+  tl <- list(abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
+
+  for (m in c("bdf", "adams", "rb4", "tsit5")) {
+    mf <- cppODE(eq, events = ev, method = m,
+                 modelname = paste0("g2_td_ff_", m),
+                 derivMode = "forward-forward")
+    mr <- cppODE(eq, events = ev, method = m,
+                 modelname = paste0("g2_td_fr_", m),
+                 derivMode = "forward-reverse")
+    ff <- do.call(solveODE, c(list(mf, times, p), tl))
+    W  <- seed_for(nrow(ff$variable))
+    moving <- which(vapply(ff$time, function(x) min(abs(x - times)) > 1e-9, TRUE))
+    expect_length(moving, 2L)
+    W[moving, , ] <- 0
+    fr <- do.call(solveODE, c(list(mr, times, p, seed = W), tl))
+    expect_second_order(ff, fr, W, m)
+  }
+})
+
 test_that("a clock-reading jump height rides on roottol", {
   # It reads t* itself, where a height blind to the clock only reads the state
   # there, so the localisation error reaches it undamped. Not a missing term:

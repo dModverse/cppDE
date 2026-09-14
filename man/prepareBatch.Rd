@@ -96,8 +96,9 @@ reject several steps in a row when the controller first adapts.}
 estimation.}
 
 \item{roottol}{Tolerance for root finding in root-triggered events.
-Default \code{1e-6}. A jump height that reads \code{time} reads the firing time
-itself, so its derivatives inherit this rather than \code{reltol}.}
+Default \code{1e-6}. An event \code{value} that depends on \code{time} evaluates the
+firing time directly, so its derivatives inherit this tolerance rather
+than \code{reltol}.}
 
 \item{maxroot}{Maximum number of triggers per root event. Default \code{1}.}
 

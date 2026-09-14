@@ -16,6 +16,7 @@ static constexpr std::size_t NS = 2, NP = 3;
 // Values. x1 sits on the surface, which is where the engine localises it.
 static const double X0 = 1.20, X1 = 0.55, P0 = 0.70, P1 = 0.35, P2 = 0.40;
 static const double GC = 0.55;             // root: g = x1 - GC
+static const double TD = 0.30;             // how hard f1 reads the clock
 static const double TE = 1.10;             // event time
 static const double W[NS] = {0.83, -0.42}; // the cotangent the sweep starts on
 // It depends on theta too, the way one handed down from a later step does.
@@ -23,14 +24,14 @@ static const double DW[NS][ND] = {{ 0.11, -0.23,  0.31,  0.07, -0.19},
                                   {-0.05,  0.17, -0.09,  0.26,  0.13}};
 
 // f0 = -p0 x0 + p1 x1
-// f1 =  p0 x0 - p1 x1 - p2 x1^2
+// f1 =  p0 x0 - p1 x1 - p2 x1^2 - TD t x1
 template<class T>
 struct Sys {
   std::vector<T> p;
   template<class St, class Tm>
-  void first(const St& x, St& f, const Tm&) const {
+  void first(const St& x, St& f, const Tm& t) const {
     f[0] = -p[0] * x[0] + p[1] * x[1];
-    f[1] = p[0] * x[0] - p[1] * x[1] - p[2] * x[1] * x[1];
+    f[1] = p[0] * x[0] - p[1] * x[1] - p[2] * x[1] * x[1] - T(TD) * T(t) * x[1];
   }
 };
 
@@ -47,7 +48,7 @@ struct Adj {
   const Sys<T>* sys;
   mutable int calls = 0;
 
-  void jac_t_vec(const std::vector<T>& x, const std::vector<T>& lam, double,
+  void jac_t_vec(const std::vector<T>& x, const std::vector<T>& lam, double t,
                  std::vector<T>& out) const {
     const auto& p = sys->p;
     auto& A = cppde::dual_arena::arena();
@@ -57,7 +58,8 @@ struct Adj {
       for (auto& o : out) cppde::ad_traits::arm_tangents(o);
     maybe_scope<Generated> _rhs_arena_scope;
     out[0] = -p[0] * lam[0] + p[0] * lam[1];
-    out[1] = p[1] * lam[0] + (T(0.0) - p[1] - T(2.0) * p[2] * x[1]) * lam[1];
+    out[1] = p[1] * lam[0]
+           + (T(0.0) - p[1] - T(2.0) * p[2] * x[1] - T(TD) * T(t)) * lam[1];
     if constexpr (Generated) {
       // A tangent below the top this call entered at is storage the caller has
       // since handed to someone else.
@@ -75,6 +77,11 @@ struct Adj {
     w[0] += sc * (T(0.0) - x[0] * lam[0] + x[0] * lam[1]);
     w[1] += sc * (x[1] * lam[0] - x[1] * lam[1]);
     w[2] += sc * (T(0.0) - x[1] * x[1] * lam[1]);
+  }
+  // f1 reads the clock through -TD t x1, so df/dt is not zero.
+  T dfdt_dot(const std::vector<T>& x, const std::vector<T>& lam,
+             const T&) const {
+    return (T(0.0) - T(TD)) * x[1] * lam[1];
   }
 };
 
@@ -94,12 +101,12 @@ struct EvAdj {
                        T*) const {}
   // g = x1 - GC, so g_dot = f1 and grad g_dot is row 1 of J on the state and
   // of df/dp on the parameters. Written out, not assembled, as the model does.
-  void root_gdot_dx(int, const std::vector<T>& x, double,
+  void root_gdot_dx(int, const std::vector<T>& x, double t,
                     std::vector<T>& o) const {
     const auto& p = sys->p;
     o.assign(NS, T(0.0));
     o[0] = p[0];
-    o[1] = T(0.0) - p[1] - T(2.0) * p[2] * x[1];
+    o[1] = T(0.0) - p[1] - T(2.0) * p[2] * x[1] - T(TD) * T(t);
   }
   void root_gdot_dp_axpy(int, const std::vector<T>& x, double, const T& sc,
                          T* w) const {
@@ -127,12 +134,14 @@ std::vector<cppde::detail::RootEvent<std::vector<T>, T> > make_events() {
   // branch and allocates nothing, which is what a model without forcings does.
   // On the finite-difference branch the temporaries push the arena top past
   // the window this check is about.
-  e.g_dot_dot = [](const std::vector<T>& x, const T&) -> double {
+  e.g_dot_dot = [](const std::vector<T>& x, const T& t) -> double {
     const double x0 = cppde::ad_traits::scalar_value(x[0]);
     const double x1 = cppde::ad_traits::scalar_value(x[1]);
+    const double tv = cppde::ad_traits::scalar_value(t);
     const double f0 = -P0 * x0 + P1 * x1;
-    const double f1 = P0 * x0 - P1 * x1 - P2 * x1 * x1;
-    return P0 * f0 + (-P1 - 2.0 * P2 * x1) * f1;
+    const double f1 = P0 * x0 - P1 * x1 - P2 * x1 * x1 - TD * tv * x1;
+    // g_ddot = df1/dt + grad f1 . f
+    return -TD * x1 + P0 * f0 + (-P1 - 2.0 * P2 * x1 - TD * tv) * f1;
   };
   return {e};
 }

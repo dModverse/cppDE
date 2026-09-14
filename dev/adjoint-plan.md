@@ -1416,6 +1416,22 @@ und Nachrechnen der Herleitung hätte sie nie gefunden. Getrennt hat die beiden 
 Prüfung, die an der Algebra nichts ändert: derselbe Transponierte, einmal mit den Puffern des
 Sweeps und einmal mit denen, die der generierte Code übergibt.
 
+**Nachtrag 2026-09-14, zweite Runde: die geschlossene Form war der Fehler.** Der
+Sprung-Adjoint hat das Heun-Sandwich als geschlossene Form gesammelt und dabei nach Ordnung in `s`
+geprunt. Das ist für den Gradienten richtig und für die Hesse nicht, weil `s^2` weder Wert noch
+erste Ableitung hat, aber `d2(s^2) = 2 (ds)^2`. Jetzt wird das Vorwärtsprogramm Zuweisung für
+Zuweisung umgedreht, und `f_e` und `f_a`, beide bei `t*` gelesen, geben dem Shift ihr eigenes
+`df/dt`. Null bei autonomer rechter Seite, deshalb hat es kein Test gesehen.
+
+Zwei Dinge daran sind über den Fall hinaus interessant. Erstens hat das isolierte Orakel
+`dev/jump-adjoint-check.cpp` den Fehler nicht sehen koennen: es prüft die Transponierte gegen
+`saltation_root_analytical_batch`, teilt sich mit ihr also die Konvention, und ein auf beiden Seiten
+fehlender Term kürzt sich weg. Gefunden hat ihn erst `dev/cxx/test_reverse_events2.cpp`, der eine
+ganze Trajektorie auf einer aufgezeichneten Schrittfolge gegen forward over forward hält. Zweitens
+blieb `tsit5` nach dem Sandwich-Fix noch stehen, weil der Codegen die Zeitableitungen auf dem
+expliziten Pfad auf null setzt: nur eine Rosenbrock-Stufe brauchte sie bisher, ein Sprung braucht
+sie immer.
+
 **Offen bleibt hier nichts.** `root`, `time` und `value` nehmen beliebige Ausdrücke, gemessen gegen
 forward over forward auf allen vier Verfahren bei 1e-10. Eine uhrlesende Sprunghöhe hängt an
 `roottol` statt an `reltol`, weil sie `t*` selbst liest; das ist kein fehlender Term, es skaliert

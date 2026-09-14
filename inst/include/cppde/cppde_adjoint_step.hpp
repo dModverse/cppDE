@@ -564,42 +564,67 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   // x_a is that state carried forward onto the surface.
   zero_armed(ws.fa, n);
   sys.first(x_after, ws.fa, t);
-  std::vector<T> xe, xa, fe, fa, wa, jva, jvb;
-  zero_armed(xe, n); zero_armed(xa, n);
-  zero_armed(fe, n); zero_armed(fa, n); zero_armed(wa, n);
-  // jvb is filled twice and the scalars between the fills take the arena the
-  // first fill used, so unarmed the second write lands on their tangents.
-  zero_armed(jva, n); zero_armed(jvb, n);
+  std::vector<T> xe, xst, xa, xk, fe, fa, fk;
+  std::vector<T> wfa, wfk, wfb, wfe, wxb, wv, wa;
+  for (auto* v : {&xe, &xst, &xa, &xk, &fe, &fa, &fk,
+                  &wfa, &wfk, &wfb, &wfe, &wxb, &wv, &wa})
+    zero_armed(*v, n);
+
+  // The forward sandwich, rebuilt as saltation_root_analytical_batch builds it.
+  // The transpose below reverses that straight-line program assignment by
+  // assignment: pruning on the value of s would drop an s^2 factor, which
+  // leaves the gradient and stays in the Hessian.
   for (std::size_t i = 0; i < n; ++i) xe[i] = x_before[i] + ws.fb[i] * s;
-  for (std::size_t i = 0; i < n; ++i) xa[i] = x_after[i] + ws.fa[i] * s;
   sys.first(xe, fe, t_s);
-  sys.first(xa, fa, t_s);
-
-  // Leaving the surface. Both f there read theta over the width the backward
-  // shift travels, and both feed J' back onto the state.
-  ws.wy.assign(n, T(0.0));
-  zero_armed(ws.wy, n);
-  for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w_out[i];
-  adj.jac_t_vec(x_after, ws.wy, t, jva);
-  adj.dfdp_t_vec_axpy(x_after, ws.wy, t, T(0.0) - s, w_theta);
-  for (std::size_t i = 0; i < n; ++i) wa[i] = w_out[i] - s * jva[i];
-
-  // How the output moves with the shift: the backward Heun average, and what
-  // the reconstruction of x_k adds to it.
-  T w_s = T(0.0);
   for (std::size_t i = 0; i < n; ++i)
-    w_s += T(0.5) * (s * (fa[i] * jva[i]) - (fa[i] + ws.fa[i]) * w_out[i]);
+    xst[i] = x_before[i] + T(0.5) * (ws.fb[i] + fe[i]) * s;
+  for (std::size_t i = 0; i < n; ++i) xa[i] = xst[i];
+  for (std::size_t j = 0; j < triggered.size(); ++j) {
+    const auto& evt = root_events[triggered[j].index];
+    if (!evt.terminal)
+      cppde::detail::apply_event_action(xa, xa, t_s, evt);
+  }
+  sys.first(xa, fa, t_s);
+  for (std::size_t i = 0; i < n; ++i) xk[i] = xa[i] - fa[i] * s;
+  sys.first(xk, fk, t_ad);
 
-  // The resets, every one reading the surface state the forward run reset.
+  //  x_out = x_a - (f_a + f_k) s / 2
+  T w_s = T(0.0);
+  for (std::size_t i = 0; i < n; ++i) {
+    wa[i]  = w_out[i];
+    wfa[i] = (T(0.0) - T(0.5)) * s * w_out[i];
+    wfk[i] = wfa[i];
+    w_s   -= T(0.5) * (fa[i] + fk[i]) * w_out[i];
+  }
+
+  //  f_k = f(x_k, t)
+  adj.jac_t_vec(xk, wfk, t, wv);
+  adj.dfdp_t_vec_axpy(xk, wfk, t, T(1.0), w_theta);
+
+  //  x_k = x_a - f_a s
+  for (std::size_t i = 0; i < n; ++i) {
+    wa[i]  += wv[i];
+    wfa[i] -= s * wv[i];
+    w_s    -= fa[i] * wv[i];
+  }
+
+  //  f_a = f(x_a, t_s), so t_s takes df/dt
+  adj.jac_t_vec(xa, wfa, t, wv);
+  for (std::size_t i = 0; i < n; ++i) wa[i] += wv[i];
+  adj.dfdp_t_vec_axpy(xa, wfa, t, T(1.0), w_theta);
+  w_s += adj.dfdt_dot(xa, wfa, t_s);
+
+  //  x_a = R(x_*), every reset reading the surface state the forward reset
   for (std::size_t i = 0; i < n; ++i) w_in[i] = wa[i];
   for (std::size_t j = triggered.size(); j-- > 0;) {
     const std::size_t idx = triggered[j].index;
     const auto& evt = root_events[idx];
     if (evt.terminal) continue;
     const T h = (evt.state_index >= 0 && evt.value_func)
-                   ? evt.value_func(xe, t_s) : T(0.0);
+                   ? evt.value_func(xst, t_s) : T(0.0);
+    for (std::size_t i = 0; i < n; ++i) wa[i] = w_in[i];
     reset_transpose(
-        evt.state_index, evt.method, h, static_cast<int>(idx), xe, t_s, n,
+        evt.state_index, evt.method, h, static_cast<int>(idx), xst, t_s, n,
         wa.data(), w_in, w_theta,
         [&](int e, const std::vector<T>& y, const T& tt, std::vector<T>& o)
           { eadj.root_dh_dx(e, y, tt, o); },
@@ -611,15 +636,26 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
         w_s);
   }
 
-  // Entering it: the forward Heun average, and the same pair the other way.
-  ws.wy.assign(n, T(0.0));
-  zero_armed(ws.wy, n);
-  for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w_in[i];
-  adj.jac_t_vec(x_before, ws.wy, t, jvb);
-  adj.dfdp_t_vec_axpy(xe, ws.wy, t, s, w_theta);
-  for (std::size_t i = 0; i < n; ++i)
-    w_s += T(0.5) * ((ws.fb[i] + fe[i]) * w_in[i] + s * (ws.fb[i] * jvb[i]));
-  for (std::size_t i = 0; i < n; ++i) w_in[i] += s * jvb[i];
+  //  x_* = x_b + (f_b + f_e) s / 2
+  for (std::size_t i = 0; i < n; ++i) {
+    wxb[i] = w_in[i];
+    wfb[i] = T(0.5) * s * w_in[i];
+    wfe[i] = wfb[i];
+    w_s   += T(0.5) * (ws.fb[i] + fe[i]) * w_in[i];
+  }
+
+  //  f_e = f(x_e, t_s), the same pair the other way
+  adj.jac_t_vec(xe, wfe, t, wv);
+  adj.dfdp_t_vec_axpy(xe, wfe, t, T(1.0), w_theta);
+  w_s += adj.dfdt_dot(xe, wfe, t_s);
+
+  //  x_e = x_b + f_b s
+  for (std::size_t i = 0; i < n; ++i) {
+    wxb[i] += wv[i];
+    wfb[i] += s * wv[i];
+    w_s    += ws.fb[i] * wv[i];
+  }
+  for (std::size_t i = 0; i < n; ++i) w_in[i] = wxb[i];
 
   if (!shifted) return;
 
@@ -644,10 +680,16 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   // strength in the Hessian. The model differentiates g_dot whole, because
   // J' grad g alone holds only for a g linear in x and blind to the clock.
   const T cs = c * s;
-  zero_armed(jvb, n);
-  eadj.root_gdot_dx(static_cast<int>(idx), x_before, t, jvb);
-  for (std::size_t i = 0; i < n; ++i) w_in[i] += cs * jvb[i];
+  zero_armed(wv, n);
+  eadj.root_gdot_dx(static_cast<int>(idx), x_before, t, wv);
+  for (std::size_t i = 0; i < n; ++i) w_in[i] += cs * wv[i];
   eadj.root_gdot_dp_axpy(static_cast<int>(idx), x_before, t, cs, w_theta);
+
+  //  f_b = f(x_b, t). grad g_dot already carries the route through f_b that
+  //  the shift takes, so only the two Heun legs feed this one.
+  adj.jac_t_vec(x_before, wfb, t, wv);
+  for (std::size_t i = 0; i < n; ++i) w_in[i] += wv[i];
+  adj.dfdp_t_vec_axpy(x_before, wfb, t, T(1.0), w_theta);
 }
 
 /// The fixed events at one time, each its own sandwich, applied in order. The
