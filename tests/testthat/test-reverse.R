@@ -612,9 +612,9 @@ hess_forward <- function(res, W) {
 test_that("forward-reverse answers the Hessian forward-forward answers", {
   for (m in c("bdf", "rb4", "tsit5")) {
     mf <- cppODE(eqns, modelname = paste0("rev2_ff_", m), method = m,
-                 derivMode = "forward-forward", nStack = 5)
+                 derivMode = "forward-forward")
     mr <- cppODE(eqns, modelname = paste0("rev2_fr_", m), method = m,
-                 derivMode = "forward-reverse", nStack = 5)
+                 derivMode = "forward-reverse")
 
     expect_identical(attr(mf, "derivMode"), "forward-forward")
     expect_true(attr(mf, "deriv2"))
@@ -642,7 +642,7 @@ test_that("every method answers the same Hessian backwards", {
   W <- NULL; ref <- NULL
   for (m in c("bdf", "adams", "rb4", "tsit5")) {
     mr <- cppODE(eqns, modelname = paste0("rev2_all_", m), method = m,
-                 derivMode = "forward-reverse", nStack = 5)
+                 derivMode = "forward-reverse")
     if (is.null(W)) {
       W <- seed_for(do.call(solveODE, c(list(mr, times, pars,
                                              seed = array(0, c(length(times), 2L, 1L))), tol)))
@@ -654,8 +654,7 @@ test_that("every method answers the same Hessian backwards", {
 })
 
 test_that("forward-reverse names its answer and refuses the older spelling", {
-  mr <- cppODE(eqns, modelname = "rev2_names", derivMode = "forward-reverse",
-               nStack = 5)
+  mr <- cppODE(eqns, modelname = "rev2_names", derivMode = "forward-reverse")
   ff <- do.call(solveODE, c(list(mr, times, pars,
                                  seed = array(1, c(length(times), 2L, 1L))), tol))
   expect_identical(dim(ff$adjoint2), c(5L, 5L, 1L))
@@ -674,8 +673,7 @@ test_that("the second-order forward mode is repeatable on every method", {
   # first derivatives were bit-identical between repeats, second derivatives
   # were not. Found through cppODE's CPPDE_POISON_ARENA switch.
   for (m in c("bdf", "adams", "rb4", "tsit5")) {
-    mm <- cppODE(eqns, modelname = paste0("rep2_", m), method = m, deriv2 = TRUE,
-                 nStack = 5)
+    mm <- cppODE(eqns, modelname = paste0("rep2_", m), method = m, deriv2 = TRUE)
     a <- do.call(solveODE, c(list(mm, times, pars), tol))
     b <- do.call(solveODE, c(list(mm, times, pars), tol))
     expect_identical(a$sens2, b$sens2, info = m)

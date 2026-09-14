@@ -268,7 +268,6 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   # CVODE always uses runtime-sized sensitivity slots (CVodeSensInit1 allocates
   # Ns_active vectors at solve time), so it's effectively heap AD from the
   # compile-time-width perspective.
-  attr(modelname, "nStack")      <- Inf
   attr(modelname, "sparse")      <- use_sparse
   attr(modelname, "lapackDense") <- use_lapack
   attr(modelname, "method")      <- method

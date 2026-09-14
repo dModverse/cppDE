@@ -134,6 +134,26 @@ public:
     }
   };
 
+  // How wide a heap dual arms itself when it has no width of its own. Without
+  // one, arm() allocates nothing and every tangent read returns the
+  // out-of-bounds zero, which a backward sweep cannot survive: it zero-arms its
+  // buffers before writing to them. A scope rather than a global, so the
+  // forward mode opens none and leaves a tangent-less temporary alone.
+  static unsigned& default_tangent_width() noexcept {
+    thread_local unsigned w = 0u;
+    return w;
+  }
+
+  class width_scope {
+    unsigned saved_;
+  public:
+    explicit width_scope(unsigned n) noexcept
+      : saved_(default_tangent_width()) { default_tangent_width() = n; }
+    width_scope(const width_scope&)            = delete;
+    width_scope& operator=(const width_scope&) = delete;
+    ~width_scope() noexcept { default_tangent_width() = saved_; }
+  };
+
   // Pointer, not `thread_local dual_arena`: a non-trivial TLS destructor
   // pins this .so against dyn.unload(). See cppde_tls.hpp. Leaked on purpose.
   static dual_arena& arena() noexcept {

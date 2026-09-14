@@ -8,7 +8,7 @@ test_that("log-transform reparam matches analytical dx/dtheta", {
   # Model: dx/dt = -k*x, x(0) = x0. p = (x0, k).
   # Reparametrize: theta = (x0, log(k)) -> Phi(theta) = (theta_x0, exp(theta_lk))
   # Phi_prime = [[1, 0], [0, k]]
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_log", deriv = TRUE, nStack = 2L)
+  mod <- cppODE(c(x = "-k*x"), modelname = "rep_log", deriv = TRUE)
 
   pars <- c(x = 1.0, k = 0.5)
   Phi_prime <- matrix(c(1, 0, 0, 0.5), nrow = 2, ncol = 2,
@@ -45,7 +45,7 @@ test_that("reparam sens equals post-hoc S * Phi' (two-state model)", {
                      abstol = tight$abstol, reltol = tight$reltol)
 
   # Reparametrized model: theta = (A0, B0, log(k1), log(k2))
-  mod_th <- cppODE(rhs, modelname = "rep_th", deriv = TRUE, nStack = 4L)
+  mod_th <- cppODE(rhs, modelname = "rep_th", deriv = TRUE)
   k1 <- pars["k1"]; k2 <- pars["k2"]
   Phi_prime <- matrix(
     c(1, 0, 0, 0,
@@ -75,7 +75,7 @@ test_that("reparam sens equals post-hoc S * Phi' (two-state model)", {
 test_that("rank-reduced reparam integrates over smaller theta space", {
   # Model: dx/dt = -k*x
   # Reparametrize to theta = (log(k)), with x0 = exp(theta) (ties IC to rate).
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_rank1", deriv = TRUE, nStack = 1L)
+  mod <- cppODE(c(x = "-k*x"), modelname = "rep_rank1", deriv = TRUE)
 
   k <- 0.4; theta <- log(k); x0 <- exp(theta)   # x0 = k by this parametrization
   pars <- c(x = x0, k = k)
@@ -97,24 +97,18 @@ test_that("rank-reduced reparam integrates over smaller theta space", {
 
 # -- Guard rails --------------------------------------------------------------
 
-test_that("nStack model works with sens1ini = NULL (identity seeding)", {
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_missing_sens", deriv = TRUE, nStack = 2L)
+test_that("identity seeding works when sens1ini is NULL", {
+  mod <- cppODE(c(x = "-k*x"), modelname = "rep_missing_sens", deriv = TRUE)
   res <- expect_silent(solveODE(mod, c(0, 1), c(x = 1, k = 0.5)))
   expect_equal(dim(res$sens1), c(2L, 1L, 2L))
 })
 
 test_that("reparam rejects 'fixed' argument", {
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_fixed_reject", deriv = TRUE, nStack = 2L)
+  mod <- cppODE(c(x = "-k*x"), modelname = "rep_fixed_reject", deriv = TRUE)
   Phi_prime <- matrix(c(1, 0, 0, 0.5), 2, 2)
   expect_error(solveODE(mod, c(0, 1), c(x = 1, k = 0.5),
                         sens1ini = Phi_prime, fixed = "k"),
                "not supported")
-})
-
-test_that("nStack with deriv=FALSE is rejected at compile time", {
-  expect_error(cppODE(c(x = "-k*x"), modelname = "rep_no_deriv",
-                      deriv = FALSE, nStack = 2L),
-               "deriv = TRUE")
 })
 
 # -- Phase 2: Second-order sensitivities under reparam -----------------------
@@ -124,7 +118,7 @@ test_that("deriv2 + log-reparam matches analytical d^2x/dtheta^2", {
   # Phi'  = [[1, 0], [0, k]]
   # Phi'' = all zero except Phi''[k_row, theta_lk, theta_lk] = k
   mod <- cppODE(c(x = "-k*x"), modelname = "d2_rep_log",
-                deriv = TRUE, deriv2 = TRUE, nStack = 2L)
+                deriv = TRUE, deriv2 = TRUE)
 
   pars <- c(x = 1.0, k = 0.5); k <- 0.5; x0 <- 1.0
   Phi_prime <- matrix(c(1, 0, 0, k), 2, 2)
@@ -170,7 +164,7 @@ test_that("CVODE reparam matches Native reparam (no events)", {
     nrow = 4, ncol = 4, byrow = TRUE)
 
   mod_native <- cppODE(rhs, modelname = "rep_par_nat",
-                       deriv = TRUE, nStack = 4L)
+                       deriv = TRUE)
   mod_cvode  <- cvode(rhs,  modelname = "rep_par_cv",
                       deriv = TRUE)
 
@@ -245,7 +239,7 @@ test_that("sens2 chain-rule parity: direct vs post-hoc composition", {
 
   # Reparametrized model: theta = (A0, B0, log(k1), log(k2))
   mod_th <- cppODE(rhs, modelname = "d2_par_th",
-                   deriv = TRUE, deriv2 = TRUE, nStack = 4L)
+                   deriv = TRUE, deriv2 = TRUE)
   k1 <- pars["k1"]; k2 <- pars["k2"]
   Phi_prime <- matrix(
     c(1, 0, 0,  0,
@@ -289,12 +283,12 @@ test_that("sens2 chain-rule parity: direct vs post-hoc composition", {
                tolerance = 1e-7)
 })
 
-# -- nStack as compile-time upper bound: M <= nStack per call ----------------
+# -- A call may answer fewer directions than the model has ------------------
 
-test_that("native: M < nStack integrates the supplied theta subset", {
-  # Compile with nStack = 3 but call with only M = 2 active thetas.
+test_that("native: a theta subset integrates on its own", {
+  # Call with only M = 2 active thetas.
   mod <- cppODE(c(x = "-k*x"), modelname = "rep_M_lt_ntheta",
-                deriv = TRUE, nStack = 3L)
+                deriv = TRUE)
   pars <- c(x = 1.0, k = 0.5); k <- 0.5; x0 <- 1.0
   tvec <- seq(0, 2, by = 0.5)
 
@@ -324,9 +318,9 @@ test_that("native: M < nStack integrates the supplied theta subset", {
                rep(0, length(tvec)), tolerance = 1e-12)
 })
 
-test_that("native deriv2: M < nStack integrates partial Phi''", {
+test_that("native deriv2: a theta subset integrates a partial Phi''", {
   mod <- cppODE(c(x = "-k*x"), modelname = "rep_M_lt_ntheta_d2",
-                deriv = TRUE, deriv2 = TRUE, nStack = 3L)
+                deriv = TRUE, deriv2 = TRUE)
   pars <- c(x = 1.0, k = 0.5); k <- 0.5; x0 <- 1.0
   tvec <- c(0, 0.5, 1, 1.5, 2)
 
@@ -342,18 +336,18 @@ test_that("native deriv2: M < nStack integrates partial Phi''", {
   expect_equal(dim(res$sens1), c(length(tvec), 1L, 2L))
   expect_equal(dim(res$sens2), c(length(tvec), 1L, 2L, 2L))
 
-  # Same analytic Hessian as the existing nStack=2 test.
+  # Same analytic Hessian as the two-theta test.
   expect_equal(as.numeric(res$sens2[, 1, 1, 1]),
                rep(0, length(tvec)), tolerance = 1e-8)
   expect_equal(as.numeric(res$sens2[, 1, 1, 2]),
                -k * tvec * exp(-k * tvec), tolerance = 1e-8)
-  # Same component and tolerance as in the nStack = 2 test above.
+  # Same component and tolerance as the two-theta test above.
   expect_equal(as.numeric(res$sens2[, 1, 2, 2]),
                x0 * exp(-k * tvec) * k * tvec * (k * tvec - 1),
                tolerance = 1e-6)
 })
 
-test_that("CVODE: M < nStack matches native reparam", {
+test_that("CVODE: a theta subset matches the native reparam", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
   rhs <- c(A = "-k1*A + k2*B",
@@ -372,7 +366,7 @@ test_that("CVODE: M < nStack matches native reparam", {
                    dimnames = list(c("A", "B", "k1", "k2"),
                                    c("log_k1", "log_k2")))
 
-  mod_nat <- cppODE(rhs, modelname = "rep_M_lt_nat", deriv = TRUE, nStack = 4L)
+  mod_nat <- cppODE(rhs, modelname = "rep_M_lt_nat", deriv = TRUE)
   mod_cv  <- cvode(rhs,  modelname = "rep_M_lt_cv",  deriv = TRUE)
 
   res_n <- solveODE(mod_nat, tvec, pars, sens1ini = Phi_M2,
@@ -388,7 +382,7 @@ test_that("CVODE: M < nStack matches native reparam", {
 
 test_that("same model supports per-call varying M (condition heterogeneity)", {
   mod <- cppODE(c(x = "-k*x"), modelname = "rep_varying_M",
-                deriv = TRUE, nStack = 3L)
+                deriv = TRUE)
   pars <- c(x = 1.0, k = 0.5); k <- 0.5; x0 <- 1.0
   tvec <- seq(0, 2, by = 0.5)
 
@@ -418,7 +412,7 @@ test_that("same model supports per-call varying M (condition heterogeneity)", {
 
 test_that("M = 0 fast-path: empty sens slot, state integration intact", {
   mod <- cppODE(c(x = "-k*x"), modelname = "rep_M_zero",
-                deriv = TRUE, nStack = 2L)
+                deriv = TRUE)
   pars <- c(x = 1.0, k = 0.5)
   tvec <- seq(0, 2, by = 0.5)
 
@@ -448,19 +442,6 @@ test_that("CVODE: M = 0 fast-path skips sensitivity integration", {
   expect_equal(dim(r$sens1), c(length(tvec), 1L, 0L))
   expect_equal(as.numeric(r$variable[, 1]),
                exp(-0.5 * tvec), tolerance = 1e-8)
-})
-
-test_that("M > nStack is rejected with a clear error", {
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_M_over",
-                deriv = TRUE, nStack = 2L)
-  pars <- c(x = 1.0, k = 0.5)
-  Phi_over <- matrix(0, nrow = 2, ncol = 3,
-                     dimnames = list(c("x", "k"), c("a", "b", "c")))
-  expect_error(
-    solveODE(mod, c(0, 1), pars, sens1ini = Phi_over,
-             abstol = 1e-10, reltol = 1e-10),
-    "exceeds the model's compile-time nStack"
-  )
 })
 
 # -- Partial-row sens1ini (rowname-driven implicit fixed) --------------------

@@ -15,7 +15,6 @@ cppODE(
   outdir = tempdir(),
   deriv = TRUE,
   deriv2 = FALSE,
-  nStack = Inf,
   includeTimeZero = TRUE,
   useDenseOutput = TRUE,
   sparse = NULL,
@@ -55,17 +54,6 @@ and exported C symbols. A random identifier is used when \code{NULL}.}
 \item{deriv2}{Logical. Compute second-order parameter sensitivities;
 implies \code{deriv = TRUE}.}
 
-\item{nStack}{Compile-time AD slab width. \code{Inf} (default) selects
-heap-allocated AD; the per-call sensitivity dimension is taken at
-run time from \code{ncol(sens1ini)} in \code{\link[=solveODE]{solveODE()}}. A positive integer
-\code{K} fixes the width to \code{K} at compile time. \code{NULL} selects
-\code{length(c(variables, parameters)) - length(fixed)}. \code{"auto"} asks
-\code{\link[=chunkWidth]{chunkWidth()}} what this machine can afford, which is the sensible
-choice for a second-order model whose parameter set is wider than the
-width: those are answered in blocks of directions on one grid.
-\code{deriv2 = TRUE} requires a finite width and silently demotes \code{Inf} to
-\code{NULL}.}
-
 \item{includeTimeZero}{Logical. Ensure that \code{0} is part of the
 integration times.}
 
@@ -99,7 +87,7 @@ The two second-order modes differ in how the inner derivative is taken.
 \verb{$sens2}, the second derivatives of every state. \code{"forward-reverse"} runs
 the backward sweep itself over tangents and answers with \verb{$adjoint2}, the
 derivatives of the gradient, which under the identity seeding is the
-Hessian of the seeded functional. Both need a finite \code{nStack}; the first
+Hessian of the seeded functional. The first
 scales with the square of the sensitivity count, the second with its
 product with the seed count.
 
@@ -118,7 +106,7 @@ The compiled model name (character) carrying the attributes
 required by \code{\link[=solveODE]{solveODE()}}: \code{equations}, \code{srcfile}, \code{variables},
 \code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed}, \code{jacobian}
 (with components \code{f.x} and \code{f.time}), \code{deriv}, \code{deriv2}, \code{derivMode},
-\code{nStack}, \code{sparse}, \code{method}, \code{useNDF}, \code{dimNames}, \code{compileArgs},
+\code{sparse}, \code{method}, \code{useNDF}, \code{dimNames}, \code{compileArgs},
 \code{backend}.
 }
 \description{

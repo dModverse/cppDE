@@ -318,7 +318,7 @@ test_that("a 10^x term compiles and differentiates correctly", {
   # closed form: 10^(-x(t)) = 10^(-x0) + k*ln(10)*t
   u <- 10^(-p10[["x"]]) + p10[["k"]] * ln10 * t10
 
-  mod <- cppODE(c(x = "-k * 10^x"), deriv = TRUE, deriv2 = TRUE, nStack = 2,
+  mod <- cppODE(c(x = "-k * 10^x"), deriv = TRUE, deriv2 = TRUE,
                 modelname = "pow10")
   res <- solveODE(mod, t10, p10, abstol = 1e-12, reltol = 1e-12)
 

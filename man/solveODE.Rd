@@ -176,6 +176,10 @@ list of \code{time} and \code{h}, the start and length of each accepted step; \c
 one column per seed, being \eqn{\lambda^T e_k}; and \code{lambda},
 \verb{[n_steps, n_states, n_seed]}, the adjoint state at each step's start. \code{eta}
 estimates the step's share of the error in the objective.
+A seed may carry its own tangents, attached as \code{seedTangent}, an array
+\verb{[n_out, n_states, n_seed, n_sens]} on the seed's own first three
+dimensions. Without them the second order misses the seed's dependence on
+the parameters. Only \code{derivMode = "forward-reverse"} has slots for them.
 With \code{keepStore = TRUE} it carries \verb{$store}, an external pointer to the
 checkpoints, for a later solve to take through \code{store}.
 }
@@ -259,7 +263,8 @@ can therefore be used directly for warm-starting subsequent solves.
 \item \strong{Full shape} \verb{[n_states + n_params, M]}: \eqn{\Phi'(\theta)}
 directly. State rows seed state ICs; parameter rows seed the dynamic
 parameters. The column count \code{M} may vary across calls; under
-stack-mode AD it must satisfy \eqn{M \le \mathtt{nStack}}.
+Tangent storage is heap-allocated, so \eqn{M} is free per call: a wide
+parameter set is answered in blocks of directions, all on one grid.
 \item \strong{Partial shape} \verb{[k, M]} with \code{k < n_states + n_params}: row
 names are required and must be a subset of
 \code{c(variables, parameters)}. The supplied rows are placed at the

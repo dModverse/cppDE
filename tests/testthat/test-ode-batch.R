@@ -41,7 +41,7 @@ test_that("solveODEBatch matches solveODE exactly without sensitivities", {
 })
 
 test_that("second-order sensitivities survive the batch path", {
-  m <- cppODE(decay, modelname = "batch_d2", deriv = TRUE, deriv2 = TRUE, nStack = 3L)
+  m <- cppODE(decay, modelname = "batch_d2", deriv = TRUE, deriv2 = TRUE)
   ser <- serial_ref(m)
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
   expect_batch_identical(bat, ser, c("time", "variable", "sens1", "sens2"))
@@ -49,8 +49,8 @@ test_that("second-order sensitivities survive the batch path", {
 
 # The arena is thread-local and pops when solve_impl returns, so heap AD is
 # the case where a result that was not flattened in time would show up.
-test_that("heap AD (nStack = Inf) batches correctly", {
-  m <- cppODE(decay, modelname = "batch_heap", deriv = TRUE, nStack = Inf)
+test_that("heap AD batches correctly", {
+  m <- cppODE(decay, modelname = "batch_heap", deriv = TRUE)
   ser <- serial_ref(m)
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
   expect_batch_identical(bat, ser, c("time", "variable", "sens1"))

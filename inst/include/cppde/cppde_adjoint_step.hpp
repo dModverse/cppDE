@@ -40,6 +40,7 @@
 
 #include <cppde/cppde_dual_math.hpp>
 #include <cppde/cppde_events.hpp>
+#include <cppde/cppde_saltation.hpp>
 #include <cppde/cppde_profiler.hpp>
 
 // The hot loops here run over buffers that are always distinct. Saying so is
@@ -499,12 +500,13 @@ void reset_transpose(int k, cppde::detail::EventMethod method, const T& h,
 }
 
 /// A batch of root events, which share one surface and one dt*.
-template<class System, class RootEvents, class EvAdj, class T>
+template<class System, class RootEvents, class EvAdj, class AdjTerms, class T>
 void apply_root_jump_adjoint(const std::vector<T>& x_before,
                              const std::vector<T>& x_after,
                              double t, const RootEvents& root_events,
                              const std::vector<cppde::detail::TriggeredEvent>& triggered,
-                             System& sys, const EvAdj& eadj, std::size_t n,
+                             System& sys, const EvAdj& eadj,
+                             const AdjTerms& adj, std::size_t n,
                              const T* w_out, T* w_in, T* w_theta,
                              jump_workspace<T>& ws)
 {
@@ -529,24 +531,67 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   }
   const bool shifted = (src < triggered.size());
 
-  T w_s = T(0.0);
-  if (shifted) {
-    zero_armed(ws.fa, n);
-    sys.first(x_after, ws.fa, t);
-    for (std::size_t i = 0; i < n; ++i) w_s -= ws.fa[i] * w_out[i];
-  }
+  const T t_ad = T(t);
 
-  // The resets, every one reading the same pre-jump state.
-  for (std::size_t i = 0; i < n; ++i) w_in[i] = w_out[i];
+  // The shift, s = -(g - value(g)) / g_dot: zero in value, dt*/dv in the
+  // tangent. It reads off the stored state because the localisation is
+  // tangent-blind, so that state carries dx/dv at a fixed time and g contracts
+  // it to the event time's. Zero without gradients, which collapses everything
+  // below to the bare reset transpose.
+  T s = T(0.0);
+  if (shifted) {
+    const T gv = root_events[triggered[src].index].func(x_before, t_ad);
+    s = (T(ad_traits::scalar_value(gv)) - gv) / g_dot;
+  }
+  const T t_s = t_ad + s;
+
+  // Forward the jump is
+  //
+  //   x_e = x_b + f_b s,   x_* = x_b + (f_b + f_e) s / 2,   x_a = R(x_*),
+  //   x_k = x_a - f_a s,   x_out = x_a - (f_a + f_k) s / 2,
+  //
+  // and this is its transpose, term for term. Nothing is dropped for being
+  // small in s: a product vanishes only when both factors are zero in value,
+  // so J' w_f against f survives where s against s does not.
+  //
+  // x_k equals the stored state in value and in tangent, so f_k is f there and
+  // x_a is that state carried forward onto the surface.
+  zero_armed(ws.fa, n);
+  sys.first(x_after, ws.fa, t);
+  std::vector<T> xe, xa, fe, fa, wa, jva, jvb;
+  zero_armed(xe, n); zero_armed(xa, n);
+  zero_armed(fe, n); zero_armed(fa, n); zero_armed(wa, n);
+  for (std::size_t i = 0; i < n; ++i) xe[i] = x_before[i] + ws.fb[i] * s;
+  for (std::size_t i = 0; i < n; ++i) xa[i] = x_after[i] + ws.fa[i] * s;
+  sys.first(xe, fe, t_s);
+  sys.first(xa, fa, t_s);
+
+  // Leaving the surface. Both f there read theta over the width the backward
+  // shift travels, and both feed J' back onto the state.
+  ws.wy.assign(n, T(0.0));
+  zero_armed(ws.wy, n);
+  for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w_out[i];
+  adj.jac_t_vec(x_after, ws.wy, t, jva);
+  adj.dfdp_t_vec_axpy(x_after, ws.wy, t, T(0.0) - s, w_theta);
+  for (std::size_t i = 0; i < n; ++i) wa[i] = w_out[i] - s * jva[i];
+
+  // How the output moves with the shift: the backward Heun average, and what
+  // the reconstruction of x_k adds to it.
+  T w_s = T(0.0);
+  for (std::size_t i = 0; i < n; ++i)
+    w_s += T(0.5) * (s * (fa[i] * jva[i]) - (fa[i] + ws.fa[i]) * w_out[i]);
+
+  // The resets, every one reading the surface state the forward run reset.
+  for (std::size_t i = 0; i < n; ++i) w_in[i] = wa[i];
   for (std::size_t j = triggered.size(); j-- > 0;) {
     const std::size_t idx = triggered[j].index;
     const auto& evt = root_events[idx];
     if (evt.terminal) continue;
     const T h = (evt.state_index >= 0 && evt.value_func)
-                   ? evt.value_func(x_before, t) : T(0.0);
+                   ? evt.value_func(xe, t) : T(0.0);
     reset_transpose(
-        evt.state_index, evt.method, h, static_cast<int>(idx), x_before, t, n,
-        w_out, w_in, w_theta,
+        evt.state_index, evt.method, h, static_cast<int>(idx), xe, t, n,
+        wa.data(), w_in, w_theta,
         [&](int e, const std::vector<T>& y, double tt, std::vector<T>& o)
           { eadj.root_dh_dx(e, y, tt, o); },
         [&](int e, const std::vector<T>& y, double tt, const T& sc, T* o)
@@ -554,26 +599,54 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
         ws.g);
   }
 
-  if (!shifted) return;
-  for (std::size_t i = 0; i < n; ++i) w_s += ws.fb[i] * w_in[i];
+  // Entering it: the forward Heun average, and the same pair the other way.
+  ws.wy.assign(n, T(0.0));
+  zero_armed(ws.wy, n);
+  for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w_in[i];
+  adj.jac_t_vec(x_before, ws.wy, t, jvb);
+  adj.dfdp_t_vec_axpy(xe, ws.wy, t, s, w_theta);
+  for (std::size_t i = 0; i < n; ++i)
+    w_s += T(0.5) * ((ws.fb[i] + fe[i]) * w_in[i] + s * (ws.fb[i] * jvb[i]));
+  for (std::size_t i = 0; i < n; ++i) w_in[i] += s * jvb[i];
 
-  // s = -(grad g . dx + dg/dp . dp) / g_dot
+  if (!shifted) return;
+
+  // Where the shift comes from: s = -(grad g . dx + dg/dp . dp) / g_dot, and
+  // the forward run corrects it, so ds/ds_lin is 1 + 2 c2 s, one in value and
+  // a tangent in the second order.
   const std::size_t idx = triggered[src].index;
-  const T c = -w_s / g_dot;
+  const double c2 = cppde::detail::root_ift_curvature(
+      x_before, t_ad, sys, ws.fb, root_events[idx],
+      ad_traits::scalar_value(g_dot));
+  const T c = (T(0.0) - w_s / g_dot) * (T(1.0) + T(2.0 * c2) * s);
   zero_armed(ws.g, n);
   root_events[idx].dg_dx(x_before, t, ws.g);
   for (std::size_t i = 0; i < n; ++i) w_in[i] += c * ws.g[i];
   eadj.root_dg_dp_axpy(static_cast<int>(idx), x_before, t, c, w_theta);
+
+  // g_dot reads the state too, so the quotient has a second half:
+  //
+  //   ds/dx = -grad g / g_dot - (s / g_dot) grad g_dot,
+  //
+  // carrying g, which is zero in value, so it is absent from the gradient and
+  // full strength in the Hessian. Only the value of grad g_dot is needed, and
+  // grad g_dot = grad g_t + (hess g) f + J' grad g.
+  const T cs = c * s;
+  adj.jac_t_vec(x_before, ws.g, t, jvb);
+  for (std::size_t i = 0; i < n; ++i) w_in[i] += cs * jvb[i];
+  adj.dfdp_t_vec_axpy(x_before, ws.g, t, cs, w_theta);
 }
 
 /// The fixed events at one time, each its own sandwich, applied in order. The
 /// last of them carries the root resets a jump switched on.
-template<class System, class FixedEvents, class RootEvents, class EvAdj, class T>
+template<class System, class FixedEvents, class RootEvents, class EvAdj,
+         class AdjTerms, class T>
 void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
                               double t, const FixedEvents& fixed_events,
                               const RootEvents& root_events,
                               const std::vector<std::size_t>& switched,
-                              System& sys, const EvAdj& eadj, std::size_t n,
+                              System& sys, const EvAdj& eadj,
+                              const AdjTerms& adj, std::size_t n,
                               const T* w_out, T* w_in, T* w_theta,
                               jump_workspace<T>& ws)
 {
@@ -583,9 +656,11 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
     if (std::abs(ad_traits::scalar_value(fixed_events[j].time) - t) < 1e-14)
       fired.push_back(static_cast<int>(j));
 
-  // The value path through the resets, which the store does not keep: a jump of
-  // several events runs one sandwich each, and every one reads what the last
-  // left. In value a sandwich is its reset, so this is the reset chain.
+  // The path through the resets, which the store does not keep: one sandwich
+  // per event, each reading what the last left. Rebuilt with the sandwich and
+  // not the bare reset, which agrees in value and not in the tangents: a reset
+  // says the post-jump state does not move with the event time, when it moves
+  // by f_before - f_after.
   const std::size_t n_steps = fired.size() + switched.size();
   ws.path.assign(n_steps + 1, std::vector<T>());
   ws.path[0] = x_before;
@@ -593,8 +668,12 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
   for (std::size_t j = 0; j < fired.size(); ++j, ++s) {
     zero_armed(ws.path[s + 1], n);
     ws.path[s + 1] = ws.path[s];
-    cppde::detail::apply_event_action_fixed(ws.path[s + 1], ws.path[s],
-                                            fixed_events[fired[j]]);
+    if constexpr (std::is_arithmetic<T>::value)
+      cppde::detail::apply_event_action_fixed(ws.path[s + 1], ws.path[s],
+                                              fixed_events[fired[j]]);
+    else
+      cppde::detail::saltation_fixed_analytical(ws.path[s + 1], ws.path[s], sys,
+                                                fixed_events[fired[j]]);
   }
   for (std::size_t j = 0; j < switched.size(); ++j, ++s) {
     zero_armed(ws.path[s + 1], n);
@@ -654,6 +733,27 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
 
     for (std::size_t i = 0; i < n; ++i) w_s += ws.fb[i] * w[i];
     eadj.fixed_dtime_dp_axpy(fired[j], w_s, w_theta);
+
+    // The same term the root path carries: each Heun shift reads f at theta
+    // over the width it travels. Read as a quadrature, w_theta is an integral
+    // split at the event and a split point that moves drags its jump along:
+    //
+    //   d w_theta[p] / dv += ( G_p(t*-) - G_p(t*+) ) dt*/dv,
+    //   G_p = (df/dtheta_p)' lambda.
+    //
+    // tau is zero in value and carries dt*/dv, so only the Hessian moves. Only
+    // parameters whose df/dtheta reads a state the reset changed contribute.
+    {
+      const T tau = evt.time - T(ad_traits::scalar_value(evt.time));
+      ws.wy.assign(n, T(0.0));
+      zero_armed(ws.wy, n);
+      for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w[i];
+      adj.dfdp_t_vec_axpy(y, ws.wy, t, tau, w_theta);
+      ws.wy.assign(n, T(0.0));
+      zero_armed(ws.wy, n);
+      for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w_out[i];
+      adj.dfdp_t_vec_axpy(zz, ws.wy, t, T(0.0) - tau, w_theta);
+    }
   }
 
   for (std::size_t i = 0; i < n; ++i) w_in[i] = w[i];
@@ -836,12 +936,13 @@ public:
           w_before.assign(n, T(0.0));
           if (e.root)
             apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
-                                    e.triggered, jumps.sys, jumps.eadj, n,
+                                    e.triggered, jumps.sys, jumps.eadj,
+                                    adj, n,
                                     w_after.data(), w_before.data(),
                                     m_wp.data(), m_jws);
           else
             apply_fixed_jump_adjoint(e.x_before, e.t, jumps.fixed, jumps.root,
-                                     e.switched, jumps.sys, jumps.eadj, n,
+                                     e.switched, jumps.sys, jumps.eadj, adj, n,
                                      w_after.data(), w_before.data(),
                                      m_wp.data(), m_jws);
 
@@ -1322,12 +1423,13 @@ public:
           w_before.assign(n, T(0.0));
           if (e.root)
             apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
-                                    e.triggered, jumps.sys, jumps.eadj, n,
+                                    e.triggered, jumps.sys, jumps.eadj,
+                                    adj, n,
                                     w_after.data(), w_before.data(),
                                     m_wp.data(), m_jws);
           else
             apply_fixed_jump_adjoint(e.x_before, e.t, jumps.fixed, jumps.root,
-                                     e.switched, jumps.sys, jumps.eadj, n,
+                                     e.switched, jumps.sys, jumps.eadj, adj, n,
                                      w_after.data(), w_before.data(),
                                      m_wp.data(), m_jws);
 

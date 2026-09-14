@@ -31,16 +31,6 @@
 #' @param deriv Logical. Compute first-order parameter sensitivities.
 #' @param deriv2 Logical. Compute second-order parameter sensitivities;
 #'   implies `deriv = TRUE`.
-#' @param nStack Compile-time AD slab width. `Inf` (default) selects
-#'   heap-allocated AD; the per-call sensitivity dimension is taken at
-#'   run time from `ncol(sens1ini)` in [solveODE()]. A positive integer
-#'   `K` fixes the width to `K` at compile time. `NULL` selects
-#'   `length(c(variables, parameters)) - length(fixed)`. `"auto"` asks
-#'   [chunkWidth()] what this machine can afford, which is the sensible
-#'   choice for a second-order model whose parameter set is wider than the
-#'   width: those are answered in blocks of directions on one grid.
-#'   `deriv2 = TRUE` requires a finite width and silently demotes `Inf` to
-#'   `NULL`.
 #' @param includeTimeZero Logical. Ensure that `0` is part of the
 #'   integration times.
 #' @param useDenseOutput Logical. Use Hermite dense output for
@@ -69,7 +59,7 @@
 #'   `$sens2`, the second derivatives of every state. `"forward-reverse"` runs
 #'   the backward sweep itself over tangents and answers with `$adjoint2`, the
 #'   derivatives of the gradient, which under the identity seeding is the
-#'   Hessian of the seeded functional. Both need a finite `nStack`; the first
+#'   Hessian of the seeded functional. The first
 #'   scales with the square of the sensitivity count, the second with its
 #'   product with the seed count.
 #'
@@ -84,7 +74,7 @@
 #'   required by [solveODE()]: `equations`, `srcfile`, `variables`,
 #'   `parameters`, `forcings`, `events`, `rootfunc`, `fixed`, `jacobian`
 #'   (with components `f.x` and `f.time`), `deriv`, `deriv2`, `derivMode`,
-#'   `nStack`, `sparse`, `method`, `useNDF`, `dimNames`, `compileArgs`,
+#'   `sparse`, `method`, `useNDF`, `dimNames`, `compileArgs`,
 #'   `backend`.
 #'
 #' @example inst/examples/example_ODE.R
@@ -96,7 +86,6 @@
 cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = NULL,
                    compile = TRUE, modelname = NULL, outdir = tempdir(),
                    deriv = TRUE, deriv2 = FALSE,
-                   nStack = Inf,
                    includeTimeZero = TRUE, useDenseOutput = TRUE,
                    sparse = NULL,
                    method = c("bdf", "adams", "rb4", "tsit5"),
@@ -234,46 +223,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   n_sens_params <- length(sens_params)
   n_total_sens <- n_sens_initials + n_sens_params
 
-  # --- Resolve nStack (compile-time AD slab width) ---
-  # Inf heap-allocates and takes the width from ncol(sens1ini) at run time,
-  # NULL stacks it at n_total_sens, K fixes it and every call has to fit K.
-  # "auto" lets the machine decide, from the store it would have to hold and the
-  # cache the step arithmetic sweeps. Second order answers a wider parameter set
-  # in blocks, and since its step sequence does not depend on the width, the
-  # blocks ride one grid: the width costs memory and cache, never accuracy.
-  if (identical(nStack, "auto")) {
-    if (!deriv) stop("'nStack = \"auto\"' requires deriv = TRUE")
-    nStack <- chunkWidth(n_variables, q_max = if (is_multistep(method) &&
-                                                 !useNDF) 12L else 5L)
-  }
-  if (!deriv && is.numeric(nStack) && length(nStack) == 1L && is.infinite(nStack)) {
-    nStack <- NULL  # heap AD is meaningful only with deriv = TRUE
-  }
-  # Heap tangents live in an arena that is reset per solve. Second order keeps
-  # numbers across that boundary, deriv2 inside the nested dual and
-  # forward-reverse in the store it hands back, so both take a fixed width.
-  if ((deriv2 || second_reverse) && is.numeric(nStack) && length(nStack) == 1L &&
-      is.infinite(nStack)) {
-    nStack <- NULL
-  }
-  if (is.null(nStack)) {
-    nStack_width <- as.integer(n_total_sens)
-    is_heap <- FALSE
-  } else if (is.numeric(nStack) && length(nStack) == 1L && is.infinite(nStack) && nStack > 0) {
-    if (!deriv) stop("'nStack = Inf' requires deriv = TRUE")
-    nStack_width <- 0L  # routes codegen to <double, 0> (heap spec)
-    is_heap <- TRUE
-  } else if (is.numeric(nStack) && length(nStack) == 1L && is.finite(nStack) && nStack >= 0 &&
-             nStack == as.integer(nStack)) {
-    if (!deriv) stop("'nStack' is only meaningful when deriv = TRUE")
-    nStack_width <- as.integer(nStack)
-    is_heap <- FALSE
-  } else {
-    stop("'nStack' must be NULL, a non-negative integer, Inf, or \"auto\"")
-  }
-  # Codegen helper: under heap AD, every diff() seeding call must pass the
-  # runtime size as a second arg so the tangent slab is allocated. Stack AD
-  # uses the static-N spec where diff(idx) takes no size arg.
+  # Tangents come from the thread-local arena at the width ncol(sens1ini) gives,
+  # read at run time. The compile-time slab an nStack argument used to choose is
+  # gone: it measured slower on every direction.
+  is_heap <- deriv || deriv2
+  # Heap AD needs the runtime size on every diff() so the slab is allocated.
   dyn_arg <- if (is_heap) ", n_sens" else ""
 
   # --- Generate unique model name ---
@@ -292,8 +246,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # they live in the dual arena -- rather than being recognised by name. A name
   # the codegen did not know once passed straight through every AD branch and
   # emitted std::exp on a tape type.
-  numType <- if (deriv2) sprintf("cppde::dual2nd<double, %d>", nStack_width)
-             else if (deriv) sprintf("cppde::dual<double, %d>", nStack_width)
+  numType <- if (deriv2) "cppde::dual2nd<double, 0>"
+             else if (deriv) "cppde::dual<double, 0>"
              else "double"
   numLevel <- if (deriv2) 2L else if (deriv) 1L else 0L
   numArena <- deriv || deriv2
@@ -546,8 +500,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       sprintf("  const int n_params_all = %d;", n_params),
       sprintf("  const int n_phi_rows   = %d;  // n_states + n_params (full Phi' row count)", n_variables + n_params),
       sprintf("  const int n_sens_total = %d;  // compile-time total (excl. compile-time fixed)", n_total_sens),
-      sprintf("  const int n_stack_max  = %s;  // compile-time AD slab width (INT_MAX under heap AD)",
-              if (is_heap) "INT_MAX" else as.character(nStack_width)),
       "  // Per-call active sens dimension: from sens1ini's column count when supplied",
       "  // (which is the auto-extended full Phi' shape on the R side, legacy",
       "  // [n_states, n_active] input is padded with an identity block on the param",
@@ -556,11 +508,15 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "  const int n_sens = has_sens1ini",
       "      ? args.n_sens1_cols",
       "      : (n_sens_total - n_runtime_fixed);",
-      "  if (n_sens > n_stack_max) {",
-      "    char _m[256];",
-      "    snprintf(_m, sizeof(_m), \"sens1ini has %d columns but the model's compile-time nStack is %d\", n_sens, n_stack_max);",
-      "    return res.fail(cppde::RC_ILL_INPUT, _m);",
-      "  }",
+      "",
+      # A backward sweep zero-arms its buffers before anything writes to them,
+      # and under heap AD a zero-armed dual has no width of its own, so every
+      # tangent it hands back reads as the out-of-bounds zero. Declaring the
+      # width for the length of the solve makes arm() bind one. Reverse only:
+      # the forward mode wants a tangent-less temporary to stay that way.
+      if (is_heap && is_reverse)
+        "  cppde::dual_arena::width_scope _cppde_width_scope((unsigned)n_sens);"
+      else character(),
       "",
       "  // active_idx[i]: compile-time sens index i -> active index in [0, n_sens), or -1 if runtime-fixed",
       "  std::vector<int> active_idx(n_sens_total, -1);",
@@ -896,8 +852,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # stepper type strings are built lazily, only for is_multistep(method).
   # The two AD scalars the steppers may be instantiated on, spelled out for the
   # same reason the model body is.
-  ad1 <- sprintf("cppde::dual<double, %d>", nStack_width)
-  ad2 <- sprintf("cppde::dual2nd<double, %d>", nStack_width)
+  ad1 <- "cppde::dual<double, 0>"
+  ad2 <- "cppde::dual2nd<double, 0>"
 
   ms_double <- ms_AD <- ms_AD2 <- NULL
   if (use_sparse) {
@@ -1659,7 +1615,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   attr(modelname, "deriv")         <- deriv
   attr(modelname, "deriv2")        <- deriv2
   attr(modelname, "derivMode")     <- derivMode
-  attr(modelname, "nStack")        <- if (is_heap) Inf else as.numeric(nStack_width)
   attr(modelname, "sparse")        <- use_sparse
   attr(modelname, "method")        <- method
   attr(modelname, "useNDF")        <- useNDF

@@ -66,7 +66,6 @@
   deriv         <- attr(model, "deriv")
   deriv2        <- attr(model, "deriv2")
   all_sens      <- if (deriv) attr(model, "dimNames")$sens else character(0)
-  nStack_attr   <- attr(model, "nStack")
   backend       <- attr(model, "backend")  # "cvode" for CVODE, NULL/other for native
   is_cvode      <- identical(backend, "cvode")
 
@@ -178,14 +177,6 @@
   ## sens1ini full shape: M = ncol(sens1ini) (theta count, may differ from n_active).
   ## otherwise: M = n_active (legacy / identity seeding produces the active basis).
   n_theta_active <- if (sens1ini_is_full) as.integer(ncol(sens1ini)) else n_active
-  if (deriv) {
-    nStack_max <- if (is.null(nStack_attr) || is.infinite(nStack_attr))
-                    .Machine$integer.max
-                  else as.integer(nStack_attr)
-    if (n_theta_active > nStack_max)
-      stop(sprintf("sens1ini column count (%d) exceeds the model's compile-time nStack (%d)",
-                   n_theta_active, nStack_max))
-  }
 
   ## --- Identity-on-active-params padding for legacy shape ---
   build_param_identity <- function(col_names) {
@@ -661,7 +652,8 @@
 #' - **Full shape** `[n_states + n_params, M]`: \eqn{\Phi'(\theta)}
 #'   directly. State rows seed state ICs; parameter rows seed the dynamic
 #'   parameters. The column count `M` may vary across calls; under
-#'   stack-mode AD it must satisfy \eqn{M \le \mathtt{nStack}}.
+#'   Tangent storage is heap-allocated, so \eqn{M} is free per call: a wide
+#'   parameter set is answered in blocks of directions, all on one grid.
 #' - **Partial shape** `[k, M]` with `k < n_states + n_params`: row
 #'   names are required and must be a subset of
 #'   `c(variables, parameters)`. The supplied rows are placed at the
@@ -802,6 +794,10 @@
 #' one column per seed, being \eqn{\lambda^T e_k}; and `lambda`,
 #' `[n_steps, n_states, n_seed]`, the adjoint state at each step's start. `eta`
 #' estimates the step's share of the error in the objective.
+#'   A seed may carry its own tangents, attached as `seedTangent`, an array
+#'   `[n_out, n_states, n_seed, n_sens]` on the seed's own first three
+#'   dimensions. Without them the second order misses the seed's dependence on
+#'   the parameters. Only `derivMode = "forward-reverse"` has slots for them.
 
 #' With `keepStore = TRUE` it carries `$store`, an external pointer to the
 #' checkpoints, for a later solve to take through `store`.

@@ -562,6 +562,27 @@ $f$ over $\mathbb{R}$ evaluates both $f$ and $\partial f/\partial x$
 when called with dual-number inputs, by virtue of the overloaded
 operators and elementary functions.
 
+### Tangent storage
+
+A dual carries $m$ tangent slots beside its value. They are held in a
+thread-local bump arena, allocated at the width the call asks for and released
+in one operation when the solve returns, so $m$ is $\mathrm{ncol}$ of the
+seeding matrix rather than a compile-time constant. A parameter set wider than
+one call should hold is answered in blocks of directions; since the step
+sequence of a tangent-blind solve does not depend on $m$, the blocks share one
+grid and the assembled Hessian equals a single pass exactly.
+
+An inline slab of compile-time width was the alternative and is no longer used.
+On a twenty-state chain with forty directions the arena takes $0.86$ of its time
+in the forward mode and $0.74$ in forward over forward: a fixed slab is carried
+whole whether or not a call uses all of it.
+
+One property of the arena form matters for correctness. A dual whose width has
+never been set has no slots, and reading a tangent from it yields zero rather
+than faulting. Buffers that are zeroed before use, as every cotangent of a
+backward sweep is, must therefore have a width declared for them first, or they
+carry derivatives that are structurally zero.
+
 ### Sensitivity equations via dual evaluation
 
 Let the ODE right-hand side depend on a parameter vector
@@ -1416,6 +1437,141 @@ cotangent of slot $j$, the restart contributes
 \end{equation}
 and slots above the first contribute nothing. The start of the
 trajectory applies the same map, and both are served by one routine.
+
+### Second order of an event's adjoint
+
+Write $s$ for the differential of the event time, so that $s = 0$ in value and
+$\mathrm{d}s \neq 0$. Then
+\begin{equation}
+  s^{2} = 0, \qquad \mathrm{d}\!\left(s^{2}\right) = 2 s\,\mathrm{d}s = 0,
+  \qquad \mathrm{d}^{2}\!\left(s^{2}\right) = 2\,(\mathrm{d}s)^{2} \neq 0 ,
+  \label{eq:s-squared}
+\end{equation}
+so terms of order $s^{2}$ drop from the gradient and not from the Hessian.
+Three of them enter a jump.
+
+**The shift.** Each half of the sandwich is a Heun step,
+\begin{equation}
+  x_{\ast} = x_{\text{before}} + f_{\text{before}}\, s
+           + \tfrac{1}{2}\, a_{\text{before}}\, s^{2},
+  \qquad
+  a = \frac{\partial f}{\partial x} f + \frac{\partial f}{\partial t},
+  \label{eq:heun-curvature}
+\end{equation}
+and $a\,s$ is the difference of the two right-hand sides the step already
+evaluates, so no Jacobian is needed.
+
+**The reconstructed state.** The store keeps $x_{\text{before}}$ alone. Rebuilt
+from the bare reset, the post-jump state satisfies $\partial x_{\text{after}} /
+\partial t^{*} = 0$, whereas
+\begin{equation}
+  \frac{\partial x_{\text{after}}}{\partial t^{*}}
+    = f_{\text{before}} - f_{\text{after}} .
+  \label{eq:post-jump-motion}
+\end{equation}
+The reconstruction therefore runs the sandwich, not the reset.
+
+**The quadrature.** The parameter cotangent
+\begin{equation}
+  \bar p_{k} = \int_{0}^{T} G_{k}\,\mathrm{d}t
+             = \int_{0}^{t^{*}} + \int_{t^{*}}^{T},
+  \qquad
+  G_{k} = \left(\frac{\partial f}{\partial p_{k}}\right)^{\!\mathsf T}\!\lambda,
+  \label{eq:quadrature-split}
+\end{equation}
+is split at $t^{*}$, and $G_{k}$ is discontinuous there because the state is.
+Differentiating a split integral whose split point moves leaves the jump of the
+integrand at the split,
+\begin{equation}
+  \frac{\partial \bar p_{k}}{\partial v}
+  \;\supset\;
+  \Big( G_{k}(t^{*-}) - G_{k}(t^{*+}) \Big)\,
+  \frac{\partial t^{*}}{\partial v} .
+  \label{eq:quadrature-jump}
+\end{equation}
+Only parameters whose $\partial f / \partial p_{k}$ reads a state the reset
+changed contribute.
+
+Implemented as accumulations scaled by the residual, all three are zero in value
+and carry $\partial t^{*} / \partial v$ in their tangent, so the gradient is
+unchanged.
+
+For a fixed event at $t = \tau(p)$ the residual is $\tau - \lfloor \tau \rceil$.
+For a root event it is
+\begin{equation}
+  s = -\,\frac{g - \lfloor g \rceil}{\dot g},
+  \qquad
+  \dot g = \frac{\partial g}{\partial t} + \nabla g \cdot f ,
+  \label{eq:root-residual}
+\end{equation}
+read at the stored state. Localisation is tangent-blind, so that state carries
+$\partial x / \partial \theta$ at a fixed time and $\nabla g$ contracts it to
+the event time's.
+
+### Transposing the root sandwich
+
+The jump is the composition
+\begin{equation}
+  x_{e} = x_{b} + f_{b} s, \quad
+  x_{\ast} = x_{b} + \tfrac{1}{2}(f_{b} + f_{e}) s, \quad
+  x_{a} = R(x_{\ast}), \quad
+  x_{k} = x_{a} - f_{a} s, \quad
+  x_{o} = x_{a} - \tfrac{1}{2}(f_{a} + f_{k}) s ,
+  \label{eq:root-sandwich}
+\end{equation}
+and its adjoint is that graph reversed, term for term. Pruning by order in $s$
+is what makes it wrong: a product vanishes only when *both* factors are zero in
+value, so $J^{\mathsf T}\bar f$ against $f$ survives where $s$ against $s$ does
+not. Collecting the surviving terms,
+\begin{equation}
+  \bar x_{a} = \big(I - s J_{a}\big)^{\!\mathsf T} \bar x_{o},
+  \qquad
+  \bar x_{b} = \big(I + s J_{b}\big)^{\!\mathsf T} \bar x_{\ast},
+  \qquad
+  \bar p \mathrel{+}= s\left(\frac{\partial f}{\partial p}\right)^{\!\mathsf T}
+          \!\big(\bar x_{\ast} - \bar x_{o}\big) ,
+  \label{eq:root-transpose}
+\end{equation}
+the last being \eqref{eq:quadrature-jump} again. The forward path corrects the
+shift by $-\tfrac{1}{2}(\ddot g / \dot g)\,s^{2}$, whose chain factor
+$1 + 2 c_{2} s$, $c_{2} = -\ddot g / (2\dot g)$, is one in value and a
+second-order tangent; the transpose carries it on $\partial s / \partial x$.
+
+With $R = \mathrm{id}$ the composition \eqref{eq:root-sandwich} is the identity
+and every term of \eqref{eq:root-transpose} cancels, which is the test the
+implementation is held to.
+
+What is not available is the shift's own derivative. Since $\dot g$ reads the
+state,
+\begin{equation}
+  \frac{\partial s}{\partial x}
+    = -\frac{\nabla g}{\dot g} - \frac{s}{\dot g}\, \nabla \dot g ,
+  \qquad
+  \nabla \dot g = \nabla \frac{\partial g}{\partial t}
+                + \left(\nabla^{2} g\right) f + J^{\mathsf T}\nabla g ,
+  \label{eq:root-quotient}
+\end{equation}
+and the second term carries $g$, which is zero in value: absent from the
+gradient and full strength in the Hessian. Only the value of $\nabla \dot g$ is
+needed, so for a $g$ that is linear in the state and blind to the time it is
+$J^{\mathsf T}\nabla g$ alone.
+
+Against the sandwich itself, evaluated over a nested dual with no solver around
+it, the transpose is exact to $9\cdot10^{-16}$. Over a whole trajectory a
+rank-one term survives, and fitting it against the sensitivities at the
+pre-jump row identifies it as $\kappa\,(J^{\mathsf T}\nabla g,\,
+(\partial f/\partial\theta)^{\mathsf T}\nabla g)$: the vector
+\eqref{eq:root-quotient} already contributes, scaled wrongly. Root events are
+therefore first order only.
+
+### Verifying a derivative across a moving event
+
+When $t^{*}$ depends on a parameter, the reported trajectory carries a row whose
+time moves with it. A functional $w^{\mathsf T} x$ seeded on that row is not the
+same functional at two parameter values and has no derivative to compare
+against. Restricting the seed to the user's own output times restores a
+well-posed functional, after which the forward, forward-over-forward and
+difference-quotient answers agree to the tolerance of the solve.
 
 ### The step grid as a constant
 

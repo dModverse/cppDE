@@ -485,10 +485,15 @@ public:
     }
   }
 
-  // As the static-N form. A heap dual that has no width yet has nothing to
-  // bind, and the caller that armed it gets the arena behaviour it had before.
+  // As the static-N form, plus: a dual with no width of its own takes the one
+  // the caller declared, if any. Without one it has nothing to bind.
   void arm() {
-    if (size_ == 0) return;
+    if (size_ == 0) {
+      const unsigned w = dual_arena::default_tangent_width();
+      if (w == 0) return;
+      size_ = w;
+      tan_  = detail::arena_alloc_t<T>(size_);
+    }
     if (tan_ == nullptr) tan_ = detail::arena_alloc_t<T>(size_);
     for (unsigned i = 0; i < size_; ++i) tan_[i] = T();
   }
