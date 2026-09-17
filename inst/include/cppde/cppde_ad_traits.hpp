@@ -112,6 +112,42 @@ inline void arm_tangents(T&) {}
 template<class S, unsigned N>
 inline void arm_tangents(cppde::dual<S, N>& v) { v.arm(); }
 
+// ============================================================================
+//  arm_outputs(a, b, x, p): binds the tangent storage of a and b, as wide as x
+//  and p carry. An entry that already has storage is left unchanged.
+// ============================================================================
+
+template<class T>
+inline unsigned tangent_count(const T&) { return 0; }
+
+template<class S>
+inline unsigned tangent_count(const cppde::dual<S, 0>& v) { return v.size(); }
+
+template<class T>
+inline void arm_width(T&, unsigned) {}
+
+template<class S>
+inline void arm_width(cppde::dual<S, 0>& v, unsigned w) {
+  if (v.size() != 0 || w == 0) return;
+  v.set_depend_size(w);
+  for (unsigned i = 0; i < w; ++i) v[i] = S();
+}
+
+template<class S, unsigned N>
+inline void arm_width(cppde::dual<S, N>& v, unsigned) {
+  if (!v.depend()) v.arm();
+}
+
+template<class T>
+inline void arm_outputs(std::vector<T>& a, std::vector<T>& b,
+                        const std::vector<T>& x, const std::vector<T>& p) {
+  unsigned w = 0;
+  for (const T& v : x) { const unsigned c = tangent_count(v); if (c > w) w = c; }
+  for (const T& v : p) { const unsigned c = tangent_count(v); if (c > w) w = c; }
+  for (T& v : a) arm_width(v, w);
+  for (T& v : b) arm_width(v, w);
+}
+
 template<class T, class V>
 inline T store_as(const V& v) {
   if constexpr (std::is_same<T, V>::value) return v;

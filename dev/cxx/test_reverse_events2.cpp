@@ -12,13 +12,15 @@
 //
 // The root sits on the state whose right-hand side reads the clock, so
 // d(g_dot)/dt is not zero. A root on a state with an autonomous right-hand side
-// leaves that term at zero and the case goes untested.
+// leaves that term at zero and the case goes untested. The fixed event's time
+// depends on a parameter and its reset scales that same state, for the same
+// reason: the shift then has a tangent, and the right-hand side read at the
+// moving event time adds df/dt before and after a reset that changes it.
 //
-// It fails as it stands, and that is what it was built for: first order comes
-// back at 2e-15 and second order at 3.4e+01, on both steppers and on one step
-// sequence. The gap is therefore algebra. It is rank one on dt*/dtheta, it
-// needs a root event and a right-hand side that reads the clock, and it is
-// absent from the gradient.
+// Both jumps once failed here in the second order alone, the root one by 3.4e+01
+// and the fixed one by 1.8e-01, on both steppers and on one step sequence: the
+// gaps were algebra, rank one on the event time's parameter, and absent from
+// the gradient.
 //
 // Build and run:  dev/cxx/run.sh --reverse-events2
 //
@@ -119,9 +121,13 @@ static event_set<V> make_events(const std::vector<V>& p) {
   using state = std::vector<V>;
   event_set<V> ev;
 
+  // The fixed time moves with p3 and sits at T_FIXED in value, so the jump's
+  // shift has a tangent and the right-hand side is read at a moving time. The
+  // reset scales x2, whose right-hand side reads the clock: the df/dt terms on
+  // either side of the reset then differ and do not cancel.
   cppde::detail::FixedEvent<state, V> f;
-  f.time        = V(T_FIXED);
-  f.state_index = 0;
+  f.time        = p[3] * V(T_FIXED / P[3]);
+  f.state_index = 2;
   const V a = p[3];
   f.value_func  = [a](const state&, const V&) { return V(0.5) + a; };
   f.method      = cppde::detail::EventMethod::Multiply;
@@ -239,7 +245,9 @@ struct event_adjoint_terms {
                         const V& sc, V* out) const {
     if (ev == 0) out[NX + 3] += sc;
   }
-  void fixed_dtime_dp_axpy(int, const V&, V*) const {}
+  void fixed_dtime_dp_axpy(int ev, const V& sc, V* out) const {
+    if (ev == 0) out[NX + 3] += sc * V(T_FIXED / P[3]);
+  }
   void fixed_dh_dt_axpy(int, const std::vector<V>&, const V&, const V&,
                         V*) const {}
 

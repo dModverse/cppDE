@@ -134,10 +134,10 @@ test_that("cppFUN dual mode supports deriv2 with zero parameters", {
   expect_equal(hess, hess2)
 })
 
-test_that("cppFUN symbolic mode produces correct jac/hess with zero parameters", {
+test_that("cppFUN forward mode produces correct jac/hess with zero parameters", {
   obj <- cppFUN(c(y = "x^2 + 3*x"), compile = TRUE,
-                modelname = "noparm_fun_sym",
-                derivMode = "symbolic", deriv2 = TRUE)
+                modelname = "noparm_fun_fwd2",
+                derivMode = "forward", deriv2 = TRUE)
 
   expect_equal(attr(obj, "variables"), "x")
   expect_null(attr(obj, "parameters"))

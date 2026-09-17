@@ -272,9 +272,7 @@ get_model <- function(cache, prob, backend, deriv, deriv2 = FALSE, method = "bdf
           modelname = nm, method = method, sparse = sparse,
           compile = TRUE, verbose = verbose)
   } else {
-    ## deriv2 needs a compile-time AD width; NULL selects exactly the
-    ## number of active sensitivity parameters.
-    cppODE(prob$rhs, events = ev, deriv = deriv, deriv2 = deriv2, fixed = fixed) NULL else Inf,
+    cppODE(prob$rhs, events = ev, deriv = deriv, deriv2 = deriv2, fixed = fixed,
            outdir = cache$outdir, sparse = sparse,
            modelname = nm, method = method, useNDF = useNDF,
            compile = TRUE, verbose = verbose)

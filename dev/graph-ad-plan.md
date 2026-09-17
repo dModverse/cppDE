@@ -58,6 +58,219 @@ direkt (dichte LU, KLU).
 - **Dedup-Loop-Pfad** (`codegen_cppODE.py` 863-882): Ein Eintrag, der nur von `t` abhängt, wird als
   konstant eingefroren.
 
+## Verifikation gegen den Code (2026-09-16)
+
+Geprüft auf `devel-reverseAD` bei e55c599. Der Plan trägt; Korrekturen und Ergänzungen:
+
+**Umgebung**
+- `dev/python/` gibt es noch nicht. `CPPDE_PY_DIR` ist neu: Die vier Loader in `R/zzz.R` lesen fest
+  `system.file("python")`. reticulate 1.46 setzt `sys.path` schon nur während des Imports.
+- `py_require("sympy")` trägt keine Python-Version. `DESCRIPTION` sagt Python ≥ 3.8 und wird 3.9.
+
+**Zeilen und Namen**
+- Der Symbolik-Test in `test-piecewise.R` steht in 63-88. `test-Pexpl.R` endet bei 150.
+- `data_code` und `codegen_stats` sind neue Schlüssel. `data_code` kommt in `R/cppODE.R` direkt hinter
+  `"namespace {"`. CVODE schreibt die Datei in Python selbst, dort gehört es in `_render_source`.
+- Attribut `jacobian`: In `cppODE.R` betrifft es 1594-1604 und 1614, in `cvode.R` 247-253 und 264.
+  `cvode.R` liest `jac_nnz_rows` für eine verbose-Meldung, also bleiben `jac_nnz_rows`/`jac_nnz_cols`.
+- `dfdt_dot` wird für **jedes** Reverse-Modell erzeugt, weil die Sprünge es brauchen
+  (`cppde_adjoint_step.hpp`). Nur die vier jvp/dfdt-Paare sind rb4-exklusiv.
+- Färbung und Farbseeds gibt es noch nicht; „Farbseeds als `double`“ ist eine neue Festlegung.
+- `_init_consts` steht heute nur im dünnen Funktor und wird nur im Dedup-Pfad benutzt. Das bleibt so:
+  nur der dünne Pfad, denn dort lebt `m_W_sparse` einen Solve lang.
+- `inst/examples/example_cppFUN.R` und `example_fun.R` lesen `jacobian.symb`/`hessian.symb`.
+- `cppDE/CLAUDE.md` existiert nicht; gemeint ist die Workspace-`CLAUDE.md`.
+- In dMod2 tragen auch `R/utils.R`, `R/parameters.R` (175, 269, 280-285), `R/prediction.R`
+  (985-994, 1129, 1196, 1284), `man/Pexpl.Rd` und `man/Y.Rd` die Symbolik.
+
+**Fehler**
+- `compute_ydd`: Der Code rechnet `f_t − J f` statt `f_t + J f`, dicht wie dünn (`csc_matvec_add`).
+  Die Wirkung ist nur der Startschritt von rb4 bei `hini == 0` und `f_t ≠ 0`, denn
+  `weighted_sup_norm` nimmt Beträge.
+- Dedup: Mit einem 80-Zustands-Modell reproduziert. Dort zeigt außerdem `x0_0` auf `params[n+k]`,
+  im Standardpfad auf `params[i]`. `LEAF(INIT)` zeigt künftig einheitlich auf `params[i]`.
+- Neu: `_generate_root_gradient_lambdas` ersetzt `DiracDelta` nicht. Ein `Heaviside` in der Wurzel
+  eines nicht-terminalen Events scheitert deshalb im Drucker. Graph-AD behebt das.
+
+**Fallback**
+- Der R-Wert-Fallback greift in jedem Modus. Ohne `compile()` werten aus:
+  - `test-cppFUN.R` 7-22, 24-46, 87-115, 119-144 und 148-161;
+  - in dMod2 `test-steadystates.R` 28, `test-Pequil-Pimpl.R` (rund acht Pimpl), `test-Pexpl.R`
+    111-149 und `test-Y.R` 141-157;
+  - `inst/workshops/Pimpl_Pexpl.Rmd`.
+  
+  Alle diese Stellen kompilieren künftig vorher. Entschieden: Der Fallback fällt strikt weg, auch für
+  Werte.
+- In `Y()` prüft der AD-Zweig nicht, ob der Eintrag geladen ist.
+- `_write_vjp_impl` differenziert ohne `jacobian` selbst. `_eval_one<T>` gibt es schon.
+
+**Funktionen**
+- Für duale Typen fehlen `fabs`, `floor`, `ceil`, `sign`, `heaviside`, `erf`, `atan2`, `cbrt` und
+  `tgamma`. Deshalb:
+  - Der Emitter senkt `sign`/`Heaviside` auf `cppde::select` ab (H(0) = 1/2) und `abs` auf `abs`.
+  - `floor`/`ceiling` bekommen einen Helfer mit Tangente 0.
+  - Andere Funktionen ohne duale Überladung sind bei dualem T ein Codegen-Fehler.
+- CVODE schreibt +J, ohne CSE und in `double`, und sein dünnes Muster jedes Mal neu. Phase 8 behält
+  das.
+
+**Benchmarks**
+- `benchmarks/R/harness.R` 277 ist seit 5154227 nicht parsebar.
+- `benchmarks/cache/` fehlt und wird per `fetch-models.R` geklont.
+- `max_states` ist 200/400.
+- Das 481er-Fe-Modell liegt in keinem Repo. Die Phasen 6 und 7 nutzen das synthetische LLG-Dipolmodell.
+
+**Anschluss (Phase 10):** Die großen PEtab-Modelle (≥ 100 Zustände), Brusselator/FHN mit großem N
+und das 481er-LLG laufen einmal durch Codegen, `cppDE::compile` und `dMod2::compile`. Gemessen wird
+forward und reverse, ohne Vergleich mit dem alten Codegen.
+
+## Stand
+
+**Reihenfolge ab Phase 8 (Entscheidung 2026-09-17):**
+
+| Schritt | Inhalt | Stand |
+|:--|:--|:--|
+| 0–5 | Streichungen, Graph/Parser/AD, Reverse-Kontraktionen, Jacobimatrix, Events, cppFUN | fertig |
+| 6 | E: lange lineare Summen als Tabellen | fertig |
+| 7 | D: Schleifen über Klassen gleicher Struktur, Summen als innere Schleifen | fertig |
+| 8 | CVODE auf dem Graphen | fertig |
+| F | C++: festes Event mit Zeitparameter und uhrlesender rechter Seite, zweite Ordnung | fertig (1.8e-1 → 7e-14) |
+| 10a | Neuinstallation, komplette cppDE-Benchmark-Suite lokal | fertig (42 Probleme, 879 Zellen) |
+| 10b | große Modelle: Codegen- und Compile-Zeit mit `cppDE::compile` und `dMod2::compile` | fertig |
+| 10c | dMod2: PEtab-Roundtrip einmal verifizieren | fertig: 32 von 32 laufen durch, 2 wie dokumentiert ausgelassen |
+| 9 | erst danach: alten Codegen entfernen, Doku, Neuinstallation, beide testthat-Suiten nacheinander | fertig: cppDE 180 Tests, dMod2 382 Tests, 0 Fehler |
+
+Ergebnisse 10a (Teil 1 `benchmarks/results/20260917-023711_full_c1_nosens-sens1`, Teil 2
+`…062619…`; neben anderen Läufen, daher absolute Zeiten überhöht):
+- Gegen den eingecheckten Lauf vom 2026-09-01 (Linux, alter Generator), gemeinsame Zellen:
+  - Schritte neu/alt 1,00, Fehler 0,97 bis 1,03.
+  - Dieselben vier Zellen scheitern (Oliveira dreimal, Weber, sens1 bei 1e-10).
+- Neu ist Lang_PLOSComputBiol2024: CVODES scheitert mit Sensitivitäten bei 1e-4 und 1e-7 (s. u.).
+- A/B neuer gegen alten Generator im selben Prozess:
+  - `cppODE()`: Laufzeit 0,99 ohne und 1,01 mit Sensitivitäten.
+  - `cvode()`: 0,97 und 0,87 bei gleicher Schrittzahl; die Spanne reicht von 0,28 bis 1,36.
+    Die Sensitivitäts-RHS als ein JVP rechnet den Primalteil je Parameter neu.
+- Die Head-to-head-Zahl mit Sensitivitäten in `Methods.Rmd` (1,84) stammt vom alten Generator
+  und dürfte jetzt kleiner sein. Vor dem Zitieren auf einer ruhigen Maschine neu messen.
+
+Smoke-Phasen 6 und 7:
+- Alle Fälle grün; mit und ohne E bzw. Schleifen gleich bis 1e-14 / 1.6e-10 / 6e-17.
+- LLG 481 läuft jetzt auf bdf mit FD-Schritt 1e-6. rb4 zerlegt je Schritt eine duale Matrix,
+  und h = 1e-4 lag im Abbruchfehler.
+- Zweite Ordnung (S5s) mit allen 27 Richtungen: Die Arena wächst im Solve binnen Sekunden um GB
+  (neu 8,6 GB, alt 16,9 GB). Der Fall läuft jetzt über die Parameter.
+  - Ergebnis: Gradient 4.1e-12, Hessematrix 4.9e-12.
+  - Mit und ohne E gleich bis 3.6e-15; Spitzenspeicher 1,5 GB.
+- Roundtrip-Nachläufe: Raimundez, Isensee, Bachmann und Schwen ändern ihren Wert beim Reimport.
+  Mit dem alten Generator ist das identisch (Isensee 33649,2 → 1990350).
+
+Tests und Compiles laufen einzeln und unter einer Speichergrenze.
+
+Ergebnisse 10b (`benchmarks/results/compile-large-20260917-035729.csv`, neben drei anderen Läufen):
+
+| Modell | Zustände | Codegen fwd/rev | `cppDE::compile` fwd/rev | `dMod2::compile` fwd/rev | Prüfung fwd/rev |
+|:--|--:|--:|--:|--:|:--|
+| Brusselator 1D | 1000 | 5.4 / 0.8 s | 13 / 13 s | 27 / 29 s | 3.5e-9 / 3.3e-8 |
+| FitzHugh-Nagumo | 1000 | 0.6 / 0.7 s | 14 / 12 s | 19 / 28 s | 1.2e-6 / 5.2e-7 |
+| LLG-Dipol | 481 | 105 / 95 s* | 16 / 13 s | 22 / 33 s | 2.8e-7 / 4.1e-7 |
+| Chen_MSB2009 | 504 | 2.1 / 1.8 s | 222 / 22 s | 232 / 228 s | Solve scheitert** |
+| Froehlich_CellSystems2018 | 1228 | 4.6 / 4.8 s | 179 / 27 s | 186 / 210 s | 9.2e-3 (FD) / 6.1e-8 |
+| Lang_PLOSComputBiol2024 | 124 | 1.0 / 1.0 s | 97 / 16 s | 103 / 118 s | 5.2e-6 / 1.0e-10 |
+
+- \* Davon 65 s in `checkSymbolNames()`: 35 TRE-Durchläufe über 20 MB Text. Jetzt ein
+  PCRE-Durchlauf, 0,05 s. Python allein braucht 5,7 s.
+- \*\* Mit dem alten Generator identisch (gleiche Zahl angenommener und verworfener Schritte bei
+  1e-6, 1e-8 und 1e-10, mit und ohne Sensitivitäten). Der Benchmark-Aufbau von Chen scheitert in
+  cppDE unabhängig vom Codegen.
+- dMod2 baut in beiden Modi das Wert- und das Vorwärtsmodell, seine Zeit folgt dem Vorwärts-Compile.
+- Ein Vorwärtsmodell (dual) verbringt unter `-O2` 59 % der Compile-Zeit in GCCs RTL-GCSE
+  (Chen: 211 s; ohne GCSE 93 s; ohne Schleifen 394 s). Ab 40 kB dualem Modellcode schaltet ein
+  GCC-Pragma im Quelltext den Pass ab. Lang: 90 → 55 s bei gleicher Laufzeit (6,56 / 6,32 s).
+- Zum Vergleich, nebenbei gemessen: Der alte Generator braucht für Chen 47 s ohne und 414 s mit
+  Sensitivitäten, der neue 19 s und 223 s (vor dem Pragma).
+- Nach der Neuinstallation (Pragma, Schlüsselwortprüfung), mit weniger Last, jeweils forward:
+
+  | Modell | Codegen | `cppDE::compile` | `dMod2::compile` |
+  |:--|--:|--:|--:|
+  | LLG | 15 s | 12 s | 23 s |
+  | Chen | 0,7 s | 53 s | 59 s |
+  | Lang | 0,2 s | 34 s | 39 s |
+
+  Die Prüfungen sind unverändert.
+
+Ergebnisse 10c:
+- `test-petab`: 40 Tests, 0 Fehler, 0 übersprungen.
+- Roundtrip über die Benchmark-Models-Sammlung: 25 von 34 in einem langen Arbeitsverzeichnis,
+  2 ausgelassen wie dokumentiert.
+  - Bachmann, Smith, Fiedler, Isensee und Raimundez scheiterten an Windows-Grenzen
+    (Pfadlänge, Kommandozeile).
+  - Alkan scheiterte an einer Parser-Regression (s. u.).
+  - Im kurzen Verzeichnis laufen Alkan, Bachmann und Fiedler durch.
+  - Isensee und Raimundez brauchten die dMod2-Korrektur der Kommandozeilengrenze (s. u.).
+- Bachmann (−838,26 → −533,60) und Schwen (1901,98 → 2306,99) ändern ihren Wert beim Reimport,
+  mit dem alten Generator identisch. Das liegt am Export von dMod2, nicht am Codegen.
+- Lang: CVODES scheitert mit Sensitivitäten bei rtol 1e-4 und 1e-7 in 10a, ebenso die Referenz.
+  Keine Regression:
+  - Die neuen Rückrufe stimmen an Punkten der Trajektorie mit SymPy überein.
+  - Über neun Toleranzen scheitert der neue Generator sechsmal, der alte siebenmal.
+  - Ein Bit Unterschied in atol entscheidet über Erfolg.
+
+Module: `cppde_graph.py` (Graph, Parser, AD), `cppde_emit.py` (Scheduler, Drucker), `cppde_model.py`
+(Funktionen des Modells, Events, CVODE-Rümpfe), `cppde_struct.py` (E und D; ersetzt die geplanten
+`cppde_linear.py` und `cppde_vector.py`), `cppsympy.py` (nur SymPy). Der Harness liegt in
+`dev/python/` (`harness.py`, `run_checks.py`, `pyrt.py`, `smoke.R`, `corpus.json`,
+`legacy/` = e55c599).
+
+Ergebnisse:
+- Parität zum alten Generator in `run_checks.py`: 1e-12. Die Summationsreihenfolge langer Summen
+  verschiebt die letzten Stellen, deshalb nicht 1e-13.
+- Vergleichspunkte, an denen schon der Referenzwert nicht endlich ist oder ein Zwischenwert
+  1e12 übersteigt, werden gezählt, aber nicht verglichen. Werte, die bis auf Rundung auslöschen,
+  gelten bis 1e-12 des größten Ausgabewerts derselben Funktion als gleich.
+- Im gefärbten Pfad macht ein singulärer Eintrag über `0·∞` die ganze Zeile nicht endlich.
+- `smoke.R` vergleicht jeden Fall zusätzlich mit dem alten Generator. Die Abweichung liegt bei
+  höchstens 1e-10, meist unter 1e-15.
+- E: jede Funktion mit und ohne Tabellen gleich (1,8 Mio. Vergleiche). Das LLG-Modell mit 481
+  Zuständen und 20 MB Modelltext wird in etwa 5 s erzeugt (3,7 s Parsen, 1–2 s Code).
+- D: mit und ohne Schleifen bitgleich; Summen als Schleife bis 1e-13. Die Zahl der Anweisungen
+  ist bei N und 2N gleich; Brusselator 2D mit 4608 Zuständen: 6 s Codegen.
+- **Abweichung bei D (bewusst):** Die Ableitungen entstehen weiter skalar auf dem Graphen, die
+  Klassen und Schleifen werden danach über den fertigen Anweisungen gebildet
+  (`cppde_struct.vector_block`). Codegröße und Compile-Zeit hängen damit nicht von N ab, die
+  Codegen-Zeit wächst linear (rund 1 ms pro Zustand für rb4 zweiter Ordnung; 10^5 Zustände
+  brauchen Minuten und GB in Python). Dafür teilen alle Ableitungen einen geprüften AD-Pfad, und
+  die Schleifen sind bitgleich zum skalaren Code. AD auf dem Klassengraphen lässt sich später vor
+  `vector_block` setzen, ohne die Ausgabe zu ändern.
+- CVODE: Rümpfe gegen SymPy grün; C++-Syntax von zehn Varianten grün.
+
+Gefunden:
+- `normalise_logic` las das Fakultäts-`!` als Not.
+- `cppde::max`/`min` haben keine Überladung für Expression-Templates. Der alte Generator
+  kompilierte `max(x, 2*y)` im AD-Modus deshalb nicht; die Argumente werden jetzt Temporaries.
+- Konstruktionszeit-`fixed` wirkte in `cppFUN(derivMode = "forward")` nicht; behoben.
+- Summen ab einigen tausend Termen brachen `ast.parse` mit RecursionError ab; sie werden vorher in
+  einen flachen Aufruf umgeschrieben.
+- Hash-Consing legte `0.5` (float) und `Fraction(1, 2)` im selben Knoten ab; der Typ hing von der
+  Reihenfolge ab. Floats mit kleinem Zweiernenner werden jetzt als Fraction gespeichert.
+- Ohne E kompiliert ein LLG-Modell mit 19 Zuständen in zweiter Ordnung etwa 9 Minuten bei
+  1,7 GB Speicher; sechs solche Compiles parallel sind zu viel.
+- Der alte CVODE-Generator las `<state>_0` als Anfangswert, differenzierte aber nach der
+  gleichnamigen Parameterzeile. Der neue bleibt aus Kompatibilität dabei.
+- **C++, unabhängig vom Codegen:** Ein festes Event mit parameterabhängiger Zeit und eine rechte
+  Seite, die die Uhr liest, ergeben in forward-reverse einen falschen Eintrag d²/dθ² für den
+  Zeitparameter (Beispiel: `t_dose*2` und `-k1*A + k2*B*time`, Abweichung 0.9 gegen ff und FD).
+  Ursache: `apply_fixed_jump_adjoint` sammelt das Heun-Sandwich geprunt und lässt die Beiträge
+  `df/dt` von `f(x_e, t_e)` und `f(x_a, t_e)` zur Kotangente des Shifts weg, das Gegenstück zu
+  955ecbe für Wurzel-Events. Behoben.
+- Eine Jacobimatrix erster Ordnung hielt ihre Temporaries bis zum Ende des Solves in der Arena
+  (LLG 481: 18 GB). Sie bindet jetzt ihre Ausgaben und öffnet einen eigenen Scope. Verschachtelte
+  Duale haben weiter keinen Scope pro Aufruf; ein langer Solve zweiter Ordnung wächst mit der
+  Schrittzahl.
+- SBML-`piecewise(1, x > 0, 0, x <= 0)` hat keinen otherwise-Zweig, aber erschöpfende Bedingungen.
+  SymPy macht daraus `True`, der Graph-Parser lehnte ab (Alkan_SciSignal2018). Ohne
+  otherwise-Zweig fällt der Parser jetzt auf SymPy zurück; Prüfung in `run_checks.py fallback`.
+- dMod2 rechnete unter Windows mit 24000 Zeichen Kommandozeile, `R CMD` läuft aber durch cmd.exe
+  (8191). Jetzt 8000, und ein `ar`-Block zählt den Aufruf davor mit.
+
 ## Compile-Budget (gilt für alle Phasen)
 
 - **Während der Entwicklung wird nur in Python geprüft:**
@@ -65,11 +278,11 @@ direkt (dichte LU, KLU).
     Tabellen wie das C++-Backend, nur mit anderer Blattsyntax. Der Code läuft mit `exec`,
     mit `float`, einer `Dual`-Klasse oder einer verschachtelten `Dual`-Klasse.
   - Referenz sind die eingefrorenen SymPy-Pfade und finite Differenzen.
-  - Aufruf in Sekunden:
-    `~/.cache/R/reticulate/uv/bin/uv run --python 3.12 --with sympy==1.14 python dev/python/run_checks.py`
+  - Aufruf in Sekunden (Windows; unter Linux liegt uv unter `~/.cache/R/reticulate/uv/bin/uv`):
+    `$LOCALAPPDATA/R/cache/R/reticulate/uv/bin/uv.exe run --python 3.12 --with sympy==1.14 python dev/python/run_checks.py`
 - **Am Phasenende** kompiliert `dev/python/smoke.R` höchstens eine Handvoll Modelle, parallel.
 - **Die volle testthat-Suite** läuft in beiden Paketen genau einmal ganz am Ende, im Hintergrund.
-- **Keine Benchmark-Suite:** Sie kommt im Anschluss an diesen Umbau.
+- **Die Benchmark-Suite** läuft in Schritt 10a lokal, vor dem Entfernen des alten Codegens.
 - **Neuinstallation** gibt es nur an den markierten Stellen. Alternativ liest `R/zzz.R` optional
   `CPPDE_PY_DIR`, dann nutzen die Smoke-Tests den Quellbaum ohne Reinstall.
 
@@ -147,7 +360,7 @@ Mit E zählen `LINROW`-Zeilen als Pseudovariablen, und es gilt J = A + G·C, wob
 - **Tests:**
   - `test-cppFUN.R`: Symbolik-Vergleiche ersetzen durch geschlossene Formen oder finite Differenzen;
     neuer Test, dass ein unkompiliertes Objekt einen Fehler wirft;
-  - `test-dual2nd-primitives.R` und `test-piecewise.R` 66-89: Referenz über `stats::D()` in R;
+  - `test-dual2nd-primitives.R` und `test-piecewise.R` 63-88: Referenz über `stats::D()` in R;
   - `test-no-parameters.R` 137-154: auf `forward` umstellen.
 - **`NEWS.md`.**
 
@@ -162,7 +375,7 @@ Mit E zählen `LINROW`-Zeilen als Pseudovariablen, und es gilt J = A + G·C, wob
 - `R/plots.R`, `plotFluxes()`: `parse()`/`eval()` pro Bedingung mit kleiner Umgebung (`Heaviside`,
   `exp10`, `piecewise`).
 - `R/compile.R`: die zwei Kommentare.
-- Tests: `test-Pequil-Pimpl.R`, `test-Pexpl.R` 78-155, `test-Y.R` 57-63 und 143-160,
+- Tests: `test-Pequil-Pimpl.R`, `test-Pexpl.R` 78-149, `test-Y.R` 57-63 und 143-160,
   `test-constructor-deriv-flag.R`, `test-deriv2.R` („symbolic“ wird „forward“).
 
 **Prüfung:** Reinstall beider Pakete, dann nur die umgeschriebenen Testdateien.
@@ -351,6 +564,27 @@ finite Differenzen.
 gegen das native Backend.
 
 **Ende der Phase:** Übereinstimmung im Rahmen der Solver-Toleranz.
+
+### Schritt F: fester Event-Zeitpunkt und uhrlesende rechte Seite (C++)
+
+**Datei:** `inst/include/cppde/cppde_adjoint_step.hpp`, `apply_fixed_jump_adjoint`: beide
+Auswertungen der rechten Seite am Eventzeitpunkt geben dem Shift ihr `df/dt` (`dfdt_dot`), wie
+der Wurzelpfad seit 955ecbe.
+
+**Prüfung:** `dev/cxx/test_reverse_events2.cpp` mit parameterabhängiger Eventzeit und einem Reset
+auf der uhrlesenden Komponente; ohne Fix 1.8e-1, mit Fix 7e-14. `smoke.R` Phase 4 wieder mit
+`-k1*A + k2*B*time`.
+
+### Schritt 10: Benchmarks und PEtab, vor dem Aufräumen
+
+- **10a:** cppDE neu installieren, dann `Rscript benchmarks/run-benchmarks.R --tier full` lokal
+  und seriell.
+- **10b:** `Rscript benchmarks/compile-large.R`: PEtab-Modelle ab 100 Zuständen, Brusselator und
+  FHN mit 1000 Zuständen, LLG mit 481; Codegen, `cppDE::compile`, `dMod2::odemodel` +
+  `dMod2::compile`, Stichprobe gegen FD bzw. vorwärts.
+- **10c:** dMod2 neu installieren; `test-petab.R` mit `DMOD_PETABTESTS`; Import, Auswertung mit
+  Ableitungen, Export nach v2 und Reimport über die Benchmark-Models-Sammlung (33 von 35 laut
+  NEWS).
 
 ### Phase 9: Aufräumen, Doku, Gesamtlauf
 

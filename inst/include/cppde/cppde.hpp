@@ -62,6 +62,7 @@
 // ============================================================================
 #include <cppde/cppde_utils.hpp>
 #include <cppde/cppde_pchip_forcing.hpp>
+#include <cppde/cppde_linmap.hpp>
 
 // ============================================================================
 //  cppDE stepper traits (multi-step vs single-step dispatch)

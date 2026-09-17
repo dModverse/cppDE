@@ -61,29 +61,27 @@ test_that("both branches of a state switch are taken", {
 # -- Second order -------------------------------------------------------------
 
 test_that("select carries value, gradient and Hessian on both branches", {
-  # Same oracle as test-dual2nd-primitives.R: the dual2nd path and the
-  # SymPy-derived closed forms are independent implementations.
+  # Reference: stats::D() of the branch the condition selects, an independent
+  # derivation of the same closed forms.
   expr <- c(y = "piecewise(a^2*b, a - 1 > 0, b*a + a^3)")
   nms <- c("a", "b")
   dP  <- diag(2); dimnames(dP) <- list(nms, nms)
   dP2 <- array(0, c(2, 2, 2), dimnames = list(nms, nms, nms))
 
-  out <- lapply(c(forward = "forward", symbolic = "symbolic"), function(mode) {
-    # The R fallback cannot parse a piecewise; only the compiled path is used.
-    f <- suppressWarnings(
-      cppFUN(expr, parameters = nms, deriv = TRUE, deriv2 = TRUE,
-             derivMode = mode, compile = TRUE,
-             modelname = paste0("pw_d2_", mode)))
-    lapply(c(0.5, 2), function(a)
-      f$evaluate(a = a, b = 3, dP = dP, dP2 = dP2, deriv2 = TRUE))
-  })
-
-  for (i in seq_along(out$forward)) {
-    expect_equal(unname(out$forward[[i]]$y),   unname(out$symbolic[[i]]$y))
-    expect_equal(unname(out$forward[[i]]$dy),  unname(out$symbolic[[i]]$dy),
-                 tolerance = 1e-10)
-    expect_equal(unname(out$forward[[i]]$d2y), unname(out$symbolic[[i]]$d2y),
-                 tolerance = 1e-10)
+  f <- cppFUN(expr, parameters = nms, deriv = TRUE, deriv2 = TRUE,
+              derivMode = "forward", compile = TRUE, modelname = "pw_d2")
+  branch <- list(quote(b*a + a^3), quote(a^2*b))
+  for (a in c(0.5, 2)) {
+    out <- f$evaluate(a = a, b = 3, dP = dP, dP2 = dP2, deriv2 = TRUE)
+    e <- branch[[1L + (a - 1 > 0)]]
+    env <- list(a = a, b = 3)
+    H <- matrix(0, 2, 2)
+    for (k in 1:2) for (l in 1:2) H[k, l] <- eval(D(D(e, nms[k]), nms[l]), env)
+    expect_equal(unname(out$y[1, 1]), eval(e, env))
+    expect_equal(unname(out$dy[1, 1, ]),
+                 vapply(nms, function(v) eval(D(e, v), env), 0),
+                 tolerance = 1e-12, ignore_attr = TRUE)
+    expect_equal(unname(out$d2y[1, 1, , ]), H, tolerance = 1e-12)
   }
 })
 

@@ -9,7 +9,8 @@
 # --reverse-trajectory-methods, --reverse-events, --reverse-events2,
 # --reverse-forcing,
 # --reverse-sparse, --err-weights, --ad-transpose or --sparse-transpose selects a reverse-AD
-# harness; --bench-adjoint-step selects a bench rather than a test.
+# harness; --linmap the constant linear maps; --bench-adjoint-step selects a
+# bench rather than a test.
 #
 # The output is the assertion: two revisions that compute the same thing must
 # produce byte-identical output.
@@ -69,6 +70,11 @@ case "${1:-}" in
   --err-weights)
     SRC="$REPO/dev/cxx/test_err_weights.cpp"
     OUT=${TMPDIR:-/tmp}/cppde_err_weights
+    shift
+    ;;
+  --linmap)
+    SRC="$REPO/dev/cxx/test_linmap.cpp"
+    OUT=${TMPDIR:-/tmp}/cppde_linmap
     shift
     ;;
   --ad-transpose)

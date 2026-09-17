@@ -250,6 +250,19 @@ inline void csc_matvec_add(const csc_matrix<T>& W,
   }
 }
 
+// y -= W * x
+template<class T>
+inline void csc_matvec_sub(const csc_matrix<T>& W,
+                           const std::vector<T>& x,
+                           std::vector<T>& y)
+{
+  for (int j = 0; j < W.n; ++j) {
+    const T xj = x[j];
+    for (int p = W.Ap[j]; p < W.Ap[j + 1]; ++p)
+      y[W.Ai[p]] -= W.Ax[p] * xj;
+  }
+}
+
 } // namespace cppde
 
 #endif // CPPDE_TYPES_HPP

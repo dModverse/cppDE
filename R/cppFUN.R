@@ -5,12 +5,12 @@
 #' optional first- and second-order derivatives. There is no time
 #' integration; the principal use cases are observation maps for
 #' likelihood-based inference and reparametrisation Jacobians for
-#' [solveODE()]. `derivMode` selects which derivative products are built;
-#' `"forward"` and `"symbolic"` both support `deriv` and `deriv2` and expose
-#' the same `func` / `jac` / `hess` / `evaluate` API. The chain rule is
-#' available through the optional seed arguments `dX`, `dP`, `dX2`, and `dP2`.
-#' See `vignette("Methods", package = "cppDE")` for the two computational
-#' paths and the pass-through convention for unmodelled inputs.
+#' [solveODE()]. `derivMode` selects which derivative products are built.
+#' The chain rule is available through the optional seed arguments `dX`,
+#' `dP`, `dX2`, and `dP2`. Every entry runs compiled code: an object built
+#' with `compile = FALSE` is evaluable only after [compile()]. See
+#' `vignette("Methods", package = "cppDE")` for the computational paths and
+#' the pass-through convention for unmodelled inputs.
 #'
 #' @param eqns Named character vector or list of algebraic expressions.
 #'   Names define the output variables; defaults to `f1`, `f2`, ... when
@@ -37,14 +37,10 @@
 #'   named, and the default `c("forward", "reverse")` builds both.
 #'   * `"forward"`: forward-mode AD on `cppde::dual`, delivering `jac`,
 #'     `hess` and `evaluate`.
-#'   * `"reverse"`: the vector-Jacobian product `vjp`, a contraction of the
-#'     symbolic Jacobian, and `vjp2`, the same contraction over a dual.
+#'   * `"reverse"`: the vector-Jacobian product `vjp`, differentiated at
+#'     code-generation time, and `vjp2`, the same contraction over a dual.
 #'     Naming one direction alone omits the other's entries, and its compile
 #'     time with them.
-#'   * `"symbolic"`: an analytic SymPy-derived Jacobian and Hessian
-#'     contracted via BLAS, in place of forward AD. It is a backend for the
-#'     forward direction rather than a direction of its own, so it cannot be
-#'     combined with the other two; there is no symbolic `vjp`.
 #'
 #' @return A list with components `func`, `jac`, `hess`, `evaluate` and,
 #'   under `derivMode = "reverse"`, `vjp` and `vjp2` (`NULL` when not
@@ -56,33 +52,28 @@
 #'   Jacobian with a cotangent `w` of the outputs, at a cost independent of the
 #'   number of upstream parameters, and returns `y`, `wx` and `wp`. `w` is
 #'   `[n_obs, n_out]` or `[n_obs, n_out, n_seed]`, and `wp` sums over
-#'   observations because the parameters are shared across them. The reverse
-#'   path has no interpreted fallback and needs `compile = TRUE`. Carries
-#'   attributes
-#'   `equations`, `variables`, `parameters`, `fixed`, `modelname`,
-#'   `srcfile`, `derivMode`, and (under `derivMode = "symbolic"`)
-#'   `jacobian.symb`, `hessian.symb`.
+#'   observations because the parameters are shared across them. Carries
+#'   attributes `equations`, `variables`, `parameters`, `fixed`, `modelname`,
+#'   `srcfile` and `derivMode`.
 #'
-#' @seealso [compile()] for compilation; [derivSymb()] for symbolic
-#'   differentiation; [cppODE()] and [cvode()] for ODE integration;
-#'   `vignette("Methods", package = "cppDE")`.
+#' @seealso [compile()] for compilation; [cppODE()] and [cvode()] for ODE
+#'   integration; `vignette("Methods", package = "cppDE")`.
 #' @export
 cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parameters = NULL,
                    fixed = NULL, modelname = NULL, outdir = tempdir(), compile = FALSE,
                    verbose = FALSE, convenient = TRUE, deriv = TRUE, deriv2 = FALSE,
                    derivMode = c("forward", "reverse")) {
 
-  derivMode <- matchDerivMode(derivMode, c("forward", "reverse", "symbolic"))
+  derivMode <- matchDerivMode(derivMode, c("forward", "reverse"))
   if (deriv2 && !deriv) { warning("deriv2 requires deriv. Setting deriv = TRUE."); deriv <- TRUE }
   emit_deriv <- deriv || deriv2
-  symbolic   <- "symbolic" %in% derivMode
   use_ad     <- emit_deriv && "forward" %in% derivMode
   use_vjp    <- emit_deriv && "reverse" %in% derivMode
   ## Second order is a forward-mode facility. Asking for it with only the
   ## reverse direction would silently return no Hessian.
-  if (deriv2 && !use_ad && !symbolic)
-    stop("deriv2 = TRUE has no reverse counterpart; add \"forward\" or ",
-         "\"symbolic\" to derivMode.", call. = FALSE)
+  if (deriv2 && !use_ad)
+    stop("deriv2 = TRUE has no reverse counterpart; add \"forward\" to ",
+         "derivMode.", call. = FALSE)
 
   # The symbol arguments name the same symbols as the equations and are checked
   # with them.
@@ -95,40 +86,12 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   modelname <- modelname %||% paste0("f", paste(sample(c(letters, 0:9), 8, TRUE), collapse = ""))
   modelname <- unique_modelname(modelname)
 
-
-  # --- Symbolic derivatives (only in symbolic mode) ---
-  sym_jac <- sym_hess <- NULL
-  if (emit_deriv && symbolic) {
-    ds <- derivSymb(eqns, deriv2 = deriv2, real = TRUE, fixed = fixed, verbose = verbose)
-    sym_jac <- ds$jacobian; sym_hess <- ds$hessian
-  }
-  ## derivSymb() omits symbols absent from the equations; pad them with zeros
-  ## so both matrices span the full `diff_syms` the results are labelled with.
-  if (!is.null(sym_jac)) { rownames(sym_jac) <- rownames(sym_jac) %||% outnames; miss <- setdiff(diff_syms, colnames(sym_jac)); if (length(miss)) sym_jac <- cbind(sym_jac, matrix("0", nrow(sym_jac), length(miss), dimnames = list(rownames(sym_jac), miss))); sym_jac <- sym_jac[, diff_syms, drop = FALSE] }
-  if (!is.null(sym_hess)) for (nm in names(sym_hess)) { full <- matrix("0", length(diff_syms), length(diff_syms), dimnames = list(diff_syms, diff_syms)); av <- intersect(diff_syms, rownames(sym_hess[[nm]])); if (length(av)) full[av, av] <- sym_hess[[nm]][av, av, drop = FALSE]; sym_hess[[nm]] <- full }
-
-  # --- Expression parsing (R fallback for symbolic mode without compile) ---
-  fallback_ok <- TRUE
-  safeParse <- function(s) {
-    if (is.null(s) || s == "0") return(expression(0))
-    s <- gsub("Heaviside\\(([^)]+)\\)", "ifelse(\\1 >= 0, 1, 0)", s)
-    s <- gsub("exp10\\(([^)]+)\\)", "exp((\\1) * log(10))", s)
-    tryCatch(parse(text = s, keep.source = FALSE),
-             error = function(e) { fallback_ok <<- FALSE; NULL })
-  }
-  parsed_exprs <- lapply(eqns, safeParse)
-  parsed_jac <- if (!is.null(sym_jac)) { m <- matrix(vector("list", length(sym_jac)), nrow(sym_jac), dimnames = dimnames(sym_jac)); for (i in seq_along(sym_jac)) m[[i]] <- safeParse(sym_jac[i]); m }
-  parsed_hess <- if (!is.null(sym_hess)) lapply(sym_hess, function(H) { m <- matrix(vector("list", length(H)), nrow(H), dimnames = dimnames(H)); for (i in seq_along(H)) m[[i]] <- safeParse(H[i]); m })
-  if (!fallback_ok) warning("R fallback unavailable. Please compile.")
-
   # --- C++ codegen ---
   codegen <- get_codegen_cppFUN_py()
-  toList <- function(mat) if (is.null(mat)) NULL else setNames(lapply(seq_len(nrow(mat)), function(i) as.list(as.character(mat[i,]))), rownames(mat))
-  toHess <- function(hl) if (is.null(hl)) NULL else setNames(lapply(hl, function(H) lapply(seq_len(nrow(H)), function(i) as.list(as.character(H[i,])))), names(hl))
   cpp_file <- file.path(outdir, paste0(modelname, ".cpp"))
   if (file.exists(cpp_file)) message("Overwriting: ", normalizePath(cpp_file, "/", FALSE))
   codegen$generate_fun_cpp(exprs = setNames(as.list(eqns), outnames), variables = as.list(variables),
-                           parameters = as.list(parameters), jacobian = toList(sym_jac), hessian = toHess(sym_hess),
+                           parameters = as.list(parameters),
                            ad = use_ad, deriv2 = deriv2, vjp = use_vjp,
                            modelname = modelname, outdir = normalizePath(outdir, "/", FALSE), version = as.character(utils::packageVersion("cppDE")))
 
@@ -137,15 +100,13 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   ## this environment, so a per-condition instance costs data, not code.
   st <- list2env(list(innames = innames, parameters = parameters,
                       outnames = outnames, modelname = modelname,
-                      diff_syms = diff_syms, use_ad = use_ad, use_vjp = use_vjp,
-                      parsed_exprs = parsed_exprs, parsed_jac = parsed_jac,
-                      parsed_hess = parsed_hess),
+                      diff_syms = diff_syms, fixed = intersect(fixed, parameters),
+                      use_ad = use_ad, use_vjp = use_vjp),
                  parent = emptyenv())
 
   fun_impl      <- function(...) .fun_impl(st, ...)
-  ## The forward entries need either backend; the reverse one is its own build
-  ## product, so a "forward"-only object carries no vjp and does not derive one.
-  fwd           <- emit_deriv && (use_ad || symbolic)
+  ## Entries of the requested directions only.
+  fwd           <- emit_deriv && use_ad
   jac_impl      <- if (deriv  && fwd) function(...) .jac_impl(st, ...)
   hess_impl     <- if (deriv2 && fwd) function(...) .hess_impl(st, ...)
   evaluate_impl <- if (fwd)     function(...) .evaluate_impl(st, ...)
@@ -176,8 +137,6 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
       attr(outfn[[nm]], "srcfile")   <- attr(outfn, "srcfile")
     }
   }
-  if (!is.null(sym_jac))  attr(outfn, "jacobian.symb") <- sym_jac
-  if (!is.null(sym_hess)) attr(outfn, "hessian.symb")  <- sym_hess
   if (compile) compile(outfn, verbose = verbose)
   outfn
 }
@@ -193,6 +152,17 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
 # .Call needs plain doubles; a matrix already is one, so this is a no-op there.
 .asdbl <- function(x) if (is.double(x)) x else as.double(x)
+
+# Stops for an entry point that is not loaded.
+.notCompiled <- function(st) {
+  stop("cppFUN object '", st$modelname, "' is not compiled; call compile().",
+       call. = FALSE)
+}
+
+# Parameters excluded from differentiation: construction- and call-time `fixed`.
+.fixedAt <- function(st, fixed) {
+  if (is.null(fixed)) st$fixed else union(st$fixed, intersect(fixed, st$parameters))
+}
 
 # --- Input validation ---
 
@@ -335,57 +305,9 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
        has_dX2 = as.integer(has_dX2), has_dP2 = as.integer(has_dP2))
 }
 
-# Bundle dX/dP into S [n_obs, n_diff, n_theta] for the symbolic chain rule.
-.buildSeedMatrix <- function(st, dX, dP, n_obs, theta, fixed_rt) {
-  n_diff <- length(st$diff_syms); n_theta <- length(theta)
-  S <- array(0, c(n_obs, n_diff, n_theta), dimnames = list(NULL, st$diff_syms, theta))
-  if (n_theta > 0 && !is.null(dX)) {
-    var_part <- intersect(st$diff_syms, dimnames(dX)[[2]])
-    if (length(var_part)) S[, var_part, ] <- dX[, var_part, theta, drop = FALSE]
-  }
-  if (n_theta > 0 && !is.null(dP)) {
-    par_part <- intersect(st$diff_syms, rownames(dP))
-    if (length(par_part)) {
-      seed_p <- dP[par_part, theta, drop = FALSE]
-      for (k in seq_len(n_theta))
-        S[, par_part, k] <- rep(seed_p[, k], each = n_obs)
-    }
-  }
-  if (length(fixed_rt)) {
-    pf <- intersect(fixed_rt, st$diff_syms)
-    if (length(pf)) S[, pf, , drop = FALSE] <- 0
-  }
-  S
-}
-
-# Bundle dX2/dP2 into S2 [n_obs, n_diff, n_theta, n_theta]; NULL if both seeds absent.
-.buildSeedTensor2 <- function(st, dX2, dP2, n_obs, theta, fixed_rt) {
-  if (is.null(dX2) && is.null(dP2)) return(NULL)
-  n_diff <- length(st$diff_syms); n_theta <- length(theta)
-  S2 <- array(0, c(n_obs, n_diff, n_theta, n_theta),
-              dimnames = list(NULL, st$diff_syms, theta, theta))
-  if (n_theta > 0 && !is.null(dX2)) {
-    var_part <- intersect(st$diff_syms, dimnames(dX2)[[2]])
-    if (length(var_part)) S2[, var_part, , ] <- dX2[, var_part, theta, theta, drop = FALSE]
-  }
-  if (n_theta > 0 && !is.null(dP2)) {
-    par_part <- intersect(st$diff_syms, dimnames(dP2)[[1]])
-    if (length(par_part)) {
-      sp <- dP2[par_part, theta, theta, drop = FALSE]
-      for (k1 in seq_len(n_theta)) for (k2 in seq_len(n_theta))
-        S2[, par_part, k1, k2] <- rep(sp[, k1, k2], each = n_obs)
-    }
-  }
-  if (length(fixed_rt)) {
-    pf <- intersect(fixed_rt, st$diff_syms)
-    if (length(pf)) S2[, pf, , ] <- 0
-  }
-  S2
-}
-
-# Identity seeds for raw dual-mode J/H: dX = I on vars, dP = I on params, over
-# the combined basis c(st$innames, st$parameters) that the symbolic mode also
-# produces. A `fixed` parameter seeds zero but keeps its column.
+# Identity seeds for raw J/H: dX = I on vars, dP = I on params, over the
+# combined basis c(st$innames, st$parameters). A `fixed` parameter seeds zero
+# but keeps its column.
 .identitySeedsRaw <- function(st, n_obs, fixed_rt) {
   n_vars <- length(st$innames); n_params <- length(st$parameters)
   theta_full <- c(st$innames, st$parameters)
@@ -413,10 +335,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   } else if (!is.null(sym)) {
     out <- .cSym(sym, x = as.double(M), y = double(length(st$outnames) * n_obs), p = as.double(p), n = as.integer(n_obs), k = as.integer(length(st$innames)), l = as.integer(length(st$outnames)))
     res <- matrix(out$y, n_obs, length(st$outnames), dimnames = list(NULL, st$outnames))
-  } else {
-    res <- matrix(NA_real_, n_obs, length(st$outnames), dimnames = list(NULL, st$outnames))
-    for (i in seq_len(n_obs)) { env <- setNames(as.list(c(M[i,], p)), c(st$innames, st$parameters)); res[i,] <- vapply(st$parsed_exprs, function(e) eval(e, env), numeric(1)) }
-  }
+  } else .notCompiled(st)
   .attachExtras(res, n_obs, chk$extra_vars, chk$extra_params, "fun")
 }
 
@@ -454,10 +373,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   }
 
   sym <- .nativeSym(funsym)
-  if (is.null(sym))
-    stop("Reverse entry '", funsym, "' is not loaded. The reverse path has no ",
-         "interpreted fallback, so the model needs cppFUN(compile = TRUE).",
-         call. = FALSE)
+  if (is.null(sym)) .notCompiled(st)
   out <- .cSym(sym,
             x        = as.double(M),
             p        = as.double(p),
@@ -495,10 +411,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   n_dir <- as.integer(n_dir)
 
   symc <- .nativeSym(paste0(st$modelname, "_vjp_ad_c"))
-  if (is.null(symc))
-    stop("Reverse entry '", st$modelname, "_vjp_ad' is not loaded. Second order ",
-         "backwards has no interpreted fallback, so the model needs ",
-         "cppFUN(compile = TRUE).", call. = FALSE)
+  if (is.null(symc)) .notCompiled(st)
   r <- .callSym(symc, .asdbl(M), .asdbl(p), .asdbl(w),
                 if (is.null(vx)) NULL else .asdbl(vx),
                 if (is.null(vp)) NULL else .asdbl(vp),
@@ -528,7 +441,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     return(list(y = y, dy = dy))
   }
   sym <- .nativeSym(funsym)
-  if (is.null(sym)) stop("AD entry '", funsym, "' is not loaded.")
+  if (is.null(sym)) .notCompiled(st)
   out <- .cSym(sym,
             x        = as.double(M),
             p        = as.double(p),
@@ -569,7 +482,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     return(list(y = y, dy = dy, d2y = d2y))
   }
   sym <- .nativeSym(funsym)
-  if (is.null(sym)) stop("AD entry '", funsym, "' is not loaded.")
+  if (is.null(sym)) .notCompiled(st)
   out <- .cSym(sym,
             x        = as.double(M),
             p        = as.double(p),
@@ -600,125 +513,6 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   list(y = y, dy = dy, d2y = d2y)
 }
 
-# --- Symbolic-path raw evaluators ---
-
-.raw_jac_sym <- function(st, M, p, n_obs, fixed_rt) {
-  n_out <- length(st$outnames); n_diff <- length(st$diff_syms)
-  symc <- .nativeSym(paste0(st$modelname, "_jacobian_c"))
-  sym <- if (is.null(symc)) .nativeSym(paste0(st$modelname, "_jacobian")) else NULL
-  if (!is.null(symc)) {
-    arr <- .callSym(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
-    dimnames(arr) <- list(NULL, st$outnames, st$diff_syms)
-  } else if (!is.null(sym)) {
-    out <- .cSym(sym, x = as.double(M), jac = double(n_obs * n_out * n_diff),
-              p = as.double(p), n = as.integer(n_obs),
-              k = as.integer(length(st$innames)), l = as.integer(n_out))
-    arr <- array(out$jac, c(n_obs, n_out, n_diff), list(NULL, st$outnames, st$diff_syms))
-  } else {
-    arr <- array(0, c(n_obs, n_out, n_diff), list(NULL, st$outnames, st$diff_syms))
-    for (i in seq_len(n_obs)) {
-      env <- setNames(as.list(c(M[i,], p)), c(st$innames, st$parameters))
-      for (o in seq_len(n_out)) for (s in seq_len(n_diff))
-        if (!(st$diff_syms[s] %in% fixed_rt)) {
-          e <- st$parsed_jac[[st$outnames[o], st$diff_syms[s]]]
-          if (!is.null(e)) arr[i, o, s] <- eval(e, env)
-        }
-    }
-  }
-  arr
-}
-
-.raw_hess_sym <- function(st, M, p, n_obs, fixed_rt) {
-  n_out <- length(st$outnames); n_diff <- length(st$diff_syms)
-  symc <- .nativeSym(paste0(st$modelname, "_hessian_c"))
-  sym <- if (is.null(symc)) .nativeSym(paste0(st$modelname, "_hessian")) else NULL
-  if (!is.null(symc)) {
-    arr <- .callSym(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
-    dimnames(arr) <- list(NULL, st$outnames, st$diff_syms, st$diff_syms)
-  } else if (!is.null(sym)) {
-    out <- .cSym(sym, x = as.double(M), hess = double(n_obs * n_out * n_diff^2),
-              p = as.double(p), n = as.integer(n_obs),
-              k = as.integer(length(st$innames)), l = as.integer(n_out))
-    arr <- array(out$hess, c(n_obs, n_out, n_diff, n_diff), list(NULL, st$outnames, st$diff_syms, st$diff_syms))
-  } else {
-    arr <- array(0, c(n_obs, n_out, n_diff, n_diff), list(NULL, st$outnames, st$diff_syms, st$diff_syms))
-    for (i in seq_len(n_obs)) {
-      env <- setNames(as.list(c(M[i,], p)), c(st$innames, st$parameters))
-      for (o in seq_len(n_out)) {
-        Hmat <- st$parsed_hess[[st$outnames[o]]]
-        for (s1 in seq_len(n_diff)) for (s2 in seq_len(n_diff))
-          if (!(st$diff_syms[s1] %in% fixed_rt) && !(st$diff_syms[s2] %in% fixed_rt)) {
-            e <- Hmat[[st$diff_syms[s1], st$diff_syms[s2]]]
-            if (!is.null(e)) arr[i, o, s1, s2] <- eval(e, env)
-          }
-      }
-    }
-  }
-  arr
-}
-
-# BLAS-3 chain rule for symbolic mode. Falls back to per-obs %*% if the C
-# entry isn't loaded (e.g. compile = FALSE).
-.chain_jac_sym <- function(st, J_raw, S, n_obs) {
-  n_out <- length(st$outnames); n_diff <- length(st$diff_syms); n_theta <- dim(S)[3]
-  sym <- .nativeSym(paste0(st$modelname, "_chain_jac"))
-  theta <- dimnames(S)[[3]]
-  if (!is.null(sym)) {
-    out <- .cSym(sym,
-              J        = as.double(J_raw),
-              S        = as.double(S),
-              J_theta  = double(n_obs * n_out * n_theta),
-              n_obs    = as.integer(n_obs),
-              n_out    = as.integer(n_out),
-              n_diff   = as.integer(n_diff),
-              n_theta  = as.integer(n_theta))
-    array(out$J_theta, c(n_obs, n_out, n_theta), list(NULL, st$outnames, theta))
-  } else {
-    arr <- array(0, c(n_obs, n_out, n_theta), list(NULL, st$outnames, theta))
-    for (obs in seq_len(n_obs))
-      arr[obs,,] <- matrix(J_raw[obs,,], n_out, n_diff) %*% matrix(S[obs,,], n_diff, n_theta)
-    arr
-  }
-}
-
-.chain_hess_sym <- function(st, H_raw, J_raw, S, S2, n_obs) {
-  n_out <- length(st$outnames); n_diff <- length(st$diff_syms); n_theta <- dim(S)[3]
-  sym <- .nativeSym(paste0(st$modelname, "_chain_hess")); theta <- dimnames(S)[[3]]
-  has_S2 <- !is.null(S2)
-  S2_flat <- if (has_S2) as.double(S2) else double(0)
-  if (!is.null(sym)) {
-    out <- .cSym(sym,
-              H        = as.double(H_raw),
-              J        = as.double(J_raw),
-              S        = as.double(S),
-              S2_in    = S2_flat,
-              H_theta  = double(n_obs * n_out * n_theta * n_theta),
-              has_S2   = as.integer(has_S2),
-              n_obs    = as.integer(n_obs),
-              n_out    = as.integer(n_out),
-              n_diff   = as.integer(n_diff),
-              n_theta  = as.integer(n_theta))
-    array(out$H_theta, c(n_obs, n_out, n_theta, n_theta),
-          list(NULL, st$outnames, theta, theta))
-  } else {
-    arr <- array(0, c(n_obs, n_out, n_theta, n_theta),
-                 list(NULL, st$outnames, theta, theta))
-    for (obs in seq_len(n_obs)) {
-      Sobs <- matrix(S[obs,,], n_diff, n_theta)
-      for (o in seq_len(n_out)) {
-        Hslice <- matrix(H_raw[obs, o, , ], n_diff, n_diff)
-        arr[obs, o, , ] <- t(Sobs) %*% Hslice %*% Sobs
-        if (has_S2) {
-          Jslice <- as.numeric(J_raw[obs, o, ])
-          for (i in seq_len(n_diff))
-            arr[obs, o, , ] <- arr[obs, o, , ] + Jslice[i] * matrix(S2[obs, i, , ], n_theta, n_theta)
-        }
-      }
-    }
-    arr
-  }
-}
-
 # --- Public derivative implementations ---
 
 .jac_impl <- function(st, vars, params = numeric(0), dX = NULL, dP = NULL,
@@ -727,34 +521,21 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   if (is.null(dP)) dP <- attr(params, "deriv")
   has_seeds <- !is.null(dX) || !is.null(dP)
   chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
-  fixed_rt <- if (is.null(fixed)) character(0) else intersect(fixed, st$parameters)
+  fixed_rt <- .fixedAt(st, fixed)
 
-  if (st$use_ad) {
-    # Dual path: AD-seeded, identity seed for the raw case.
-    if (!has_seeds) {
-      seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
-      dX <- seeds$dX; dP <- seeds$dP
-    }
-    theta <- .resolveTheta(dX, dP)
-    aligned <- .alignSeedsDual(st, dX, dP, NULL, NULL, n_obs, theta, fixed_rt)
-    res <- .call_eval_ad(st, M, p, aligned$dX, aligned$dP, n_obs, theta)
-    arr <- res$dy
-    if (!has_seeds) {
-      # Drop runtime-fixed columns from the canonical-basis output.
-      dsyms <- setdiff(theta, fixed_rt)
-      arr <- arr[, , dsyms, drop = FALSE]
-    }
-  } else {
-    # Symbolic path.
-    raw <- .raw_jac_sym(st, M, p, n_obs, fixed_rt)
-    if (!has_seeds) {
-      dsyms <- setdiff(st$diff_syms, fixed_rt)
-      arr <- raw[, , dsyms, drop = FALSE]
-    } else {
-      theta <- .resolveTheta(dX, dP)
-      S <- .buildSeedMatrix(st, dX, dP, n_obs, theta, fixed_rt)
-      arr <- .chain_jac_sym(st, raw, S, n_obs)
-    }
+  # Identity seed for the raw case.
+  if (!has_seeds) {
+    seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
+    dX <- seeds$dX; dP <- seeds$dP
+  }
+  theta <- .resolveTheta(dX, dP)
+  aligned <- .alignSeedsDual(st, dX, dP, NULL, NULL, n_obs, theta, fixed_rt)
+  res <- .call_eval_ad(st, M, p, aligned$dX, aligned$dP, n_obs, theta)
+  arr <- res$dy
+  if (!has_seeds) {
+    # Drop runtime-fixed columns from the canonical-basis output.
+    dsyms <- setdiff(theta, fixed_rt)
+    arr <- arr[, , dsyms, drop = FALSE]
   }
   .attachExtras(arr, n_obs, chk$extra_vars, chk$extra_params, "jac")
 }
@@ -768,36 +549,19 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   if (is.null(dP2)) dP2 <- attr(params, "deriv2")
   has_seeds <- !is.null(dX) || !is.null(dP) || !is.null(dX2) || !is.null(dP2)
   chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
-  fixed_rt <- if (is.null(fixed)) character(0) else intersect(fixed, st$parameters)
+  fixed_rt <- .fixedAt(st, fixed)
 
-  if (st$use_ad) {
-    if (!has_seeds) {
-      seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
-      dX <- seeds$dX; dP <- seeds$dP
-    }
-    theta <- .resolveTheta(dX, dP, dX2, dP2)
-    aligned <- .alignSeedsDual(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt)
-    res <- .call_eval_ad2(st, M, p, aligned, n_obs, theta)
-    arr <- res$d2y
-    if (!has_seeds) {
-      dsyms <- setdiff(theta, fixed_rt)
-      arr <- arr[, , dsyms, dsyms, drop = FALSE]
-    }
-  } else {
-    raw <- .raw_hess_sym(st, M, p, n_obs, fixed_rt)
-    if (!has_seeds) {
-      dsyms <- setdiff(st$diff_syms, fixed_rt)
-      arr <- raw[, , dsyms, dsyms, drop = FALSE]
-    } else {
-      theta <- .resolveTheta(dX, dP, dX2, dP2)
-      S  <- .buildSeedMatrix(st, dX, dP, n_obs, theta, fixed_rt)
-      S2 <- .buildSeedTensor2(st, dX2, dP2, n_obs, theta, fixed_rt)
-      # Need the raw Jacobian for the J*S2 contribution.
-      J_raw <- if (!is.null(S2)) .raw_jac_sym(st, M, p, n_obs, fixed_rt)
-               else array(0, c(n_obs, length(st$outnames), length(st$diff_syms)),
-                          list(NULL, st$outnames, st$diff_syms))
-      arr <- .chain_hess_sym(st, raw, J_raw, S, S2, n_obs)
-    }
+  if (!has_seeds) {
+    seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
+    dX <- seeds$dX; dP <- seeds$dP
+  }
+  theta <- .resolveTheta(dX, dP, dX2, dP2)
+  aligned <- .alignSeedsDual(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt)
+  res <- .call_eval_ad2(st, M, p, aligned, n_obs, theta)
+  arr <- res$d2y
+  if (!has_seeds) {
+    dsyms <- setdiff(theta, fixed_rt)
+    arr <- arr[, , dsyms, dsyms, drop = FALSE]
   }
   .attachExtras(arr, n_obs, chk$extra_vars, chk$extra_params, "hess")
 }
@@ -809,9 +573,8 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
   one <- function(a) do.call(.evaluate_impl,
                              c(list(st), a, list(deriv2 = deriv2)))
-  sym <- if (isTRUE(st$use_ad))
-    .nativeSym(paste0(st$modelname,
-                      if (deriv2) "_eval_ad2_batch" else "_eval_ad_batch")) else NULL
+  sym <- .nativeSym(paste0(st$modelname,
+                           if (deriv2) "_eval_ad2_batch" else "_eval_ad_batch"))
   if (is.null(sym) || length(sets) < 2L) return(lapply(sets, one))
 
   n_out <- length(st$outnames)
@@ -830,11 +593,11 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     att <- isTRUE(a$attach.input)
     chk <- .checkInputs(st, vars, params, att)
     if (is.null(a$fixed)) {
-      fixed_rt <- character(0)
+      fixed_rt <- .fixedAt(st, NULL)
     } else if (!is.null(fx_in) && identical(fx_in, a$fixed)) {
       fixed_rt <- fx_out
     } else {
-      fixed_rt <- a$fixed[match(a$fixed, st$parameters, 0L) > 0L]
+      fixed_rt <- .fixedAt(st, a$fixed)
       fx_in <<- a$fixed; fx_out <<- fixed_rt
     }
     if (!has_seeds) {
@@ -909,65 +672,30 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   if (is.null(dP2)) dP2 <- attr(params, "deriv2")
   has_seeds <- !is.null(dX) || !is.null(dP) || !is.null(dX2) || !is.null(dP2)
   chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
-  fixed_rt <- if (is.null(fixed)) character(0) else intersect(fixed, st$parameters)
+  fixed_rt <- .fixedAt(st, fixed)
   n_out <- length(st$outnames)
 
-  if (st$use_ad) {
+  if (!has_seeds) {
+    seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
+    dX <- seeds$dX; dP <- seeds$dP
+  }
+  theta <- .resolveTheta(dX, dP, dX2, dP2)
+  aligned <- .alignSeedsDual(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt)
+  if (deriv2) {
+    res <- .call_eval_ad2(st, M, p, aligned, n_obs, theta)
+    y <- res$y; dy <- res$dy; d2y <- res$d2y
     if (!has_seeds) {
-      seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
-      dX <- seeds$dX; dP <- seeds$dP
-    }
-    theta <- .resolveTheta(dX, dP, dX2, dP2)
-    aligned <- .alignSeedsDual(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt)
-    if (deriv2) {
-      res <- .call_eval_ad2(st, M, p, aligned, n_obs, theta)
-      y <- res$y; dy <- res$dy; d2y <- res$d2y
-      if (!has_seeds) {
-        dsyms <- setdiff(theta, fixed_rt)
-        dy  <- dy [, , dsyms, drop = FALSE]
-        d2y <- d2y[, , dsyms, dsyms, drop = FALSE]
-      }
-    } else {
-      res <- .call_eval_ad(st, M, p, aligned$dX, aligned$dP, n_obs, theta)
-      y <- res$y; dy <- res$dy; d2y <- NULL
-      if (!has_seeds) {
-        dsyms <- setdiff(theta, fixed_rt)
-        dy <- dy[, , dsyms, drop = FALSE]
-      }
+      dsyms <- setdiff(theta, fixed_rt)
+      dy  <- dy [, , dsyms, drop = FALSE]
+      d2y <- d2y[, , dsyms, dsyms, drop = FALSE]
     }
   } else {
-    # Symbolic path: separate eval / jac / hess, optional chain rule.
-    y <- {
-      sym <- .nativeSym(paste0(st$modelname, "_eval"))
-      if (!is.null(sym)) {
-        out <- .cSym(sym, x = as.double(M), y = double(n_out * n_obs), p = as.double(p),
-                  n = as.integer(n_obs), k = as.integer(length(st$innames)),
-                  l = as.integer(n_out))
-        matrix(out$y, n_obs, n_out, dimnames = list(NULL, st$outnames))
-      } else {
-        res <- matrix(NA_real_, n_obs, n_out, dimnames = list(NULL, st$outnames))
-        for (i in seq_len(n_obs)) { env <- setNames(as.list(c(M[i,], p)), c(st$innames, st$parameters)); res[i,] <- vapply(st$parsed_exprs, function(e) eval(e, env), numeric(1)) }
-        res
-      }
+    res <- .call_eval_ad(st, M, p, aligned$dX, aligned$dP, n_obs, theta)
+    y <- res$y; dy <- res$dy; d2y <- NULL
+    if (!has_seeds) {
+      dsyms <- setdiff(theta, fixed_rt)
+      dy <- dy[, , dsyms, drop = FALSE]
     }
-    raw_J <- .raw_jac_sym(st, M, p, n_obs, fixed_rt)
-    if (has_seeds) {
-      theta <- .resolveTheta(dX, dP, dX2, dP2)
-      S <- .buildSeedMatrix(st, dX, dP, n_obs, theta, fixed_rt)
-      dy <- .chain_jac_sym(st, raw_J, S, n_obs)
-    } else {
-      dsyms <- setdiff(st$diff_syms, fixed_rt)
-      dy <- raw_J[, , dsyms, drop = FALSE]
-    }
-    if (deriv2) {
-      raw_H <- .raw_hess_sym(st, M, p, n_obs, fixed_rt)
-      if (has_seeds) {
-        S2 <- .buildSeedTensor2(st, dX2, dP2, n_obs, theta, fixed_rt)
-        d2y <- .chain_hess_sym(st, raw_H, raw_J, S, S2, n_obs)
-      } else {
-        d2y <- raw_H[, , dsyms, dsyms, drop = FALSE]
-      }
-    } else d2y <- NULL
   }
 
   y   <- .attachExtras(y,   n_obs, chk$extra_vars, chk$extra_params, "fun")

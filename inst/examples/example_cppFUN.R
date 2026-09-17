@@ -37,7 +37,6 @@ args_obs <- list(x1 = 1, x2 = 2, x3 = 4,
 cat("Observable values:\n");                   print(do.call(f_obs$func, args_obs))
 cat("\nJacobian (observable x input):\n");     print(do.call(f_obs$jac,  args_obs)[1, , ])
 cat("\nHessian of obs1:\n");                   print(do.call(f_obs$hess, args_obs)[1, "obs1", , ])
-cat("\nSymbolic Jacobian:\n");                 print(attr(f_obs, "jacobian.symb"))
 
 ## -----------------------------------------------------------------
 ## 2. Parameter transformation, log10 trafo

@@ -16,7 +16,7 @@ cvodeConfig <- new.env(parent = emptyenv())
 #' @useDynLib cppDE, .registration = TRUE, .fixes = "C_"
 #' @noRd
 .onLoad <- function(libname, pkgname) {
-  reticulate::py_require("sympy")
+  reticulate::py_require("sympy", python_version = ">=3.9")
 
   cvodeConfig$available        <- FALSE
   cvodeConfig$cflags           <- ""
@@ -106,6 +106,13 @@ cvodeConfig <- new.env(parent = emptyenv())
 #' @noRd
 .cppde_py_cache <- new.env(parent = emptyenv())
 
+# Directory of the Python generators; CPPDE_PY_DIR overrides the installed one.
+.cppde_py_dir <- function() {
+  d <- Sys.getenv("CPPDE_PY_DIR")
+  if (nzchar(d)) normalizePath(d, "/", mustWork = TRUE)
+  else system.file("python", package = "cppDE")
+}
+
 #' @keywords internal
 #' @importFrom reticulate import_from_path
 #' @noRd
@@ -114,7 +121,7 @@ get_codegen_cppODE_py <- function() {
     .cppde_py_cache$codegen_cppODE <-
       reticulate::import_from_path(
         "codegen_cppODE",
-        path = system.file("python", package = "cppDE"),
+        path = .cppde_py_dir(),
         delay_load = TRUE
       )
   }
@@ -129,7 +136,7 @@ get_codegen_cppFUN_py <- function() {
     .cppde_py_cache$codegen_cppFUN <-
       reticulate::import_from_path(
         "codegen_cppFUN",
-        path = system.file("python", package = "cppDE"),
+        path = .cppde_py_dir(),
         delay_load = TRUE
       )
   }
@@ -144,24 +151,9 @@ get_codegen_cvode_py <- function() {
     .cppde_py_cache$codegen_cvode <-
       reticulate::import_from_path(
         "codegen_cvode",
-        path = system.file("python", package = "cppDE"),
+        path = .cppde_py_dir(),
         delay_load = TRUE
       )
   }
   .cppde_py_cache$codegen_cvode
-}
-
-#' @keywords internal
-#' @importFrom reticulate import_from_path
-#' @noRd
-get_derivSymb_py <- function() {
-  if (!exists("derivSymb", envir = .cppde_py_cache, inherits = FALSE)) {
-    .cppde_py_cache$derivSymb <-
-      reticulate::import_from_path(
-        "derivSymb",
-        path = system.file("python", package = "cppDE"),
-        delay_load = TRUE
-      )
-  }
-  .cppde_py_cache$derivSymb
 }

@@ -244,14 +244,6 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
                     length(variables), length(res$jac_nnz_rows)))
   }
 
-  # --- Build jacobian matrix (char) for attr, like cppODE ---
-  jac_matrix_R <- matrix("0", nrow = length(variables), ncol = length(variables),
-                         dimnames = list(variables, variables))
-  if (length(res$jac_nnz_rows)) {
-    jac_matrix_R[cbind(as.integer(res$jac_nnz_rows) + 1L,
-                       as.integer(res$jac_nnz_cols) + 1L)] <- as.character(res$jac_nnz_exprs)
-  }
-
   # --- Attributes (mirror cppODE so solveODE works unchanged) ---
   attr(modelname, "equations")   <- rhs
   attr(modelname, "srcfile")     <- normalizePath(res$srcfile, winslash = "/", mustWork = FALSE)
@@ -261,7 +253,6 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   attr(modelname, "events")      <- events
   attr(modelname, "rootfunc")    <- rootfunc
   attr(modelname, "fixed")       <- c(fixed_initials, fixed_params)
-  attr(modelname, "jacobian")    <- list(f.x = jac_matrix_R, f.time = unlist(res$time_derivs))
   attr(modelname, "deriv")       <- isTRUE(deriv)
   attr(modelname, "deriv2")      <- FALSE
   attr(modelname, "derivMode")   <- derivMode

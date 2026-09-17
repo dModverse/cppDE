@@ -742,7 +742,8 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
   }
 
   // Backwards through the same chain: the root path's sandwich with the event
-  // time's residual tau in place of the shift, and the same pruning rule.
+  // time's residual tau in place of the shift. Products of two factors that
+  // vanish in value are dropped.
   std::vector<T> w(w_out, w_out + n);
   std::vector<T> f1, f2, g1, g2, xe, xk, jv;
   zero_armed(f1, n); zero_armed(f2, n);
@@ -788,6 +789,9 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
     T w_s = T(0.0);
     for (std::size_t i = 0; i < n; ++i)
       w_s += T(0.5) * (tau * (g1[i] * jv[i]) - (g1[i] + g2[i]) * w[i]);
+    // df/dt of g1 at the event time, cotangent -tau w / 2.
+    for (std::size_t i = 0; i < n; ++i) ws.wy[i] = (T(0.0) - T(0.5) * tau) * w[i];
+    w_s += adj.dfdt_dot(xa, ws.wy, evt.time);
     for (std::size_t i = 0; i < n; ++i) w[i] -= tau * jv[i];
 
     // The resets on that surface, switched ones first because they came last.
@@ -835,6 +839,9 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
     adj.dfdp_t_vec_axpy(xe, ws.wy, t, tau, w_theta);
     for (std::size_t i = 0; i < n; ++i)
       w_s += T(0.5) * ((f1[i] + f2[i]) * w[i] + tau * (f1[i] * jv[i]));
+    // df/dt of f2 at the event time, cotangent tau w / 2.
+    for (std::size_t i = 0; i < n; ++i) ws.wy[i] = T(0.5) * tau * w[i];
+    w_s += adj.dfdt_dot(xe, ws.wy, evt.time);
     for (std::size_t i = 0; i < n; ++i) w[i] += tau * jv[i];
 
     // kappa scales the event time's derivative, which reads the parameters.

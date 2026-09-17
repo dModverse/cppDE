@@ -17,13 +17,15 @@ Description: Generates, compiles, and runs 'C++' solvers for systems of ordinary
     differential equations. Includes a variable-order BDF integrator with
     LAPACK/KLU linear algebra and a Rosenbrock4 method derived from
     'Boost.Numeric.Odeint'. First- and second-order parameter sensitivities are
-    computed automatically via forward-mode automatic differentiation using
-    in-tree dual numbers. Supports time-based and root-triggered events,
-    symbolic Jacobian generation, and sparse matrix factorization for large
+    computed by forward-mode automatic differentiation on in-tree dual
+    numbers, gradients by a discrete adjoint. Jacobians and
+    adjoint contractions are derived at code-generation time by automatic
+    differentiation on an expression graph. Supports time-based and
+    root-triggered events and sparse matrix factorization for large
     systems.
 Language: en-GB
 License: MIT + file LICENSE
-SystemRequirements: C++17; Python (>= 3.8) with SymPy. Two further
+SystemRequirements: C++17; Python (>= 3.9) with SymPy. Two further
     features are gated on external libraries that ./configure detects at
     install time: the cvode() backend and the sparse Jacobian path.
     Neither is required to install or use the package, and neither is

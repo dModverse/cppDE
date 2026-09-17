@@ -1,6 +1,5 @@
-# Unit tests for cppde::dual2nd math primitives. One primitive per model,
-# asserted equal between derivMode "forward" and "symbolic": independent code
-# paths, with the symbolic one as the trusted oracle.
+# Unit tests for cppde::dual2nd math primitives. One primitive per model; the
+# forward path is checked against stats::D(), an independent derivation in R.
 
 skip_on_cran()
 
@@ -17,28 +16,36 @@ name_of <- function(expr) {
   gsub("^_|_$", "", gsub("[^A-Za-z0-9]+", "_", s))
 }
 
-# Helper: run both modes and return (y, dy, d2y) arrays.
+# Helper: the compiled forward result and its stats::D() reference, both as
+# (y, dy, d2y) arrays in the layout evaluate() returns.
 run_modes <- function(expr, parameters, x_vals, dP, dP2 = NULL) {
-  out <- list()
-  for (mode in c("forward", "symbolic")) {
-    f <- cppFUN(expr, parameters = parameters,
-                deriv = TRUE, deriv2 = TRUE, derivMode = mode,
-                compile = TRUE,
-                modelname = paste0("d2prim_", mode, "_", name_of(expr)))
-    args <- as.list(x_vals)
-    args$dP <- dP
-    if (!is.null(dP2)) args$dP2 <- dP2
-    args$deriv2 <- TRUE
-    out[[mode]] <- do.call(f$evaluate, args)
+  f <- cppFUN(expr, parameters = parameters,
+              deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
+              compile = TRUE, modelname = paste0("d2prim_", name_of(expr)))
+  args <- as.list(x_vals)
+  args$dP <- dP
+  if (!is.null(dP2)) args$dP2 <- dP2
+  args$deriv2 <- TRUE
+
+  e <- str2lang(expr[[1]])
+  n <- length(parameters)
+  at <- function(z) eval(z, as.list(x_vals))
+  dy <- array(0, c(1, 1, n))
+  d2y <- array(0, c(1, 1, n, n))
+  for (k in seq_len(n)) {
+    dk <- D(e, parameters[k])
+    dy[1, 1, k] <- at(dk)
+    for (l in seq_len(n)) d2y[1, 1, k, l] <- at(D(dk, parameters[l]))
   }
-  out
+  list(forward = do.call(f$evaluate, args),
+       reference = list(y = matrix(at(e), 1, 1), dy = dy, d2y = d2y))
 }
 
-# Helper: assert forward AD and symbolic agree on all three derivative levels.
+# Helper: assert forward AD and the reference agree on all three levels.
 expect_modes_agree <- function(out, tol_y = 1e-12, tol_dy = 1e-10, tol_d2y = 1e-10) {
-  expect_equal(unname(out$forward$y),   unname(out$symbolic$y),   tolerance = tol_y)
-  expect_equal(unname(out$forward$dy),  unname(out$symbolic$dy),  tolerance = tol_dy)
-  expect_equal(unname(out$forward$d2y), unname(out$symbolic$d2y), tolerance = tol_d2y)
+  expect_equal(unname(out$forward$y),   unname(out$reference$y),   tolerance = tol_y)
+  expect_equal(unname(out$forward$dy),  unname(out$reference$dy),  tolerance = tol_dy)
+  expect_equal(unname(out$forward$d2y), unname(out$reference$d2y), tolerance = tol_d2y)
 }
 
 # Identity Phi(theta) = theta seed: dP = I, dP2 = 0. Each parameter is its
@@ -52,28 +59,28 @@ identity_seeds <- function(par_names) {
 
 # -- Binary arithmetic --------------------------------------------------------
 
-test_that("dual2nd matches symbolic on a + b", {
+test_that("dual2nd matches D() on a + b", {
   s <- identity_seeds(c("a", "b"))
   out <- run_modes(c(y = "a + b"), parameters = c("a", "b"),
                    x_vals = list(a = 1.5, b = 2.5), dP = s$dP, dP2 = s$dP2)
   expect_modes_agree(out)
 })
 
-test_that("dual2nd matches symbolic on a * b (cross-Hessian)", {
+test_that("dual2nd matches D() on a * b (cross-Hessian)", {
   s <- identity_seeds(c("a", "b"))
   out <- run_modes(c(y = "a * b"), parameters = c("a", "b"),
                    x_vals = list(a = 1.5, b = 2.5), dP = s$dP, dP2 = s$dP2)
   expect_modes_agree(out)
 })
 
-test_that("dual2nd matches symbolic on a / b", {
+test_that("dual2nd matches D() on a / b", {
   s <- identity_seeds(c("a", "b"))
   out <- run_modes(c(y = "a / b"), parameters = c("a", "b"),
                    x_vals = list(a = 1.5, b = 2.5), dP = s$dP, dP2 = s$dP2)
   expect_modes_agree(out)
 })
 
-test_that("dual2nd matches symbolic on a - b", {
+test_that("dual2nd matches D() on a - b", {
   s <- identity_seeds(c("a", "b"))
   out <- run_modes(c(y = "a - b"), parameters = c("a", "b"),
                    x_vals = list(a = 1.5, b = 2.5), dP = s$dP, dP2 = s$dP2)
@@ -82,7 +89,7 @@ test_that("dual2nd matches symbolic on a - b", {
 
 # -- Transcendentals ----------------------------------------------------------
 
-test_that("dual2nd matches symbolic on sin / cos / tan", {
+test_that("dual2nd matches D() on sin / cos / tan", {
   s <- identity_seeds(c("x"))
   for (fn in c("sin", "cos", "tan")) {
     expr <- setNames(sprintf("%s(x)", fn), "y")
@@ -92,7 +99,7 @@ test_that("dual2nd matches symbolic on sin / cos / tan", {
   }
 })
 
-test_that("dual2nd matches symbolic on exp / log / sqrt", {
+test_that("dual2nd matches D() on exp / log / sqrt", {
   s <- identity_seeds(c("x"))
   for (fn in c("exp", "log", "sqrt")) {
     expr <- setNames(sprintf("%s(x)", fn), "y")
@@ -102,7 +109,7 @@ test_that("dual2nd matches symbolic on exp / log / sqrt", {
   }
 })
 
-test_that("dual2nd matches symbolic on hyperbolic trig", {
+test_that("dual2nd matches D() on hyperbolic trig", {
   s <- identity_seeds(c("x"))
   for (fn in c("sinh", "cosh", "tanh")) {
     expr <- setNames(sprintf("%s(x)", fn), "y")
@@ -114,14 +121,14 @@ test_that("dual2nd matches symbolic on hyperbolic trig", {
 
 # -- pow ----------------------------------------------------------------------
 
-test_that("dual2nd matches symbolic on a^b (both AD)", {
+test_that("dual2nd matches D() on a^b (both AD)", {
   s <- identity_seeds(c("a", "b"))
   out <- run_modes(c(y = "a^b"), parameters = c("a", "b"),
                    x_vals = list(a = 1.7, b = 2.3), dP = s$dP, dP2 = s$dP2)
   expect_modes_agree(out)
 })
 
-test_that("dual2nd matches symbolic on a^2 (scalar exponent)", {
+test_that("dual2nd matches D() on a^2 (scalar exponent)", {
   s <- identity_seeds(c("a"))
   out <- run_modes(c(y = "a^2"), parameters = c("a"),
                    x_vals = list(a = 1.7), dP = s$dP, dP2 = s$dP2)
@@ -130,7 +137,7 @@ test_that("dual2nd matches symbolic on a^2 (scalar exponent)", {
 
 # -- Composite ----------------------------------------------------------------
 
-test_that("dual2nd matches symbolic on a*sin(b) + exp(a)", {
+test_that("dual2nd matches D() on a*sin(b) + exp(a)", {
   s <- identity_seeds(c("a", "b"))
   out <- run_modes(c(y = "a*sin(b) + exp(a)"), parameters = c("a", "b"),
                    x_vals = list(a = 0.4, b = 1.1), dP = s$dP, dP2 = s$dP2)

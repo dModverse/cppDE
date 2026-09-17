@@ -104,10 +104,9 @@ returned as \verb{$trace} from \code{\link[=solveODE]{solveODE()}}.}
 \value{
 The compiled model name (character) carrying the attributes
 required by \code{\link[=solveODE]{solveODE()}}: \code{equations}, \code{srcfile}, \code{variables},
-\code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed}, \code{jacobian}
-(with components \code{f.x} and \code{f.time}), \code{deriv}, \code{deriv2}, \code{derivMode},
-\code{sparse}, \code{method}, \code{useNDF}, \code{dimNames}, \code{compileArgs},
-\code{backend}.
+\code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed}, \code{deriv},
+\code{deriv2}, \code{derivMode}, \code{sparse}, \code{method}, \code{useNDF}, \code{dimNames},
+\code{compileArgs}, \code{backend}.
 }
 \description{
 Generates C++ source code for an ODE system \eqn{\dot{x} = f(x, p)},

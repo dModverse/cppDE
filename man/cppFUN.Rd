@@ -57,14 +57,10 @@ named, and the default \code{c("forward", "reverse")} builds both.
 \itemize{
 \item \code{"forward"}: forward-mode AD on \code{cppde::dual}, delivering \code{jac},
 \code{hess} and \code{evaluate}.
-\item \code{"reverse"}: the vector-Jacobian product \code{vjp}, a contraction of the
-symbolic Jacobian, and \code{vjp2}, the same contraction over a dual.
+\item \code{"reverse"}: the vector-Jacobian product \code{vjp}, differentiated at
+code-generation time, and \code{vjp2}, the same contraction over a dual.
 Naming one direction alone omits the other's entries, and its compile
 time with them.
-\item \code{"symbolic"}: an analytic SymPy-derived Jacobian and Hessian
-contracted via BLAS, in place of forward AD. It is a backend for the
-forward direction rather than a direction of its own, so it cannot be
-combined with the other two; there is no symbolic \code{vjp}.
 }}
 }
 \value{
@@ -77,12 +73,9 @@ the inputs carry, \code{dw} those of the cotangent, and it returns \code{dwx} an
 Jacobian with a cotangent \code{w} of the outputs, at a cost independent of the
 number of upstream parameters, and returns \code{y}, \code{wx} and \code{wp}. \code{w} is
 \verb{[n_obs, n_out]} or \verb{[n_obs, n_out, n_seed]}, and \code{wp} sums over
-observations because the parameters are shared across them. The reverse
-path has no interpreted fallback and needs \code{compile = TRUE}. Carries
-attributes
-\code{equations}, \code{variables}, \code{parameters}, \code{fixed}, \code{modelname},
-\code{srcfile}, \code{derivMode}, and (under \code{derivMode = "symbolic"})
-\code{jacobian.symb}, \code{hessian.symb}.
+observations because the parameters are shared across them. Carries
+attributes \code{equations}, \code{variables}, \code{parameters}, \code{fixed}, \code{modelname},
+\code{srcfile} and \code{derivMode}.
 }
 \description{
 Generates and compiles C++ code that evaluates a system of algebraic
@@ -90,15 +83,14 @@ expressions \eqn{y = g(x, p)} on one or more rows of input, with
 optional first- and second-order derivatives. There is no time
 integration; the principal use cases are observation maps for
 likelihood-based inference and reparametrisation Jacobians for
-\code{\link[=solveODE]{solveODE()}}. \code{derivMode} selects which derivative products are built;
-\code{"forward"} and \code{"symbolic"} both support \code{deriv} and \code{deriv2} and expose
-the same \code{func} / \code{jac} / \code{hess} / \code{evaluate} API. The chain rule is
-available through the optional seed arguments \code{dX}, \code{dP}, \code{dX2}, and \code{dP2}.
-See \code{vignette("Methods", package = "cppDE")} for the two computational
-paths and the pass-through convention for unmodelled inputs.
+\code{\link[=solveODE]{solveODE()}}. \code{derivMode} selects which derivative products are built.
+The chain rule is available through the optional seed arguments \code{dX},
+\code{dP}, \code{dX2}, and \code{dP2}. Every entry runs compiled code: an object built
+with \code{compile = FALSE} is evaluable only after \code{\link[=compile]{compile()}}. See
+\code{vignette("Methods", package = "cppDE")} for the computational paths and
+the pass-through convention for unmodelled inputs.
 }
 \seealso{
-\code{\link[=compile]{compile()}} for compilation; \code{\link[=derivSymb]{derivSymb()}} for symbolic
-differentiation; \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} for ODE integration;
-\code{vignette("Methods", package = "cppDE")}.
+\code{\link[=compile]{compile()}} for compilation; \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} for ODE
+integration; \code{vignette("Methods", package = "cppDE")}.
 }

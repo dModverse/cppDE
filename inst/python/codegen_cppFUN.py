@@ -1,499 +1,132 @@
-"""
-Algebraic Function C++ Code Generator for cppDE
-============================================================
-Generates C++ source code for evaluating algebraic functions and their
-symbolic Jacobians and Hessians. Supports fixed symbols that are treated
-as constants (no differentiation) but still appear as runtime parameters.
+"""C++ generator of cppFUN models.
 
-Author: Simon Beyer
+Public API: generate_fun_cpp. Expressions and derivatives come from
+cppde_graph; the entry points are documented in R/cppFUN.R.
 """
 
-import sympy as sp
-
-def _sbml_piecewise(*args):
-    """SBML's flat `piecewise(v1, c1, v2, c2, ..., otherwise)` as sp.Piecewise.
-
-    libsbml's L3 formatter emits the branches as one flat argument list. An
-    odd argument count means the last entry is the otherwise branch.
-    """
-    pairs = [(args[i], args[i + 1]) for i in range(0, len(args) - 1, 2)]
-    if len(args) % 2:
-        pairs.append((args[-1], True))
-    return sp.Piecewise(*pairs)
-
-
-from sympy.parsing.sympy_parser import (
-    parse_expr,
-    standard_transformations,
-    convert_xor
-)
-from cppsympy import (CppdePrinter, TokenError, is_boolean, normalise_logic,
-                      parse_error)
 import os
-import re
-import keyword
-from functools import lru_cache
 from io import StringIO
 
-_IDENT_RE = re.compile(r'(?<![\.\w])[A-Za-z_][A-Za-z0-9_]*')
-_PY_RESERVED = frozenset(keyword.kwlist) | {'True', 'False', 'None'}
-# =====================================================================
-# Safe parsing configuration (cached)
-# =====================================================================
+import cppde_emit as em
+import cppde_graph as cg
 
-def _ensure_double_literals(cpp_code):
-    """
-    Convert integer literals to double literals in C++ code.
-    
-    This fixes issues with std::max/std::min template argument deduction
-    where mixing int and double arguments causes compilation errors.
-    E.g., std::max(0, x[1]) fails but std::max(0.0, x[1]) works.
-    
-    The function uses a two-pass approach:
-    1. Temporarily replace scientific notation with placeholders
-    2. Convert remaining integers to doubles
-    3. Restore scientific notation
-    
-    This avoids converting numbers like 1e-5 incorrectly.
-    """
-    # Match scientific notation: digits, optionally with decimal, 
-    # followed by e/E and optional sign and digits
-    sci_pattern = r'(\d+\.?\d*[eE][+-]?\d+)'
-    
-    # Store all scientific notation numbers
-    sci_numbers = []
-    def store_sci(match):
-        sci_numbers.append(match.group(0))
-        return f'__SCI_PLACEHOLDER_{len(sci_numbers)-1}__'
-    
-    # Replace scientific notation with placeholders
-    temp = re.sub(sci_pattern, store_sci, cpp_code)
-    
-    # Convert integers (not preceded by identifier chars or '[', not followed by digits, '.', or ']')
-    # This converts: 0, 1, 42
-    # But NOT: x[0], 3.14, array[123]
-    int_pattern = r'(?<![a-zA-Z0-9_.\[])(\d+)(?![0-9.\]])'
-    temp = re.sub(int_pattern, lambda m: m.group(1) + '.0', temp)
-    
-    # Restore scientific notation
-    for i, sci in enumerate(sci_numbers):
-        temp = temp.replace(f'__SCI_PLACEHOLDER_{i}__', sci)
-    
-    return temp
-@lru_cache(maxsize=1)
-def _get_safe_parse_dict_cached():
-    """
-    Create safe local_dict for parsing that avoids SymPy singleton conflicts.
-    Cached to avoid repeated dict creation.
-    """
-    return {
-        # Override problematic SymPy singletons
-        'S': sp.Symbol('S'),
-        'I': sp.Symbol('I'),
-        'N': sp.Symbol('N'),
-        'O': sp.Symbol('O'),
-        'Q': sp.Symbol('Q'),
-        'C': sp.Symbol('C'),
-        
-        # Exponential and logarithmic functions
-        'exp': sp.exp,
-        'exp10': lambda x: sp.exp(x * sp.log(10)),
-        'exp2': lambda x: sp.exp(x * sp.log(2)),
-        'log': sp.log,
-        'ln': sp.log,
-        'log10': lambda x: sp.log(x, 10),
-        'log2': lambda x: sp.log(x, 2),
-        
-        # Trigonometric functions
-        'sin': sp.sin, 'cos': sp.cos, 'tan': sp.tan,
-        'cot': sp.cot, 'sec': sp.sec, 'csc': sp.csc,
-        
-        # Inverse trigonometric functions
-        'asin': sp.asin, 'acos': sp.acos, 'atan': sp.atan,
-        'acot': sp.acot, 'asec': sp.asec, 'acsc': sp.acsc,
-        'atan2': sp.atan2,
-        
-        # Hyperbolic functions
-        'sinh': sp.sinh, 'cosh': sp.cosh, 'tanh': sp.tanh,
-        'coth': sp.coth, 'sech': sp.sech, 'csch': sp.csch,
-        
-        # Inverse hyperbolic functions
-        'asinh': sp.asinh, 'acosh': sp.acosh, 'atanh': sp.atanh,
-        'acoth': sp.acoth, 'asech': sp.asech, 'acsch': sp.acsch,
-        
-        # Power and root functions
-        'sqrt': sp.sqrt, 'cbrt': sp.cbrt, 'root': sp.root, 'pow': sp.Pow,
-        
-        # Absolute value and sign
-        'abs': sp.Abs, 'sign': sp.sign,
-        
-        # Rounding functions
-        'floor': sp.floor, 'ceiling': sp.ceiling,
-        'round': lambda x: sp.floor(x + sp.Rational(1, 2)),
-        
-        # Min/Max
-        'min': sp.Min, 'max': sp.Max,
-        
-        # Factorial and gamma functions
-        'factorial': sp.factorial, 'gamma': sp.gamma,
-        'loggamma': sp.loggamma, 'digamma': sp.digamma,
-        'polygamma': sp.polygamma, 'beta': sp.beta,
-        
-        # Error functions
-        'erf': sp.erf, 'erfc': sp.erfc, 'erfi': sp.erfi,
-        
-        # Bessel functions
-        'besselj': sp.besselj, 'bessely': sp.bessely,
-        'besseli': sp.besseli, 'besselk': sp.besselk,
-        
-        # Special functions
-        'Heaviside': sp.Heaviside, 'DiracDelta': sp.DiracDelta,
-        'And': sp.And, 'Or': sp.Or, 'Not': sp.Not,
-        'KroneckerDelta': sp.KroneckerDelta, 'Piecewise': sp.Piecewise,
-        'piecewise': _sbml_piecewise,
-        
-        # Constants
-        'pi': sp.pi, 'E': sp.E, 'euler_gamma': sp.EulerGamma, 'oo': sp.oo,
-        
-        # Complex functions
-        're': sp.re, 'im': sp.im, 'conjugate': sp.conjugate, 'arg': sp.arg,
-    }
-# =====================================================================
-# Code Generation Context
-# =====================================================================
+_USING_STD = (
+    "    using std::exp; using std::log; using std::sqrt; using std::pow;\n"
+    "    using std::sin; using std::cos; using std::tan;\n"
+    "    using std::asin; using std::acos; using std::atan; using std::atan2;\n"
+    "    using std::sinh; using std::cosh; using std::tanh;\n"
+    "    using std::asinh; using std::acosh; using std::atanh;\n"
+    "    using std::floor; using std::ceil;\n"
+    "    using std::abs; using std::max; using std::min;\n")
 
-_MATH_MACRO_MAP = {
-    "M_E": "std::exp(1.0)",
-    "M_LOG2E": "1.0 / std::log(2.0)",
-    "M_LOG10E": "1.0 / std::log(10.0)",
-    "M_LN2": "std::log(2.0)",
-    "M_LN10": "std::log(10.0)",
-    "M_PI": "std::acos(-1.0)",
-    "M_PI_2": "(std::acos(-1.0) * 0.5)",
-    "M_PI_4": "(std::acos(-1.0) * 0.25)",
-    "M_1_PI": "(1.0 / std::acos(-1.0))",
-    "M_2_PI": "(2.0 / std::acos(-1.0))",
-    "M_2_SQRTPI": "(2.0 / std::sqrt(std::acos(-1.0)))",
-    "M_SQRT2": "std::sqrt(2.0)",
-    "M_SQRT1_2": "std::sqrt(0.5)",
-}
-class CodeGenContext:
+_USING_AD = (
+    "    using cppde::exp; using cppde::log; using cppde::sqrt; using cppde::pow;\n"
+    "    using cppde::sin; using cppde::cos; using cppde::tan;\n"
+    "    using cppde::asin; using cppde::acos; using cppde::atan;\n"
+    "    using cppde::sinh; using cppde::cosh; using cppde::tanh;\n"
+    "    using cppde::asinh; using cppde::acosh; using cppde::atanh;\n"
+    "    using cppde::abs; using cppde::max; using cppde::min;\n")
+
+
+class FunModel:
+    """Parsed outputs over per-observation variables and shared parameters.
+
+    Variable i prints as x_obs[i], parameter k as p[k], cotangent i as _w[i].
+
+    Attributes:
+        variables, parameters, out_names: name lists.
+        g: cppde_graph.Graph; roots: node per output; ad: cppde_graph.AD.
     """
-    Holds precomputed state for efficient code generation.
-    Avoids repeated symbol creation and printer construction.
-    """
-    
-    def __init__(self, variables, parameters):
-        self.variables = list(variables) if variables else []
-        self.parameters = list(parameters) if parameters else []
-        
-        # Create symbols once
-        self.var_symbols = {v: sp.Symbol(v, real=True) for v in self.variables}
-        self.par_symbols = {p: sp.Symbol(p, real=True) for p in self.parameters}
-        self.all_symbols = {**self.var_symbols, **self.par_symbols}
-        
-        # Build the slot mapping: symbol name -> the C++ it prints as
-        self.replacements = {}
+
+    def __init__(self, exprs, variables, parameters):
+        self.variables = list(variables)
+        self.parameters = list(parameters)
+        self.out_names = list(exprs.keys())
+        g = self.g = cg.Graph()
+        sym = {}
+        for k, p in enumerate(self.parameters):
+            sym[p] = g.param(k)
         for i, v in enumerate(self.variables):
-            self.replacements[v] = f"x_obs[{i}]"
-        for i, p in enumerate(self.parameters):
-            self.replacements[p] = f"p[{i}]"
-        
-        # The printer substitutes the slots, so no model symbol reaches the
-        # generated source: rewriting the finished source instead turns
-        # std::pow into p[0]::pow for a parameter named std.
-        self.printer = CppdePrinter(symbols=self.replacements)
-        
-        # Cache for converted expressions
-        self._expr_cache = {}
-    
-    def to_cpp(self, expr):
-        """
-        Convert a SymPy expression or string to valid C++ code.
-        Uses caching for repeated expressions.
-        """
-        # Create a hashable key
-        if isinstance(expr, str):
-            cache_key = expr.strip()
-            if cache_key == "0":
-                return "0.0"
-        else:
-            cache_key = expr
-            if expr == 0:
-                return "0.0"
-        
-        # Check cache
-        if cache_key in self._expr_cache:
-            return self._expr_cache[cache_key]
-        
-        # Parse string if needed
-        if isinstance(expr, str):
-            expr = self._parse_expr(cache_key)
-        
-        if expr == 0:
-            self._expr_cache[cache_key] = "0.0"
-            return "0.0"
-        
-        # Replace DiracDelta
-        expr = self._replace_dirac_delta(expr)
-        
-        # Generate C++ code
-        cpp_code = self.printer.doprint(expr)
-        
-        # replace non-standard math macros
-        for macro, repl in _MATH_MACRO_MAP.items():
-            cpp_code = cpp_code.replace(macro, repl)
-        
-        # Convert integer literals to double literals to avoid C++ template deduction issues
-        cpp_code = _ensure_double_literals(cpp_code)
-        
-        self._expr_cache[cache_key] = cpp_code
-        return cpp_code
-    
-    def _parse_expr(self, expr_str):
-        """Parse a string expression to SymPy."""
-        expr_str = normalise_logic(expr_str)
-        safe_local = dict(_get_safe_parse_dict_cached())
-        safe_local.update(self.all_symbols)
+            sym[v] = g.state(i)
+        self.parser = cg.Parser(g, sym)
+        self.ad = cg.AD(g)
+        self.roots = [self.parser.parse(str(exprs[n]), label=n) for n in self.out_names]
 
-        # Pre-declare bare identifiers as Symbols so user names like beta,
-        # gamma, zeta, etc. don't resolve to SymPy FunctionClass globals.
-        for name in _IDENT_RE.findall(expr_str):
-            if name not in safe_local and name not in _PY_RESERVED:
-                safe_local[name] = sp.Symbol(name, real=True)
-
-        transformations = standard_transformations + (convert_xor,)
-
-        try:
-            return parse_expr(
-                expr_str,
-                local_dict=safe_local,
-                transformations=transformations,
-                evaluate=True,
-            )
-        except (SyntaxError, TokenError) as e:
-            raise parse_error(expr_str, e) from None
-    
     @staticmethod
-    def _replace_dirac_delta(expr):
-        """Replace DiracDelta(x) with a discrete equivalent Piecewise form."""
-        if expr == 0:
-            return expr
-        
-        def dirac_to_piecewise(d):
-            if isinstance(d, sp.DiracDelta):
-                arg = d.args[0]
-                return sp.Piecewise(
-                    (sp.Float(1.0), sp.Eq(arg, 0)), (sp.Float(0.0), True)
-                )
-            return d
-        
-        return expr.replace(lambda x: isinstance(x, sp.DiracDelta), dirac_to_piecewise)
+    def slot(at):
+        k = at[0]
+        if k == cg.STATE:
+            return "x_obs[%d]" % at[1]
+        if k == cg.PARAM:
+            return "p[%d]" % at[1]
+        if k == cg.VEC and at[1] == "w":
+            return "_w[%d]" % at[2]
+        raise em.EmitError("no slot for leaf " + cg.KIND_NAMES[k])
+
+    def render(self, stmts, level, indent):
+        pr = em.Printer(self.g, self.slot, style="template", ad_level=level)
+        return em.render_cpp(stmts, pr, "T", indent=indent)
+
+
 # =====================================================================
 # Public interface
 # =====================================================================
 
 def generate_fun_cpp(exprs, variables, parameters=None,
-                     jacobian=None, hessian=None, ad=False, deriv2=False,
-                     vjp=False,
-                     modelname="model", outdir=None, version = "1.0.0"):
+                     ad=False, deriv2=False, vjp=False,
+                     modelname="model", outdir=None, version="1.0.0"):
+    """Write `<outdir>/<modelname>.cpp` for a cppFUN model.
+
+    Args:
+        exprs: dict output name -> expression, or list (outputs f1, f2, ...).
+        variables: per-observation symbols.
+        parameters: shared symbols, fixed ones included.
+        ad: emit `_eval_ad` (dual); with `deriv2` also `_eval_ad2` (dual2nd).
+        vjp: emit `_vjp` and `_vjp_ad`.
+        outdir: output directory (required).
+
+    Returns:
+        dict with `filename` (absolute path) and `modelname`.
     """
-    Generate C++ source code for algebraic model evaluation.
-
-    Two disjoint emission paths driven by `ad`:
-
-      ad = False (symbolic mode): emit `_eval`; emit `_jacobian` if `jacobian`
-        is given; emit `_hessian` if `hessian` is given. Whenever a Jacobian
-        or Hessian C entry is emitted, also emit a thin `_chain_jac` /
-        `_chain_hess` wrapper around the BLAS-3 helpers in
-        `cppde/cppde_chain_blas.hpp`.
-
-      ad = True (dual mode): emit `_eval` plus `_eval_ad` (forward-mode AD on
-        `cppde::dual<double, 0>`); if `deriv2` is also True, additionally
-        emit `_eval_ad2` (nested dual `cppde::dual2nd<double, 0>`) for
-        first- and second-order chain-rule sensitivities in one pass. No
-        symbolic Jacobian/Hessian or chain wrappers are emitted in this
-        mode.
-
-    Parameters
-    ----------
-    exprs : dict[str, str] or list[str]
-        Algebraic model expressions. Dict {"f1": "a*x + b*y"} or list.
-    variables : list[str]
-        Variable symbols (vary by observation).
-    parameters : list[str], optional
-        Parameter symbols (constant across observations). Includes fixed ones.
-    jacobian : dict[str, list[str]], optional
-        Symbolic Jacobian from derivSymb(). Only consulted when `ad = False`.
-    hessian : dict[str, list[list[str]]], optional
-        Symbolic Hessian from derivSymb(). Only consulted when `ad = False`.
-    ad : bool, optional
-        If True, select the dual-number AD emission path (no symbolic
-        Jacobian/Hessian even if supplied).
-    deriv2 : bool, optional
-        Only meaningful with `ad = True`. Triggers emission of `_eval_ad2`.
-    modelname : str, optional
-        Base name for the generated model.
-
-    Returns
-    -------
-    dict
-        {"filename": absolute path, "modelname": model name}
-    """
-    # Normalize inputs
     if isinstance(variables, str):
         variables = [variables]
     variables = variables or []
-
     if parameters is None:
         parameters = []
     elif isinstance(parameters, str):
         parameters = [parameters]
-
     if isinstance(exprs, list):
-        exprs = {f"f{i+1}": expr for i, expr in enumerate(exprs)}
+        exprs = {"f%d" % (i + 1): e for i, e in enumerate(exprs)}
     elif not isinstance(exprs, dict):
         raise TypeError("exprs must be a dict or list")
-
-    # Create context with precomputed state
-    ctx = CodeGenContext(variables, parameters)
-
-    # Parse expressions
-    parsed_exprs = _parse_expressions(exprs, ctx)
-
-    # Generate C++ code using StringIO for efficient string building
-    cpp_code = _generate_cpp_code(
-        parsed_exprs, ctx, jacobian, hessian, ad, deriv2, vjp, modelname, version
-    )
-    
     if outdir is None:
         raise ValueError("outdir must be provided explicitly")
+
+    model = FunModel(exprs, variables, parameters)
+    cpp_code = _generate_cpp_code(model, ad, deriv2, vjp, modelname, version)
+
     os.makedirs(outdir, exist_ok=True)
-    filename = os.path.join(outdir, f"{modelname}.cpp")
-    
+    filename = os.path.join(outdir, "%s.cpp" % modelname)
     with open(filename, "w", encoding="utf-8") as f:
         f.write(cpp_code)
-
     return {"filename": os.path.abspath(filename), "modelname": modelname}
-# =====================================================================
-# Parsing
-# =====================================================================
-
-def _parse_expressions(exprs, ctx):
-    """Parse algebraic expressions into SymPy objects."""
-    base_local = dict(_get_safe_parse_dict_cached())
-    base_local.update(ctx.all_symbols)
-
-    transformations = standard_transformations + (convert_xor,)
-
-    parsed = {}
-    for name, expr_str in exprs.items():
-        try:
-            expr_str = normalise_logic(str(expr_str).strip())
-            if expr_str == "0":
-                parsed[name] = sp.Integer(0)
-            else:
-                # Pre-declare bare identifiers per-expression so user names
-                # like beta/gamma/zeta don't resolve to SymPy FunctionClass
-                # globals via parse_expr's default global_dict.
-                local = dict(base_local)
-                for nm in _IDENT_RE.findall(expr_str):
-                    if nm not in local and nm not in _PY_RESERVED:
-                        local[nm] = sp.Symbol(nm, real=True)
-                parsed[name] = parse_expr(
-                    expr_str,
-                    local_dict=local,
-                    transformations=transformations,
-                    evaluate=True,
-                )
-        except Exception as e:
-            raise parse_error(expr_str, e, label=name) from None
-    return parsed
-# =====================================================================
-# C++ source assembly (using StringIO)
-# =====================================================================
-
-def _strip_std_prefix(cpp):
-    """
-    Strip `std::` prefix from math functions and rename fabs -> abs so the
-    same expression compiles for both T=double and T=cppde::dual<double, 0>.
-
-    For T=double, `using std::{exp,log,...,abs,max,min};` resolves the call.
-    For T=dual<...>, the cppde:: overloads defined in cppde_dual_math.hpp
-    are picked by ADL.
-    """
-    cpp = re.sub(r'\bstd::fabs\b', 'abs', cpp)
-    cpp = re.sub(r'\bstd::', '', cpp)
-    return cpp
 
 
 # =====================================================================
-# Common subexpression elimination
+# C++ source assembly
 # =====================================================================
 
-# sp.cse lifts a repeated subexpression into a `const T` local, which forces the
-# dual ET to evaluate at the temp boundary, so later references are a scalar
-# load instead of a re-walk of the whole tree. Mirrors codegen_cppODE._cse_temps.
-
-def _cse_exprs(exprs, prefix='_cse_t'):
-    """Apply sympy CSE across a list of parsed sympy expressions.
-
-    Returns (temps, simplified): temps is a list of (Symbol, subexpr) in
-    dependency order; simplified is the rewritten expression list (same length
-    and order as the input). When sympy finds no shared structure temps is
-    empty and simplified == list(exprs), so callers fall back to direct
-    emission with zero overhead. No gating on expression count: a single giant
-    expression with internal repetition is the primary case CSE targets here.
-    """
-    syms = sp.numbered_symbols(prefix=prefix, cls=sp.Symbol)
-    return sp.cse(list(exprs), symbols=syms, optimizations='basic')
-
-
-def _parse_entry(expr, ctx):
-    """Parse a Jacobian/Hessian entry to a sympy expression.
-
-    Entries arrive as strings from derivSymb() (or already-parsed sympy).
-    Returns sp.Integer(0) for entries that are exactly zero so callers can
-    skip them before CSE, preserving the original sparse-emission behaviour.
-    """
-    if not isinstance(expr, str):
-        return expr
-    s = expr.strip()
-    if s == "0" or s == "0.0":
-        return sp.Integer(0)
-    return ctx._parse_expr(s)
-
-
-def _generate_cpp_code(exprs, ctx, jacobian, hessian, ad, deriv2, vjp,
-                       modelname, version):
-    """Assemble the complete C++ source for the model.
-
-    Modes are disjoint: when `ad=True` the symbolic jacobian/hessian arguments
-    are ignored even if provided, and no `_jacobian`/`_hessian`/`_chain_*`
-    entries are emitted. When `ad=False` the AD entries `_eval_ad`/`_eval_ad2`
-    are not emitted.
-
-    `vjp` is the reverse direction and is independent of `ad`: it contracts the
-    symbolic Jacobian, so a caller that only ever multiplies by the Jacobian
-    should not pay for the extra entry points.
-    """
-    out_names = list(exprs.keys())
+def _generate_cpp_code(model, ad, deriv2, vjp, modelname, version):
+    """Source text of the model; `vjp` is independent of `ad`."""
+    ctx = model
+    out_names = model.out_names
     buf = StringIO()
+    emit_ad = ad
+    emit_ad2 = ad and deriv2
+    emit_vjp = vjp
+    level = 1 if (emit_ad or emit_vjp) else 0
 
-    if ad:
-        emit_jacobian = False
-        emit_hessian  = False
-    else:
-        emit_jacobian = jacobian is not None
-        emit_hessian  = hessian  is not None
-
-    emit_chain = emit_jacobian or emit_hessian
-    emit_ad    = ad
-    emit_ad2   = ad and deriv2
-    emit_vjp   = vjp
-
-    # Header
-    buf.write(f"/** Code auto-generated by cppDE {version} **/\n\n")
+    buf.write("/** Code auto-generated by cppDE %s **/\n\n" % version)
     buf.write("#include <cmath>\n")
     buf.write("#include <algorithm>\n")
     buf.write("#include <limits>\n")
@@ -501,8 +134,6 @@ def _generate_cpp_code(exprs, ctx, jacobian, hessian, ad, deriv2, vjp,
     buf.write("#define R_NO_REMAP\n")
     buf.write("#include <R.h>\n")
     buf.write("#include <Rinternals.h>\n")
-    # The eval template is one text for T = double and T = dual, and a
-    # piecewise emits cppde::select in both.
     buf.write("#include <cppde/cppde_scalar_ops.hpp>\n")
     if emit_ad or emit_vjp:
         buf.write("#ifdef _OPENMP\n#include <omp.h>\n#endif\n")
@@ -512,169 +143,160 @@ def _generate_cpp_code(exprs, ctx, jacobian, hessian, ad, deriv2, vjp,
         buf.write("#include <cppde/cppde_dual2nd.hpp>\n")
         buf.write("#include <cppde/cppde_dual2nd_math.hpp>\n")
         buf.write("#include <cppde/cppde_dual2nd_expr.hpp>\n")
-    if emit_chain:
-        buf.write("#include <cppde/cppde_chain_blas.hpp>\n")
     buf.write("\n")
-    buf.write(f"// Modelname: {modelname}\n")
-    buf.write(f"// Variables: {', '.join(ctx.variables) if ctx.variables else 'none'}\n")
-    buf.write(f"// Parameters: {', '.join(ctx.parameters) if ctx.parameters else 'none'}\n")
-    buf.write(f"// Outputs: {', '.join(out_names)}\n\n")
+    buf.write("// Modelname: %s\n" % modelname)
+    buf.write("// Variables: %s\n" % (", ".join(ctx.variables) or "none"))
+    buf.write("// Parameters: %s\n" % (", ".join(ctx.parameters) or "none"))
+    buf.write("// Outputs: %s\n\n" % ", ".join(out_names))
 
-    # Template helper shared by _eval and (if ad) _eval_ad / _eval_ad2.
-    _write_eval_template(buf, exprs, out_names, ctx, modelname, emit_ad)
+    _write_eval_template(buf, model, modelname, emit_ad or emit_vjp, level)
 
     buf.write("extern \"C\" {\n\n")
-
-    # All entries are guarded: see _write_guarded.
     NAN_ = "std::numeric_limits<double>::quiet_NaN()"
-
-    # Eval function (always, uses template helper with T=double).
     _write_guarded(
         buf,
         lambda b: _write_eval_function(b, out_names, ctx, modelname),
-        f"std::fill(y, y + (size_t)(*n) * (size_t)(*l), {NAN_});",
+        "std::fill(y, y + (size_t)(*n) * (size_t)(*l), %s);" % NAN_,
     )
-
-    # AD entries (dual mode).
     if emit_ad:
         _write_eval_ad_impl(buf, out_names, ctx, modelname)
         _write_guarded(
             buf,
             lambda b: _write_eval_ad_function(b, out_names, ctx, modelname),
-            f"""const size_t ny_ = (size_t)(*n_obs_p) * (size_t)(*n_out_p);
-std::fill(y, y + ny_, {NAN_});
-std::fill(dy, dy + ny_ * (size_t)(*n_theta_p), {NAN_});""",
+            """const size_t ny_ = (size_t)(*n_obs_p) * (size_t)(*n_out_p);
+std::fill(y, y + ny_, %s);
+std::fill(dy, dy + ny_ * (size_t)(*n_theta_p), %s);""" % (NAN_, NAN_),
         )
         _write_eval_ad_batch(buf, modelname)
     if emit_vjp:
-        # The contraction is a template now, and a template cannot have C
-        # linkage, so it and its dual instantiation sit outside the block.
+        # Templates cannot have C linkage.
         buf.write("} // extern \"C\"\n\n")
-        _write_vjp_impl(buf, jacobian, exprs, out_names, ctx, modelname)
+        _write_vjp_impl(buf, model, modelname)
         _write_vjp_ad_impl(buf, modelname, ctx, out_names)
         buf.write("extern \"C\" {\n\n")
         _write_guarded(
             buf,
             lambda b: _write_vjp_function(b, modelname),
-            f"""const size_t ny_ = (size_t)(*n_obs_p) * (size_t)(*n_out_p);
+            """const size_t ny_ = (size_t)(*n_obs_p) * (size_t)(*n_out_p);
 const size_t ns_ = (size_t)(*n_seed_p);
-std::fill(y, y + ny_, {NAN_});
-std::fill(wx, wx + (size_t)(*n_obs_p) * (size_t)(*n_vars_p) * ns_, {NAN_});
-std::fill(wp, wp + (size_t)(*n_params_p) * ns_, {NAN_});""",
+std::fill(y, y + ny_, %s);
+std::fill(wx, wx + (size_t)(*n_obs_p) * (size_t)(*n_vars_p) * ns_, %s);
+std::fill(wp, wp + (size_t)(*n_params_p) * ns_, %s);""" % (NAN_, NAN_, NAN_),
         )
     if emit_ad2:
         _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=True)
         _write_guarded(
             buf,
             lambda b: _write_eval_ad2_function(b, out_names, ctx, modelname),
-            f"""const size_t ny_ = (size_t)(*n_obs_p) * (size_t)(*n_out_p);
+            """const size_t ny_ = (size_t)(*n_obs_p) * (size_t)(*n_out_p);
 const size_t nt_ = (size_t)(*n_theta_p);
-std::fill(y, y + ny_, {NAN_});
-std::fill(dy, dy + ny_ * nt_, {NAN_});
-std::fill(d2y, d2y + ny_ * nt_ * nt_, {NAN_});""",
+std::fill(y, y + ny_, %s);
+std::fill(dy, dy + ny_ * nt_, %s);
+std::fill(d2y, d2y + ny_ * nt_ * nt_, %s);""" % (NAN_, NAN_, NAN_),
         )
         _write_eval_ad2_batch(buf, modelname)
-
-    # Jacobian (symbolic, double-only) and its BLAS chain-rule wrapper.
-    if emit_jacobian:
-        n_sym_j = len(jacobian[next(iter(jacobian))])
-        _write_guarded(
-            buf,
-            lambda b: _write_jacobian_function(b, jacobian, out_names, ctx, modelname),
-            f"std::fill(jac, jac + (size_t)(*n) * {len(out_names)} * {n_sym_j}, {NAN_});",
-        )
-        _write_guarded(
-            buf,
-            lambda b: _write_chain_jac_wrapper(b, modelname),
-            f"std::fill(J_theta, J_theta + (size_t)(*n_obs) * (size_t)(*n_out)"
-            f" * (size_t)(*n_theta), {NAN_});",
-        )
-
-    # Hessian (symbolic, double-only) and its BLAS chain-rule wrapper.
-    if emit_hessian:
-        n_sym_h = len(hessian[next(iter(hessian))])
-        _write_guarded(
-            buf,
-            lambda b: _write_hessian_function(b, hessian, out_names, ctx, modelname),
-            f"std::fill(hess, hess + (size_t)(*n) * {len(out_names)}"
-            f" * {n_sym_h} * {n_sym_h}, {NAN_});",
-        )
-        _write_guarded(
-            buf,
-            lambda b: _write_chain_hess_wrapper(b, modelname),
-            f"std::fill(H_theta, H_theta + (size_t)(*n_obs) * (size_t)(*n_out)"
-            f" * (size_t)(*n_theta) * (size_t)(*n_theta), {NAN_});",
-        )
 
     _write_call_entries(
         buf, modelname,
         n_vars=len(ctx.variables), n_params=len(ctx.parameters),
         n_out=len(out_names),
-        n_sym_j=len(jacobian[next(iter(jacobian))]) if emit_jacobian else None,
-        n_sym_h=len(hessian[next(iter(hessian))]) if emit_hessian else None,
         ad=emit_ad, ad2=emit_ad2, vjp=emit_vjp)
 
     buf.write("} // extern \"C\"\n")
-
     return buf.getvalue()
 
 
-def _write_eval_template(buf, exprs, out_names, ctx, modelname, ad):
-    """
-    Emit an inline template helper that evaluates the expressions for a single
-    observation. Templated on scalar type T so it instantiates for `double` and,
-    when `ad=True`, for cppde::dual<double, 0>.
-    """
-    n_vars = len(ctx.variables)
+def eval_statements(model):
+    """Body of `_eval_one<T>`: y_local[i] = output i."""
+    stores = [(("vec", "y_local", i), r, "=") for i, r in enumerate(model.roots)]
+    stmts, names = em.schedule(model.g, stores, prefix="_t")
+    return [("block", names, stmts)]
 
+
+def _write_eval_template(buf, model, modelname, ad, level):
+    """`<model>_eval_one<T>(x_obs, p, y_local)`, instantiated for double and,
+    with `ad`, for the dual types."""
     buf.write("namespace {\n")
     buf.write("template <typename T>\n")
-    buf.write(f"inline void {modelname}_eval_one(const T* x_obs, const T* p, T* y_local) {{\n")
-    # Bring math functions into scope so expressions resolve for both double
-    # and the AD scalar via overload resolution.
-    buf.write("    using std::exp; using std::log; using std::sqrt; using std::pow;\n")
-    buf.write("    using std::sin; using std::cos; using std::tan;\n")
-    buf.write("    using std::asin; using std::acos; using std::atan; using std::atan2;\n")
-    buf.write("    using std::sinh; using std::cosh; using std::tanh;\n")
-    buf.write("    using std::asinh; using std::acosh; using std::atanh;\n")
-    buf.write("    using std::floor; using std::ceil;\n")
-    buf.write("    using std::abs; using std::max; using std::min;\n")
+    buf.write("inline void %s_eval_one(const T* x_obs, const T* p, T* y_local) {\n"
+              % modelname)
+    buf.write(_USING_STD)
     if ad:
-        # cppde::dual overloads live in namespace cppde; ADL picks them up
-        # for dual<...> arguments. Pull them in by name to also make
-        # double-or-dual mixed expressions resolve consistently.
-        buf.write("    using cppde::exp; using cppde::log; using cppde::sqrt; using cppde::pow;\n")
-        buf.write("    using cppde::sin; using cppde::cos; using cppde::tan;\n")
-        buf.write("    using cppde::asin; using cppde::acos; using cppde::atan;\n")
-        buf.write("    using cppde::sinh; using cppde::cosh; using cppde::tanh;\n")
-        buf.write("    using cppde::asinh; using cppde::acosh; using cppde::atanh;\n")
-        buf.write("    using cppde::abs; using cppde::max; using cppde::min;\n")
-    if n_vars == 0:
-        buf.write("    (void)x_obs;\n")
-    if not ctx.parameters:
-        buf.write("    (void)p;\n")
-    buf.write("\n")
-
-    # CSE across all outputs: shared subexpressions are lifted into `const T`
-    # temps materialised once per call. For T=dual this collapses the ET tree
-    # walked per observation; for T=double it just shrinks the emitted source.
-    ordered = [exprs[nm] for nm in out_names]
-    temps, simplified = _cse_exprs(ordered, prefix='_cse_t')
-    for sym, sub in temps:
-        sub_cpp = _strip_std_prefix(ctx.to_cpp(sub))
-        # A piecewise condition can be lifted into its own temp, and that one
-        # holds a truth value, not a model quantity.
-        temp_type = "bool" if is_boolean(sub) else "T"
-        buf.write(f"    const {temp_type} {sym.name} = {sub_cpp};\n")
-    if temps:
-        buf.write("\n")
-
-    for i, expr in enumerate(simplified):
-        cpp_code = _strip_std_prefix(ctx.to_cpp(expr))
-        buf.write(f"    y_local[{i}] = {cpp_code};\n")
-
+        buf.write(_USING_AD)
+    buf.write("    (void)x_obs; (void)p;\n\n")
+    for line in model.render(eval_statements(model), level, "    "):
+        buf.write(line + "\n")
     buf.write("}\n")
     buf.write("} // anonymous namespace\n\n")
+
+
+def vjp_statements(model, cast="(size_t)"):
+    """(per-observation statements, per-seed statements) of `_vjp_impl`;
+    `cast` prefixes the index products."""
+    g = model.g
+    w = [g.vec("w", i) for i in range(len(model.roots))]
+    adj = model.ad.vjp(model.roots, w, cg.F_STATE | cg.F_PARAM)
+    stores = []
+    for leaf in sorted(adj, key=lambda n: g.attr[n]):
+        k, idx = g.attr[leaf][0], g.attr[leaf][1]
+        if k == cg.STATE:
+            t = ("vec", "wx", "obs + %sn_obs * (%d + %sn_vars * s)" % (cast, idx, cast))
+        else:
+            t = ("vec", "wp", "%d + %sn_params * s" % (idx, cast))
+        stores.append((t, adj[leaf], "+="))
+    stmts, names = em.schedule(g, stores, prefix="_v")
+    outer, inner = em.split_loop(g, stmts, cg.F_VEC)
+    return [("block", names, outer)], [("block", names, inner)]
+
+
+def _write_vjp_impl(buf, model, modelname):
+    """`<model>_vjp_impl<T>`: y and the cotangents wx (per observation) and
+    wp (summed over observations) for each seed w[., ., s].
+
+    Layouts (column-major): x [n_obs, n_vars], w [n_obs, n_out, n_seed],
+    y [n_obs, n_out], wx [n_obs, n_vars, n_seed], wp [n_params, n_seed].
+    """
+    n_vars = len(model.variables)
+    n_out = len(model.out_names)
+    outer, inner = vjp_statements(model)
+    buf.write("template<class T>\n")
+    buf.write("static void %s_vjp_impl(const T* x, const T* p,\n" % modelname)
+    buf.write("                         const T* w,\n")
+    buf.write("                         T* y, T* wx, T* wp,\n")
+    buf.write("                         int n_obs, int n_vars, int n_params,\n")
+    buf.write("                         int n_out, int n_seed) {\n")
+    buf.write(_USING_STD)
+    buf.write(_USING_AD)
+    buf.write("    (void)n_vars; (void)n_params; (void)n_out; (void)x; (void)p;\n\n")
+    buf.write("    const size_t ns_ = (size_t)(n_seed > 0 ? n_seed : 1);\n")
+    buf.write("    for (size_t i_ = 0; i_ < (size_t)n_obs * (size_t)n_vars * ns_; ++i_)\n")
+    buf.write("        wx[i_] = T(0.0);\n")
+    buf.write("    for (size_t i_ = 0; i_ < (size_t)n_params * ns_; ++i_)\n")
+    buf.write("        wp[i_] = T(0.0);\n\n")
+    buf.write("    for (int obs = 0; obs < n_obs; ++obs) {\n")
+    if n_vars > 0:
+        buf.write("        T x_obs_buf[%d];\n" % n_vars)
+        buf.write("        for (int j = 0; j < n_vars; ++j)\n")
+        buf.write("            x_obs_buf[j] = x[obs + (size_t)n_obs * j];\n")
+        buf.write("        const T* x_obs = x_obs_buf;\n")
+        buf.write("        (void)x_obs;\n")
+    buf.write("        T y_obs[%d];\n" % max(n_out, 1))
+    buf.write("        %s_eval_one<T>(%s, p, y_obs);\n"
+              % (modelname, "x_obs" if n_vars > 0 else "nullptr"))
+    buf.write("        for (int i = 0; i < n_out; ++i)\n")
+    buf.write("            y[obs + (size_t)n_obs * i] = y_obs[i];\n")
+    for line in model.render(outer, 1, "        "):
+        buf.write(line + "\n")
+    buf.write("        for (int s = 0; s < n_seed; ++s) {\n")
+    buf.write("            const T* w_s = w + (size_t)n_obs * (size_t)n_out * s;\n")
+    buf.write("            T _w[%d];\n" % max(n_out, 1))
+    buf.write("            for (int i = 0; i < n_out; ++i)\n")
+    buf.write("                _w[i] = w_s[obs + (size_t)n_obs * i];\n")
+    buf.write("            (void)_w;\n")
+    for line in model.render(inner, 1, "            "):
+        buf.write(line + "\n")
+    buf.write("        }\n")
+    buf.write("    }\n}\n\n")
 
 
 def _write_guarded(buf, emit_fn, nan_fill):
@@ -828,8 +450,7 @@ def _write_eval_ad_function(buf, out_names, ctx, modelname):
 
 
 def _write_call_entries(buf, modelname, n_vars, n_params, n_out,
-                        n_sym_j=None, n_sym_h=None, ad=False, ad2=False,
-                        vjp=False):
+                        ad=False, ad2=False, vjp=False):
     """Emit .Call entries beside the .C ones.
 
     `.C()` copies every argument in and every result out; on a chain evaluated
@@ -843,31 +464,6 @@ def _write_call_entries(buf, modelname, n_vars, n_params, n_out,
   {modelname}_eval(REAL(xS), REAL(y), REAL(pS), &n_obs, &n_vars, &n_out);
   UNPROTECT(1);
   return y;
-}}
-
-""")
-    if n_sym_j is not None:
-        buf.write(f"""SEXP {modelname}_jacobian_c(SEXP xS, SEXP pS, SEXP nS) {{
-  int n_obs = INTEGER(nS)[0], n_vars = {n_vars}, n_out = {n_out};
-  SEXP d = PROTECT(Rf_allocVector(INTSXP, 3));
-  INTEGER(d)[0] = n_obs; INTEGER(d)[1] = {n_out}; INTEGER(d)[2] = {n_sym_j};
-  SEXP jac = PROTECT(Rf_allocArray(REALSXP, d));
-  {modelname}_jacobian(REAL(xS), REAL(jac), REAL(pS), &n_obs, &n_vars, &n_out);
-  UNPROTECT(2);
-  return jac;
-}}
-
-""")
-    if n_sym_h is not None:
-        buf.write(f"""SEXP {modelname}_hessian_c(SEXP xS, SEXP pS, SEXP nS) {{
-  int n_obs = INTEGER(nS)[0], n_vars = {n_vars}, n_out = {n_out};
-  SEXP d = PROTECT(Rf_allocVector(INTSXP, 4));
-  INTEGER(d)[0] = n_obs; INTEGER(d)[1] = {n_out};
-  INTEGER(d)[2] = {n_sym_h}; INTEGER(d)[3] = {n_sym_h};
-  SEXP hess = PROTECT(Rf_allocArray(REALSXP, d));
-  {modelname}_hessian(REAL(xS), REAL(hess), REAL(pS), &n_obs, &n_vars, &n_out);
-  UNPROTECT(2);
-  return hess;
 }}
 
 """)
@@ -980,119 +576,6 @@ SEXP {modelname}_vjp_ad_c(SEXP xS, SEXP pS, SEXP wS, SEXP vxS, SEXP vpS,
 
 """)
 
-
-def _write_vjp_impl(buf, jacobian, exprs, out_names, ctx, modelname):
-    """
-    Generate the reverse-mode entry point: given a cotangent w of the outputs,
-    fill the cotangents of the variables and of the parameters. Cost is
-    independent of the upstream parameter count, which is what distinguishes it
-    from `_eval_ad`.
-
-    The contraction is the symbolic Jacobian's, not a tape's: the entries are
-    the ones `_jacobian` emits, computed once per observation and contracted
-    once per seed.
-
-    Layouts (R column-major):
-      x   [n_obs, n_vars]                    -> obs + n_obs * j
-      p   [n_params]                         -> j
-      w   [n_obs, n_out, n_seed]             -> obs + n_obs * (i + n_out * s)
-      y   [n_obs, n_out]                     -> obs + n_obs * i
-      wx  [n_obs, n_vars, n_seed]            -> obs + n_obs * (j + n_vars * s)
-      wp  [n_params, n_seed]                 -> j + n_params * s
-
-    wp accumulates over observations because the parameters are shared across
-    them; wx does not, because each observation has its own variables.
-    """
-    n_vars = len(ctx.variables)
-    n_params = len(ctx.parameters)
-    n_out = len(out_names)
-
-    buf.write(
-        f"template<class T>\n"
-        f"static void {modelname}_vjp_impl(const T* x, const T* p,\n"
-        f"                         const T* w,\n"
-        f"                         T* y, T* wx, T* wp,\n"
-        f"                         int n_obs, int n_vars, int n_params,\n"
-        f"                         int n_out, int n_seed) {{\n"
-    )
-    buf.write("    using std::exp; using std::log; using std::sqrt; using std::pow;\n")
-    buf.write("    using std::sin; using std::cos; using std::tan;\n")
-    buf.write("    using std::asin; using std::acos; using std::atan; using std::atan2;\n")
-    buf.write("    using std::sinh; using std::cosh; using std::tanh;\n")
-    buf.write("    using std::asinh; using std::acosh; using std::atanh;\n")
-    buf.write("    using std::floor; using std::ceil;\n")
-    buf.write("    using std::abs; using std::max; using std::min;\n")
-    buf.write("    using cppde::exp; using cppde::log; using cppde::sqrt; using cppde::pow;\n")
-    buf.write("    using cppde::sin; using cppde::cos; using cppde::tan;\n")
-    buf.write("    using cppde::asin; using cppde::acos; using cppde::atan;\n")
-    buf.write("    using cppde::sinh; using cppde::cosh; using cppde::tanh;\n")
-    buf.write("    using cppde::asinh; using cppde::acosh; using cppde::atanh;\n")
-    buf.write("    using cppde::abs; using cppde::max; using cppde::min;\n")
-    buf.write("    (void)n_vars; (void)n_params; (void)n_out; (void)x; (void)p;\n\n")
-
-    buf.write("    const size_t ns_ = (size_t)(n_seed > 0 ? n_seed : 1);\n")
-    buf.write("    for (size_t i_ = 0; i_ < (size_t)n_obs * (size_t)n_vars * ns_; ++i_)\n")
-    buf.write("        wx[i_] = T(0.0);\n")
-    buf.write("    for (size_t i_ = 0; i_ < (size_t)n_params * ns_; ++i_)\n")
-    buf.write("        wp[i_] = T(0.0);\n\n")
-
-    # The nonzero entries of the Jacobian, in the order _jacobian emits them.
-    # A caller in dual mode passes none, so it is derived here: the reverse
-    # direction is a contraction of it either way.
-    syms = [ctx.var_symbols[v] for v in ctx.variables] + \
-           [ctx.par_symbols[q] for q in ctx.parameters]
-    entries = []  # (output i, symbol j, expr)
-    for i, out_name in enumerate(out_names):
-        if jacobian is not None and out_name in jacobian:
-            row = [_parse_entry(e, ctx) for e in jacobian[out_name]]
-        else:
-            body = ctx._parse_expr(str(exprs[out_name])) \
-                if isinstance(exprs[out_name], str) else exprs[out_name]
-            free = body.free_symbols
-            row = [sp.diff(body, sym) if sym in free else sp.Integer(0)
-                   for sym in syms]
-        for j, e in enumerate(row):
-            if e == 0:
-                continue
-            entries.append((i, j, e))
-
-    buf.write("    for (int obs = 0; obs < n_obs; ++obs) {\n")
-    if n_vars > 0:
-        buf.write(f"        T x_obs_buf[{n_vars}];\n")
-        buf.write("        for (int j = 0; j < n_vars; ++j)\n")
-        buf.write("            x_obs_buf[j] = x[obs + (size_t)n_obs * j];\n")
-        buf.write("        const T* x_obs = x_obs_buf;\n")
-        buf.write("        (void)x_obs;\n")
-    buf.write(f"        T y_obs[{max(n_out, 1)}];\n")
-    buf.write(f"        {modelname}_eval_one<T>("
-              f"{'x_obs' if n_vars > 0 else 'nullptr'}, p, y_obs);\n")
-    buf.write("        for (int i = 0; i < n_out; ++i)\n")
-    buf.write("            y[obs + (size_t)n_obs * i] = y_obs[i];\n\n")
-
-    if entries:
-        temps, simplified = _cse_exprs([e for _, _, e in entries], prefix='_cse_vt')
-        for sym, sub in temps:
-            t_ = "bool" if is_boolean(sub) else "T"
-            buf.write(f"        const {t_} {sym.name} = "
-                      f"{_strip_std_prefix(ctx.to_cpp(sub))};\n")
-        if temps:
-            buf.write("\n")
-        buf.write(f"        const T _jv[{len(entries)}] = {{\n")
-        for e in simplified:
-            buf.write(f"            {_strip_std_prefix(ctx.to_cpp(e))},\n")
-        buf.write("        };\n\n")
-
-        buf.write("        for (int s = 0; s < n_seed; ++s) {\n")
-        buf.write("            const T* w_s = w + (size_t)n_obs * (size_t)n_out * s;\n")
-        for k, (i, j, _) in enumerate(entries):
-            wi = f"w_s[obs + (size_t)n_obs * {i}]"
-            if j < n_vars:
-                tgt = f"wx[obs + (size_t)n_obs * ({j} + (size_t)n_vars * s)]"
-            else:
-                tgt = f"wp[{j - n_vars} + (size_t)n_params * s]"
-            buf.write(f"            {tgt} += {wi} * _jv[{k}];\n")
-        buf.write("        }\n")
-    buf.write("    }\n}\n\n")
 
 def _write_vjp_ad_impl(buf, modelname, ctx, out_names):
     """The same contraction over a dual, which is forward over reverse.
@@ -1436,149 +919,3 @@ def _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=False):
     buf.write("            }\n")
     buf.write("        }\n")
     buf.write("    }\n}\n\n")
-
-
-def _write_jacobian_function(buf, jacobian, out_names, ctx, modelname):
-    """
-    Generate Jacobian evaluation function (sparse: only non-zero entries).
-
-    Array layout for R (column-major): jac[n_obs, n_out, n_symbols]
-    Linear index: obs + n_obs * (output + n_out * symbol)
-    """
-    first_fn = next(iter(jacobian))
-    n_symbols = len(jacobian[first_fn])
-    n_vars = len(ctx.variables)
-    n_out = len(out_names)
-
-    buf.write(f"void {modelname}_jacobian(double* x, double* jac, double* p, int* n, int* k, int* l) {{\n")
-    buf.write("    const int n_obs = *n;\n")
-    buf.write("    const int n_vars = *k;\n")
-    buf.write("    (void)n_vars;  // suppress unused warning\n")
-    buf.write(f"    const int n_out = {n_out};\n")
-    buf.write(f"    const int n_symbols = {n_symbols};\n\n")
-
-    # Zero-initialize entire jacobian array
-    buf.write("    // Zero-initialize\n")
-    buf.write("    std::fill(jac, jac + (size_t)n_obs * n_out * n_symbols, 0.0);\n\n")
-
-    buf.write("    // Layout: jac[obs, output, symbol] (R column-major)\n")
-    buf.write("    // Linear index: obs + n_obs * (output + n_out * symbol)\n")
-    buf.write("    for (int obs = 0; obs < n_obs; obs++) {\n")
-
-    if n_vars > 0:
-        buf.write(f"        double x_obs_buf[{n_vars}];\n")
-        buf.write("        for (int j = 0; j < n_vars; ++j)\n")
-        buf.write("            x_obs_buf[j] = x[obs + (size_t)n_obs * j];\n")
-        buf.write("        const double* x_obs = x_obs_buf;\n")
-        buf.write("        (void)x_obs;  // suppress unused warning\n")
-
-    # Collect the non-zero (output, symbol) entries, then CSE across them: a shared
-    # denominator lifts into a `const double` temp inside the obs loop, where the
-    # x_obs and p it depends on are in scope.
-    entries = []  # (output_i, symbol_j, sympy_expr)
-    for i, out_name in enumerate(out_names):
-        if out_name not in jacobian:
-            continue
-        for j, expr in enumerate(jacobian[out_name]):
-            e = _parse_entry(expr, ctx)
-            if e == 0:
-                continue
-            entries.append((i, j, e))
-
-    temps, simplified = _cse_exprs([e for _, _, e in entries], prefix='_cse_jt')
-    for sym, sub in temps:
-        buf.write(f"        const double {sym.name} = {ctx.to_cpp(sub)};\n")
-    if temps:
-        buf.write("\n")
-
-    for (i, j, _), e in zip(entries, simplified):
-        # R column-major: obs + n_obs * (output + n_out * symbol)
-        buf.write(f"        jac[obs + (size_t)n_obs * ({i} + n_out * {j})] = {ctx.to_cpp(e)};\n")
-
-    buf.write("    }\n}\n\n")
-def _write_hessian_function(buf, hessian, out_names, ctx, modelname):
-    """
-    Generate Hessian evaluation function (sparse: only non-zero entries).
-
-    Array layout for R (column-major): hess[n_obs, n_out, n_symbols, n_symbols]
-    Linear index: obs + n_obs * (output + n_out * (sym1 + n_symbols * sym2))
-    """
-    first_fn = next(iter(hessian))
-    n_symbols = len(hessian[first_fn])
-    n_vars = len(ctx.variables)
-    n_out = len(out_names)
-
-    buf.write(f"void {modelname}_hessian(double* x, double* hess, double* p, int* n, int* k, int* l) {{\n")
-    buf.write("    const int n_obs = *n;\n")
-    buf.write("    const int n_vars = *k;\n")
-    buf.write(f"    const int n_out = {n_out};\n")
-    buf.write("    (void)n_vars;  // suppress unused warning\n")
-    buf.write(f"    const int n_symbols = {n_symbols};\n\n")
-
-    buf.write("    // Zero-initialize\n")
-    buf.write("    std::fill(hess, hess + (size_t)n_obs * n_out * n_symbols * n_symbols, 0.0);\n\n")
-
-    buf.write("    // Layout: hess[obs, output, sym1, sym2] (R column-major)\n")
-    buf.write("    // Linear index: obs + n_obs * (output + n_out * (sym1 + n_symbols * sym2))\n")
-    buf.write("    for (int obs = 0; obs < n_obs; obs++) {\n")
-
-    if n_vars > 0:
-        buf.write(f"        double x_obs_buf[{n_vars}];\n")
-        buf.write("        for (int j = 0; j < n_vars; ++j)\n")
-        buf.write("            x_obs_buf[j] = x[obs + (size_t)n_obs * j];\n")
-        buf.write("        const double* x_obs = x_obs_buf;\n")
-        buf.write("        (void)x_obs;  // suppress unused warning\n")
-
-    # Collect non-zero (output, sym1, sym2) entries, then CSE across them.
-    entries = []  # (output_i, sym1_j, sym2_k, sympy_expr)
-    for i, out_name in enumerate(out_names):
-        if out_name not in hessian:
-            continue
-        for j, hess_row in enumerate(hessian[out_name]):
-            for k, expr in enumerate(hess_row):
-                e = _parse_entry(expr, ctx)
-                if e == 0:
-                    continue
-                entries.append((i, j, k, e))
-
-    temps, simplified = _cse_exprs([e for _, _, _, e in entries], prefix='_cse_ht')
-    for sym, sub in temps:
-        buf.write(f"        const double {sym.name} = {ctx.to_cpp(sub)};\n")
-    if temps:
-        buf.write("\n")
-
-    for (i, j, k, _), e in zip(entries, simplified):
-        # R column-major: obs + n_obs * (output + n_out * (sym1 + n_symbols * sym2))
-        buf.write(
-            f"        hess[obs + (size_t)n_obs * ({i} + n_out * ({j} + n_symbols * {k}))] = {ctx.to_cpp(e)};\n"
-        )
-
-    buf.write("    }\n}\n\n")
-
-
-def _write_chain_jac_wrapper(buf, modelname):
-    """
-    Thin extern-C wrapper around cppde::chain_jac. Performs the per-obs
-    DGEMM contraction J_theta[obs, ., .] = J[obs, ., .] %*% S[obs, ., .].
-    """
-    buf.write(f"void {modelname}_chain_jac(double* J, double* S, double* J_theta,\n")
-    buf.write("                          int* n_obs, int* n_out, int* n_diff, int* n_theta) {\n")
-    buf.write("    cppde::chain_jac(J, S, J_theta, *n_obs, *n_out, *n_diff, *n_theta);\n")
-    buf.write("}\n\n")
-
-
-def _write_chain_hess_wrapper(buf, modelname):
-    """
-    Thin extern-C wrapper around cppde::chain_hess. Performs per-obs and
-    per-output H_theta[obs, o, ., .] = S' H[obs, o, ., .] S
-                                     + sum_i J[obs, o, i] S2[obs, i, ., .]
-    where the J*S2 term is skipped when has_S2 == 0.
-    """
-    buf.write(f"void {modelname}_chain_hess(double* H, double* J,\n")
-    buf.write("                           double* S, double* S2_in, double* H_theta,\n")
-    buf.write("                           int* has_S2,\n")
-    buf.write("                           int* n_obs, int* n_out, int* n_diff, int* n_theta) {\n")
-    buf.write("    const double* S2 = (*has_S2) ? S2_in : nullptr;\n")
-    buf.write("    cppde::chain_hess(H, J, S, S2, H_theta,\n")
-    buf.write("                       *n_obs, *n_out, *n_diff, *n_theta);\n")
-    buf.write("}\n\n")

@@ -17,14 +17,8 @@ res$out
 # Jacobian for first (and only) observation
 res$jacobian[1, , ]
 
-# Symbolic Jacobian
-attributes(f)$jacobian.symb
-
 # Hessian for output "A" at first observation
 res$hessian[1, "A", , ]
-
-# Symbolic Hessian
-attributes(f)$hessian.symb$A
 }
 
 

@@ -54,16 +54,17 @@ Table \ref{tab:entry-points} summarises their scope.
 \midrule
 Problem class              & ODE                              & ODE                           & algebraic $y = g(x, p)$       \\
 Methods                    & \texttt{bdf, adams, rb4, tsit5}  & \texttt{bdf, adams}           &                             \\
-First-order sensitivities  & in-tree dual-number AD           & SUNDIALS analytic RHS         & dual AD or symbolic           \\
-Reverse-mode gradient      & yes (discrete adjoint)           & yes (CVODES ASA)              & yes                           \\
-Second-order sensitivities & yes (nested duals, fwd-over-rev) & no                            & yes (nested duals or symbolic)\\
+First-order sensitivities  & in-tree dual-number AD           & SUNDIALS, generated JVP       & dual AD                       \\
+Reverse-mode gradient      & yes (discrete adjoint)           & yes (CVODES ASA)              & yes (generated VJP)           \\
+Second-order sensitivities & yes (nested duals, fwd-over-rev) & no                            & yes (nested duals)            \\
 External dependencies      & LAPACK; KLU optional             & SUNDIALS $\ge 6.0$; KLU opt.  & none                          \\
-Codegen                    & SymPy + \texttt{R CMD SHLIB}     & SymPy + \texttt{R CMD SHLIB}  & SymPy + \texttt{R CMD SHLIB}  \\
+Codegen                    & graph AD + \texttt{R CMD SHLIB}  & graph AD + \texttt{R CMD SHLIB} & graph AD + \texttt{R CMD SHLIB} \\
 \bottomrule
 \end{tabular}%
 }
 \caption{The three cppDE entry points and what they cover. The
-codegen pipeline (parse the user's expressions through SymPy, emit
+codegen pipeline of Section \ref{sec:codegen} (parse the user's
+expressions into an expression graph, differentiate on the graph, emit
 C++, compile via \texttt{R CMD SHLIB}, load via \texttt{dyn.load}) is
 shared, as is the \texttt{solveODE()} dispatcher used by both
 integrator backends.}
@@ -82,7 +83,8 @@ resulting binary depends on LAPACK and, optionally, KLU.
 system-installed SUNDIALS CVODE/CVODES library and inherits its
 numerical behaviour.
 
-Section \ref{sec:cppde} describes the in-tree integrator
+Section \ref{sec:codegen} describes the code generator the three
+entry points share. Section \ref{sec:cppde} describes the in-tree integrator
 \texttt{cppODE()} in full, including its four time-stepping methods,
 its forward-mode automatic-differentiation framework for parameter
 sensitivities, the reverse-mode discrete adjoint that computes a
@@ -101,6 +103,70 @@ reparametrisation Jacobians $\partial p/\partial \theta$ that seed
 sensitivity propagation through the integrators. Section
 \ref{sec:bench} benchmarks the two integrator backends against each
 other on $42$ problems.
+
+# Code generation \label{sec:codegen}
+
+Every entry point turns the user's expressions into straight-line C++
+templated over the scalar type, so that one source serves the value,
+the dual-number and the nested-dual instantiation. The derivatives the
+integrators need beyond that, namely the Jacobian, the contractions of
+the discrete adjoint, and the time derivatives of the right-hand side
+and of the event roots, are formed at code-generation time by automatic
+differentiation on an expression graph.
+
+\textbf{The expression graph.} Each expression is read by Python's own
+parser and lowered into a directed acyclic graph whose nodes are
+hash-consed: a node is identified by its operation, its operands and
+its constant attributes, and is created at most once. A subexpression
+that occurs several times is therefore a single node, and the
+elimination of common subexpressions is a property of the
+representation rather than a pass over it. Sums and products are kept
+flat with numeric coefficients and exponents, and numeric constants
+are normalised so that equal values map to equal nodes. Syntax the
+parser does not read is passed to SymPy and translated into the same
+graph; SymPy also supplies the derivative of a function the graph has
+no rule for.
+
+\textbf{Derivatives.} A forward sweep over the graph forms a
+Jacobian-vector product, a reverse sweep a vector-Jacobian product;
+both add nodes to the same graph, so derivative and value share their
+common parts. The Jacobian $J = \partial f/\partial x$ is assembled in
+one of two ways. For moderate models, each node carries the sparse
+gradient of its value with respect to the states, and the gradients of
+the roots are the nonzero entries of $J$. When that work exceeds a
+multiple of the number of entries, a greedy distance-2 colouring of
+the column intersection graph groups structurally orthogonal columns;
+if it needs few colours, one Jacobian-vector product per colour,
+seeded with ones on the
+columns of that colour, recovers all entries of those columns at the
+cost of a few evaluations of $f$. The reverse contractions
+$J^{\mathsf T}\lambda$ and $(\partial f/\partial p)^{\mathsf T}\lambda$
+are vector-Jacobian products, and the derivatives the Rosenbrock
+stages and the event localisation require are Jacobian-vector products
+along $\dot x = f$. The cost of code generation is linear in the size
+of the graph.
+
+\textbf{Linear tables.} A sum of at least twelve terms
+$c_j\,x_j\,\varphi$ with numeric $c_j$ and a common state-free factor
+$\varphi$ becomes a row of a constant matrix $C$, so that
+$f(x) = \phi(x, Cx)$. The generated code evaluates $z = Cx$ once per
+call from a sparse or dense table, and assembles the Jacobian as
+\begin{equation}
+  J = \frac{\partial \phi}{\partial x} + \frac{\partial \phi}{\partial z}\,C,
+  \label{eq:linmap-jacobian}
+\end{equation}
+while the reverse contractions apply $C^{\mathsf T}$. A dense coupling,
+such as a dipolar interaction among all states, then costs a table
+rather than a sum of expressions per entry.
+
+\textbf{Loops over equal structure.} A method-of-lines discretisation
+repeats the same statement for every grid point. Statements whose
+graphs agree up to state indices and constants form a class; a class
+of at least sixteen instances is emitted as one loop over index and
+constant tables, and a sum of many terms of one structure as an inner
+loop. The differentiation itself remains per instance, so the
+generator stays linear in the model size, while the emitted code of a
+regular model no longer grows with it.
 
 # \texttt{cppODE()} \label{sec:cppde}
 
@@ -1450,8 +1516,9 @@ $\mathrm{d}s \neq 0$. Then
 so terms of order $s^{2}$ drop from the gradient and not from the Hessian.
 Three of them enter a jump. The same three enter a fixed event, with the event
 time's own residual $\tau = \varepsilon(\theta) - \lfloor \varepsilon \rceil$ in
-place of $s$: a fixed event is the same five-stage sandwich, and its transpose
-is \eqref{eq:root-transpose} with $\tau$ substituted throughout. Carrying only
+place of $s$: a fixed event is the same five-stage sandwich
+\eqref{eq:root-sandwich}, and its transpose is that program reversed with $\tau$
+substituted throughout. Carrying only
 the classical saltation there is exact in value and wrong in the tangents as
 soon as the jump height moves with a parameter, because
 $\bar x_{a} = (I - \tau J_{a})^{\mathsf T}\bar x_{o}$ then has a second factor
@@ -1939,9 +2006,10 @@ required when \texttt{sparse = TRUE}.
 
 ## What is shared
 
-The symbolic Jacobian $J = \partial f / \partial x$ is derived through
-SymPy at code-generation time and emitted as analytic C++ exactly as
-in \texttt{cppODE()}. The KLU sparse linear solver path activates
+The Jacobian $J = \partial f / \partial x$ is formed on the expression
+graph of Section \ref{sec:codegen} and emitted as analytic C++ exactly
+as in \texttt{cppODE()}, including its linear tables and loops. The
+KLU sparse linear solver path activates
 automatically when the Jacobian is sufficiently sparse and the
 SuiteSparse libraries were detected at install time; the dense
 fallback uses LAPACK. Forcing functions are PCHIP-interpolated,
@@ -1957,15 +2025,15 @@ analytic forward-sensitivity equation
   \qquad k = 1, \dots, n_p,
   \label{eq:cvodes-sens}
 \end{equation}
-directly. The in-tree backend recovers the same equation by
+directly. The generated right-hand side of \eqref{eq:cvodes-sens} is
+one Jacobian-vector product of $f$ in the direction
+$(S_k, \partial p/\partial\theta_k)$, evaluated in \texttt{double}
+without forming $J$. The in-tree backend recovers the same equation by
 evaluating $f$ on dual-typed state, cf.\ \eqref{eq:sensitivity-p}.
 The two formulations are mathematically equivalent. Numerically, the
-analytic right-hand side avoids the per-evaluation arena allocation
-required by the dual-number path and is preferable on large
-problems with a sparse $\partial f/\partial p$; conversely, the
-dual-number path benefits from SymPy's common-subexpression
-elimination on small problems for which integrator control flow
-dominates the cost.
+generated product avoids the per-evaluation arena allocation required
+by the dual-number path, but is invoked once per direction, whereas
+the dual evaluation carries all directions in a single pass.
 
 \textbf{Available methods.} CVODE provides only the multistep families.
 Calling \texttt{cvode(method = "bdf")} or
@@ -2008,8 +2076,8 @@ including the batch entry point.
 \textbf{The backward problem.} Where \texttt{cppODE()} transposes the
 steps the forward run took, CVODES integrates \eqref{eq:adjoint-ode} as
 an ODE in its own right [@cao2003adjoint]. The generated glue emits the
-two transposed contractions from the symbolic Jacobian the forward path
-already uses,
+two transposed contractions as vector-Jacobian products of $f$
+(Section \ref{sec:codegen}),
 \begin{equation}
   \dot\lambda = -\left(\frac{\partial f}{\partial x}\right)^{\!\mathsf T}\!\lambda,
   \qquad
@@ -2023,8 +2091,8 @@ the error test rather than leaving it uncontrolled. Both equations are
 integrated from $T$ down to $t_0$, and the minus signs of
 \eqref{eq:asa-system} cancel against the reversed limits, so $q(t_0)$
 is the parameter part of the gradient and $\lambda(t_0)$ the state
-part. Both right-hand sides are contractions of quantities the forward
-path already builds; only the index order differs.
+part. Both right-hand sides are the contractions the native reverse
+mode uses; neither forms $J$.
 
 \textbf{Checkpoints and the forward state.} The backward right-hand
 side needs $x(t)$, which the forward pass no longer holds. CVODES
@@ -2096,88 +2164,66 @@ Jacobians $\partial p / \partial \theta$ that supply the seed matrix
 in equation \eqref{eq:sensitivity-theta} when the dynamic model is
 fitted in a transformed parameter space.
 
-## Unified API and two computational paths
+## Unified API and two derivative directions
 
-Both values of the \texttt{derivMode} argument expose the same
-R-side methods: \texttt{func}, \texttt{jac}, \texttt{hess}, and the
-combined \texttt{evaluate}. They differ only in how the underlying C
-entry points are generated and dispatched.
+The \texttt{derivMode} argument names the derivative products that are
+built; \verb|"forward"| and \verb|"reverse"| are independent and are
+both built by default.
 
 \begin{itemize}
-\item \verb|"symbolic"|: the analytic Jacobian and Hessian of $g$
-are derived by SymPy at code-generation time. The compiled module
-exposes \texttt{\_eval}, \texttt{\_jacobian} (when \texttt{deriv}),
-and \texttt{\_hessian} (when \texttt{deriv2}). When seeds are
-supplied, the chain rule is applied by BLAS-3 DGEMM through two
-\texttt{extern "C"} wrappers \texttt{\_chain\_jac} and
-\texttt{\_chain\_hess}, which delegate to the inline routines in
-\texttt{cppde\_chain\_blas.hpp}.
-
-\item \verb|"forward"| (default): no SymPy step. The compiled module
-exposes \texttt{\_eval}, \texttt{\_eval\_ad} (when \texttt{deriv}, on
+\item \verb|"forward"|: the compiled module exposes \texttt{\_eval},
+\texttt{\_eval\_ad} (when \texttt{deriv}, on
 \texttt{cppde::dual<double, 0>}), and \texttt{\_eval\_ad2} (when
 \texttt{deriv2}, on the nested-dual alias
-\texttt{cppde::dual2nd<double, 0>}). The chain rule is applied
-inside the AD evaluation by seeding the dual-number tangent slots;
-the same source that evaluates $g$ over $\mathbb{R}$ then also
-evaluates the chain-ruled $\partial y/\partial\theta$ and
-$\partial^2 y/\partial\theta^2$.
+\texttt{cppde::dual2nd<double, 0>}), all instantiated from one
+template over the scalar type. The R-side methods \texttt{func},
+\texttt{jac}, \texttt{hess} and the combined \texttt{evaluate} call
+them. The chain rule is applied inside the evaluation by seeding the
+dual-number tangent slots, so the same source that evaluates $g$ over
+$\mathbb{R}$ also evaluates the chain-ruled
+$\partial y/\partial\theta$ and $\partial^2 y/\partial\theta^2$.
 
-\item \verb|"reverse"| (default alongside \verb|"forward"|): the
-vector-Jacobian product \texttt{\_vjp}, which contracts a cotangent
-of the outputs into cotangents of the variables and parameters at a
-cost independent of the upstream parameter count. It contracts the
-symbolic Jacobian, and is separately requestable: a caller that only
-ever multiplies by the Jacobian should not compile it.
+\item \verb|"reverse"|: the vector-Jacobian product \texttt{\_vjp},
+which contracts a cotangent of the outputs into cotangents of the
+variables and parameters at a cost independent of the upstream
+parameter count, and \texttt{\_vjp\_ad}, the same contraction
+instantiated over a dual, which is forward over reverse. The
+contraction is a reverse sweep on the expression graph
+(Section \ref{sec:codegen}) and forms neither $J$ nor a Hessian. It is
+separately requestable: a caller that only ever multiplies by the
+Jacobian need not compile the forward entries, and vice versa.
 \end{itemize}
 
-\verb|"symbolic"| is a backend for the forward Jacobian rather than a
-direction of its own, and cannot be combined with the other two;
-the vector-Jacobian product is symbolic either way. \verb|"forward"| and
-\verb|"reverse"| are independent build products and may be asked for
-together, which is the default.
-
-The two paths are equivalent in exact arithmetic. The forward AD path
-avoids the SymPy expansion of $\partial g/\partial p$ and
-$\partial^2 g/\partial p^2$, whose intermediate expressions can grow
-sharply with the depth of the compositions in $g$. The symbolic
-path benefits from SymPy's common-subexpression elimination when
-the analytic derivatives remain compact. The reverse entry is
-described in Section \ref{sec:cppde} for the integrator; here it is
-the same construction without the time stepping, and one sweep over
-a straight-line program.
+The reverse entry is described in Section \ref{sec:cppde} for the
+integrator; here it is the same construction without the time
+stepping, and one sweep over a straight-line program.
 
 \begin{table}[h]
 \centering
-\resizebox{\textwidth}{!}{%
-\begin{tabular}{@{} l l l @{}}
+\begin{tabular}{@{} l l @{}}
 \toprule
-Call                                       & dual path                                           & symbolic path \\
+Call                                       & C entry \\
 \midrule
-\texttt{func(x, p)}                        & \texttt{\_eval}                                     & \texttt{\_eval} \\
-\texttt{jac(x, p)} (no seeds)              & \texttt{\_eval\_ad} with identity seed              & \texttt{\_jacobian} \\
-\texttt{jac(x, p, dX, dP)}                 & \texttt{\_eval\_ad} with user seeds                 & \texttt{\_jacobian + \_chain\_jac} \\
-\texttt{hess(x, p)} (no seeds)             & \texttt{\_eval\_ad2} with identity seed             & \texttt{\_hessian} \\
-\texttt{hess(x, p, dX, dP[, dX2, dP2])}    & \texttt{\_eval\_ad2} with all seeds                 & \texttt{\_hessian + \_chain\_hess} \\
-\texttt{evaluate(\ldots, deriv2 = FALSE)}  & one \texttt{\_eval\_ad}-pass                        & \texttt{\_eval + \_jacobian} (+ chain) \\
-\texttt{evaluate(\ldots, deriv2 = TRUE)}   & one \texttt{\_eval\_ad2}-pass                       & \texttt{\_eval + \_jacobian + \_hessian} (+ chain) \\
+\texttt{func(x, p)}                        & \texttt{\_eval} \\
+\texttt{jac(x, p)} (no seeds)              & \texttt{\_eval\_ad} with identity seed \\
+\texttt{jac(x, p, dX, dP)}                 & \texttt{\_eval\_ad} with user seeds \\
+\texttt{hess(x, p)} (no seeds)             & \texttt{\_eval\_ad2} with identity seed \\
+\texttt{hess(x, p, dX, dP[, dX2, dP2])}    & \texttt{\_eval\_ad2} with all seeds \\
+\texttt{evaluate(\ldots, deriv2 = FALSE)}  & one \texttt{\_eval\_ad} pass \\
+\texttt{evaluate(\ldots, deriv2 = TRUE)}   & one \texttt{\_eval\_ad2} pass \\
+\texttt{vjp(x, p, w)}                      & \texttt{\_vjp} \\
+\texttt{vjp2(x, p, w, vx, vp, dw)}         & \texttt{\_vjp\_ad} \\
 \bottomrule
-\end{tabular}%
-}
-\caption{Dispatch within \texttt{cppFUN()}. Both modes accept the same
-arguments and return arrays of the same shape; only the C entries
-called and the location of the chain-rule contraction differ.}
+\end{tabular}
+\caption{Dispatch within \texttt{cppFUN()}.}
 \label{tab:funcpp-dispatch}
 \end{table}
 
-The combined entry point \texttt{evaluate()} is provided because in
-the dual path a single nested-dual evaluation produces the value,
-the first-order sensitivities, and the second-order sensitivities
-together; obtaining all three through separate calls to
-\texttt{func}, \texttt{jac}, and \texttt{hess} would repeat the
-underlying evaluation three times. In the symbolic path
-\texttt{evaluate()} simply combines the three independent C calls
-and applies the chain rule once.
+The combined entry point \texttt{evaluate()} is provided because a
+single nested-dual evaluation produces the value, the first-order
+sensitivities, and the second-order sensitivities together; obtaining
+all three through separate calls to \texttt{func}, \texttt{jac}, and
+\texttt{hess} would repeat the underlying evaluation three times.
 
 ## Chain rule via dX, dP, dX2, dP2
 
@@ -2199,17 +2245,15 @@ Symbols listed in \texttt{fixed} have their seed rows zeroed before
 the contraction; symbols absent from the seeds also contribute zero,
 not an error.
 
-In the symbolic path the seeds are bundled into one matrix
+Bundling the seeds into one matrix
 $S \in \mathbb{R}^{n_{\mathrm{obs}} \times n_{\mathrm{diff}} \times
 n_\theta}$ over the canonical-symbol basis
-$n_{\mathrm{diff}} = n_x + n_p$. The chain rule for the Jacobian is
+$n_{\mathrm{diff}} = n_x + n_p$, the chain rule for the Jacobian reads
 \begin{equation}
   \frac{\partial y}{\partial\theta}\bigg|_{\mathrm{obs}}
     = J\bigl(x_{\mathrm{obs}}, p\bigr) \cdot S_{\mathrm{obs}},
 \end{equation}
-implemented as one DGEMM per observation in
-\texttt{cppde::chain\_jac}. For the Hessian, two contributions
-combine,
+and for the Hessian two contributions combine,
 \begin{equation}
   \frac{\partial^2 y}{\partial\theta\,\partial\theta^\top}\bigg|_{\mathrm{obs},\,o}
     = S_{\mathrm{obs}}^\top \, H_o\bigl(x_{\mathrm{obs}}, p\bigr) \,
@@ -2217,11 +2261,10 @@ combine,
     + \sum_{i} J_{o, i}\bigl(x_{\mathrm{obs}}, p\bigr) \,
         S2_{\mathrm{obs}, i, \cdot, \cdot},
 \end{equation}
-implemented as two DGEMMs plus one DGEMV per (obs, output) in
-\texttt{cppde::chain\_hess}. The second term vanishes when $\Phi$ is
-affine (\texttt{dX2} and \texttt{dP2} unset).
+the second of which vanishes when $\Phi$ is affine (\texttt{dX2} and
+\texttt{dP2} unset).
 
-In the dual path the same contractions are obtained automatically by
+Neither $J$ nor $H$ is formed. Both contractions are obtained by
 seeding the dual-number tangent slots. Each input scalar $x_i$ becomes
 \begin{equation*}
   \tilde x_i = (x_i + \mathrm{d}X_{i,\cdot}\,\varepsilon_{\mathrm{in}})
@@ -2255,7 +2298,7 @@ partial-shape \texttt{sens1ini} convention used by \texttt{solveODE()}.
 
 # Benchmarks \label{sec:bench}
 
-Both backends solve the same problem from the same symbolic input.
+Both backends solve the same problem from the same model equations.
 Right-hand side, analytic Jacobian, events, linear-solver selection,
 and tolerances are shared, so a head-to-head measurement isolates the
 numerical core rather than the model formulation.

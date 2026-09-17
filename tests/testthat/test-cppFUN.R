@@ -2,6 +2,22 @@
 
 skip_on_cran()
 
+# Closed forms of y1 = a*x^2 + b, y2 = sin(c*x) over (a, b, c, x).
+.xs_jac <- function(a, b, c, x) {
+  rbind(y1 = c(a = x^2, b = 1, c = 0, x = 2 * a * x),
+        y2 = c(a = 0, b = 0, c = x * cos(c * x), x = c * cos(c * x)))
+}
+.xs_hess <- function(a, b, c, x) {
+  s <- c("a", "b", "c", "x")
+  H <- array(0, c(2, 4, 4), list(c("y1", "y2"), s, s))
+  H["y1", "a", "x"] <- H["y1", "x", "a"] <- 2 * x
+  H["y1", "x", "x"] <- 2 * a
+  H["y2", "c", "c"] <- -x^2 * sin(c * x)
+  H["y2", "c", "x"] <- H["y2", "x", "c"] <- cos(c * x) - c * x * sin(c * x)
+  H["y2", "x", "x"] <- -c^2 * sin(c * x)
+  H
+}
+
 # -- Basic cppFUN output structure ---------------------------------------------
 
 test_that("cppFUN returns correct output", {
@@ -10,8 +26,8 @@ test_that("cppFUN returns correct output", {
     y2 = "a + b * x"
   )
 
-  f <- cppFUN(trafo, parameters = c("a", "b", "x"),
-              deriv = TRUE, modelname = "fun_basic", convenient = TRUE)
+  f <- cppFUN(trafo, parameters = c("a", "b", "x"), deriv = TRUE,
+              modelname = "fun_basic", compile = TRUE, convenient = TRUE)
 
   res <- f$func(a = 2, b = 0.5, x = 1)
 
@@ -19,6 +35,20 @@ test_that("cppFUN returns correct output", {
   expect_equal(colnames(res), c("y1", "y2"))
   expect_equal(unname(res[1, "y1"]), 2 * exp(-0.5), tolerance = 1e-10)
   expect_equal(unname(res[1, "y2"]), 2.5, tolerance = 1e-10)
+})
+
+test_that("an object that was not compiled says so", {
+  # Every entry needs compiled code.
+  f <- cppFUN(c(y = "a * x"), variables = "x", parameters = "a",
+              derivMode = c("forward", "reverse"), modelname = "fun_uncompiled",
+              convenient = FALSE)
+  M <- matrix(2, 1, 1, dimnames = list(NULL, "x"))
+  msg <- "'fun_uncompiled' is not compiled; call compile\\(\\)"
+  expect_error(f$func(M, c(a = 3)), msg)
+  expect_error(f$jac(M, c(a = 3)), msg)
+  expect_error(f$evaluate(M, c(a = 3)), msg)
+  expect_error(f$vjp(M, c(a = 3), matrix(1, 1, 1)), msg)
+  expect_error(f$vjp2(M, c(a = 3), matrix(1, 1, 1)), msg)
 })
 
 test_that("parameters named like the generated arrays do not collide", {
@@ -32,8 +62,8 @@ test_that("parameters named like the generated arrays do not collide", {
 
   for (i in seq_along(orders)) {
     f <- cppFUN(trafo, parameters = orders[[i]], deriv = TRUE,
-                derivMode = "symbolic", modelname = paste0("collide_", i),
-                convenient = TRUE)
+                derivMode = "forward", modelname = paste0("collide_", i),
+                compile = TRUE, convenient = TRUE)
     res <- do.call(f$func, as.list(pars[orders[[i]]]))
     jac <- do.call(f$jac, as.list(pars[orders[[i]]]))[1, , ]
 
@@ -51,24 +81,26 @@ test_that("symbols named after C++ tokens do not reach the generated source", {
   trafo <- c(o1 = "std * exp(ini * log(10)) + default",
              o2 = "sqrt(int) + std^2")
 
-  for (mode in c("forward", "symbolic")) {
-    f <- cppFUN(trafo, variables = "int", parameters = c("std", "ini", "default"),
-                deriv = TRUE, derivMode = mode, compile = TRUE,
-                modelname = paste0("cxx_tokens_", mode), convenient = TRUE)
-    res <- f$func(int = 4, std = 2, ini = 0.5, default = 3)
-    jac <- f$jac(int = 4, std = 2, ini = 0.5, default = 3)[1, , ]
+  f <- cppFUN(trafo, variables = "int", parameters = c("std", "ini", "default"),
+              deriv = TRUE, derivMode = c("forward", "reverse"), compile = TRUE,
+              modelname = "cxx_tokens", convenient = TRUE)
+  res <- f$func(int = 4, std = 2, ini = 0.5, default = 3)
+  jac <- f$jac(int = 4, std = 2, ini = 0.5, default = 3)[1, , ]
 
-    expect_equal(unname(res[1, ]), c(2 * 10^0.5 + 3, 6), tolerance = 1e-10,
-                 label = paste("values,", mode))
-    expect_equal(unname(jac["o1", "std"]), 10^0.5, tolerance = 1e-8)
-    expect_equal(unname(jac["o1", "default"]), 1, tolerance = 1e-10)
-    expect_equal(unname(jac["o2", "int"]), 0.25, tolerance = 1e-8)
-  }
+  expect_equal(unname(res[1, ]), c(2 * 10^0.5 + 3, 6), tolerance = 1e-10)
+  expect_equal(unname(jac["o1", "std"]), 10^0.5, tolerance = 1e-8)
+  expect_equal(unname(jac["o1", "default"]), 1, tolerance = 1e-10)
+  expect_equal(unname(jac["o2", "int"]), 0.25, tolerance = 1e-8)
+
+  r <- f$vjp(matrix(4, 1, 1, dimnames = list(NULL, "int")),
+             c(std = 2, ini = 0.5, default = 3), matrix(c(0, 1), 1, 2))
+  expect_equal(unname(r$wx[1, 1, 1]), 0.25, tolerance = 1e-10)
+  expect_equal(unname(r$wp["std", 1]), 4, tolerance = 1e-10)
 })
 
 test_that("a Python keyword as a symbol name is rejected", {
-  # SymPy parses through Python, where the name is a syntax error, and True,
-  # False and None read as constants and drop the symbol from the model.
+  # The generator parses through Python, where the name is a syntax error, and
+  # True, False and None read as constants and drop the symbol from the model.
   expect_error(cppFUN(c(y = "class * 2"), modelname = "py_kw_eqn"),
                "Python keyword used as a symbol name: 'class'")
   expect_error(cppFUN(c(y = "a * 2"), parameters = c("a", "lambda"),
@@ -91,7 +123,7 @@ test_that("cppFUN Jacobian matches analytical derivatives", {
   )
 
   f <- cppFUN(trafo, parameters = c("a", "b", "x"),
-              deriv = TRUE, derivMode = "symbolic",
+              deriv = TRUE, derivMode = "forward", compile = TRUE,
               modelname = "fun_jac", convenient = TRUE)
 
   jac <- f$jac(a = 2, b = 0.5, x = 1)
@@ -120,8 +152,8 @@ test_that("cppFUN Hessian has correct dimensions and is symmetric", {
   trafo <- c(y = "a * b * x^2")
 
   f <- cppFUN(trafo, parameters = c("a", "b", "x"),
-              deriv = TRUE, deriv2 = TRUE, derivMode = "symbolic",
-              modelname = "fun_hess", convenient = TRUE)
+              deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
+              compile = TRUE, modelname = "fun_hess", convenient = TRUE)
 
   hess_arr <- f$hess(a = 2, b = 3, x = 4)
 
@@ -149,8 +181,8 @@ test_that("cppFUN fixed parameters are excluded from derivatives", {
   trafo <- c(y = "a * b + c")
 
   f <- cppFUN(trafo, parameters = c("a", "b", "c"),
-              fixed = "c", deriv = TRUE, derivMode = "symbolic",
-              modelname = "fun_fixed", convenient = TRUE)
+              fixed = "c", deriv = TRUE, derivMode = "forward",
+              compile = TRUE, modelname = "fun_fixed", convenient = TRUE)
 
   jac <- f$jac(a = 2, b = 3, c = 1)
 
@@ -158,58 +190,57 @@ test_that("cppFUN fixed parameters are excluded from derivatives", {
   expect_equal(dim(jac)[3], 2)
   jac_names <- dimnames(jac)[[3]]
   expect_false("c" %in% jac_names)
+  expect_equal(unname(jac[1, "y", ]), c(3, 2), tolerance = 1e-12)
 })
 
-# -- forward vs symbolic agree on raw derivatives --------------------------------
+# -- raw derivatives against closed forms ---------------------------------------
 
-test_that("cppFUN forward and symbolic give identical raw jac/hess", {
+test_that("cppFUN raw jac/hess match the closed forms", {
   trafo <- c(y1 = "a*x^2 + b", y2 = "sin(c*x)")
   pars  <- list(a = 2, b = 1, c = 0.3, x = 3)
-  out_d <- list(); out_s <- list()
-  for (mode in c("forward", "symbolic")) {
-    f <- cppFUN(trafo, parameters = c("a", "b", "c", "x"),
-                deriv = TRUE, deriv2 = TRUE, derivMode = mode,
-                compile = TRUE, modelname = paste0("xs_raw_", mode))
-    res <- list()
-    res$y    <- do.call(f$func, pars)
-    res$jac  <- do.call(f$jac,  pars)
-    res$hess <- do.call(f$hess, pars)
-    if (mode == "forward") out_d <- res else out_s <- res
-  }
-  expect_equal(unname(out_d$y),    unname(out_s$y),    tolerance = 1e-12)
-  expect_equal(unname(out_d$jac),  unname(out_s$jac),  tolerance = 1e-10)
-  expect_equal(unname(out_d$hess), unname(out_s$hess), tolerance = 1e-10)
+  f <- cppFUN(trafo, parameters = c("a", "b", "c", "x"),
+              deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
+              compile = TRUE, modelname = "xs_raw")
+  y    <- do.call(f$func, pars)
+  jac  <- do.call(f$jac,  pars)
+  hess <- do.call(f$hess, pars)
+  expect_equal(unname(y[1, ]), c(2 * 9 + 1, sin(0.9)), tolerance = 1e-12)
+  expect_equal(unname(jac[1, , ]), unname(do.call(.xs_jac, pars)),
+               tolerance = 1e-12)
+  expect_equal(unname(hess[1, , , ]), unname(do.call(.xs_hess, pars)),
+               tolerance = 1e-12)
 })
 
-# -- forward vs symbolic agree under chain rule, including dX2/dP2 ---------------
+# -- second-order chain rule, including dX2/dP2 ---------------------------------
 
-test_that("cppFUN forward and symbolic agree under second-order chain rule", {
+test_that("cppFUN evaluates the second-order chain rule", {
   trafo <- c(y1 = "a*x^2 + b", y2 = "sin(c*x)")
   th    <- c("th1", "th2", "th3")
+  s     <- c("a", "b", "c", "x")
   # Linear part of Phi: theta -> (a, b, c) = (2*th1, 1*th2, 1*th3 + th1)
-  dP <- matrix(0, 4, length(th),
-               dimnames = list(c("a", "b", "c", "x"), th))
+  dP <- matrix(0, 4, length(th), dimnames = list(s, th))
   dP["a", "th1"] <- 2
   dP["b", "th2"] <- 1
   dP["c", "th3"] <- 1
   dP["c", "th1"] <- 1
   # Nonlinear quadratic part: a depends on th1*th2 with coefficient 0.5.
-  dP2 <- array(0, c(4, length(th), length(th)),
-               dimnames = list(c("a", "b", "c", "x"), th, th))
+  dP2 <- array(0, c(4, length(th), length(th)), dimnames = list(s, th, th))
   dP2["a", "th1", "th2"] <- 0.5
   dP2["a", "th2", "th1"] <- 0.5
   pars <- list(a = 2, b = 1, c = 0.3, x = 3)
-  out  <- list()
-  for (mode in c("forward", "symbolic")) {
-    f <- cppFUN(trafo, parameters = c("a", "b", "c", "x"),
-                deriv = TRUE, deriv2 = TRUE, derivMode = mode,
-                compile = TRUE, modelname = paste0("xs_chain_", mode))
-    out[[mode]] <- do.call(f$evaluate, c(pars, list(dP = dP, dP2 = dP2,
-                                                    deriv2 = TRUE)))
+  f <- cppFUN(trafo, parameters = s, deriv = TRUE, deriv2 = TRUE,
+              derivMode = "forward", compile = TRUE, modelname = "xs_chain")
+  out <- do.call(f$evaluate, c(pars, list(dP = dP, dP2 = dP2, deriv2 = TRUE)))
+
+  J <- do.call(.xs_jac, pars)
+  H <- do.call(.xs_hess, pars)
+  d2 <- array(0, c(2, 3, 3))
+  for (o in 1:2) {
+    d2[o, , ] <- t(dP) %*% H[o, , ] %*% dP
+    for (i in 1:4) d2[o, , ] <- d2[o, , ] + J[o, i] * dP2[i, , ]
   }
-  expect_equal(out$forward$y,   out$symbolic$y,   tolerance = 1e-12)
-  expect_equal(out$forward$dy,  out$symbolic$dy,  tolerance = 1e-10)
-  expect_equal(out$forward$d2y, out$symbolic$d2y, tolerance = 1e-9)
+  expect_equal(unname(out$dy[1, , ]), unname(J %*% dP), tolerance = 1e-12)
+  expect_equal(unname(out$d2y[1, , , ]), d2, tolerance = 1e-12)
 })
 
 # -- forward + deriv2 + identity pass-through (regression) ------------------------
@@ -219,22 +250,22 @@ test_that("cppFUN forward and symbolic agree under second-order chain rule", {
 test_that("cppFUN forward deriv2 handles identity pass-through", {
   trafo <- c(la = "la", y2 = "la^2 + b", zero = "0")
   pars  <- list(la = 1.5, b = 0.7)
-  for (mode in c("forward", "symbolic")) {
-    f <- cppFUN(trafo, parameters = c("la", "b"),
-                deriv = TRUE, deriv2 = TRUE, derivMode = mode,
-                compile = TRUE, modelname = paste0("xs_passthru_", mode))
-    out <- do.call(f$evaluate, c(pars, list(deriv2 = TRUE)))
-    if (mode == "forward") d <- out else s <- out
-  }
-  expect_equal(unname(d$y),   unname(s$y),   tolerance = 1e-12)
-  expect_equal(unname(d$dy),  unname(s$dy),  tolerance = 1e-10)
-  expect_equal(unname(d$d2y), unname(s$d2y), tolerance = 1e-10)
+  f <- cppFUN(trafo, parameters = c("la", "b"),
+              deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
+              compile = TRUE, modelname = "xs_passthru")
+  d <- do.call(f$evaluate, c(pars, list(deriv2 = TRUE)))
+  H <- array(0, c(3, 2, 2))
+  H[2, 1, 1] <- 2
+  expect_equal(unname(d$y[1, ]), c(1.5, 1.5^2 + 0.7, 0), tolerance = 1e-12)
+  expect_equal(unname(d$dy[1, , ]), rbind(c(1, 0), c(3, 1), c(0, 0)),
+               tolerance = 1e-12)
+  expect_equal(unname(d$d2y[1, , , ]), H, tolerance = 1e-12)
 })
 
 
 # -- Reverse mode ---------------------------------------------------------------
 
-test_that("vjp contracts the Jacobian the symbolic path returns", {
+test_that("vjp contracts the Jacobian the forward path returns", {
   trafo <- c(y1 = "a * exp(-k * t) + b", y2 = "log(a + k * k) * t")
   pars  <- c(a = 2, b = -0.5, k = 0.7)
   M     <- matrix(c(0.3, 1.1, 2.7), ncol = 1, dimnames = list(NULL, "t"))
@@ -243,14 +274,14 @@ test_that("vjp contracts the Jacobian the symbolic path returns", {
   fr <- cppFUN(trafo, variables = "t", parameters = names(pars), deriv = TRUE,
                derivMode = "reverse", modelname = "vjp_rev", compile = TRUE,
                convenient = FALSE)
-  fs <- cppFUN(trafo, variables = "t", parameters = names(pars), deriv = TRUE,
-               derivMode = "symbolic", modelname = "vjp_symb", compile = TRUE,
+  ff <- cppFUN(trafo, variables = "t", parameters = names(pars), deriv = TRUE,
+               derivMode = "forward", modelname = "vjp_fwd", compile = TRUE,
                convenient = FALSE)
 
   r <- fr$vjp(M, pars, w)
-  J <- fs$jac(M, pars)
+  J <- ff$jac(M, pars)
 
-  expect_equal(unname(r$y), unname(fs$func(M, pars)), tolerance = 1e-12)
+  expect_equal(unname(r$y), unname(ff$func(M, pars)), tolerance = 1e-12)
 
   # A variable is per observation, a parameter is shared, so the parameter
   # cotangent sums over observations and the variable one does not.
@@ -286,14 +317,9 @@ test_that("vjp sweeps several seeds against one recording", {
 test_that("derivMode builds exactly the directions it names", {
   eq <- c(y = "a * a")
 
-  # symbolic is a backend for the forward Jacobian, not a direction.
-  fs <- cppFUN(eq, parameters = "a", deriv = TRUE, derivMode = "symbolic",
-               modelname = "dm_symb", convenient = FALSE)
-  expect_null(fs$vjp)
-  expect_false(is.null(fs$jac))
-  expect_error(cppFUN(eq, parameters = "a", derivMode = c("symbolic", "reverse"),
-                      modelname = "dm_bad"),
-               "cannot be combined")
+  expect_error(cppFUN(eq, parameters = "a", derivMode = "symbolic",
+                      modelname = "dm_symb"),
+               'derivMode = "symbolic" is gone')
   # Second order is forward-only, so asking for it with the reverse direction
   # alone would otherwise return no Hessian without saying so.
   expect_error(cppFUN(eq, parameters = "a", deriv2 = TRUE, derivMode = "reverse",
