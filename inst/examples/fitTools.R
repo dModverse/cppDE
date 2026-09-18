@@ -150,9 +150,12 @@ plotWaterfall <- function(ms) {
   df <- data.frame(rank = seq_along(o), delta = ms$value[o] - ms$value[o[1]],
                    status = factor(ms$status[o],
                                    c("global", "local", "iteration limit")))
+  ## The axis spans at least two decades, so that fits within the noise of the
+  ## optimum sit on one level.
   ggplot(df, aes(rank, delta)) +
     geom_step(colour = "grey70") +
     geom_point(aes(colour = status), size = 2) +
+    expand_limits(y = c(0, 100)) +
     scale_y_continuous(trans = scales::pseudo_log_trans(base = 10),
                        breaks = c(0, 10^(0:8))) +
     scale_colour_manual(values = c(global = "#1b7837", local = "#b2182b",
