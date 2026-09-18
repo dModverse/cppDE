@@ -76,7 +76,7 @@
 #'   `deriv2`, `derivMode`, `sparse`, `method`, `useNDF`, `dimNames`,
 #'   `compileArgs`, `backend`.
 #'
-#' @example inst/examples/example_ODE.R
+#' @example inst/examples/cppODE.R
 #' @importFrom stats setNames
 #' @seealso [solveODE()] for integration; [cvode()] for the
 #'   SUNDIALS-backed alternative; [cppFUN()] for algebraic functions;

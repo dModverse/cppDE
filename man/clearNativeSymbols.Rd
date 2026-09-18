@@ -19,3 +19,8 @@ makes that pairing stale. Call this to drop it; \link{compile} does it for you.
 Addresses are never cached, so this is not needed after loading or unloading
 a shared object.
 }
+\examples{
+## Forget the cached entry points, as after unloading a model's shared object
+## by hand; compile() does this itself.
+clearNativeSymbols()
+}

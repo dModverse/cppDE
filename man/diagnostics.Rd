@@ -17,9 +17,8 @@ Invisibly returns the \code{diagnostics} list.
 Prints a summary of the solver diagnostics returned by \code{\link[=solveODE]{solveODE()}}.
 }
 \examples{
-\dontrun{
-res <- solveODE(model, times, parms)
-diagnostics(res)
+\donttest{
+f <- cppODE(c(x = "-k*x"), deriv = FALSE)
+diagnostics(solveODE(f, times = 0:5, parms = c(x = 1, k = 0.3)))
 }
-
 }

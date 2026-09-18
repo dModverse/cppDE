@@ -190,6 +190,17 @@ caller that spread the wider axis across threads already owns them.
 A model compiled before this entry point existed, or a build without
 OpenMP, falls back to \code{\link[=solveODE]{solveODE()}} per condition.
 }
+\examples{
+\donttest{
+## One model, several conditions, solved on threads in one call. A condition's
+## list overrides the batch-wide arguments.
+f <- cppODE(c(x = "-k*x"), deriv = FALSE)
+conditions <- list(slow = list(parms = c(x = 1, k = 0.1)),
+                   fast = list(parms = c(x = 1, k = 1)))
+res <- solveODEBatch(f, conditions, times = 0:5)
+sapply(res, function(r) r$variable[, "x"])
+}
+}
 \seealso{
 \code{\link[=solveODE]{solveODE()}}
 }

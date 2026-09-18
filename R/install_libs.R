@@ -118,6 +118,7 @@
 #' @seealso [cvode()] and the `sparse` argument of [cppODE()], which report
 #'   the relevant option when a library is unavailable.
 #'
+#' @example inst/examples/install_libs.R
 #' @export
 install_libs <- function(which = c("sundials", "suitesparse"),
                          dir = NULL,

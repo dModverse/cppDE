@@ -27,5 +27,6 @@
 #'   no entry point resolved), `threads` (its current thread count, `NA` without
 #'   a getter) and `guard` (whether the `fork()` handler is installed).
 #' @seealso [batchAvailable()]
+#' @example inst/examples/forkGuard.R
 #' @export
 forkGuard <- function() .Call(C_cppde_blas_info)

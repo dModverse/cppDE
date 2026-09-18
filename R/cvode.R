@@ -65,6 +65,7 @@
 #'
 #' @seealso [cppODE()], [solveODE()], [cppFUN()];
 #'   `vignette("Methods", package = "cppDE")`.
+#' @example inst/examples/cvode.R
 #' @export
 cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = NULL,
                   compile = TRUE, modelname = NULL, outdir = tempdir(),

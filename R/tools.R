@@ -72,6 +72,7 @@ unique_modelname <- function(modelname) {
 #' a shared object.
 #'
 #' @return `NULL`, invisibly.
+#' @example inst/examples/clearNativeSymbols.R
 #' @export
 clearNativeSymbols <- function() {
   rm(list = ls(.symDLL, all.names = TRUE), envir = .symDLL)
@@ -108,6 +109,7 @@ clearNativeSymbols <- function() {
 #' @param verbose Logical; if `TRUE`, show compiler commands.
 #'
 #' @return Invisibly returns `TRUE` on successful compilation.
+#' @example inst/examples/compile.R
 #' @export
 compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE) {
 

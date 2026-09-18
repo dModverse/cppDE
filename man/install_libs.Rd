@@ -144,6 +144,13 @@ The SuiteSparse modules built here (\code{klu}, \code{amd}, \code{colamd}, \code
 not use BLAS at all.
 }
 
+\examples{
+\dontrun{
+## Downloads and builds SUNDIALS and SuiteSparse; reinstall cppDE afterwards
+## so that ./configure finds them.
+install_libs()
+}
+}
 \seealso{
 \code{\link[=cvode]{cvode()}} and the \code{sparse} argument of \code{\link[=cppODE]{cppODE()}}, which report
 the relevant option when a library is unavailable.

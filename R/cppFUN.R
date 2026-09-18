@@ -58,6 +58,7 @@
 #'
 #' @seealso [compile()] for compilation; [cppODE()] and [cvode()] for ODE
 #'   integration; `vignette("Methods", package = "cppDE")`.
+#' @example inst/examples/cppFUN.R
 #' @export
 cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parameters = NULL,
                    fixed = NULL, modelname = NULL, outdir = tempdir(), compile = FALSE,

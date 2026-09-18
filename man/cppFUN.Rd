@@ -90,6 +90,16 @@ with \code{compile = FALSE} is evaluable only after \code{\link[=compile]{compil
 \code{vignette("Methods", package = "cppDE")} for the computational paths and
 the pass-through convention for unmodelled inputs.
 }
+\examples{
+\donttest{
+## Two observables of two states and a scale, compiled with their Jacobian.
+## The functions take the inputs as named arguments.
+g <- cppFUN(c(y = "s*(x1 + x2)", z = "log(x1)"), variables = c("x1", "x2"),
+            parameters = "s", compile = TRUE)
+g$func(x1 = 1, x2 = 2, s = 0.5)
+g$jac(x1 = 1, x2 = 2, s = 0.5)[1, , ]
+}
+}
 \seealso{
 \code{\link[=compile]{compile()}} for compilation; \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} for ODE
 integration; \code{vignette("Methods", package = "cppDE")}.

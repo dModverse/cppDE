@@ -807,6 +807,7 @@
 #' @seealso [cppODE()] and [cvode()] for model compilation;
 #'   [diagnostics()] for printing solver statistics.
 #'
+#' @example inst/examples/solveODE.R
 #' @export
 solveODE <- function(model, times, parms,
                      sens1ini = NULL, sens2ini = NULL,
@@ -889,6 +890,7 @@ solveODE <- function(model, times, parms,
 #'   names of `conditions`.
 #'
 #' @seealso [solveODE()]
+#' @example inst/examples/solveODEBatch.R
 #' @export
 solveODEBatch <- function(model, conditions,
                           times = NULL, parms = NULL,
@@ -1047,6 +1049,7 @@ solveODEBatch <- function(model, conditions,
 #'   are not visible here: inside a forked child, and inside an enclosing
 #'   OpenMP region.
 #' @seealso [solveODEBatch()]
+#' @example inst/examples/batchAvailable.R
 #' @export
 batchAvailable <- function(model) {
   sym  <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
@@ -1069,6 +1072,7 @@ batchAvailable <- function(model) {
 #' @inheritParams solveODEBatch
 #' @return An object of class `"cppDEbatch"` for [solveBatch()].
 #' @seealso [solveBatch()], [solveODEBatch()]
+#' @example inst/examples/prepareBatch.R
 #' @export
 prepareBatch <- function(model, conditions,
                          times = NULL, parms = NULL,
@@ -1121,6 +1125,7 @@ prepareBatch <- function(model, conditions,
 #' @param cores,traceFile,onFailure As in [solveODEBatch()].
 #' @return A list of [solveODE()] results, named as the prepared conditions.
 #' @seealso [prepareBatch()]
+#' @example inst/examples/solveBatch.R
 #' @export
 solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
                        seed = NULL, errWeights = NULL,
@@ -1227,11 +1232,7 @@ solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
 #'
 #' @return Invisibly returns the `diagnostics` list.
 #'
-#' @examples
-#' \dontrun{
-#' res <- solveODE(model, times, parms)
-#' diagnostics(res)
-#' }
+#' @example inst/examples/diagnostics.R
 #'
 #' @export
 diagnostics <- function(result) {
