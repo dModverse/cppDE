@@ -1,4 +1,4 @@
-# cppDE (development version)
+# cppDE 0.10.0
 
 * **Derivatives come from automatic differentiation on an expression graph.**
   `cppODE()`, `cvode()` and `cppFUN()` parse a model into a hash-consed graph
@@ -182,6 +182,12 @@
   solve was four orders out. The reciprocal pivot growth now decides.
 * The code generator no longer recognises scalar types by name. The caller
   states the derivative depth and whether tangents live in the arena.
+* New example `inst/examples/example_fitMultilayer.R`: 150 parameters of a
+  simulated Co/Pt multilayer, fitted by `optim()` on the reverse gradient, with
+  the forward gradient timed beside it. The examples that compared against cOde
+  are gone.
+* Every exported function has an example. Those that compile build into
+  `tempdir()` and run under `\donttest`.
 
 # cppDE 0.9.5
 
