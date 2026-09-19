@@ -11,7 +11,7 @@
 #' Available methods are `"bdf"` (default) and `"adams"`. Sensitivities
 #' are first-order forward only; `deriv2` is not supported.
 #' `derivMode = "reverse"` compiles the CVODES adjoint instead, returning
-#' `$adjoint` the way the native backend's reverse mode does. Events,
+#' `$cotangent` the way the native backend's reverse mode does. Events,
 #' forcings, `rootfunc`, and `fixed` behave as in [cppODE()].
 #'
 #' SUNDIALS (>= 6.0) must be available at install time; otherwise
@@ -35,7 +35,7 @@
 #'   Ignored under `derivMode = "forward"`.
 #' @param derivMode Direction the derivatives are taken in. `"forward"` (default)
 #'   is the CVODES forward sensitivity solver, driven by `deriv`. `"reverse"`
-#'   is CVODES adjoint sensitivity analysis, one backward solve per seed
+#'   is CVODES adjoint sensitivity analysis, one backward solve per cotangent
 #'   column. It needs `deriv = FALSE` and refuses `events` and `rootfunc`.
 #' @param stepTrace Logical. Compile to record per-step diagnostics
 #'   (returned as `$trace` from [solveODE()]). Without `events` or
@@ -257,7 +257,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   attr(modelname, "backend")     <- "cvode"
 
   # The sens dim defaults to model-parameter names; solveODE() overrides it per
-  # call when sens1ini carries a full Phi' shape.
+  # call when the tangent carries a full Phi' shape.
   attr(modelname, "dimNames") <- if (deriv) {
     list(time = "time", variable = variables, sens = sens_names)
   } else {

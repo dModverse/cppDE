@@ -7,9 +7,10 @@
 solveBatch(
   handle,
   parms = NULL,
-  sens1ini = NULL,
-  sens2ini = NULL,
-  seed = NULL,
+  tangent = NULL,
+  hessian = NULL,
+  cotangent = NULL,
+  curvature = NULL,
   errWeights = NULL,
   cores = NULL,
   traceFile = NULL,
@@ -22,11 +23,9 @@ solveBatch(
 \item{parms}{List of named numeric vectors, one per condition, or \code{NULL} to
 reuse the prepared values.}
 
-\item{sens1ini, sens2ini}{Lists of sensitivity initial values, one per
-condition, or \code{NULL} to reuse. Shapes must match the prepared ones.}
-
-\item{seed}{List of reverse-mode seeds, one per condition, or \code{NULL} to
-reuse. Shapes must match the prepared ones.}
+\item{tangent, hessian, cotangent, curvature}{Lists with one element per
+condition, each as the argument of the same name in \code{\link[=solveODE]{solveODE()}}, or
+\code{NULL} to reuse. Shapes must match the prepared ones.}
 
 \item{errWeights}{List of weightings for the step-size controller, one per
 condition, or \code{NULL} to keep the prepared ones. Each is the \code{errWeights}
@@ -39,8 +38,8 @@ A list of \code{\link[=solveODE]{solveODE()}} results, named as the prepared con
 }
 \description{
 Re-solves the conditions of a \code{\link[=prepareBatch]{prepareBatch()}} handle with new numbers.
-Only \code{parms}, \code{sens1ini}, \code{sens2ini}, \code{seed} and \code{errWeights} may change;
-anything else needs a fresh handle.
+Only \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent}, \code{curvature} and
+\code{errWeights} may change; anything else needs a fresh handle.
 }
 \examples{
 \donttest{

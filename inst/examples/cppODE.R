@@ -32,7 +32,7 @@ parms <- c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)
 
 out <- solveODE(fwd, times, parms)
 head(out$variable)
-out$sens1[21, "B", ]                  # dB(10) / d(A, B, k1, k2)
+out$tangent[21, "B", ]                # dB(10) / d(A, B, k1, k2)
 
 out <- solveODE(dosed, times, c(parms, t_e = 4))
 out$variable[times %in% c(3.5, 4, 4.5), ]
@@ -46,9 +46,9 @@ out <- solveODE(forced, times, parms, forcings = u)
 out$variable[21, ]
 
 out <- solveODE(fwd2, times, parms)
-out$sens2[21, "B", , ]                # Hessian of B(10)
+out$hessian[21, "B", , ]              # Hessian of B(10)
 
-## The gradient of sum(B) over the grid: a seed of ones on B
-seed <- cbind(A = 0, B = rep(1, length(times)))
-solveODE(rev, times, parms, seed = seed)$adjoint
+## The gradient of sum(B) over the grid: a cotangent of ones on B
+onB <- cbind(A = 0, B = rep(1, length(times)))
+solveODE(rev, times, parms, cotangent = onB)$cotangent
 }

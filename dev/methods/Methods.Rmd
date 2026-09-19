@@ -620,7 +620,7 @@ inputs.
 ### Tangent storage
 
 A dual carries its value inline and $m$ tangent slots behind a pointer,
-and $m$ is $\mathrm{ncol}$ of the seeding matrix, read at run time rather
+and $m$ is $\mathrm{ncol}$ of the tangent, read at run time rather
 than fixed at compile time. The tangents of temporaries come from a
 thread-local bump arena, whose allocations since the start of a generated
 model body are released in one operation when that body returns. The
@@ -703,8 +703,8 @@ for $S_\theta$ directly,
   S_\theta(t_0) = \frac{\partial p_{\mathrm{init}}}{\partial \theta}.
   \label{eq:sensitivity-theta}
 \end{equation}
-The matrix $\partial p / \partial\theta$ is the \emph{seed matrix},
-supplied through the \texttt{sens1ini} argument of
+The matrix $\partial p / \partial\theta$ is the \emph{tangent} of the
+inputs, supplied through the \texttt{tangent} argument of
 \texttt{solveODE()} and fixed for the integration. The choice
 $\partial p/\partial\theta = I_{n_p}$ gives $S_\theta = S_p$; any
 other choice propagates $M$ directions of $\theta$-space at the cost
@@ -1153,8 +1153,8 @@ The gradient therefore costs one backward solve of a linear system of
 dimension $n_x$ and a quadrature of dimension $n_p$, whatever $M$;
 $\partial f/\partial p$ enters only through its contraction with
 $\lambda$ and is never formed. The two parts of
-\eqref{eq:adjoint-quadrature} are returned stacked as a forward seed
-matrix is indexed, states first and parameters second.
+\eqref{eq:adjoint-quadrature} are returned stacked as the rows of the
+\texttt{tangent} argument are indexed, states first and parameters second.
 
 ### Discrete and continuous adjoints
 
@@ -1267,16 +1267,17 @@ backward pass can be issued as separate calls. A reverse solve with
 a later solve of the same model at the same times and parameters accepts
 them through \texttt{store}; that solve performs no integration and
 proceeds directly to the sweep. A store created at a different parameter
-value is rejected rather than reused. The seed may be omitted on the
-call that creates a store, which then performs a value-only run and
+value is rejected rather than reused. The cotangent may be omitted on
+the call that creates a store, which then performs a value-only run and
 retains its checkpoints.
 
 A gradient requires two solves at the same parameter value, one to
-provide the values from which the seed is formed and one to perform the
-sweep, and the store removes the second integration. Several cotangents
-are handled in the same way: the columns of a three-dimensional seed
-sweep the one store in turn, so $n_{\text{seed}}$ cotangents cost
-$n_{\text{seed}}$ sweeps and a single integration.
+provide the values from which the cotangent is formed and one to perform
+the sweep, and the store removes the second integration. Several
+cotangents are handled in the same way: the columns of a
+three-dimensional cotangent sweep the one store in turn, so
+$n_{\text{seed}}$ cotangents cost $n_{\text{seed}}$ sweeps and a single
+integration.
 
 Under \verb|derivMode = "forward-reverse"| both arguments are refused. A
 checkpoint of that mode carries tangents, which live in the arena of the
@@ -1534,7 +1535,7 @@ Hessian would be wrong by a rank-one term.
 When $t^{*}$ depends on a parameter, the reported trajectory carries a row whose
 time moves with it. A functional $w^{\mathsf T} x$ seeded on that row is not the
 same functional at two parameter values and has no derivative to compare
-against. Restricting the seed to the user's own output times restores a
+against. Restricting the cotangent to the user's own output times restores a
 well-posed functional, after which the forward, forward-over-forward and
 difference-quotient answers agree to the tolerance of the solve.
 
@@ -1694,13 +1695,13 @@ whose Jacobian is the Hessian $\nabla^2_\theta J$. Nothing in the sweep
 that evaluates \eqref{eq:gradient-map} depends on the scalar type, so
 instantiating it on $\mathtt{dual}\langle\mathtt{double}, N\rangle$
 rather than on \texttt{double} differentiates the sweep itself. Seeded
-with directions $V \in \mathbb{R}^{M \times N}$ it returns the pair
+with the tangent $V \in \mathbb{R}^{M \times N}$ it returns the pair
 $(\nabla_\theta J,\; \nabla^2_\theta J\,V)$, both computed exactly
 rather than by a difference quotient; for $V = I_M$ the second member is
 the Hessian. This is selected
 by \texttt{derivMode = "forward-reverse"} and reported as
-\verb|adjoint2|, of shape $[n_x + n_p, N, n_{\text{seed}}]$, beside the
-\verb|adjoint| and \verb|sens1| of the same run.
+\verb|curvature|, of shape $[n_x + n_p, N, n_{\text{seed}}]$, beside the
+\verb|cotangent| and \verb|tangent| of the same run.
 
 The tangents satisfy the second-order adjoint system. Write
 $v = (v_0, v_p)$ for one direction in $\theta$, let $\sigma$ be the
@@ -1724,11 +1725,11 @@ backwards from $\mu(T^+) = 0$,
 \end{equation}
 and with the jumps $\mu(t_o^-) = \mu(t_o^+) + \dot w_o$, where
 $\dot w_o$ is the derivative of the cotangent row $w_o$ along $v$. It is
-zero for a seed that does not depend on $\theta$; a seed formed from the
-solution, such as a weighted residual, supplies it through the
-\texttt{seedTangent} attribute of the seed, an array
+zero for a cotangent that does not depend on $\theta$; a cotangent formed
+from the solution, such as a weighted residual, supplies it through the
+\texttt{curvature} argument, an array
 $[n_{\mathrm{out}}, n_x, n_{\mathrm{seed}}, N]$. Without it the gradient
-is unchanged and the Hessian misses the dependence of the seed on
+is unchanged and the Hessian misses the dependence of the cotangent on
 $\theta$. Differentiating
 \eqref{eq:adjoint-quadrature} along $v$ then gives the two halves of
 $\nabla^2_\theta J\,v$, the state half as $\mu(t_0)$ and the parameter
@@ -1766,12 +1767,12 @@ difference quotient of the gradient would cost $N$ further gradient
 evaluations and lose half of the available digits.
 
 Forward over forward answers a different question. It returns
-\verb|sens2|, the second derivatives of every state
+\verb|hessian|, the second derivatives of every state
 with respect to every pair of parameters, from which the Hessian of any
 functional can be contracted afterwards. Forward over reverse returns
 the Hessian of one functional. Where that functional is a likelihood the
 mixed route is the cheaper by a factor of $M$; where the states
-themselves are of interest, only \verb|sens2| answers.
+themselves are of interest, only \verb|hessian| answers.
 
 The second order needs two further facilities. The iteration matrix
 carries tangents, so the transposed solve applies the implicit function
@@ -1819,10 +1820,10 @@ its conditions in parallel.
 
 \texttt{prepareBatch()} performs the first phase once and keeps the
 converted arguments in a handle. \texttt{solveBatch()} then solves the
-same conditions with new parameter values, initial sensitivities, seeds
+same conditions with new parameter values, tangents, cotangents
 or error weights of unchanged shapes, as an optimiser does at every
-iteration. Reverse-mode solves run through the same entry with one seed
-per condition, and \texttt{cvode()} models provide the same batch
+iteration. Reverse-mode solves run through the same entry with one
+cotangent per condition, and \texttt{cvode()} models provide the same batch
 entry.
 
 # \texttt{cvode()} \label{sec:cvode}
@@ -1833,7 +1834,7 @@ result through the same \texttt{solveODE()} interface as
 \texttt{cppODE()}. The code generator, the \texttt{events},
 \texttt{forcings}, \texttt{rootfunc} and \texttt{fixed} arguments, the
 shape of the returned object, and the column ordering of
-\texttt{parms} and \texttt{sens1ini} are the same for both backends.
+\texttt{parms} and \texttt{tangent} are the same for both backends.
 SUNDIALS ($\ge 6.0$) must be installed on the build host; KLU, used for
 sparse Jacobians, is detected the same way and is required when
 \texttt{sparse = TRUE}.
@@ -1888,16 +1889,16 @@ its sensitivities from the transported state.
 \textbf{Seeding.} The chain-rule construction
 $S_\theta = S_p\,\partial p / \partial \theta$ of equation
 \eqref{eq:sensitivity-theta} is identical to the \texttt{cppODE()}
-case. \texttt{solveODE()} accepts the same \texttt{sens1ini} matrix
-shapes (legacy, full, and partial) and the same row-name conventions;
+case. \texttt{solveODE()} accepts the same \texttt{tangent} matrix
+shapes (state-only, full, and partial) and the same row-name conventions;
 only second-order $S_\theta$ is unavailable.
 
 ## Adjoint sensitivity analysis \label{sec:asa}
 
 \texttt{cvode(..., derivMode = "reverse")} compiles the CVODES adjoint
 sensitivity analysis (ASA) in place of the forward sensitivities and
-returns the same \verb|$adjoint| as a native reverse solve, the
-contraction \eqref{eq:adjoint-contraction} of a seed, stacked states
+returns the same \verb|$cotangent| as a native reverse solve, the
+contraction \eqref{eq:adjoint-contraction} of a cotangent, stacked states
 first and parameters second. The rest of the call, including the batch
 entry point, is unchanged.
 
@@ -1935,7 +1936,7 @@ derivative of no discretisation that was carried out. It approximates
 the exact gradient to $O(\mathrm{tol})$ and differs by the same order
 from the derivative of the value the call reported.
 
-\textbf{Jumps at observations.} $\lambda$ is initialised with the seed
+\textbf{Jumps at observations.} $\lambda$ is initialised with the cotangent
 row of the last observation, and the sweep stops at every earlier
 observation time to add that row, the jump condition in
 \eqref{eq:adjoint-ode}. A jump is a new initial condition, so the
@@ -1947,7 +1948,7 @@ KLU for a sparse model, and the analytic Jacobian $-J^{\top}$, formed
 from $J$ in the forward pattern; it runs at the caller's tolerances and
 step budget.
 
-\textbf{Several cotangents.} The columns of a seed share the checkpoints,
+\textbf{Several cotangents.} The columns of a cotangent share the checkpoints,
 but each needs a backward integration of its own. The native mode
 sweeps its stored checkpoints once per column instead. Its
 \texttt{keepStore}, \texttt{store}, \texttt{adjointGrid} and
@@ -1979,7 +1980,7 @@ and the parameters $p$ are shared by all rows. There is no time
 integration. Typical uses are observation maps, which connect
 integrator output to data and whose derivatives enter the gradient of a
 likelihood, and reparametrisations $p = \Phi(\theta)$, whose Jacobian is
-the seed matrix of \eqref{eq:sensitivity-theta}.
+the tangent of \eqref{eq:sensitivity-theta}.
 
 The expressions are parsed into the expression graph of Section
 \ref{sec:codegen}, and the generator emits one function template over
@@ -2006,17 +2007,18 @@ of the returned object and the compiled entries they call.
 
 \begin{table}[h]
 \centering
+\small
 \begin{tabular}{@{} l l l @{}}
 \toprule
 R function & direction & compiled entry \\
 \midrule
-\texttt{func(x, p)}                           & both    & \texttt{\_eval\_c} \\
-\texttt{jac(x, p[, dX, dP])}                  & forward & \texttt{\_eval\_ad\_c} \\
-\texttt{hess(x, p[, dX, dP, dX2, dP2])}       & forward & \texttt{\_eval\_ad2\_c} \\
-\texttt{evaluate(\ldots, deriv2)}             & forward & \texttt{\_eval\_ad\_c} or \texttt{\_eval\_ad2\_c} \\
-\texttt{evaluateBatch(sets, cores, deriv2)}   & forward & \texttt{\_eval\_ad\_batch} or \texttt{\_eval\_ad2\_batch} \\
-\texttt{vjp(x, p, w)}                         & reverse & \texttt{\_vjp\_c} \\
-\texttt{vjp2(x, p, w, vx, vp, dw)}            & reverse & \texttt{\_vjp\_ad\_c} \\
+\texttt{func(x, p)}                                            & both    & \texttt{\_eval\_c} \\
+\texttt{jac(x, p[, tangentX, tangentP])}                       & forward & \texttt{\_eval\_ad\_c} \\
+\texttt{hess(x, p[, tangentX, tangentP, hessianX, hessianP])}  & forward & \texttt{\_eval\_ad2\_c} \\
+\texttt{evaluate(\ldots, deriv2)}                              & forward & \texttt{\_eval\_ad\_c} or \texttt{\_eval\_ad2\_c} \\
+\texttt{evaluateBatch(sets, cores, deriv2)}                    & forward & \texttt{\_eval\_ad\_batch} or \texttt{\_eval\_ad2\_batch} \\
+\texttt{vjp(x, p, cotangent)}                                  & reverse & \texttt{\_vjp\_c} \\
+\texttt{vjp(x, p, cotangent, tangentX, tangentP, curvature)}   & reverse & \texttt{\_vjp\_ad\_c} \\
 \bottomrule
 \end{tabular}
 \caption{R functions of a \texttt{cppFUN()} object and the compiled
@@ -2033,12 +2035,13 @@ returns $\partial y/\partial\theta$ as an array
 $[n_{\mathrm{obs}}, n_y, n_\theta]$, \texttt{hess} evaluates it on
 nested duals and returns $\partial^2 y/\partial\theta^2$ as
 $[n_{\mathrm{obs}}, n_y, n_\theta, n_\theta]$. The directions $\theta$
-are given by the seeds of the next section. Without seeds, the identity
+are given by the tangents of the next section. Without them, the identity
 over the variables and the differentiated parameters is used, so the
 result is the Jacobian or Hessian with respect to $(x, p)$.
 \texttt{evaluate} returns the value and the derivatives of one pass,
 which separate calls of \texttt{func}, \texttt{jac} and \texttt{hess}
-would evaluate up to three times. \texttt{evaluateBatch} runs
+would evaluate up to three times, as \texttt{y}, \texttt{tangent} and,
+with \texttt{deriv2 = TRUE}, \texttt{hessian}. \texttt{evaluateBatch} runs
 \texttt{evaluate} over a list of argument sets in one call, distributed
 over OpenMP threads with dynamic scheduling, and falls back to a loop
 for fewer than two sets.
@@ -2054,80 +2057,120 @@ $[n_{\mathrm{obs}}, n_y]$ or $[n_{\mathrm{obs}}, n_y, n_{\mathrm{seed}}]$,
       \frac{\partial g_i}{\partial p_k}(x_o, p),
   \label{eq:funcpp-vjp}
 \end{equation}
-together with the value $y$. The parameter cotangent is summed over the
+as \texttt{cotangentX} and \texttt{cotangentP}, together with the value
+$y$. The parameter cotangent is summed over the
 observations because the parameters are shared by them. The contraction
-is one reverse sweep per observation and seed column, at a cost
+is one reverse sweep per observation and cotangent column, at a cost
 independent of the number of upstream parameters, and forms neither the
 Jacobian nor the Hessian. Statements of the sweep that do not depend on
 the cotangent are evaluated once per observation, outside the loop over
-seed columns.
+cotangent columns.
 
-\texttt{vjp2} runs the same template on duals. With tangents $v_x$ and
-$v_p$ of the inputs and $\dot w$ of the cotangent in $n_{\mathrm{dir}}$
-directions it returns, beside the output of \texttt{vjp}, the
-derivatives
+Given \texttt{tangentX} and \texttt{tangentP}, the tangents $v_x$ and
+$v_p$ of the inputs in $n_{\mathrm{dir}}$ directions, or
+\texttt{curvature}, the derivative $\dot w$ of the cotangent along them,
+\texttt{vjp} runs the same template on duals and returns, beside
+\texttt{cotangentX} and \texttt{cotangentP}, the derivatives
 \begin{equation}
   \frac{\mathrm{d}}{\mathrm{d}v}\bigl(w^{\mathsf T} J\bigr)
     = w^{\mathsf T}\,\frac{\partial J}{\partial (x, p)}\,v
       + \dot w^{\mathsf T} J,
   \qquad J = \frac{\partial g}{\partial (x, p)},
-  \label{eq:funcpp-vjp2}
+  \label{eq:funcpp-vjp-curvature}
 \end{equation}
-as \texttt{dwx} and \texttt{dwp}. This is forward over reverse as in
-Section \ref{sec:fwdrev}: an observation map contributes its curvature to
-a backward chain without forming a Hessian.
+as \texttt{curvatureX} and \texttt{curvatureP}. This is forward over
+reverse as in Section \ref{sec:fwdrev}: an observation map contributes
+its curvature to a backward chain without forming a Hessian.
 
-## Chain rule via dX, dP, dX2, dP2
+## Tangent, Hessian, cotangent and curvature
 
-The seed arguments encode the Jacobian and optionally the Hessian of an
-upstream map $\Phi: \theta \mapsto (x, p)$:
+A map has a tangent and a Hessian, a functional has a cotangent and a
+curvature. For the upstream map $\Phi: \theta \mapsto (x, p)$ the
+tangent is $V = \Phi'(\theta)$ and the Hessian is $\Phi''(\theta)$. For
+a scalar functional of the outputs the cotangent $W$ is its gradient in
+the outputs, and the curvature $\dot W$ is the derivative of $W$ along
+the tangent, which is the Hessian of the functional applied to the
+tangent. An argument and its result carry the same name: a forward
+argument lives on the inputs and its result on the outputs, a reverse
+argument lives on the outputs and its result on the inputs.
+Table \ref{tab:derivative-names} lists the names.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{} l l l l @{}}
+\toprule
+object & \texttt{solveODE()} & \texttt{cppFUN()} argument & \texttt{cppFUN()} result \\
+\midrule
+tangent $V$        & \texttt{tangent}   & \texttt{tangentX}, \texttt{tangentP} & \texttt{tangent} \\
+Hessian $\Phi''$   & \texttt{hessian}   & \texttt{hessianX}, \texttt{hessianP} & \texttt{hessian} \\
+cotangent $W$      & \texttt{cotangent} & \texttt{cotangent}                   & \texttt{cotangentX}, \texttt{cotangentP} \\
+curvature $\dot W$ & \texttt{curvature} & \texttt{curvature}                   & \texttt{curvatureX}, \texttt{curvatureP} \\
+\bottomrule
+\end{tabular}
+\caption{Names of the four derivative objects in R. \texttt{solveODE()}
+uses one name for the argument and the element of its result; the
+\texttt{cppFUN()} results are elements of the lists that
+\texttt{evaluate} and \texttt{vjp} return.}
+\label{tab:derivative-names}
+\end{table}
+
+Forward over forward takes $\Phi''$ as \texttt{hessian} and returns
+\texttt{hessian}, the second derivatives of every output in every pair of
+directions of the tangent. Forward over reverse takes $\dot W$ as
+\texttt{curvature} and returns \texttt{curvature}, the Hessian of the
+seeded functional applied to the tangent; with the identity tangent,
+the columns of that Hessian.
+
+\textbf{Chain rule.} \texttt{cppFUN()} takes the tangent and the Hessian
+of its inputs in two blocks each:
 \begin{itemize}
-\item \texttt{dX[obs, name, theta]}: $\partial x_i/\partial\theta_a$,
+\item \texttt{tangentX[obs, name, theta]}: $\partial x_i/\partial\theta_a$,
 per observation row, variable and direction $\theta_a$;
-\item \texttt{dP[name, theta]}: $\partial p_j/\partial\theta_a$, the
+\item \texttt{tangentP[name, theta]}: $\partial p_j/\partial\theta_a$, the
 same for all observations;
-\item \texttt{dX2[obs, name, theta1, theta2]}:
+\item \texttt{hessianX[obs, name, theta1, theta2]}:
 $\partial^2 x_i/\partial\theta_a\partial\theta_b$, optional, zero by
 default;
-\item \texttt{dP2[name, theta1, theta2]}:
+\item \texttt{hessianP[name, theta1, theta2]}:
 $\partial^2 p_j/\partial\theta_a\partial\theta_b$, optional, zero by
 default.
 \end{itemize}
 They may also be supplied as the attributes \texttt{deriv} and
-\texttt{deriv2} of the variables and parameters. Seed rows of parameters
-listed in \texttt{fixed} are set to zero, and symbols absent from the
-seeds contribute zero.
+\texttt{deriv2} of the variables and parameters. Tangent rows of
+parameters listed in \texttt{fixed} are set to zero, and symbols absent
+from the tangent contribute zero.
 
-With the seeds bundled into one array
-$S \in \mathbb{R}^{n_{\mathrm{obs}} \times n_{\mathrm{diff}} \times
-n_\theta}$ over the $n_{\mathrm{diff}} = n_x + n_p$ inputs, and $S2$ for
-the second-order seeds, the chain rule for the Jacobian reads
+With the tangents bundled into one array
+$V \in \mathbb{R}^{n_{\mathrm{obs}} \times n_{\mathrm{diff}} \times
+n_\theta}$ over the $n_{\mathrm{diff}} = n_x + n_p$ inputs, and $\Phi''$
+for the Hessians, the chain rule for the Jacobian reads
 \begin{equation}
   \frac{\partial y}{\partial\theta}\bigg|_{\mathrm{obs}}
-    = J\bigl(x_{\mathrm{obs}}, p\bigr) \cdot S_{\mathrm{obs}},
+    = J\bigl(x_{\mathrm{obs}}, p\bigr) \cdot V_{\mathrm{obs}},
 \end{equation}
 and for the Hessian of output $o$ two contributions combine,
 \begin{equation}
   \frac{\partial^2 y_o}{\partial\theta\,\partial\theta^\top}\bigg|_{\mathrm{obs}}
-    = S_{\mathrm{obs}}^\top \, H_o\bigl(x_{\mathrm{obs}}, p\bigr) \,
-      S_{\mathrm{obs}}
+    = V_{\mathrm{obs}}^\top \, H_o\bigl(x_{\mathrm{obs}}, p\bigr) \,
+      V_{\mathrm{obs}}
     + \sum_{i} J_{o, i}\bigl(x_{\mathrm{obs}}, p\bigr) \,
-        S2_{\mathrm{obs}, i, \cdot, \cdot},
+        \Phi''_{\mathrm{obs}, i, \cdot, \cdot},
 \end{equation}
 the second of which vanishes when $\Phi$ is affine.
 
 Neither $J$ nor $H$ is formed. Both contractions follow from seeding the
 tangent slots of the duals. Each input scalar $x_i$ becomes
 \begin{equation*}
-  \tilde x_i = (x_i + \mathrm{d}X_{i,\cdot}\,\varepsilon_{\mathrm{in}})
-             + \bigl(\mathrm{d}X_{i,\cdot}
-                     + \mathrm{d}X2_{i,\cdot,\cdot}\,\varepsilon_{\mathrm{in}}\bigr)\,\varepsilon_{\mathrm{out}},
+  \tilde x_i = (x_i + V_{i,\cdot}\,\varepsilon_{\mathrm{in}})
+             + \bigl(V_{i,\cdot}
+                     + \Phi''_{i,\cdot,\cdot}\,\varepsilon_{\mathrm{in}}\bigr)\,\varepsilon_{\mathrm{out}},
 \end{equation*}
 a nested dual whose inner tangent slots carry $\partial x_i/\partial\theta$
 and whose outer tangent slot $k$ is itself an inner dual with value
 $\partial x_i/\partial\theta_k$ and inner tangents
 $\partial^2 x_i/\partial\theta_k\partial\theta$. The multiplication rule
-then propagates both the $S^\top H S$ and the $J \cdot S2$ terms in one
+then propagates both the $V^\top H V$ and the $J \cdot \Phi''$ terms in one
 evaluation; the inner tangents of $\tilde y$ are
 $\partial y/\partial\theta$, and the cross slots $\tilde y[k][m]$ are
 $\partial^2 y/\partial\theta_k\partial\theta_m$.
@@ -2140,7 +2183,7 @@ unchanged: their values are copied, their Jacobian rows are zero for a
 variable and the identity for a parameter, and their Hessian rows are
 zero. An observation map then need not repeat every column of the
 integrator output as an identity, as with the partial-shape
-\texttt{sens1ini} of \texttt{solveODE()}.
+\texttt{tangent} of \texttt{solveODE()}.
 
 \clearpage
 
@@ -2245,11 +2288,7 @@ $M = 152$. The adjoint costs $6.3$ plain solves for
 Chen\_MSB2009 and $3.6$ for Lang\_PLOSComputBiol2024, independent of
 $M$. Against a reference gradient at the reference tolerance, the
 Chen gradient deviates by $4.9 \cdot 10^{-11}$ at
-$\mathrm{rtol} = 10^{-10}$. CVODES provides no counterpart here:
-Chen\_MSB2009 carries events, which its adjoint module does not
-support, and on Lang\_PLOSComputBiol2024 the CVODES adjoint failed at
-all three tolerances, which also leaves the Lang gradient without a
-reference.
+$\mathrm{rtol} = 10^{-10}$.
 
 \begin{figure}[h]
 \centering
@@ -2260,6 +2299,33 @@ tolerances. The lines are least-squares fits of the forward cost,
 linear in $M$, continued dashed beyond the measured range to the two
 models that run in reverse.}
 \label{fig:gradient}
+\end{figure}
+
+\textbf{Discrete and CVODES adjoint.} A separate run computes the same
+gradient with both adjoints on the six models with $M \ge 40$, on one
+node with one core per model. Two of them, Chen\_MSB2009 and
+Giordano\_Nature2020, carry events, which the CVODES adjoint module does
+not support. On the other four (Figure \ref{fig:adjoint}) the CVODES
+adjoint takes $8.7$ to $18.8$ times as long as the discrete adjoint on
+Lang\_PLOSComputBiol2024, Lucarelli\_CellSystems2018 and
+Raimundez\_PCB2020, and $1.0$ to $1.5$ times on Zheng\_PNAS2012
+($n_x = 15$), where a solve takes about a millisecond. The discrete
+adjoint runs backward over the recorded steps of the forward solve;
+CVODES integrates the backward problem with its own step-size control
+and recomputes the forward state between checkpoints. At
+$\mathrm{rtol} = 10^{-10}$ both gradients deviate from the reference by
+$10^{-10}$ to $5 \cdot 10^{-7}$; the reference is the CVODES adjoint at
+the reference tolerance, which favours CVODES. On Zheng\_PNAS2012 the
+gradient of the summed outputs vanishes, so that model contributes a
+timing only.
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=\textwidth]{fig-adjoint.pdf}
+\caption{Time of one gradient by the CVODES adjoint over the time by the
+discrete adjoint, per model and tolerance; right of the line the
+discrete adjoint is faster.}
+\label{fig:adjoint}
 \end{figure}
 
 \textbf{Second order.} The Hessian of the sum of all outputs is
@@ -2316,7 +2382,9 @@ CVODE's favour, which makes the quoted ratio an upper bound.
 
 Fifteen of the $1083$ cells failed and are excluded from the
 aggregates: the CVODES adjoint on Lang\_PLOSComputBiol2024 on each of
-its three linear-solver settings and tolerances, and at
+its three linear-solver settings and tolerances, which stalled at the
+final time while its gradient quadrature was part of the error test and
+completes in the configuration of Section \ref{sec:asa}, and at
 $\mathrm{rtol} = 10^{-10}$ the in-tree forward sensitivities of
 Oliveira\_NatCommun2021 on its three linear-solver settings and of
 Weber\_BMC2015, as well as forward over forward on the same two

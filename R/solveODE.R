@@ -43,12 +43,13 @@
 # Marshal one condition into the 15 positional .Call arguments.  Shared by
 # solveODE() and solveODEBatch() so both see identical validation.
 .odeCallArgs <- function(model, times, parms,
-                         sens1ini = NULL, sens2ini = NULL,
+                         tangent = NULL, hessian = NULL,
                          fixed = NULL, forcings = NULL,
                          abstol = 1e-6, reltol = 1e-6,
                          maxattemps = 50L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
-                         seed = NULL, adjointGrid = FALSE,
+                         cotangent = NULL, curvature = NULL,
+                         adjointGrid = FALSE,
                          errWeights = NULL, keepStore = FALSE, store = NULL,
                          sensErrCon = TRUE) {
 
@@ -72,88 +73,92 @@
   n_params  <- length(parameters)
   n_phi_rows <- n_states + n_params
 
-  ## --- Detect sens1ini shape per call ---
+  ## --- Detect tangent shape per call ---
   ## State-only [n_states, n_active] leaves the parameter rows at the identity, full
   ## Phi' supplies them, partial names the rows it supplies and zero-pads the rest.
-  if (!is.null(sens1ini) && !deriv)
-    stop("'sens1ini' supplied but model has deriv = FALSE")
-  if (!is.null(sens2ini) && !deriv2)
-    stop("'sens2ini' supplied but model has deriv2 = FALSE")
+  if (!is.null(tangent) && !deriv)
+    stop("'tangent' supplied but model has deriv = FALSE")
+  if (!is.null(hessian) && !deriv2)
+    stop("'hessian' supplied but model has deriv2 = FALSE")
 
   ## --- Reverse mode: which direction the model was built for ---
   ## The mode is stamped on the model, not passed per call, exactly as `deriv`
   ## is: it decides which code was emitted and cannot be chosen afterwards.
   is_reverse <- attr(model, "derivMode") %in% c("reverse", "forward-reverse")
-  if (!is.null(seed) && !is_reverse)
-    stop("'seed' supplied but the model was not compiled with derivMode = \"reverse\"")
-  ## A seedless reverse call is the value half of the pair: it integrates,
-  ## fills the store and sweeps nothing.
-  if (is.null(seed) && is_reverse && !isTRUE(keepStore))
-    stop("a model compiled with derivMode = \"reverse\" needs a 'seed', or ",
+  if (!is.null(cotangent) && !is_reverse)
+    stop("'cotangent' supplied but the model was not compiled with derivMode = \"reverse\"")
+  ## A reverse call without a cotangent is the value half of the pair: it
+  ## integrates, fills the store and sweeps nothing.
+  if (is.null(cotangent) && is_reverse && !isTRUE(keepStore))
+    stop("a model compiled with derivMode = \"reverse\" needs a 'cotangent', or ",
          "keepStore = TRUE to run it for its values alone")
-  if (!is.null(seed)) {
-    if (!is.numeric(seed)) stop("'seed' must be numeric")
-    d <- dim(seed)
+  if (!is.null(cotangent)) {
+    if (!is.numeric(cotangent)) stop("'cotangent' must be numeric")
+    d <- dim(cotangent)
     if (is.null(d) || length(d) < 2L || length(d) > 3L)
-      stop("'seed' must be a [n_out, n_states] matrix or an ",
+      stop("'cotangent' must be a [n_out, n_states] matrix or an ",
            "[n_out, n_states, n_seed] array")
     if (d[2] != n_states)
-      stop("'seed' has ", d[2], " state columns, the model has ", n_states)
-    storage.mode(seed) <- "double"
+      stop("'cotangent' has ", d[2], " state columns, the model has ", n_states)
+    storage.mode(cotangent) <- "double"
     ## Seed attributes keep the .Call signature fixed. adjointGrid and
     ## errWeights exist only on the native reverse pass; CVODE refuses them.
     if (isTRUE(adjointGrid)) {
       if (is_cvode)
         stop("'adjointGrid' is not available on the CVODE backend: the sweep ",
              "is CVODES' own backward solve and reports no grid.", call. = FALSE)
-      attr(seed, "adjointGrid") <- TRUE
+      attr(cotangent, "adjointGrid") <- TRUE
     }
-    ## The seed's own tangents in theta, [n_out, n_states, n_seed, n_sens],
-    ## accepted only under forward-reverse.
-    stg <- attr(seed, "seedTangent")
-    if (!is.null(stg)) {
+    ## The cotangent's derivative along the tangent, [n_out, n_states, n_seed,
+    ## n_sens]. It rides on the cotangent so the .Call signature stays fixed.
+    if (!is.null(curvature)) {
       if (!identical(attr(model, "derivMode"), "forward-reverse"))
-        stop("a seed tangent needs derivMode = \"forward-reverse\"; the first ",
+        stop("a curvature needs derivMode = \"forward-reverse\"; the first ",
              "order has no slot for it", call. = FALSE)
-      sd <- dim(stg)
-      if (length(sd) != 4L || !identical(sd[1:3], d[1:3]))
-        stop("'seedTangent' must be [n_out, n_states, n_seed, n_sens] on the ",
-             "seed's own first three dimensions", call. = FALSE)
-      storage.mode(stg) <- "double"
-      attr(seed, "seedTangent") <- stg
+      if (!is.numeric(curvature)) stop("'curvature' must be numeric", call. = FALSE)
+      sd <- dim(curvature)
+      if (length(d) == 2L) d <- c(d, 1L)
+      if (length(sd) != 4L || !identical(as.integer(sd[1:3]), as.integer(d[1:3])))
+        stop("'curvature' must be [n_out, n_states, n_seed, n_sens] on the ",
+             "cotangent's own first three dimensions", call. = FALSE)
+      storage.mode(curvature) <- "double"
+      attr(cotangent, "curvature") <- curvature
     }
     if (!is.null(errWeights)) {
       if (is_cvode)
         stop("'errWeights' is not available on the CVODE backend: the backward ",
              "solve runs under CVODES' own step-size control.", call. = FALSE)
-      attr(seed, "errWeights") <- .checkErrWeights(errWeights, n_states)
+      attr(cotangent, "errWeights") <- .checkErrWeights(errWeights, n_states)
     }
 
   }
-  if (!is.null(errWeights) && is.null(seed))
-    stop("'errWeights' weights a reverse solve's step size and needs a 'seed'",
+  if (!is.null(curvature) && is.null(cotangent))
+    stop("'curvature' is the derivative of a cotangent and needs one",
+         call. = FALSE)
+  if (!is.null(errWeights) && is.null(cotangent))
+    stop("'errWeights' weights a reverse solve's step size and needs a 'cotangent'",
          call. = FALSE)
 
 
-  is_2d_sens1 <- !is.null(sens1ini) &&
-    (is.matrix(sens1ini) ||
-       (is.array(sens1ini) && length(dim(sens1ini)) == 2L))
-  sens1ini_is_legacy <-
-    is_2d_sens1 && n_phi_rows != n_states && nrow(sens1ini) == n_states && {
-      rn <- rownames(sens1ini)
+  is_2d_tangent <- !is.null(tangent) &&
+    (is.matrix(tangent) ||
+       (is.array(tangent) && length(dim(tangent)) == 2L))
+  tangent_is_legacy <-
+    is_2d_tangent && n_phi_rows != n_states && nrow(tangent) == n_states && {
+      rn <- rownames(tangent)
       is.null(rn) || all(rn %in% variables)
     }
   ## "is_full" means a full or partial Phi', anything but the state-only shape.
-  ## It gates runtime `fixed` and sets n_theta_active and the sens2ini shape.
-  sens1ini_is_full <- is_2d_sens1 && !sens1ini_is_legacy
+  ## It gates runtime `fixed` and sets n_theta_active and the hessian shape.
+  tangent_is_full <- is_2d_tangent && !tangent_is_legacy
 
-  ## --- Runtime fixed: incompatible with full-shape sens1ini ---
+  ## --- Runtime fixed: incompatible with full-shape tangent ---
   fixed_indices <- integer(0)
   if (!is.null(fixed)) {
     if (!deriv) { warning("'fixed' ignored when deriv = FALSE") }
-    else if (sens1ini_is_full) {
-      stop("'fixed' is not supported together with full-shape sens1ini; ",
-           "express fixedness through zero rows in sens1ini instead")
+    else if (tangent_is_full) {
+      stop("'fixed' is not supported together with full-shape tangent; ",
+           "express fixedness through zero rows in tangent instead")
     } else {
       if (!is.character(fixed)) stop("'fixed' must be a character vector")
       bad <- setdiff(fixed, all_sens)
@@ -167,9 +172,9 @@
   n_active  <- length(active_sens)
 
   ## --- Per-call active sens dimension ---
-  ## sens1ini full shape: M = ncol(sens1ini) (theta count, may differ from n_active).
+  ## tangent full shape: M = ncol(tangent) (theta count, may differ from n_active).
   ## otherwise: M = n_active (state-only or identity seeding uses the active basis).
-  n_theta_active <- if (sens1ini_is_full) as.integer(ncol(sens1ini)) else n_active
+  n_theta_active <- if (tangent_is_full) as.integer(ncol(tangent)) else n_active
 
   ## --- Identity-on-active-params padding for the state-only shape ---
   build_param_identity <- function(col_names) {
@@ -185,17 +190,17 @@
   ## --- Output sens column names (per call) ---
   ## Full Phi' uses its own colnames, or theta1..thetaM when it carries none;
   ## state-only and NULL use active_sens, the model-parameter basis.
-  sens_col_names <- if (sens1ini_is_full) {
-    cn <- colnames(sens1ini)
+  sens_col_names <- if (tangent_is_full) {
+    cn <- colnames(tangent)
     if (!is.null(cn)) cn else sprintf("theta%d", seq_len(n_theta_active))
   } else {
     active_sens
   }
 
-  ## --- Coerce sens1ini to flat [n_phi_rows, n_theta_active] ---
+  ## --- Coerce tangent to flat [n_phi_rows, n_theta_active] ---
   ## The reorder is skipped when the order already matches, the common case when
   ## an optimiser reuses one shape. State-only padding fills a preallocated matrix.
-  coerce_sens1ini <- function(x, n_cols, col_names, arg) {
+  coerce_tangent <- function(x, n_cols, col_names, arg) {
     if (!is.numeric(x)) stop("'", arg, "' must be numeric")
 
     is_2d <- is.matrix(x) || (is.array(x) && length(dim(x)) == 2L)
@@ -271,109 +276,109 @@
     as.double(out)
   }
 
-  ## --- Build sens1ini for the C++ side ---
+  ## --- Build tangent for the C++ side ---
   ## CVODE always needs a full Phi', the generated cppDE code accepts NULL and
   ## identity-seeds via diff(ai). Runtime `fixed` becomes zero rows in a default.
-  if (deriv && is.null(sens1ini) && is_cvode) {
+  if (deriv && is.null(tangent) && is_cvode) {
     default_pp <- matrix(0, nrow = n_phi_rows, ncol = n_active,
                          dimnames = list(c(variables, parameters), active_sens))
     for (j in seq_along(active_sens)) {
       r <- match(active_sens[j], c(variables, parameters))
       if (!is.na(r)) default_pp[r, j] <- 1.0
     }
-    sens1ini <- as.double(default_pp)
-    dim(sens1ini) <- c(n_phi_rows, n_active)
-  } else if (!is.null(sens1ini)) {
-    flat <- coerce_sens1ini(sens1ini, n_theta_active, sens_col_names, "sens1ini")
+    tangent <- as.double(default_pp)
+    dim(tangent) <- c(n_phi_rows, n_active)
+  } else if (!is.null(tangent)) {
+    flat <- coerce_tangent(tangent, n_theta_active, sens_col_names, "tangent")
     ## Preserve 2-D shape for C++ Rf_ncols(), distinguishes [phi_rows, M] from a flat vector.
     dim(flat) <- c(n_phi_rows, n_theta_active)
-    sens1ini <- flat
+    tangent <- flat
   }
 
-  if (!is.null(sens2ini)) {
-    if (!is.numeric(sens2ini)) stop("'sens2ini' must be numeric")
+  if (!is.null(hessian)) {
+    if (!is.numeric(hessian)) stop("'hessian' must be numeric")
     ## State-only [n_states, M, M] is accepted only alongside a state-only or absent
-    ## sens1ini, where Phi'' vanishes on the parameter block. Full is the unified
+    ## tangent, where Phi'' vanishes on the parameter block. Full is the unified
     ## shape; partial names the rows it supplies and the C++ side gets it padded.
-    legacy_d2_ok <- !sens1ini_is_full && n_phi_rows != n_states
+    legacy_d2_ok <- !tangent_is_full && n_phi_rows != n_states
     expected_rows <- c(variables, parameters)
 
-    if (is.array(sens2ini) && length(dim(sens2ini)) == 3) {
-      d <- dim(sens2ini); nr <- d[1L]; nc1 <- d[2L]; nc2 <- d[3L]
-      dn <- dimnames(sens2ini)
+    if (is.array(hessian) && length(dim(hessian)) == 3) {
+      d <- dim(hessian); nr <- d[1L]; nc1 <- d[2L]; nc2 <- d[3L]
+      dn <- dimnames(hessian)
       rn  <- if (length(dn) >= 1L) dn[[1L]] else NULL
       cn1 <- if (length(dn) >= 2L) dn[[2L]] else NULL
       cn2 <- if (length(dn) >= 3L) dn[[3L]] else NULL
 
       if (nc1 != n_theta_active || nc2 != n_theta_active)
-        stop(sprintf("'sens2ini' must have dim 2 and 3 equal to %d", n_theta_active))
+        stop(sprintf("'hessian' must have dim 2 and 3 equal to %d", n_theta_active))
 
       ## Column reorder/check on dims 2 and 3 (once each).
       if (!is.null(cn1)) {
         if (!setequal(cn1, sens_col_names))
-          stop("'sens2ini' dim 2 must match sens columns")
+          stop("'hessian' dim 2 must match sens columns")
         if (!identical(cn1, sens_col_names))
-          sens2ini <- sens2ini[, sens_col_names, , drop = FALSE]
+          hessian <- hessian[, sens_col_names, , drop = FALSE]
       }
       if (!is.null(cn2)) {
         if (!setequal(cn2, sens_col_names))
-          stop("'sens2ini' dim 3 must match sens columns")
+          stop("'hessian' dim 3 must match sens columns")
         if (!identical(cn2, sens_col_names))
-          sens2ini <- sens2ini[, , sens_col_names, drop = FALSE]
+          hessian <- hessian[, , sens_col_names, drop = FALSE]
       }
 
       ## Full shape: [n_phi_rows, M, M].
       if (nr == n_phi_rows) {
         if (!is.null(rn)) {
           if (!setequal(rn, expected_rows))
-            stop("'sens2ini' dim 1 must be c(variables, parameters)")
+            stop("'hessian' dim 1 must be c(variables, parameters)")
           if (!identical(rn, expected_rows))
-            sens2ini <- sens2ini[expected_rows, , , drop = FALSE]
+            hessian <- hessian[expected_rows, , , drop = FALSE]
         }
-        sens2ini <- as.double(sens2ini)
+        hessian <- as.double(hessian)
 
       ## State-only shape: [n_states, M, M], state rownames or none.
       } else if (nr == n_states && legacy_d2_ok &&
                  (is.null(rn) || all(rn %in% variables))) {
         if (!is.null(rn)) {
           if (!setequal(rn, variables))
-            stop("'sens2ini' dim 1 must match variables (legacy shape)")
+            stop("'hessian' dim 1 must match variables (legacy shape)")
           if (!identical(rn, variables))
-            sens2ini <- sens2ini[variables, , , drop = FALSE]
+            hessian <- hessian[variables, , , drop = FALSE]
         }
         full <- array(0, dim = c(n_phi_rows, n_theta_active, n_theta_active))
-        full[seq_len(n_states), , ] <- sens2ini
-        sens2ini <- as.double(full)
+        full[seq_len(n_states), , ] <- hessian
+        hessian <- as.double(full)
 
       ## Partial-row shape: dim-1 names required, subset of expected_rows.
       } else {
         if (is.null(rn))
           stop(sprintf(
-            "'sens2ini' has shape [%d, %d, %d]; expected [%d, %d, %d] (full Phi''), [%d, %d, %d] (legacy), or a partial-row array with dim-1 names identifying a subset of c(variables, parameters)",
+            "'hessian' has shape [%d, %d, %d]; expected [%d, %d, %d] (full Phi''), [%d, %d, %d] (legacy), or a partial-row array with dim-1 names identifying a subset of c(variables, parameters)",
             nr, nc1, nc2, n_phi_rows, n_theta_active, n_theta_active,
             n_states, n_theta_active, n_theta_active))
         bad <- setdiff(rn, expected_rows)
         if (length(bad))
-          stop("'sens2ini' has unknown dim-1 names: ", paste(bad, collapse = ", "))
+          stop("'hessian' has unknown dim-1 names: ", paste(bad, collapse = ", "))
         if (anyDuplicated(rn))
-          stop("'sens2ini' has duplicate dim-1 names")
+          stop("'hessian' has duplicate dim-1 names")
         full <- array(0, dim = c(n_phi_rows, n_theta_active, n_theta_active))
-        full[match(rn, expected_rows), , ] <- sens2ini
-        sens2ini <- as.double(full)
+        full[match(rn, expected_rows), , ] <- hessian
+        hessian <- as.double(full)
       }
 
     } else {
       ## Vector form (no partial; needs names).
-      len <- length(sens2ini)
+      len <- length(hessian)
       if (len == n_phi_rows * n_theta_active^2) {
-        sens2ini <- as.double(sens2ini)
+        hessian <- as.double(hessian)
       } else if (len == n_states * n_theta_active^2 && legacy_d2_ok) {
         pad <- array(0, dim = c(n_phi_rows, n_theta_active, n_theta_active))
-        pad[seq_len(n_states), , ] <- array(as.double(sens2ini),
+        pad[seq_len(n_states), , ] <- array(as.double(hessian),
                                             dim = c(n_states, n_theta_active, n_theta_active))
-        sens2ini <- as.double(pad)
+        hessian <- as.double(pad)
       } else {
-        stop(sprintf("'sens2ini' must have length %d", n_phi_rows * n_theta_active^2))
+        stop(sprintf("'hessian' must have length %d", n_phi_rows * n_theta_active^2))
       }
     }
   }
@@ -384,7 +389,7 @@
   times <- as.double(times)
 
   ## Store flags travel as attributes of `times`, since the call that makes a
-  ## store has no seed. Native backend only: CVODES keeps its checkpoints.
+  ## store has no cotangent. Native backend only: CVODES keeps its checkpoints.
   if (isTRUE(keepStore) || !is.null(store)) {
     what <- if (isTRUE(keepStore)) "keepStore" else "store"
     if (!is_reverse)
@@ -476,14 +481,14 @@
   if (maxsteps    <= 0L) stop("'maxsteps' must be positive")
   if (maxroot     <= 0L) stop("'maxroot' must be positive")
 
-  list(call_args = list(times, parms_ordered, sens1ini, sens2ini, fixed_indices,
+  list(call_args = list(times, parms_ordered, tangent, hessian, fixed_indices,
                         as.double(abstol), as.double(reltol), maxattemps, maxsteps,
                         as.double(hini), as.double(roottol), maxroot,
-                        forcing_times_list, forcing_values_list, seed),
+                        forcing_times_list, forcing_values_list, cotangent),
        times = times, variables = variables, sens_col_names = sens_col_names,
        theta_names = c(variables, parameters),
-       seed_names = if (!is.null(seed) && length(dim(seed)) == 3L)
-                      dimnames(seed)[[3]] else NULL)
+       seed_names = if (!is.null(cotangent) && length(dim(cotangent)) == 3L)
+                      dimnames(cotangent)[[3]] else NULL)
 }
 
 
@@ -497,22 +502,22 @@
   ## repeating it here would see a refcount above one and duplicate each array.
   if (!is.null(result$variable) && is.null(dimnames(result$variable)))
     colnames(result$variable) <- variables
-  if (!is.null(result$sens1) && is.null(dimnames(result$sens1)))
-    dimnames(result$sens1) <- list(time = NULL, variable = variables, sens = out_sens)
-  if (!is.null(result$sens2) && is.null(dimnames(result$sens2)))
-    dimnames(result$sens2) <- list(time = NULL, variable = variables,
-                                   sens1 = out_sens, sens2 = out_sens)
-  ## The reverse answer is one row per model parameter, states first, so it
-  ## indexes the same way a forward sens1ini seeds.
-  if (!is.null(result$adjoint) && is.null(dimnames(result$adjoint)))
-    dimnames(result$adjoint) <- list(prep$theta_names, prep$seed_names)
-  ## Forward over reverse: the gradient's own derivatives, one block per
-  ## sensitivity direction. Under the identity seeding that block is a Hessian.
-  if (!is.null(result$adjoint2) && is.null(dimnames(result$adjoint2)))
-    dimnames(result$adjoint2) <- list(theta = prep$theta_names, sens = out_sens,
-                                      seed = prep$seed_names)
+  if (!is.null(result$tangent) && is.null(dimnames(result$tangent)))
+    dimnames(result$tangent) <- list(time = NULL, variable = variables, sens = out_sens)
+  if (!is.null(result$hessian) && is.null(dimnames(result$hessian)))
+    dimnames(result$hessian) <- list(time = NULL, variable = variables,
+                                     sens1 = out_sens, sens2 = out_sens)
+  ## The cotangent of the inputs, one row per model parameter, states first,
+  ## indexed as the argument `tangent`.
+  if (!is.null(result$cotangent) && is.null(dimnames(result$cotangent)))
+    dimnames(result$cotangent) <- list(prep$theta_names, prep$seed_names)
+  ## Forward-reverse: the cotangent's derivatives, one block per tangent
+  ## direction. Under the identity tangent that block is a Hessian.
+  if (!is.null(result$curvature) && is.null(dimnames(result$curvature)))
+    dimnames(result$curvature) <- list(theta = prep$theta_names, sens = out_sens,
+                                       seed = prep$seed_names)
   ## The sweep's own grid. lambda is [step, state, seed]; eta carries one column
-  ## per seed, so it names the way the adjoint's columns do.
+  ## per cotangent column, so it names the way the cotangent's columns do.
   if (!is.null(result$adjointGrid)) {
     g <- result$adjointGrid
     if (is.null(dimnames(g$lambda)))
@@ -561,16 +566,26 @@
 #' @description
 #' Numerically integrates a compiled ODE model created by [cppODE()] (or
 #' [cvode()]) over a specified time span. Returns the state trajectory and,
-#' when the model was compiled with sensitivities, first- and (optionally)
-#' second-order parameter sensitivities.
+#' when the model was compiled with derivatives, their tangent and Hessian
+#' (forward) or the cotangent and curvature of a seeded functional (reverse).
 #'
 #' @details
-#' ## Sensitivity initial values
+#' ## Derivative arguments and results
 #'
-#' `sens1ini` and `sens2ini` are the Jacobian \eqn{\Phi'(\theta)} and the
+#' A derivative argument and its result carry the same name. `tangent` and
+#' `hessian` are the first and second derivative in \eqn{\theta} of the
+#' inputs going in, and of the states coming out. `cotangent` is the gradient
+#' of a functional with respect to the outputs going in, and with respect to
+#' the inputs coming out. `curvature` is the derivative of the cotangent
+#' along the tangent: that functional's Hessian applied to the tangent, on the
+#' outputs going in and on the inputs coming out.
+#'
+#' ## Tangent and Hessian of the inputs
+#'
+#' `tangent` and `hessian` are the Jacobian \eqn{\Phi'(\theta)} and the
 #' Hessian tensor \eqn{\Phi''(\theta)} of a reparametrisation
 #' \eqn{p = \Phi(\theta)} of the initial states and parameters; the returned
-#' sensitivities are then taken with respect to \eqn{\theta}. Omitting them
+#' derivatives are then taken with respect to \eqn{\theta}. Omitting them
 #' seeds the identity on the active (non-fixed) sensitivities. Three shapes
 #' are accepted, selected per call from the row count and row names:
 #'
@@ -578,7 +593,7 @@
 #'   parameter block is implied. The active set equals the model's
 #'   sensitivity names minus `fixed`. Detected when `nrow == n_states`
 #'   and row names are absent or are a permutation of `variables`. This
-#'   is the shape of `res$sens1[t, , ]`, so it can seed a following solve.
+#'   is the shape of `res$tangent[t, , ]`, so it can seed a following solve.
 #' - **Full shape** `[n_states + n_params, M]`: \eqn{\Phi'(\theta)}
 #'   directly. State rows seed state ICs; parameter rows seed the dynamic
 #'   parameters. The column count `M` may change from call to call.
@@ -602,30 +617,29 @@
 #' @param parms Named numeric vector of initial conditions and parameters.
 #'   Names must include all of
 #'   `c(attr(model, "variables"), attr(model, "parameters"))`.
-#' @param sens1ini Optional numeric matrix of first-order sensitivity
-#'   initial values, interpreted as the Jacobian \eqn{\Phi'(\theta)}.
+#' @param tangent Optional numeric matrix, the tangent of the inputs: the
+#'   Jacobian \eqn{\Phi'(\theta)} of the initial states and parameters.
 #'   Accepts three shapes (see Details): state-only `[n_states, n_active]`
 #'   (auto-extended with identity on parameter rows), full
 #'   `[n_states + n_params, M]`, or partial `[k, M]` with row names
 #'   identifying a subset of `c(variables, parameters)` (missing rows
 #'   are zero-padded, i.e. implicitly fixed). Column names label the
-#'   resulting sensitivity output columns. Default `NULL` uses identity
+#'   directions of the returned derivatives. Default `NULL` uses identity
 #'   seeding on the active sensitivity basis.
-#' @param sens2ini Optional numeric array of second-order sensitivity
-#'   initial values, interpreted as the Hessian tensor
-#'   \eqn{\Phi''(\theta)}. Shapes are analogous to those of `sens1ini`:
+#' @param hessian Optional numeric array, the Hessian tensor
+#'   \eqn{\Phi''(\theta)} of the inputs. Shapes are analogous to those of
+#'   `tangent`:
 #'   `[n_states, n_active, n_active]` (state-only),
 #'   `[n_states + n_params, M, M]` (full), or `[k, M, M]` with dim-1
 #'   names identifying a subset of `c(variables, parameters)` (partial,
 #'   zero-padded). Allowed only when `attr(model, "deriv2")` is `TRUE`.
-#'   Default `NULL` uses zero seeding (correct when \eqn{\Phi} is
-#'   linear-affine).
+#'   Default `NULL` means the inputs are affine in \eqn{\theta}.
 #' @param fixed Optional character vector of sensitivity-parameter names
 #'   to treat as fixed at run time. The integrator then runs with a
 #'   smaller AD state. Names must be a subset of
 #'   `attr(model, "dimNames")$sens`. Unlike compile-time `fixed` in
 #'   [cppODE()], the run-time `fixed` set can be changed between calls
-#'   without recompilation. Incompatible with full / partial `sens1ini`
+#'   without recompilation. Incompatible with full / partial `tangent`
 #'   (those encode fixedness through row values or row presence).
 #'   Default `NULL` (all parameters active).
 #' @param forcings Optional named list of forcing-function data. Each
@@ -661,19 +675,20 @@
 #'   for models compiled without trace support (`$trace` is `NULL` in
 #'   that case).
 #'
-#' @param seed Reverse-mode seed, required by a model compiled with
-#'   `derivMode = "reverse"` or `"forward-reverse"` ([cppODE()]) or with
+#' @param cotangent The cotangent of the outputs, required by a model compiled
+#'   with `derivMode = "reverse"` or `"forward-reverse"` ([cppODE()]) or with
 #'   `derivMode = "reverse"` ([cvode()]). A `[n_out, n_states]` matrix or an
 #'   `[n_out, n_states, n_seed]` array, whose first dimension is the solve's
 #'   own output row count: a root event adds output times, so that count is
 #'   not `length(times)` in general. What comes back is `w' * dx/dtheta`
-#'   summed over times and states, one column per seed column. Supplying it
-#'   to a forward model is an error, as is leaving it out on a reverse one.
-#'
-#'   Under `"forward-reverse"` the seed may carry its own tangents in theta
-#'   as the attribute `seedTangent`, an array
-#'   `[n_out, n_states, n_seed, n_sens]` on the seed's first three dimensions.
-#'   Without it `adjoint2` omits the seed's dependence on the parameters.
+#'   summed over times and states, one column per cotangent column. Supplying
+#'   it to a forward model is an error, as is leaving it out on a reverse one.
+#' @param curvature Optional, `"forward-reverse"` only: the derivative of
+#'   `cotangent` along the tangent, `[n_out, n_states, n_seed, n_sens]` on the
+#'   cotangent's first three dimensions. For a cotangent that is the gradient
+#'   of a functional of the outputs, this is that functional's Hessian applied
+#'   to the output tangent. `NULL` treats the cotangent as constant in
+#'   \eqn{\theta}.
 #' @param errWeights Optional lambda from an earlier sweep, used as a
 #'   step-size weight. Native backend only. A list with `time` (ascending,
 #'   length `n`), `lambda` (`[n, n_states]`), and optionally `breaks`
@@ -682,9 +697,10 @@
 #'   (smallest weight as a fraction of the largest, default `0`). The
 #'   controller then takes the maximum of its own error norm and
 #'   \eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
-#'   finer than `abstol` and `reltol` ask, never coarser. Requires a `seed`.
+#'   finer than `abstol` and `reltol` ask, never coarser. Requires a
+#'   `cotangent`.
 #' @param keepStore Whether a reverse solve returns its checkpoints as
-#'   `$store`, for a later solve to reuse through `store`. The `seed` may then
+#'   `$store`, for a later solve to reuse through `store`. The `cotangent` may then
 #'   be omitted, which runs the model for its values alone. Native backend
 #'   only: CVODES holds its checkpoints itself.
 #' @param store The `$store` of an earlier solve of the same model at the same
@@ -701,23 +717,24 @@
 #'   convention SUNDIALS ships (`CVodeSetSensErrCon`). Needs a model with
 #'   sensitivities; under `derivMode = "forward-reverse"` it is off already.
 #' @param adjointGrid Whether the sweep also reports the grid it ran on, as
-#'   `$adjointGrid`. `FALSE` by default; requires a `seed` and the native
+#'   `$adjointGrid`. `FALSE` by default; requires a `cotangent` and the native
 #'   backend. Costs one
 #'   `[n_steps, n_states, n_seed]` array, so it is a diagnostic.
 #'
 #' @return
 #' A named list with components `time`, `variable`, `diagnostics`, and,
-#' when `attr(model, "deriv")` is `TRUE`, `sens1`, plus `sens2` when
+#' when `attr(model, "deriv")` is `TRUE`, `tangent`, plus `hessian` when
 #' `attr(model, "deriv2")` is `TRUE`. A model compiled with
-#' `derivMode = "reverse"` carries neither, and returns `adjoint` instead:
-#' `[n_states + n_params, n_seed]`, indexed exactly as a forward `sens1ini`
-#' seeds. One compiled with `derivMode = "forward-reverse"` carries `sens1` and
-#' `adjoint` and adds `adjoint2`, `[n_states + n_params, n_s, n_seed]`: the
-#' derivatives of each `adjoint` entry, which under the identity seeding are the
-#' columns of the Hessian of the seeded functional. Output arrays are time-first:
-#' `variable` is `[n_t, n_x]`, `sens1` is `[n_t, n_x, n_s]`, and
-#' `sens2` is `[n_t, n_x, n_s, n_s]`. The dimension names of `sens1`
-#' and `sens2` reflect the active (non-fixed) sensitivity parameters.
+#' `derivMode = "reverse"` carries neither, and returns `cotangent` instead:
+#' `[n_states + n_params, n_seed]`, the cotangent of the inputs, indexed exactly
+#' as the argument `tangent`. One compiled with `derivMode = "forward-reverse"`
+#' carries `tangent` and `cotangent` and adds `curvature`,
+#' `[n_states + n_params, n_s, n_seed]`: the derivatives of each `cotangent`
+#' entry along the tangent, which under the identity tangent are the columns of
+#' the Hessian of the seeded functional. Output arrays are time-first:
+#' `variable` is `[n_t, n_x]`, `tangent` is `[n_t, n_x, n_s]`, and
+#' `hessian` is `[n_t, n_x, n_s, n_s]`. The dimension names of `tangent`
+#' and `hessian` reflect the active (non-fixed) sensitivity parameters.
 #' The `diagnostics` element is a list of solver statistics (see
 #' [diagnostics()]). When the model was compiled with `stepTrace = TRUE`,
 #' an additional `$trace` `data.frame` with per-step diagnostics is
@@ -725,7 +742,7 @@
 #'
 #' With `adjointGrid = TRUE` a reverse solve also carries `$adjointGrid`, a
 #' list of `time` and `h`, the start and length of each accepted step; `eta`,
-#' one column per seed, being \eqn{\lambda^T e_k}; and `lambda`,
+#' one column per cotangent column, being \eqn{\lambda^T e_k}; and `lambda`,
 #' `[n_steps, n_states, n_seed]`, the adjoint state at each step's start. `eta`
 #' estimates the step's share of the error in the objective.
 #'
@@ -738,22 +755,23 @@
 #' @example inst/examples/solveODE.R
 #' @export
 solveODE <- function(model, times, parms,
-                     sens1ini = NULL, sens2ini = NULL,
+                     tangent = NULL, hessian = NULL,
                      fixed = NULL, forcings = NULL,
                      abstol = 1e-6, reltol = 1e-6,
                      maxattemps = 50L, maxsteps = 1e6L,
                      hini = 0, roottol = 1e-6, maxroot = 1L,
                      onFailure = c("stop", "warn", "silent"),
-                     traceFile = NULL, seed = NULL, adjointGrid = FALSE,
+                     traceFile = NULL, cotangent = NULL, curvature = NULL,
+                     adjointGrid = FALSE,
                      errWeights = NULL, keepStore = FALSE, store = NULL,
                      sensErrCon = TRUE) {
 
   onFailure <- match.arg(onFailure)
 
-  prep <- .odeCallArgs(model, times, parms, sens1ini, sens2ini, fixed, forcings,
+  prep <- .odeCallArgs(model, times, parms, tangent, hessian, fixed, forcings,
                        abstol, reltol, maxattemps, maxsteps, hini, roottol, maxroot,
-                       seed, adjointGrid, errWeights, keepStore, store,
-                       sensErrCon)
+                       cotangent, curvature, adjointGrid, errWeights, keepStore,
+                       store, sensErrCon)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model)))
   if (is.null(SYM)) stop("Model not loaded. Run compile() first.", call. = FALSE)
@@ -795,10 +813,11 @@ solveODE <- function(model, times, parms,
 #'
 #' @param model A model handle from [cppODE()] or [cvode()].
 #' @param conditions A list of per-condition argument lists. Recognized names
-#'   are `times`, `parms`, `sens1ini`, `sens2ini`, `fixed`, `forcings` and the
-#'   solver options `abstol`, `reltol`, `maxattemps`, `maxsteps`, `hini`,
-#'   `roottol`, `maxroot`; anything given here overrides the batch-wide value
-#'   of the same name.
+#'   are `times`, `parms`, `tangent`, `hessian`, `cotangent`, `curvature`,
+#'   `fixed`, `forcings`, the solver options `abstol`, `reltol`, `maxattemps`,
+#'   `maxsteps`, `hini`, `roottol`, `maxroot`, and `adjointGrid`, `errWeights`,
+#'   `keepStore`, `store`, `sensErrCon`; anything given here overrides the
+#'   batch-wide value of the same name.
 #' @param traceFile Optional. Either one path per condition, or a single path
 #'   used as a template, in which case the condition's name (or its index) is
 #'   inserted before the extension. Needs a model built with `stepTrace = TRUE`.
@@ -822,7 +841,7 @@ solveODE <- function(model, times, parms,
 #' @export
 solveODEBatch <- function(model, conditions,
                           times = NULL, parms = NULL,
-                          sens1ini = NULL, sens2ini = NULL,
+                          tangent = NULL, hessian = NULL,
                           fixed = NULL, forcings = NULL,
                           abstol = 1e-6, reltol = 1e-6,
                           maxattemps = 50L, maxsteps = 1e6L,
@@ -830,15 +849,16 @@ solveODEBatch <- function(model, conditions,
                           cores = NULL,
                           traceFile = NULL,
                           onFailure = c("stop", "warn", "silent"),
-                          seed = NULL, adjointGrid = FALSE,
+                          cotangent = NULL, curvature = NULL,
+                          adjointGrid = FALSE,
                           errWeights = NULL, keepStore = FALSE, store = NULL,
                           sensErrCon = TRUE) {
 
   onFailure <- match.arg(onFailure)
-  preps <- .batchPreps(model, conditions, times, parms, sens1ini, sens2ini,
+  preps <- .batchPreps(model, conditions, times, parms, tangent, hessian,
                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                       hini, roottol, maxroot, seed, adjointGrid, errWeights,
-                       keepStore, store, sensErrCon)
+                       hini, roottol, maxroot, cotangent, curvature, adjointGrid,
+                       errWeights, keepStore, store, sensErrCon)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   .batchRun(model, preps, SYM, .batchDimnames(preps, SYM), names(conditions),
@@ -860,44 +880,45 @@ solveODEBatch <- function(model, conditions,
 
 # Validate and marshal every condition. Serial R work, shared by solveODEBatch()
 # and prepareBatch().
-.batchPreps <- function(model, conditions, times, parms, sens1ini, sens2ini,
+.batchPreps <- function(model, conditions, times, parms, tangent, hessian,
                         fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                        hini, roottol, maxroot, seed = NULL, adjointGrid = FALSE,
-                        errWeights = NULL, keepStore = FALSE, store = NULL,
-                        sensErrCon = TRUE) {
+                        hini, roottol, maxroot, cotangent = NULL, curvature = NULL,
+                        adjointGrid = FALSE, errWeights = NULL,
+                        keepStore = FALSE, store = NULL, sensErrCon = TRUE) {
 
   if (!is.list(conditions) || !length(conditions))
     stop("'conditions' must be a non-empty list", call. = FALSE)
   if (!all(vapply(conditions, is.list, logical(1))))
     stop("every element of 'conditions' must be a list of arguments", call. = FALSE)
 
-  known <- c("times", "parms", "sens1ini", "sens2ini", "fixed", "forcings",
+  known <- c("times", "parms", "tangent", "hessian", "fixed", "forcings",
              "abstol", "reltol", "maxattemps", "maxsteps", "hini", "roottol",
-             "maxroot", "seed", "adjointGrid", "errWeights", "keepStore",
-             "store", "sensErrCon")
+             "maxroot", "cotangent", "curvature", "adjointGrid", "errWeights",
+             "keepStore", "store", "sensErrCon")
   bad <- setdiff(unlist(lapply(conditions, names)), known)
   if (length(bad))
     stop("unknown per-condition argument(s): ", paste(unique(bad), collapse = ", "),
          "\n  Per-condition arguments are: ", paste(known, collapse = ", "),
          call. = FALSE)
 
-  shared <- list(times = times, parms = parms, sens1ini = sens1ini,
-                 sens2ini = sens2ini, fixed = fixed, forcings = forcings,
+  shared <- list(times = times, parms = parms, tangent = tangent,
+                 hessian = hessian, fixed = fixed, forcings = forcings,
                  abstol = abstol, reltol = reltol, maxattemps = maxattemps,
                  maxsteps = maxsteps, hini = hini, roottol = roottol,
-                 maxroot = maxroot, seed = seed, adjointGrid = adjointGrid,
-                 errWeights = errWeights, keepStore = keepStore, store = store,
-                 sensErrCon = sensErrCon)
+                 maxroot = maxroot, cotangent = cotangent, curvature = curvature,
+                 adjointGrid = adjointGrid, errWeights = errWeights,
+                 keepStore = keepStore, store = store, sensErrCon = sensErrCon)
 
   lapply(seq_along(conditions), function(i) {
     a <- utils::modifyList(shared, conditions[[i]])
     if (is.null(a$times) || is.null(a$parms))
       stop("condition ", i, " has no 'times' or no 'parms', and none was given ",
            "batch-wide", call. = FALSE)
-    .odeCallArgs(model, a$times, a$parms, a$sens1ini, a$sens2ini, a$fixed,
+    .odeCallArgs(model, a$times, a$parms, a$tangent, a$hessian, a$fixed,
                  a$forcings, a$abstol, a$reltol, a$maxattemps, a$maxsteps,
-                 a$hini, a$roottol, a$maxroot, a$seed, a$adjointGrid,
-                 a$errWeights, a$keepStore, a$store, a$sensErrCon)
+                 a$hini, a$roottol, a$maxroot, a$cotangent, a$curvature,
+                 a$adjointGrid, a$errWeights, a$keepStore, a$store,
+                 a$sensErrCon)
   })
 }
 
@@ -1004,19 +1025,20 @@ batchAvailable <- function(model) {
 #' @export
 prepareBatch <- function(model, conditions,
                          times = NULL, parms = NULL,
-                         sens1ini = NULL, sens2ini = NULL,
+                         tangent = NULL, hessian = NULL,
                          fixed = NULL, forcings = NULL,
                          abstol = 1e-6, reltol = 1e-6,
                          maxattemps = 50L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
-                         seed = NULL, adjointGrid = FALSE,
+                         cotangent = NULL, curvature = NULL,
+                         adjointGrid = FALSE,
                          errWeights = NULL, keepStore = FALSE, store = NULL,
                          sensErrCon = TRUE) {
 
-  preps <- .batchPreps(model, conditions, times, parms, sens1ini, sens2ini,
+  preps <- .batchPreps(model, conditions, times, parms, tangent, hessian,
                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                       hini, roottol, maxroot, seed, adjointGrid, errWeights,
-                       keepStore, store, sensErrCon)
+                       hini, roottol, maxroot, cotangent, curvature, adjointGrid,
+                       errWeights, keepStore, store, sensErrCon)
 
   sym <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   structure(list(
@@ -1035,16 +1057,15 @@ prepareBatch <- function(model, conditions,
 #'
 #' @description
 #' Re-solves the conditions of a [prepareBatch()] handle with new numbers.
-#' Only `parms`, `sens1ini`, `sens2ini`, `seed` and `errWeights` may change;
-#' anything else needs a fresh handle.
+#' Only `parms`, `tangent`, `hessian`, `cotangent`, `curvature` and
+#' `errWeights` may change; anything else needs a fresh handle.
 #'
 #' @param handle A `"cppDEbatch"` object from [prepareBatch()].
 #' @param parms List of named numeric vectors, one per condition, or `NULL` to
 #'   reuse the prepared values.
-#' @param sens1ini,sens2ini Lists of sensitivity initial values, one per
-#'   condition, or `NULL` to reuse. Shapes must match the prepared ones.
-#' @param seed List of reverse-mode seeds, one per condition, or `NULL` to
-#'   reuse. Shapes must match the prepared ones.
+#' @param tangent,hessian,cotangent,curvature Lists with one element per
+#'   condition, each as the argument of the same name in [solveODE()], or
+#'   `NULL` to reuse. Shapes must match the prepared ones.
 #' @param errWeights List of weightings for the step-size controller, one per
 #'   condition, or `NULL` to keep the prepared ones. Each is the `errWeights`
 #'   list of [solveODE()], typically lambda from the previous iteration.
@@ -1053,8 +1074,8 @@ prepareBatch <- function(model, conditions,
 #' @seealso [prepareBatch()]
 #' @example inst/examples/solveBatch.R
 #' @export
-solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
-                       seed = NULL, errWeights = NULL,
+solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
+                       cotangent = NULL, curvature = NULL, errWeights = NULL,
                        cores = NULL, traceFile = NULL,
                        onFailure = c("stop", "warn", "silent")) {
 
@@ -1071,9 +1092,9 @@ solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
            call. = FALSE)
     x
   }
-  parms <- chk(parms, "parms"); sens1ini <- chk(sens1ini, "sens1ini")
-  sens2ini <- chk(sens2ini, "sens2ini"); seed <- chk(seed, "seed")
-  errWeights <- chk(errWeights, "errWeights")
+  parms <- chk(parms, "parms"); tangent <- chk(tangent, "tangent")
+  hessian <- chk(hessian, "hessian"); cotangent <- chk(cotangent, "cotangent")
+  curvature <- chk(curvature, "curvature"); errWeights <- chk(errWeights, "errWeights")
   n_states <- length(attr(handle$model, "variables"))
 
   for (k in seq_len(K)) {
@@ -1091,35 +1112,49 @@ solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
     }
     # Assigning NULL into a list slot removes it and shifts every later
     # positional argument, so a NULL element means "keep the prepared value".
-    if (!is.null(sens1ini) && !is.null(sens1ini[[k]])) {
-      if (!identical(dim(sens1ini[[k]]), handle$sens_dim[[k]]))
-        stop("condition ", k, ": sens1ini shape changed; call prepareBatch() again.",
+    if (!is.null(tangent) && !is.null(tangent[[k]])) {
+      if (!identical(dim(tangent[[k]]), handle$sens_dim[[k]]))
+        stop("condition ", k, ": tangent shape changed; call prepareBatch() again.",
              call. = FALSE)
-      preps[[k]]$call_args[[3L]] <- sens1ini[[k]]
+      preps[[k]]$call_args[[3L]] <- tangent[[k]]
     }
-    if (!is.null(sens2ini) && !is.null(sens2ini[[k]]))
-      preps[[k]]$call_args[[4L]] <- sens2ini[[k]]
-    # The seed carries the grid flag and the step-size weights as attributes,
-    # so a replacement takes the prepared ones over unless new weights are
-    # given below.
-    if (!is.null(seed) && !is.null(seed[[k]])) {
-      sk  <- seed[[k]]
+    if (!is.null(hessian) && !is.null(hessian[[k]]))
+      preps[[k]]$call_args[[4L]] <- hessian[[k]]
+    # The cotangent carries the grid flag, the curvature and the step-size
+    # weights as attributes, so a replacement takes the prepared ones over
+    # unless new ones are given below.
+    if (!is.null(cotangent) && !is.null(cotangent[[k]])) {
+      sk  <- cotangent[[k]]
       old <- preps[[k]]$call_args[[15L]]
       if (is.null(old))
-        stop("condition ", k, ": the handle was prepared without a 'seed'; ",
+        stop("condition ", k, ": the handle was prepared without a 'cotangent'; ",
              "call prepareBatch() again.", call. = FALSE)
       if (!is.numeric(sk) || !identical(dim(sk), dim(old)))
-        stop("condition ", k, ": seed shape changed; call prepareBatch() again.",
+        stop("condition ", k, ": cotangent shape changed; call prepareBatch() again.",
              call. = FALSE)
       storage.mode(sk) <- "double"
       attributes(sk) <- attributes(old)
+      preps[[k]]$call_args[[15L]] <- sk
+    }
+    if (!is.null(curvature) && !is.null(curvature[[k]])) {
+      ck  <- curvature[[k]]
+      sk  <- preps[[k]]$call_args[[15L]]
+      old <- attr(sk, "curvature")
+      if (is.null(old))
+        stop("condition ", k, ": the handle was prepared without a 'curvature'; ",
+             "call prepareBatch() again.", call. = FALSE)
+      if (!is.numeric(ck) || !identical(dim(ck), dim(old)))
+        stop("condition ", k, ": curvature shape changed; call prepareBatch() again.",
+             call. = FALSE)
+      storage.mode(ck) <- "double"
+      attr(sk, "curvature") <- ck
       preps[[k]]$call_args[[15L]] <- sk
     }
     if (!is.null(errWeights) && !is.null(errWeights[[k]])) {
       sk <- preps[[k]]$call_args[[15L]]
       if (is.null(sk))
         stop("condition ", k, ": 'errWeights' weights a reverse solve's step ",
-             "size and needs a 'seed'.", call. = FALSE)
+             "size and needs a 'cotangent'.", call. = FALSE)
       attr(sk, "errWeights") <- .checkErrWeights(errWeights[[k]], n_states)
       preps[[k]]$call_args[[15L]] <- sk
     }

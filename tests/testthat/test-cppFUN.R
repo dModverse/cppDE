@@ -70,10 +70,10 @@ fx <- list(
   dm_both = cppFUN(c(y = "a * a"), parameters = "a", deriv = TRUE,
                    derivMode = c("forward", "reverse"), modelname = "dm_both",
                    convenient = FALSE),
-  vjp2 = cppFUN(c(y1 = "a * x1^2 + b * x1 * x2", y2 = "sin(a * x2) + b^2 * x1"),
-                variables = c("x1", "x2"), parameters = c("a", "b"),
-                deriv2 = TRUE, derivMode = c("forward", "reverse"),
-                modelname = "cf_vjp2")
+  vjp_fr = cppFUN(c(y1 = "a * x1^2 + b * x1 * x2", y2 = "sin(a * x2) + b^2 * x1"),
+                  variables = c("x1", "x2"), parameters = c("a", "b"),
+                  deriv2 = TRUE, derivMode = c("forward", "reverse"),
+                  modelname = "cf_vjpfr")
 )
 fx_collide <- lapply(seq_along(collide_orders), function(i)
   cppFUN(c(o1 = "p + 2 * x", o2 = "y * k",
@@ -106,7 +106,8 @@ test_that("an object that was not compiled says so", {
   expect_error(f$jac(M, c(a = 3)), msg)
   expect_error(f$evaluate(M, c(a = 3)), msg)
   expect_error(f$vjp(M, c(a = 3), matrix(1, 1, 1)), msg)
-  expect_error(f$vjp2(M, c(a = 3), matrix(1, 1, 1)), msg)
+  expect_error(f$vjp(M, c(a = 3), matrix(1, 1, 1), tangentP = matrix(1, 1, 1)),
+               msg)
 })
 
 test_that("parameters named like the generated arrays do not collide", {
@@ -141,8 +142,8 @@ test_that("symbols named after C++ tokens do not reach the generated source", {
 
   r <- f$vjp(matrix(4, 1, 1, dimnames = list(NULL, "int")),
              c(std = 2, ini = 0.5, default = 3), matrix(c(0, 1), 1, 2))
-  expect_equal(unname(r$wx[1, 1, 1]), 0.25, tolerance = 1e-10)
-  expect_equal(unname(r$wp["std", 1]), 4, tolerance = 1e-10)
+  expect_equal(unname(r$cotangentX[1, 1, 1]), 0.25, tolerance = 1e-10)
+  expect_equal(unname(r$cotangentP["std", 1]), 4, tolerance = 1e-10)
 })
 
 test_that("a Python keyword as a symbol name is rejected", {
@@ -237,7 +238,7 @@ test_that("cppFUN raw jac/hess match the closed forms", {
                tolerance = 1e-12)
 })
 
-# -- second-order chain rule, including dX2/dP2 ---------------------------------
+# -- second-order chain rule, including hessianX/hessianP -----------------------
 
 test_that("cppFUN evaluates the second-order chain rule", {
   th    <- c("th1", "th2", "th3")
@@ -254,7 +255,8 @@ test_that("cppFUN evaluates the second-order chain rule", {
   dP2["a", "th2", "th1"] <- 0.5
   pars <- list(a = 2, b = 1, c = 0.3, x = 3)
   f <- fx$xs
-  out <- do.call(f$evaluate, c(pars, list(dP = dP, dP2 = dP2, deriv2 = TRUE)))
+  out <- do.call(f$evaluate,
+                 c(pars, list(tangentP = dP, hessianP = dP2, deriv2 = TRUE)))
 
   J <- do.call(.xs_jac, pars)
   H <- do.call(.xs_hess, pars)
@@ -263,8 +265,8 @@ test_that("cppFUN evaluates the second-order chain rule", {
     d2[o, , ] <- t(dP) %*% H[o, , ] %*% dP
     for (i in 1:4) d2[o, , ] <- d2[o, , ] + J[o, i] * dP2[i, , ]
   }
-  expect_equal(unname(out$dy[1, , ]), unname(J %*% dP), tolerance = 1e-12)
-  expect_equal(unname(out$d2y[1, , , ]), d2, tolerance = 1e-12)
+  expect_equal(unname(out$tangent[1, , ]), unname(J %*% dP), tolerance = 1e-12)
+  expect_equal(unname(out$hessian[1, , , ]), d2, tolerance = 1e-12)
 })
 
 # -- forward + deriv2 + identity pass-through (regression) ------------------------
@@ -278,9 +280,9 @@ test_that("cppFUN forward deriv2 handles identity pass-through", {
   H <- array(0, c(3, 2, 2))
   H[2, 1, 1] <- 2
   expect_equal(unname(d$y[1, ]), c(1.5, 1.5^2 + 0.7, 0), tolerance = 1e-12)
-  expect_equal(unname(d$dy[1, , ]), rbind(c(1, 0), c(3, 1), c(0, 0)),
+  expect_equal(unname(d$tangent[1, , ]), rbind(c(1, 0), c(3, 1), c(0, 0)),
                tolerance = 1e-12)
-  expect_equal(unname(d$d2y[1, , , ]), H, tolerance = 1e-12)
+  expect_equal(unname(d$hessian[1, , , ]), H, tolerance = 1e-12)
 })
 
 
@@ -303,11 +305,11 @@ test_that("vjp contracts the Jacobian the forward path returns", {
   # cotangent sums over observations and the variable one does not.
   wt <- vapply(seq_len(nrow(M)),
                function(o) sum(w[o, ] * J[o, , "t"]), numeric(1))
-  expect_equal(unname(r$wx[, 1, 1]), wt, tolerance = 1e-12)
+  expect_equal(unname(r$cotangentX[, 1, 1]), wt, tolerance = 1e-12)
 
   for (nm in names(pars))
-    expect_equal(unname(r$wp[nm, 1]), sum(w * J[, , nm]), tolerance = 1e-12,
-                 label = paste("wp", nm))
+    expect_equal(unname(r$cotangentP[nm, 1]), sum(w * J[, , nm]),
+                 tolerance = 1e-12, label = paste("cotangentP", nm))
 })
 
 test_that("vjp sweeps several seeds against one recording", {
@@ -320,9 +322,10 @@ test_that("vjp sweeps several seeds against one recording", {
   w[1, 2, 2] <- 1
   r <- f$vjp(NULL, pars, w)
 
-  expect_equal(dim(r$wp), c(2L, 2L))
-  expect_equal(unname(r$wp[, 1]), c(pars[["b"]], pars[["a"]]), tolerance = 1e-12)
-  expect_equal(unname(r$wp[, 2]), c(cos(pars[["a"]]), 2 * pars[["b"]]),
+  expect_equal(dim(r$cotangentP), c(2L, 2L))
+  expect_equal(unname(r$cotangentP[, 1]), c(pars[["b"]], pars[["a"]]),
+               tolerance = 1e-12)
+  expect_equal(unname(r$cotangentP[, 2]), c(cos(pars[["a"]]), 2 * pars[["b"]]),
                tolerance = 1e-12)
 })
 
@@ -355,7 +358,7 @@ test_that("derivMode builds exactly the directions it names", {
   # The two objects agree where they overlap.
   p <- c(a = 1.3)
   w <- matrix(1, 1, 1)
-  expect_equal(unname(fr$vjp(NULL, p, w)$wp[1, 1]),
+  expect_equal(unname(fr$vjp(NULL, p, w)$cotangentP[1, 1]),
                unname(fb$jac(NULL, p)[1, 1, "a"]), tolerance = 1e-12)
 })
 
@@ -368,25 +371,25 @@ test_that("derivMode builds exactly the directions it names", {
 # ---------------------------------------------------------------------------
 
 test_that("the dual vjp keeps the first order it already answered", {
-  f <- fx$vjp2
+  f <- fx$vjp_fr
   set.seed(3)
   X <- matrix(rnorm(8), 4L, 2L, dimnames = list(NULL, c("x1", "x2")))
   P <- c(a = 0.7, b = -0.4)
   W <- matrix(rnorm(8), 4L, 2L)
 
   r1 <- f$vjp(X, P, W)
-  r2 <- f$vjp2(X, P, W, vx = array(rnorm(24), c(4L, 2L, 3L)),
-               vp = matrix(rnorm(6), 2L, 3L))
+  r2 <- f$vjp(X, P, W, tangentX = array(rnorm(24), c(4L, 2L, 3L)),
+              tangentP = matrix(rnorm(6), 2L, 3L))
   # The dual instantiation sums the same expressions in its own order, so the
   # first order comes back to rounding rather than to the last bit.
-  expect_equal(r2$wx, r1$wx, tolerance = 1e-12)
-  expect_equal(r2$wp, r1$wp, tolerance = 1e-12)
-  expect_identical(dim(r2$dwx), c(4L, 2L, 1L, 3L))
-  expect_identical(dim(r2$dwp), c(2L, 1L, 3L))
+  expect_equal(r2$cotangentX, r1$cotangentX, tolerance = 1e-12)
+  expect_equal(r2$cotangentP, r1$cotangentP, tolerance = 1e-12)
+  expect_identical(dim(r2$curvatureX), c(4L, 2L, 1L, 3L))
+  expect_identical(dim(r2$curvatureP), c(2L, 1L, 3L))
 })
 
 test_that("the dual vjp answers the curvature the forward Hessian carries", {
-  f <- fx$vjp2
+  f <- fx$vjp_fr
   set.seed(3)
   n <- 4L; nd <- 3L
   X <- matrix(rnorm(n * 2), n, 2L, dimnames = list(NULL, c("x1", "x2")))
@@ -395,7 +398,7 @@ test_that("the dual vjp answers the curvature the forward Hessian carries", {
   VX <- array(rnorm(n * 2 * nd), c(n, 2L, nd))
   VP <- matrix(rnorm(2 * nd), 2L, nd)
 
-  r <- f$vjp2(X, P, W, vx = VX, vp = VP)
+  r <- f$vjp(X, P, W, tangentX = VX, tangentP = VP)
   H <- f$hess(x1 = X[, 1], x2 = X[, 2], a = P[["a"]], b = P[["b"]])
   nsym <- dim(H)[3L]
 
@@ -411,14 +414,14 @@ test_that("the dual vjp answers the curvature the forward Hessian carries", {
     ref_x[o, , 1L, k] <- contrib[1:2]
     ref_p[, 1L, k] <- ref_p[, 1L, k] + contrib[3:4]
   }
-  expect_equal(r$dwx, ref_x, tolerance = 1e-12)
-  expect_equal(r$dwp, ref_p, tolerance = 1e-12)
+  expect_equal(r$curvatureX, ref_x, tolerance = 1e-12)
+  expect_equal(r$curvatureP, ref_p, tolerance = 1e-12)
 })
 
-test_that("a cotangent's own tangents go through linearly", {
-  # The vjp is linear in w, so seeding only dw has to reproduce a first-order
-  # vjp taken with that direction as the cotangent.
-  f <- fx$vjp2
+test_that("a curvature alone goes through linearly", {
+  # The vjp is linear in the cotangent, so a curvature alone has to reproduce a
+  # first-order vjp taken with that direction as the cotangent.
+  f <- fx$vjp_fr
   set.seed(5)
   n <- 4L; nd <- 2L
   X <- matrix(rnorm(n * 2), n, 2L, dimnames = list(NULL, c("x1", "x2")))
@@ -426,12 +429,12 @@ test_that("a cotangent's own tangents go through linearly", {
   W <- matrix(rnorm(n * 2), n, 2L)
   DW <- array(rnorm(n * 2 * nd), c(n, 2L, 1L, nd))
 
-  r <- f$vjp2(X, P, W, dw = DW)
+  r <- f$vjp(X, P, W, curvature = DW)
   for (k in seq_len(nd)) {
     rk <- f$vjp(X, P, matrix(DW[, , 1L, k], n, 2L))
-    expect_equal(unname(r$dwx[, , 1L, k]), unname(rk$wx[, , 1L]),
+    expect_equal(unname(r$curvatureX[, , 1L, k]), unname(rk$cotangentX[, , 1L]),
                  tolerance = 1e-12, info = as.character(k))
-    expect_equal(unname(r$dwp[, 1L, k]), unname(rk$wp[, 1L]),
+    expect_equal(unname(r$curvatureP[, 1L, k]), unname(rk$cotangentP[, 1L]),
                  tolerance = 1e-12, info = as.character(k))
   }
 })

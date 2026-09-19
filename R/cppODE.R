@@ -47,12 +47,12 @@
 #'   the BDF corrector. Applies to `method = "bdf"`; ignored otherwise.
 #' @param derivMode Direction the derivatives are taken in.
 #'   * `"forward"` (default): forward sensitivities as built by `deriv`,
-#'     returned as `$sens1`.
-#'   * `"reverse"`: no forward sensitivities; the model takes a `seed` in
-#'     [solveODE()] and returns `$adjoint`, one row per state and parameter.
-#'   * `"forward-forward"`: the same as `deriv2 = TRUE`, returning `$sens2`.
-#'   * `"forward-reverse"`: returns `$sens1`, `$adjoint` and `$adjoint2`, the
-#'     derivatives of `$adjoint` along each sensitivity direction.
+#'     returned as `$tangent`.
+#'   * `"reverse"`: no forward sensitivities; the model takes a `cotangent` in
+#'     [solveODE()] and returns `$cotangent`, one row per state and parameter.
+#'   * `"forward-forward"`: the same as `deriv2 = TRUE`, returning `$hessian`.
+#'   * `"forward-reverse"`: returns `$tangent`, `$cotangent` and `$curvature`,
+#'     the derivatives of `$cotangent` along each tangent direction.
 #'
 #'   The reverse modes force `useDenseOutput = TRUE`.
 #' @param profile Logical. Compile with profiling counters.
@@ -210,7 +210,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   n_sens_params <- length(sens_params)
   n_total_sens <- n_sens_initials + n_sens_params
 
-  # Tangents come from the thread-local arena at the width ncol(sens1ini) gives,
+  # Tangents come from the thread-local arena at the width ncol(tangent) gives,
   # read at run time.
   is_heap <- deriv || deriv2
   # Heap AD needs the runtime size on every diff() so the slab is allocated.
@@ -423,7 +423,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       externC <- c(
         externC,
         "  if (args.sens2ini != nullptr)",
-        "    return res.fail(cppde::RC_ILL_INPUT, \"sens2ini supplied but deriv2 = FALSE\");"
+        "    return res.fail(cppde::RC_ILL_INPUT, \"hessian supplied but deriv2 = FALSE\");"
       )
     }
 
@@ -530,7 +530,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "  // [n_phi_rows, n_sens] and [n_phi_rows, n_sens, n_sens] respectively.",
       "  if (has_sens1ini && args.n_sens1 != n_phi_rows * n_sens) {",
       "    char _m[256];",
-      "    snprintf(_m, sizeof(_m), \"sens1ini has wrong length: expected n_phi_rows * n_sens = %d * %d = %d, got %d\", n_phi_rows, n_sens, n_phi_rows * n_sens, args.n_sens1);",
+      "    snprintf(_m, sizeof(_m), \"tangent has wrong length: expected n_phi_rows * n_sens = %d * %d = %d, got %d\", n_phi_rows, n_sens, n_phi_rows * n_sens, args.n_sens1);",
       "    return res.fail(cppde::RC_ILL_INPUT, _m);",
       "  }"
     )
@@ -540,11 +540,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         externC,
         "  if (has_sens2ini && args.n_sens2 != n_phi_rows * n_sens * n_sens) {",
         "    char _m[256];",
-        "    snprintf(_m, sizeof(_m), \"sens2ini has wrong length: expected n_phi_rows * n_sens^2 = %d * %d^2 = %d, got %d\", n_phi_rows, n_sens, n_phi_rows * n_sens * n_sens, args.n_sens2);",
+        "    snprintf(_m, sizeof(_m), \"hessian has wrong length: expected n_phi_rows * n_sens^2 = %d * %d^2 = %d, got %d\", n_phi_rows, n_sens, n_phi_rows * n_sens * n_sens, args.n_sens2);",
         "    return res.fail(cppde::RC_ILL_INPUT, _m);",
         "  }",
         "  if (has_sens2ini && !has_sens1ini)",
-        "    return res.fail(cppde::RC_ILL_INPUT, \"sens2ini requires sens1ini (Phi'' without Phi' is inconsistent)\");"
+        "    return res.fail(cppde::RC_ILL_INPUT, \"hessian requires tangent (Phi'' without Phi' is inconsistent)\");"
       )
     }
 
@@ -1176,7 +1176,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   written_onestep <- is_explicit(method) || is_rosenbrock(method)
 
   # --- The backward sweep ---
-  # One per seed column, rows indexed as sens1ini (states, then parameters).
+  # One per cotangent column, rows indexed as the tangent (states, then parameters).
   # State rows sum the cotangents of x0 (wx0) and of the flat vector (wp).
   if (is_reverse) {
     # The transposed solve a corrector needs. An explicit method has none, and
@@ -1204,17 +1204,17 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "  if (args.seed == nullptr) {",
       "    if (args.want_store) return res.return_code;",
       "    return res.fail(cppde::RC_ILL_INPUT,",
-      "                    \"a model compiled with derivMode = reverse needs a seed\");",
+      "                    \"a model compiled with derivMode = reverse needs a cotangent\");",
       "  }",
       "  if (args.n_seed_rows != n_out) {",
       "    char _m[192];",
-      "    snprintf(_m, sizeof(_m), \"seed has %d rows but the run produced %d output \"",
+      "    snprintf(_m, sizeof(_m), \"cotangent has %d rows but the run produced %d output \"",
       "             \"rows; a root event observes more times than it was asked for\",",
       "             args.n_seed_rows, n_out);",
       "    return res.fail(cppde::RC_ILL_INPUT, _m);",
       "  }",
       sprintf("  if (args.n_seed_states != %d)", n_variables),
-      "    return res.fail(cppde::RC_ILL_INPUT, \"seed has the wrong state count\");",
+      "    return res.fail(cppde::RC_ILL_INPUT, \"cotangent has the wrong state count\");",
       "",
       sprintf("  std::vector<%s> _theta(full_params.begin(), full_params.end());",
               rev_num_type),
@@ -1535,7 +1535,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   attr(modelname, "useNDF")        <- useNDF
   # Dimension names: under reparametrization the sens columns are theta slots.
   # The sens dim defaults to model-parameter names; solveODE() overrides it per
-  # call when sens1ini carries a full Phi' shape.
+  # call when the tangent carries a full Phi' shape.
   if (deriv) {
     attr(modelname, "dimNames") <- list(
       time = "time",

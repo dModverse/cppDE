@@ -165,7 +165,7 @@ test_that("first-order sensitivities are correct for all methods", {
 
     sens_names <- attr(mod, "dimNames")$sens
     k1_idx <- which(sens_names == "k1")
-    ad_dA_dk1 <- res$sens1[, 1, k1_idx]  # state 1 (A), param k1_idx
+    ad_dA_dk1 <- res$tangent[, 1, k1_idx]  # state 1 (A), param k1_idx
 
     expect_equal(ad_dA_dk1, fd_dA_dk1, tolerance = 1e-3,
                  label = paste(m, "dA/dk1"))
@@ -180,8 +180,8 @@ test_that("second-order sensitivities are finite for stiff methods", {
   for (m in stiff_methods) {
     res <- solveODE(decay_d2[[m]], times, pars, abstol = 1e-10, reltol = 1e-10)
 
-    expect_true(!is.null(res$sens2), label = paste(m, "sens2 exists"))
-    expect_true(all(is.finite(res$sens2)), label = paste(m, "sens2 finite"))
+    expect_true(!is.null(res$hessian), label = paste(m, "hessian exists"))
+    expect_true(all(is.finite(res$hessian)), label = paste(m, "hessian finite"))
   }
 })
 
@@ -190,7 +190,7 @@ test_that("second-order sensitivities are symmetric over a long stiff run", {
   res <- solveODE(mod, c(0, 10^seq(-2, 3, length.out = 30)),
                   c(y1 = 1, y2 = 0, y3 = 0, k1 = 0.04, k2 = 3e7, k3 = 1e4),
                   abstol = 1e-12, reltol = 1e-10)
-  s <- res$sens2[31, , , ]
+  s <- res$hessian[31, , , ]
   expect_equal(unname(s), unname(aperm(s, c(1, 3, 2))), tolerance = 1e-12)
   expect_lt(max(abs(s)), 1e3)
 })
@@ -270,12 +270,12 @@ test_that("a root event on the grid carries the firing time into the sensitiviti
   E2 <- exp(-0.1 * (16 - 12))
 
   expect_equal(unname(res$variable[i, "C"]), 4 * E1 + 3 * E2, tolerance = 1e-7)
-  expect_equal(res$sens1[i, "C", "C"], E1,                tolerance = 1e-6)
-  expect_equal(res$sens1[i, "C", "d"], E2,                tolerance = 1e-6)
-  expect_equal(res$sens1[i, "C", "c"], 3 * E2 * 0.1,      tolerance = 1e-6)
-  expect_equal(res$sens1[i, "C", "S"], -3 * E2 * 0.1,     tolerance = 1e-6)
-  expect_equal(res$sens2[i, "C", "d", "c"], E2 * 0.1,     tolerance = 1e-6)
-  expect_equal(res$sens2[i, "C", "c", "d"], E2 * 0.1,     tolerance = 1e-6)
+  expect_equal(res$tangent[i, "C", "C"], E1,                tolerance = 1e-6)
+  expect_equal(res$tangent[i, "C", "d"], E2,                tolerance = 1e-6)
+  expect_equal(res$tangent[i, "C", "c"], 3 * E2 * 0.1,      tolerance = 1e-6)
+  expect_equal(res$tangent[i, "C", "S"], -3 * E2 * 0.1,     tolerance = 1e-6)
+  expect_equal(res$hessian[i, "C", "d", "c"], E2 * 0.1,     tolerance = 1e-6)
+  expect_equal(res$hessian[i, "C", "c", "d"], E2 * 0.1,     tolerance = 1e-6)
 })
 
 test_that("a fixed event switches on a root condition it steps over", {
@@ -303,10 +303,10 @@ test_that("a reset switched on by a jump transports like a fixed one", {
   b <- solved(reset_time)
   expect_identical(a$time, b$time)
   expect_equal(a$variable, b$variable)
-  expect_equal(a$sens1, b$sens1)
-  expect_equal(a$sens2, b$sens2)
+  expect_equal(a$tangent, b$tangent)
+  expect_equal(a$hessian, b$hessian)
   # the saltation term of the event time is what makes this more than an identity
-  expect_gt(abs(a$sens1[max(which(a$time == 8)), "C", "te"]), 0.1)
+  expect_gt(abs(a$tangent[max(which(a$time == 8)), "C", "te"]), 0.1)
 })
 
 test_that("a root event does not fire twice on the crossing it just handled", {
@@ -377,10 +377,10 @@ test_that("a 10^x term compiles and differentiates correctly", {
   res <- solveODE(pow10, t10, p10, abstol = 1e-12, reltol = 1e-12)
 
   expect_equal(as.numeric(res$variable[, "x"]), -log10(u), tolerance = 1e-8)
-  expect_equal(as.numeric(res$sens1[, "x", "x"]),
+  expect_equal(as.numeric(res$tangent[, "x", "x"]),
                10^(-p10[["x"]]) / u, tolerance = 1e-6)
-  expect_equal(as.numeric(res$sens1[, "x", "k"]), -t10 / u, tolerance = 1e-6)
-  expect_equal(as.numeric(res$sens2[, "x", "k", "k"]),
+  expect_equal(as.numeric(res$tangent[, "x", "k"]), -t10 / u, tolerance = 1e-6)
+  expect_equal(as.numeric(res$hessian[, "x", "k", "k"]),
                ln10 * t10^2 / u^2, tolerance = 1e-6)
 })
 
@@ -394,7 +394,7 @@ test_that("state and parameter names that are C++ tokens compile and solve", {
   exp <- solveODE(cxx_ref, tt, c(a = 1, b = 0, k = 0.7, b0 = 0.2))
 
   expect_equal(unname(res$variable), unname(exp$variable), tolerance = 1e-10)
-  expect_equal(unname(res$sens1), unname(exp$sens1), tolerance = 1e-10)
+  expect_equal(unname(res$tangent), unname(exp$tangent), tolerance = 1e-10)
 })
 
 test_that("a Python keyword as a symbol name is rejected", {
@@ -434,6 +434,6 @@ test_that("a forcing that multiplies a state reaches the Jacobian", {
   # take their own grids and leave O(tol/h) behind. It is four decades tighter
   # than the error a missing forcing term would produce, which is the point.
   for (k in seq_along(pars))
-    expect_equal(unname(res$sens1[, , k]), unname(fd[, , k]), tolerance = 1e-3,
+    expect_equal(unname(res$tangent[, , k]), unname(fd[, , k]), tolerance = 1e-3,
                  info = names(pars)[k])
 })

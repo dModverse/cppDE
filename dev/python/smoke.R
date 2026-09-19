@@ -63,27 +63,27 @@ S2$pars <- c(setNames(rep(0.1, 40), names(S2$rhs)),
 
 tol <- list(abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
 
-contract <- function(sens1, W)
+contract <- function(tangent, W)
   vapply(seq_len(dim(W)[3]),
-         function(k) apply(sens1 * as.vector(W[, , k]), 3, sum),
-         numeric(dim(sens1)[3]))
+         function(k) apply(tangent * as.vector(W[, , k]), 3, sum),
+         numeric(dim(tangent)[3]))
 
 hess_forward <- function(res, W) {
-  ns <- dim(res$sens2)[3]
+  ns <- dim(res$hessian)[3]
   outer(seq_len(ns), seq_len(ns),
-        Vectorize(function(a, b) sum(as.vector(W) * res$sens2[, , a, b])))
+        Vectorize(function(a, b) sum(as.vector(W) * res$hessian[, , a, b])))
 }
 
 relerr <- function(a, b) max(abs(a - b)) / max(1, max(abs(b)))
 
-seed_for <- function(n_t, n_x) { set.seed(1); array(rnorm(n_t * n_x), c(n_t, n_x, 1)) }
+cotangent_for <- function(n_t, n_x) { set.seed(1); array(rnorm(n_t * n_x), c(n_t, n_x, 1)) }
 
 solve_with <- function(m, M, ...)
   do.call(cppDE::solveODE, c(list(m, M$times, M$pars), M$tol %||% tol,
                              if (!is.null(M$forcings)) list(forcings = M$forcings),
                              list(...)))
 
-## reverse against forward sens1 (first order)
+## reverse against the forward tangent (first order)
 rev_vs_fwd <- function(M, method, outdir, tag, sparse = NULL) {
   mf <- cppDE::cppODE(M$rhs, events = M$events, forcings = names(M$forcings), method = method,
                       sparse = sparse, deriv = TRUE, fixed = M$fixed, outdir = outdir,
@@ -92,11 +92,11 @@ rev_vs_fwd <- function(M, method, outdir, tag, sparse = NULL) {
                       sparse = sparse, derivMode = "reverse", fixed = M$fixed,
                       outdir = outdir, modelname = paste0(tag, "_r"))
   ff <- solve_with(mf, M)
-  W <- seed_for(nrow(ff$variable), ncol(ff$variable))
-  fr <- solve_with(mr, M, seed = W)
-  ref <- contract(ff$sens1, W)[, 1]
-  list(err = c(gradient = relerr(fr$adjoint[names(ref), 1], ref)),
-       val = c(fr$adjoint[names(ref), 1]))
+  W <- cotangent_for(nrow(ff$variable), ncol(ff$variable))
+  fr <- solve_with(mr, M, cotangent = W)
+  ref <- contract(ff$tangent, W)[, 1]
+  list(err = c(gradient = relerr(fr$cotangent[names(ref), 1], ref)),
+       val = c(fr$cotangent[names(ref), 1]))
 }
 
 ## forward-reverse against forward-forward (second order)
@@ -108,14 +108,14 @@ rev2_vs_fwd2 <- function(M, method, outdir, tag, sparse = NULL) {
                       sparse = sparse, derivMode = "forward-reverse", fixed = M$fixed,
                       outdir = outdir, modelname = paste0(tag, "_fr"))
   ff <- solve_with(mf, M)
-  W <- seed_for(nrow(ff$variable), ncol(ff$variable))
+  W <- cotangent_for(nrow(ff$variable), ncol(ff$variable))
   W[!(ff$time %in% M$times), , ] <- 0
-  fr <- solve_with(mr, M, seed = W)
-  ref <- contract(ff$sens1, W)[, 1]
-  hr <- unname(fr$adjoint2[names(ref), , 1])
-  list(err = c(gradient = relerr(fr$adjoint[names(ref), 1], ref),
+  fr <- solve_with(mr, M, cotangent = W)
+  ref <- contract(ff$tangent, W)[, 1]
+  hr <- unname(fr$curvature[names(ref), , 1])
+  list(err = c(gradient = relerr(fr$cotangent[names(ref), 1], ref),
                hessian = relerr(hr, hess_forward(ff, W))),
-       val = c(fr$adjoint[names(ref), 1], hr))
+       val = c(fr$cotangent[names(ref), 1], hr))
 }
 
 
@@ -126,7 +126,7 @@ set_jac <- function(strategy) {
       "import os; os.environ['CPPDE_JAC'] = '%s'", strategy))
 }
 
-## Central differences of the trajectory (and of sens1) in each parameter.
+## Central differences of the trajectory (and of the tangent) in each parameter.
 fd_sens <- function(m, M, pars, what = "variable", h = 1e-5) {
   base <- solve_with(m, M)[[what]]
   out <- array(0, c(dim(base), length(pars)))
@@ -153,14 +153,14 @@ fwd_vs_fd <- function(M, method, outdir, tag, sparse = NULL, jac = "") {
   cppDE::compile(m)
   t2 <- proc.time()[["elapsed"]]
   r <- solve_with(m, M)
-  keep <- setdiff(dimnames(r$sens1)[[3]], M$no_fd)
+  keep <- setdiff(dimnames(r$tangent)[[3]], M$no_fd)
   fd <- fd_sens(m, M, keep, h = M$fd_h %||% 1e-5)
-  list(err = c(sens1 = relerr(r$sens1[, , keep], fd)), val = c(r$variable, r$sens1),
+  list(err = c(sens1 = relerr(r$tangent[, , keep], fd)), val = c(r$variable, r$tangent),
        note = sprintf("codegen %.1f s, compile %.1f s, %.0f kB source",
                       t1 - t0, t2 - t1, file.size(attr(m, "srcfile")) / 1e3))
 }
 
-## Second-order sensitivities against differences of sens1.
+## Second-order sensitivities against differences of the tangent.
 fwd2_vs_fd <- function(M, method, outdir, tag, sparse = NULL, jac = "") {
   set_jac(jac)
   m <- cppDE::cppODE(M$rhs, events = M$events, forcings = names(M$forcings), method = method,
@@ -170,10 +170,10 @@ fwd2_vs_fd <- function(M, method, outdir, tag, sparse = NULL, jac = "") {
   m1 <- cppDE::cppODE(M$rhs, events = M$events, forcings = names(M$forcings), method = method,
                       sparse = sparse, deriv = TRUE, outdir = outdir,
                       modelname = paste0(tag, "_1"))
-  pars <- dimnames(r$sens2)[[4]]
-  fd2 <- fd_sens(m1, M, pars, what = "sens1")
-  fd2 <- fd2[, , dimnames(r$sens2)[[3]], , drop = FALSE]
-  list(err = c(sens2 = relerr(r$sens2, fd2)), val = c(r$sens1, r$sens2))
+  pars <- dimnames(r$hessian)[[4]]
+  fd2 <- fd_sens(m1, M, pars, what = "tangent")
+  fd2 <- fd2[, , dimnames(r$hessian)[[3]], , drop = FALSE]
+  list(err = c(sens2 = relerr(r$hessian, fd2)), val = c(r$tangent, r$hessian))
 }
 
 ## Small S2 for second order: 12 chain states.
@@ -205,9 +205,9 @@ rev_grad_fd <- function(M, method, outdir, tag) {
                       outdir = outdir, modelname = paste0(tag, "_v"))
   base <- solve_with(m0, M)
   grid <- base$time %in% M$times
-  W <- seed_for(nrow(base$variable), ncol(base$variable))
+  W <- cotangent_for(nrow(base$variable), ncol(base$variable))
   W[!grid, , ] <- 0
-  fr <- solve_with(mr, M, seed = W)
+  fr <- solve_with(mr, M, cotangent = W)
   fun <- function(Mp) {
     r <- solve_with(m0, Mp)
     sum(r$variable[r$time %in% M$times, , drop = FALSE] * W[grid, , 1])
@@ -219,8 +219,8 @@ rev_grad_fd <- function(M, method, outdir, tag) {
     Mm <- M; Mm$pars[[k]] <- Mm$pars[[k]] - h
     (fun(Mp) - fun(Mm)) / (2 * h)
   }, 0)
-  list(err = c(gradient = relerr(fr$adjoint[nm, 1], fd)),
-       val = c(fr$adjoint[nm, 1], fr$adjoint2[, , 1]))
+  list(err = c(gradient = relerr(fr$cotangent[nm, 1], fd)),
+       val = c(fr$cotangent[nm, 1], fr$curvature[, , 1]))
 }
 
 
@@ -325,21 +325,22 @@ cv_vs_native <- function(M, outdir, tag, sparse = NULL, reverse = FALSE) {
   rn <- solve_with(mn, M)
   on <- match(M$times, rn$time)
   if (reverse) {
-    W <- seed_for(nrow(rn$variable), ncol(rn$variable))
+    W <- cotangent_for(nrow(rn$variable), ncol(rn$variable))
     W[-on, , ] <- 0
-    rc <- solve_with(mc, M, seed = W[on, , , drop = FALSE])
-    ref <- contract(rn$sens1, W)[, 1]
-    return(list(err = c(gradient = relerr(rc$adjoint[names(ref), 1], ref)),
-                val = rc$adjoint[names(ref), 1]))
+    rc <- solve_with(mc, M, cotangent = W[on, , , drop = FALSE])
+    ref <- contract(rn$tangent, W)[, 1]
+    return(list(err = c(gradient = relerr(rc$cotangent[names(ref), 1], ref)),
+                val = rc$cotangent[names(ref), 1]))
   }
   rc <- solve_with(mc, M)
   oc <- match(M$times, rc$time)
   list(err = c(variable = relerr(rc$variable[oc, ], rn$variable[on, ]),
-               sens1 = relerr(rc$sens1[oc, , ], rn$sens1[on, , ])),
-       val = c(rc$variable[oc, ], rc$sens1[oc, , ]))
+               sens1 = relerr(rc$tangent[oc, , ], rn$tangent[on, , ])),
+       val = c(rc$variable[oc, ], rc$tangent[oc, , ]))
 }
 
-## cppFUN S4: jac/hess against differences, vjp against jac, vjp2 against hess.
+## cppFUN S4: jac/hess against differences, vjp against jac, its curvature
+## against hess.
 fun_s4 <- function(outdir, tag) {
   eq <- c(y1 = "piecewise(a*x^2, x > c, b*sqrt(x))",
           y2 = "abs(x - a)*pow(b, 2.5)",
@@ -386,17 +387,19 @@ fun_s4 <- function(outdir, tag) {
   VX <- array(rnorm(2), c(2, 1, 1))
   VP <- matrix(rnorm(4), 4, 1, dimnames = list(names(P), NULL))
   VP["c", 1] <- 0
-  r2 <- f$vjp2(X, P, W, vx = VX, vp = VP)
+  r2 <- f$vjp(X, P, W, tangentX = VX, tangentP = VP)
   full <- array(0, c(2, 4, 4), list(NULL, c("x", "a", "b", "k"), c("x", "a", "b", "k")))
   for (o in 1:2) full[o, , ] <- W[o, 1] * H[o, 1, , ] + W[o, 2] * H[o, 2, , ] + W[o, 3] * H[o, 3, , ]
   ref_dx <- vapply(1:2, function(o) sum(full[o, "x", ] * c(VX[o, 1, 1], VP[c("a", "b", "k"), 1])), 0)
   ref_dp <- vapply(c("a", "b", "k"), function(nm)
     sum(vapply(1:2, function(o) sum(full[o, nm, ] * c(VX[o, 1, 1], VP[c("a", "b", "k"), 1])), 0)), 0)
   list(err = c(jac_fd = relerr(J, jfd), hess_fd = relerr(H, hfd),
-               vjp_jac = relerr(c(r$wx[, 1, 1], r$wp[c("a", "b", "k"), 1]), c(jx, jp)),
-               vjp2_hess = relerr(c(r2$dwx[, 1, 1, 1], r2$dwp[c(1, 2, 4), 1, 1]),
-                                  c(ref_dx, ref_dp))),
-       val = c(J, H, r$wx, r$wp, r2$dwx, r2$dwp))
+               vjp_jac = relerr(c(r$cotangentX[, 1, 1], r$cotangentP[c("a", "b", "k"), 1]),
+                                c(jx, jp)),
+               curvature_hess = relerr(c(r2$curvatureX[, 1, 1, 1],
+                                         r2$curvatureP[c(1, 2, 4), 1, 1]),
+                                       c(ref_dx, ref_dp))),
+       val = c(J, H, r$cotangentX, r$cotangentP, r2$curvatureX, r2$curvatureP))
 }
 
 ## ---------------------------------------------------------------------------

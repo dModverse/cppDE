@@ -318,7 +318,8 @@ align_rows <- function(res, times) {
   idx <- idx[keep]
   list(time = res$time[idx],
        variable = res$variable[idx, , drop = FALSE],
-       sens1 = if (!is.null(res$sens1)) res$sens1[idx, , , drop = FALSE] else NULL)
+       tangent = if (!is.null(res$tangent)) res$tangent[idx, , , drop = FALSE]
+                 else NULL)
 }
 
 ## Each state is normalised by its own trajectory magnitude, so a
@@ -486,7 +487,7 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
 
   ## Ones on every state and output row. The row count comes from a value run,
   ## which includes the extra rows cppDE reports at events.
-  seed_for <- function(backend, method = "bdf", useNDF = TRUE, sparse = NULL) {
+  ones_for <- function(backend, method = "bdf", useNDF = TRUE, sparse = NULL) {
     m0 <- get_model(cache, prob, backend, deriv = FALSE, method = method,
                     useNDF = useNDF, sparse = sparse)
     n  <- nrow(solveODE(m0, prob$times, prob$parms, onFailure = "stop")$variable)
@@ -496,12 +497,12 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
   ## mirrored.
   hessian_of <- function(res, derivMode) {
     if (derivMode == "forward-forward") {
-      h <- apply(res$sens2, c(3L, 4L), sum)
+      h <- apply(res$hessian, c(3L, 4L), sum)
       h[upper.tri(h)] <- t(h)[upper.tri(h)]
       return(h)
     }
-    d <- dimnames(res$adjoint2)[[2L]]
-    res$adjoint2[d, , 1L]
+    d <- dimnames(res$curvature)[[2L]]
+    res$curvature[d, , 1L]
   }
 
   ## -- references ----------------------------------------------------------
@@ -511,9 +512,11 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
       if (mode == "sens1" && reverse1) {
         b <- if (has_events) "cppde" else ref_backend
         m <- get_model(cache, prob, b, deriv = TRUE, derivMode = "reverse")
-        solveODE(m, prob$times, prob$parms, abstol = ref_atol,
-                 reltol = ref_tol[["rtol"]], seed = seed_for(b),
-                 onFailure = "stop")$adjoint[prob$sens, 1L]
+        ## Parameters that enter only the initial values have no cotangent row.
+        a <- solveODE(m, prob$times, prob$parms, abstol = ref_atol,
+                      reltol = ref_tol[["rtol"]], cotangent = ones_for(b),
+                      onFailure = "stop")$cotangent[, 1L]
+        a[intersect(prob$sens, names(a))]
       } else {
         m <- get_model(cache, prob, ref_backend, deriv = mode == "sens1",
                        method = "bdf")
@@ -526,7 +529,7 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
   }
 
   ## -- one model over the tolerance sweep ----------------------------------
-  measure <- function(cfg, m, mode, derivMode, nsens, seed, check) {
+  measure <- function(cfg, m, mode, derivMode, nsens, cotangent, check) {
     lu <- if (isTRUE(attr(m, "sparse"))) "sparse" else "dense"
     base <- list(problem = prob$name, condition = prob$condition %||% NA_character_,
                  source = prob$source, nstates = prob$nstates, npars = prob$npars,
@@ -539,7 +542,8 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
       ## is still swept, which is how the IVP test set treats E5.
       atol <- prob$atol %||% tolerances$atol[ti]
       run <- function() solveODE(m, prob$times, prob$parms, abstol = atol,
-                                 reltol = rtol, seed = seed, onFailure = "silent")
+                                 reltol = rtol, cotangent = cotangent,
+                                 onFailure = "silent")
       res <- tryCatch(run(), error = function(e) NULL)
       ok  <- !is.null(res) && !is.null(res$diagnostics) &&
              res$diagnostics$return_code == 0L
@@ -595,20 +599,20 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
       m <- model_or_null(cfg, prob, mode, deriv = deriv,
                          derivMode = if (deriv) derivMode else "forward")
       if (is.null(m)) next
-      seed <- if (derivMode == "reverse") tryCatch(
-        seed_for(cfg$backend, cfg$method,
+      w <- if (derivMode == "reverse") tryCatch(
+        ones_for(cfg$backend, cfg$method,
                  if (is.na(cfg$useNDF)) TRUE else cfg$useNDF, cfg$sparse),
         error = function(e) NULL)
-      if (derivMode == "reverse" && is.null(seed)) next
+      if (derivMode == "reverse" && is.null(w)) next
       check <- function(res) {
         al <- align_rows(res, prob$times)
         if (derivMode == "reverse")
           return(c(traj_error(al$variable, ref$nosens$variable),
-                   grad_error(res$adjoint[prob$sens, 1L], ref$sens1)))
+                   grad_error(res$cotangent[names(ref$sens1), 1L], ref$sens1)))
         c(traj_error(al$variable, ref[[mode]]$variable),
-          if (deriv) sens_error(al$sens1, ref$sens1$sens1) else NA_real_)
+          if (deriv) sens_error(al$tangent, ref$sens1$tangent) else NA_real_)
       }
-      measure(cfg, m, mode, derivMode, if (deriv) prob$nsens else 0L, seed, check)
+      measure(cfg, m, mode, derivMode, if (deriv) prob$nsens else 0L, w, check)
     }
   }
 
@@ -623,20 +627,20 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
     else {
       cfg0  <- configs[[1L]]
       modes2 <- c(if (ff) "forward-forward", "forward-reverse")
-      seed2 <- tryCatch(seed_for("cppde", cfg0$method), error = function(e) NULL)
+      w2    <- tryCatch(ones_for("cppde", cfg0$method), error = function(e) NULL)
       href <- tryCatch({
         m <- get_model(cache, p2, "cppde", deriv = TRUE, derivMode = modes2[1L])
         hessian_of(solveODE(m, prob$times, prob$parms, abstol = ref_atol,
-                            reltol = ref_tol[["rtol"]], seed = if (!ff) seed2,
+                            reltol = ref_tol[["rtol"]], cotangent = if (!ff) w2,
                             onFailure = "stop"), modes2[1L])
       }, error = function(e) NULL)
       for (dm in modes2) {
         cfg <- list(label = if (dm == "forward-forward") "cppDE_ff" else "cppDE_fr",
                     backend = "cppde", method = cfg0$method, useNDF = cfg0$useNDF)
         m <- model_or_null(cfg, p2, "sens2", deriv = TRUE, derivMode = dm)
-        if (is.null(m) || (dm == "forward-reverse" && is.null(seed2))) next
+        if (is.null(m) || (dm == "forward-reverse" && is.null(w2))) next
         measure(cfg, m, "sens2", dm, p2$nsens,
-                if (dm == "forward-reverse") seed2,
+                if (dm == "forward-reverse") w2,
                 function(res) c(NA_real_, grad_error(hessian_of(res, dm), href)))
       }
     }

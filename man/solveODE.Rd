@@ -8,8 +8,8 @@ solveODE(
   model,
   times,
   parms,
-  sens1ini = NULL,
-  sens2ini = NULL,
+  tangent = NULL,
+  hessian = NULL,
   fixed = NULL,
   forcings = NULL,
   abstol = 1e-06,
@@ -21,7 +21,8 @@ solveODE(
   maxroot = 1L,
   onFailure = c("stop", "warn", "silent"),
   traceFile = NULL,
-  seed = NULL,
+  cotangent = NULL,
+  curvature = NULL,
   adjointGrid = FALSE,
   errWeights = NULL,
   keepStore = FALSE,
@@ -39,32 +40,31 @@ solution. Must be non-empty and contain only finite values.}
 Names must include all of
 \code{c(attr(model, "variables"), attr(model, "parameters"))}.}
 
-\item{sens1ini}{Optional numeric matrix of first-order sensitivity
-initial values, interpreted as the Jacobian \eqn{\Phi'(\theta)}.
+\item{tangent}{Optional numeric matrix, the tangent of the inputs: the
+Jacobian \eqn{\Phi'(\theta)} of the initial states and parameters.
 Accepts three shapes (see Details): state-only \verb{[n_states, n_active]}
 (auto-extended with identity on parameter rows), full
 \verb{[n_states + n_params, M]}, or partial \verb{[k, M]} with row names
 identifying a subset of \code{c(variables, parameters)} (missing rows
 are zero-padded, i.e. implicitly fixed). Column names label the
-resulting sensitivity output columns. Default \code{NULL} uses identity
+directions of the returned derivatives. Default \code{NULL} uses identity
 seeding on the active sensitivity basis.}
 
-\item{sens2ini}{Optional numeric array of second-order sensitivity
-initial values, interpreted as the Hessian tensor
-\eqn{\Phi''(\theta)}. Shapes are analogous to those of \code{sens1ini}:
+\item{hessian}{Optional numeric array, the Hessian tensor
+\eqn{\Phi''(\theta)} of the inputs. Shapes are analogous to those of
+\code{tangent}:
 \verb{[n_states, n_active, n_active]} (state-only),
 \verb{[n_states + n_params, M, M]} (full), or \verb{[k, M, M]} with dim-1
 names identifying a subset of \code{c(variables, parameters)} (partial,
 zero-padded). Allowed only when \code{attr(model, "deriv2")} is \code{TRUE}.
-Default \code{NULL} uses zero seeding (correct when \eqn{\Phi} is
-linear-affine).}
+Default \code{NULL} means the inputs are affine in \eqn{\theta}.}
 
 \item{fixed}{Optional character vector of sensitivity-parameter names
 to treat as fixed at run time. The integrator then runs with a
 smaller AD state. Names must be a subset of
 \code{attr(model, "dimNames")$sens}. Unlike compile-time \code{fixed} in
 \code{\link[=cppODE]{cppODE()}}, the run-time \code{fixed} set can be changed between calls
-without recompilation. Incompatible with full / partial \code{sens1ini}
+without recompilation. Incompatible with full / partial \code{tangent}
 (those encode fixedness through row values or row presence).
 Default \code{NULL} (all parameters active).}
 
@@ -110,22 +110,24 @@ The trace is also attached to the returned list as \verb{$trace}. Ignored
 for models compiled without trace support (\verb{$trace} is \code{NULL} in
 that case).}
 
-\item{seed}{Reverse-mode seed, required by a model compiled with
-\code{derivMode = "reverse"} or \code{"forward-reverse"} (\code{\link[=cppODE]{cppODE()}}) or with
+\item{cotangent}{The cotangent of the outputs, required by a model compiled
+with \code{derivMode = "reverse"} or \code{"forward-reverse"} (\code{\link[=cppODE]{cppODE()}}) or with
 \code{derivMode = "reverse"} (\code{\link[=cvode]{cvode()}}). A \verb{[n_out, n_states]} matrix or an
 \verb{[n_out, n_states, n_seed]} array, whose first dimension is the solve's
 own output row count: a root event adds output times, so that count is
 not \code{length(times)} in general. What comes back is \verb{w' * dx/dtheta}
-summed over times and states, one column per seed column. Supplying it
-to a forward model is an error, as is leaving it out on a reverse one.
+summed over times and states, one column per cotangent column. Supplying
+it to a forward model is an error, as is leaving it out on a reverse one.}
 
-Under \code{"forward-reverse"} the seed may carry its own tangents in theta
-as the attribute \code{seedTangent}, an array
-\verb{[n_out, n_states, n_seed, n_sens]} on the seed's first three dimensions.
-Without it \code{adjoint2} omits the seed's dependence on the parameters.}
+\item{curvature}{Optional, \code{"forward-reverse"} only: the derivative of
+\code{cotangent} along the tangent, \verb{[n_out, n_states, n_seed, n_sens]} on the
+cotangent's first three dimensions. For a cotangent that is the gradient
+of a functional of the outputs, this is that functional's Hessian applied
+to the output tangent. \code{NULL} treats the cotangent as constant in
+\eqn{\theta}.}
 
 \item{adjointGrid}{Whether the sweep also reports the grid it ran on, as
-\verb{$adjointGrid}. \code{FALSE} by default; requires a \code{seed} and the native
+\verb{$adjointGrid}. \code{FALSE} by default; requires a \code{cotangent} and the native
 backend. Costs one
 \verb{[n_steps, n_states, n_seed]} array, so it is a diagnostic.}
 
@@ -137,10 +139,11 @@ length \code{n}), \code{lambda} (\verb{[n, n_states]}), and optionally \code{bre
 (smallest weight as a fraction of the largest, default \code{0}). The
 controller then takes the maximum of its own error norm and
 \eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
-finer than \code{abstol} and \code{reltol} ask, never coarser. Requires a \code{seed}.}
+finer than \code{abstol} and \code{reltol} ask, never coarser. Requires a
+\code{cotangent}.}
 
 \item{keepStore}{Whether a reverse solve returns its checkpoints as
-\verb{$store}, for a later solve to reuse through \code{store}. The \code{seed} may then
+\verb{$store}, for a later solve to reuse through \code{store}. The \code{cotangent} may then
 be omitted, which runs the model for its values alone. Native backend
 only: CVODES holds its checkpoints itself.}
 
@@ -161,17 +164,18 @@ sensitivities; under \code{derivMode = "forward-reverse"} it is off already.}
 }
 \value{
 A named list with components \code{time}, \code{variable}, \code{diagnostics}, and,
-when \code{attr(model, "deriv")} is \code{TRUE}, \code{sens1}, plus \code{sens2} when
+when \code{attr(model, "deriv")} is \code{TRUE}, \code{tangent}, plus \code{hessian} when
 \code{attr(model, "deriv2")} is \code{TRUE}. A model compiled with
-\code{derivMode = "reverse"} carries neither, and returns \code{adjoint} instead:
-\verb{[n_states + n_params, n_seed]}, indexed exactly as a forward \code{sens1ini}
-seeds. One compiled with \code{derivMode = "forward-reverse"} carries \code{sens1} and
-\code{adjoint} and adds \code{adjoint2}, \verb{[n_states + n_params, n_s, n_seed]}: the
-derivatives of each \code{adjoint} entry, which under the identity seeding are the
-columns of the Hessian of the seeded functional. Output arrays are time-first:
-\code{variable} is \verb{[n_t, n_x]}, \code{sens1} is \verb{[n_t, n_x, n_s]}, and
-\code{sens2} is \verb{[n_t, n_x, n_s, n_s]}. The dimension names of \code{sens1}
-and \code{sens2} reflect the active (non-fixed) sensitivity parameters.
+\code{derivMode = "reverse"} carries neither, and returns \code{cotangent} instead:
+\verb{[n_states + n_params, n_seed]}, the cotangent of the inputs, indexed exactly
+as the argument \code{tangent}. One compiled with \code{derivMode = "forward-reverse"}
+carries \code{tangent} and \code{cotangent} and adds \code{curvature},
+\verb{[n_states + n_params, n_s, n_seed]}: the derivatives of each \code{cotangent}
+entry along the tangent, which under the identity tangent are the columns of
+the Hessian of the seeded functional. Output arrays are time-first:
+\code{variable} is \verb{[n_t, n_x]}, \code{tangent} is \verb{[n_t, n_x, n_s]}, and
+\code{hessian} is \verb{[n_t, n_x, n_s, n_s]}. The dimension names of \code{tangent}
+and \code{hessian} reflect the active (non-fixed) sensitivity parameters.
 The \code{diagnostics} element is a list of solver statistics (see
 \code{\link[=diagnostics]{diagnostics()}}). When the model was compiled with \code{stepTrace = TRUE},
 an additional \verb{$trace} \code{data.frame} with per-step diagnostics is
@@ -179,7 +183,7 @@ attached.
 
 With \code{adjointGrid = TRUE} a reverse solve also carries \verb{$adjointGrid}, a
 list of \code{time} and \code{h}, the start and length of each accepted step; \code{eta},
-one column per seed, being \eqn{\lambda^T e_k}; and \code{lambda},
+one column per cotangent column, being \eqn{\lambda^T e_k}; and \code{lambda},
 \verb{[n_steps, n_states, n_seed]}, the adjoint state at each step's start. \code{eta}
 estimates the step's share of the error in the objective.
 
@@ -189,16 +193,27 @@ pointer to the checkpoints, for a later solve to take through \code{store}.
 \description{
 Numerically integrates a compiled ODE model created by \code{\link[=cppODE]{cppODE()}} (or
 \code{\link[=cvode]{cvode()}}) over a specified time span. Returns the state trajectory and,
-when the model was compiled with sensitivities, first- and (optionally)
-second-order parameter sensitivities.
+when the model was compiled with derivatives, their tangent and Hessian
+(forward) or the cotangent and curvature of a seeded functional (reverse).
 }
 \details{
-\subsection{Sensitivity initial values}{
+\subsection{Derivative arguments and results}{
 
-\code{sens1ini} and \code{sens2ini} are the Jacobian \eqn{\Phi'(\theta)} and the
+A derivative argument and its result carry the same name. \code{tangent} and
+\code{hessian} are the first and second derivative in \eqn{\theta} of the
+inputs going in, and of the states coming out. \code{cotangent} is the gradient
+of a functional with respect to the outputs going in, and with respect to
+the inputs coming out. \code{curvature} is the derivative of the cotangent
+along the tangent: that functional's Hessian applied to the tangent, on the
+outputs going in and on the inputs coming out.
+}
+
+\subsection{Tangent and Hessian of the inputs}{
+
+\code{tangent} and \code{hessian} are the Jacobian \eqn{\Phi'(\theta)} and the
 Hessian tensor \eqn{\Phi''(\theta)} of a reparametrisation
 \eqn{p = \Phi(\theta)} of the initial states and parameters; the returned
-sensitivities are then taken with respect to \eqn{\theta}. Omitting them
+derivatives are then taken with respect to \eqn{\theta}. Omitting them
 seeds the identity on the active (non-fixed) sensitivities. Three shapes
 are accepted, selected per call from the row count and row names:
 \itemize{
@@ -206,7 +221,7 @@ are accepted, selected per call from the row count and row names:
 parameter block is implied. The active set equals the model's
 sensitivity names minus \code{fixed}. Detected when \code{nrow == n_states}
 and row names are absent or are a permutation of \code{variables}. This
-is the shape of \code{res$sens1[t, , ]}, so it can seed a following solve.
+is the shape of \code{res$tangent[t, , ]}, so it can seed a following solve.
 \item \strong{Full shape} \verb{[n_states + n_params, M]}: \eqn{\Phi'(\theta)}
 directly. State rows seed state ICs; parameter rows seed the dynamic
 parameters. The column count \code{M} may change from call to call.
@@ -241,21 +256,22 @@ parms <- c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)
 ## Values and sensitivities at tighter tolerances than the default 1e-6
 out <- solveODE(fwd, times, parms, abstol = 1e-10, reltol = 1e-10)
 out$variable[11, ]
-out$sens1[11, , ]                     # [state, parameter] at t = 10
+out$tangent[11, , ]                   # [state, parameter] at t = 10
 
-## Only two directions: sens1ini seeds the rate constants, one column each
+## Only two directions: the tangent seeds the rate constants, one column each
 S <- matrix(0, 2, 2, dimnames = list(c("k1", "k2"), c("k1", "k2")))
 diag(S) <- 1
-solveODE(fwd, times, parms, sens1ini = S)$sens1[11, , ]
+solveODE(fwd, times, parms, tangent = S)$tangent[11, , ]
 
-## Reverse mode: a seed weights the states at every time, and $adjoint is the
-## gradient of sum(seed * x) in the initial values and parameters. keepStore
-## keeps the forward pass, so each further seed costs one backward sweep.
+## Reverse mode: a cotangent weights the states at every time, and $cotangent is
+## the gradient of sum(cotangent * x) in the initial values and parameters.
+## keepStore keeps the forward pass, so each further cotangent costs one
+## backward sweep.
 first <- solveODE(rev, times, parms, keepStore = TRUE)
 onB   <- cbind(A = 0, B = rep(1, length(times)))
 onA   <- cbind(A = rep(1, length(times)), B = 0)
-solveODE(rev, times, parms, seed = onB, store = first$store)$adjoint
-solveODE(rev, times, parms, seed = onA, store = first$store)$adjoint
+solveODE(rev, times, parms, cotangent = onB, store = first$store)$cotangent
+solveODE(rev, times, parms, cotangent = onA, store = first$store)$cotangent
 }
 }
 \seealso{

@@ -196,8 +196,9 @@ maResiduals <- function(u, Ju, logSigma, w, C = 100) {
 }
 
 ## The same objective, sum(eta^2) / sigma^2 + n (C + 2 logSigma), with its
-## gradient in `u`, `logSigma` and `w` instead of a Jacobian. `du` is the seed a
-## reverse sweep contracts with du/dtheta. `eta` are the scaled innovations.
+## gradient in `u`, `logSigma` and `w` instead of a Jacobian. `du` is the
+## cotangent a reverse sweep contracts with du/dtheta. `eta` are the scaled
+## innovations.
 maObjective <- function(u, logSigma, w, C = 100) {
   if (C + 2 * logSigma <= 0) return(NULL)
   n   <- length(u)

@@ -44,17 +44,17 @@ test_that("log-transform reparam matches analytical dx/dtheta", {
                       dimnames = list(c("x", "k"), c("theta_x0", "theta_lk")))
 
   tvec <- seq(0, 2, by = 0.5)
-  res  <- solveODE(mod, times = tvec, parms = pars, sens1ini = Phi_prime,
+  res  <- solveODE(mod, times = tvec, parms = pars, tangent = Phi_prime,
                    abstol = 1e-10, reltol = 1e-10)
 
-  expect_equal(dim(res$sens1), c(length(tvec), 1L, 2L))
-  expect_equal(dimnames(res$sens1)$sens, c("theta_x0", "theta_lk"))
+  expect_equal(dim(res$tangent), c(length(tvec), 1L, 2L))
+  expect_equal(dimnames(res$tangent)$sens, c("theta_x0", "theta_lk"))
 
   k  <- 0.5; x0 <- 1.0
   expected_x0 <- exp(-k * tvec)
   expected_lk <- -k * tvec * x0 * exp(-k * tvec)
-  expect_equal(as.numeric(res$sens1[, 1, 1]), expected_x0, tolerance = 1e-8)
-  expect_equal(as.numeric(res$sens1[, 1, 2]), expected_lk, tolerance = 1e-8)
+  expect_equal(as.numeric(res$tangent[, 1, 1]), expected_x0, tolerance = 1e-8)
+  expect_equal(as.numeric(res$tangent[, 1, 2]), expected_lk, tolerance = 1e-8)
 })
 
 # -- Parity: direct integration vs post-hoc S * Phi' --------------------------
@@ -80,17 +80,17 @@ test_that("reparam sens equals post-hoc S * Phi' (two-state model)", {
     dimnames = list(c("A", "B", "k1", "k2"),
                     c("A0", "B0", "log_k1", "log_k2"))
   )
-  res_th <- solveODE(mod_AB, tvec, pars, sens1ini = Phi_prime,
+  res_th <- solveODE(mod_AB, tvec, pars, tangent = Phi_prime,
                      abstol = tight$abstol, reltol = tight$reltol)
 
   # Post-hoc: S_theta[t, i, j] = sum_p S_id[t, i, p] * Phi_prime[p, j]
   # where rows of Phi_prime are (A, B, k1, k2) and columns are theta names.
-  S_id <- res_id$sens1
-  S_expected <- array(0, dim = dim(res_th$sens1), dimnames = dimnames(res_th$sens1))
+  S_id <- res_id$tangent
+  S_expected <- array(0, dim = dim(res_th$tangent), dimnames = dimnames(res_th$tangent))
   for (ti in seq_len(dim(S_id)[1])) {
     S_expected[ti, , ] <- S_id[ti, , ] %*% Phi_prime
   }
-  expect_equal(as.numeric(res_th$sens1), as.numeric(S_expected),
+  expect_equal(as.numeric(res_th$tangent), as.numeric(S_expected),
                tolerance = 1e-8)
 })
 
@@ -110,28 +110,28 @@ test_that("rank-reduced reparam integrates over smaller theta space", {
                       dimnames = list(c("x", "k"), "log_k"))
 
   tvec <- seq(0, 3, by = 0.5)
-  res  <- solveODE(mod, tvec, pars, sens1ini = Phi_prime,
+  res  <- solveODE(mod, tvec, pars, tangent = Phi_prime,
                    abstol = 1e-10, reltol = 1e-10)
 
-  expect_equal(dim(res$sens1), c(length(tvec), 1L, 1L))
+  expect_equal(dim(res$tangent), c(length(tvec), 1L, 1L))
 
   expected <- k * exp(-k * tvec) * (1 - k * tvec)
-  expect_equal(as.numeric(res$sens1[, 1, 1]), expected, tolerance = 1e-8)
+  expect_equal(as.numeric(res$tangent[, 1, 1]), expected, tolerance = 1e-8)
 })
 
 # -- Guard rails --------------------------------------------------------------
 
-test_that("identity seeding works when sens1ini is NULL", {
+test_that("identity seeding works when tangent is NULL", {
   mod <- mod_x
   res <- expect_silent(solveODE(mod, c(0, 1), c(x = 1, k = 0.5)))
-  expect_equal(dim(res$sens1), c(2L, 1L, 2L))
+  expect_equal(dim(res$tangent), c(2L, 1L, 2L))
 })
 
 test_that("reparam rejects 'fixed' argument", {
   mod <- mod_x
   Phi_prime <- matrix(c(1, 0, 0, 0.5), 2, 2)
   expect_error(solveODE(mod, c(0, 1), c(x = 1, k = 0.5),
-                        sens1ini = Phi_prime, fixed = "k"),
+                        tangent = Phi_prime, fixed = "k"),
                "not supported")
 })
 
@@ -149,20 +149,20 @@ test_that("deriv2 + log-reparam matches analytical d^2x/dtheta^2", {
 
   tvec <- c(0, 0.5, 1, 1.5, 2)
   res <- solveODE(mod, tvec, pars,
-                  sens1ini = Phi_prime, sens2ini = Phi_pp,
+                  tangent = Phi_prime, hessian = Phi_pp,
                   abstol = 1e-10, reltol = 1e-10)
 
-  expect_equal(dim(res$sens2), c(length(tvec), 1L, 2L, 2L))
+  expect_equal(dim(res$hessian), c(length(tvec), 1L, 2L, 2L))
 
-  expect_equal(as.numeric(res$sens2[, 1, 1, 1]),
+  expect_equal(as.numeric(res$hessian[, 1, 1, 1]),
                rep(0, length(tvec)), tolerance = 1e-8)
-  expect_equal(as.numeric(res$sens2[, 1, 1, 2]),
+  expect_equal(as.numeric(res$hessian[, 1, 1, 2]),
                -k * tvec * exp(-k * tvec), tolerance = 1e-8)
-  expect_equal(as.numeric(res$sens2[, 1, 2, 1]),   # symmetry
+  expect_equal(as.numeric(res$hessian[, 1, 2, 1]),   # symmetry
                -k * tvec * exp(-k * tvec), tolerance = 1e-8)
   # The pure second derivative in log k passes through zero on this grid, so the
   # residual there is absolute rather than relative and needs a looser tolerance.
-  expect_equal(as.numeric(res$sens2[, 1, 2, 2]),
+  expect_equal(as.numeric(res$hessian[, 1, 2, 2]),
                x0 * exp(-k * tvec) * k * tvec * (k * tvec - 1),
                tolerance = 1e-6)
 })
@@ -187,13 +187,13 @@ test_that("CVODE reparam matches Native reparam (no events)", {
   mod_native <- mod_AB
   mod_cvode  <- cv_AB
 
-  res_n <- solveODE(mod_native, tvec, pars, sens1ini = Phi_prime,
+  res_n <- solveODE(mod_native, tvec, pars, tangent = Phi_prime,
                     abstol = tight$abstol, reltol = tight$reltol)
-  res_c <- solveODE(mod_cvode,  tvec, pars, sens1ini = Phi_prime,
+  res_c <- solveODE(mod_cvode,  tvec, pars, tangent = Phi_prime,
                     abstol = tight$abstol, reltol = tight$reltol)
 
-  expect_equal(dim(res_n$sens1), dim(res_c$sens1))
-  expect_equal(as.numeric(res_n$sens1), as.numeric(res_c$sens1),
+  expect_equal(dim(res_n$tangent), dim(res_c$tangent))
+  expect_equal(as.numeric(res_n$tangent), as.numeric(res_c$tangent),
                tolerance = 1e-6)
 })
 
@@ -222,20 +222,20 @@ test_that("CVODE reparam with time event: chain-rule saltation (post-hoc parity)
                      abstol = tight$abstol, reltol = tight$reltol)
 
   # CVODE reparam (uses chain-rule saltation internally)
-  res_cv <- solveODE(cv_x_ev, tvec, pars, sens1ini = Phi_prime,
+  res_cv <- solveODE(cv_x_ev, tvec, pars, tangent = Phi_prime,
                      abstol = tight$abstol, reltol = tight$reltol)
 
   # Post-hoc composition: S_theta[t, i, j] = sum_p S_id[t, i, p] * Phi_prime[p, j]
-  S_id <- res_id$sens1  # [t, x, (x, k, t_e, dose)]
-  S_expected <- array(0, dim = dim(res_cv$sens1))
+  S_id <- res_id$tangent  # [t, x, (x, k, t_e, dose)]
+  S_expected <- array(0, dim = dim(res_cv$tangent))
   for (ti in seq_len(dim(S_id)[1])) {
     S_expected[ti, , ] <- S_id[ti, , ] %*% Phi_prime
   }
-  expect_equal(as.numeric(res_cv$sens1), as.numeric(S_expected),
+  expect_equal(as.numeric(res_cv$tangent), as.numeric(S_expected),
                tolerance = 1e-5)
 })
 
-test_that("sens2 chain-rule parity: direct vs post-hoc composition", {
+test_that("hessian chain-rule parity: direct vs post-hoc composition", {
   # Nonlinear reparametrization over a 2-state model: theta -> p
   pars <- c(A = 1.0, B = 0.2, k1 = 0.3, k2 = 0.1)
   tvec <- seq(0, 3, length.out = 7)
@@ -259,15 +259,15 @@ test_that("sens2 chain-rule parity: direct vs post-hoc composition", {
   Phi_pp[4, 4, 4] <- k2  # d^2 k2 / d(log_k2)^2 = k2
 
   res_th <- solveODE(mod_AB_d2, tvec, pars,
-                     sens1ini = Phi_prime, sens2ini = Phi_pp,
+                     tangent = Phi_prime, hessian = Phi_pp,
                      abstol = tight$abstol, reltol = tight$reltol)
 
   # Post-hoc chain rule, i and j over the n_states + n_params slots:
   #   H^theta[t,k,a,b] = sum_ij H_id[t,k,i,j] Phi'[i,a] Phi'[j,b]
   #                    + sum_i  S_id[t,k,i]   Phi''[i,a,b]
-  S_id <- res_id$sens1   # [t, k, i] but here i only has n_active = 4 slots (all)
-  H_id <- res_id$sens2   # [t, k, i, j] with same i, j basis
-  H_expected <- array(0, dim = dim(res_th$sens2))
+  S_id <- res_id$tangent   # [t, k, i] but here i only has n_active = 4 slots (all)
+  H_id <- res_id$hessian   # [t, k, i, j] with same i, j basis
+  H_expected <- array(0, dim = dim(res_th$hessian))
 
   # Note: S_id / H_id are indexed by ACTIVE slots, which under identity mode
   # correspond to the full (variables, parameters) vector since nothing is fixed.
@@ -285,7 +285,7 @@ test_that("sens2 chain-rule parity: direct vs post-hoc composition", {
     }
   }
 
-  expect_equal(as.numeric(res_th$sens2), as.numeric(H_expected),
+  expect_equal(as.numeric(res_th$hessian), as.numeric(H_expected),
                tolerance = 1e-7)
 })
 
@@ -300,26 +300,26 @@ test_that("native: a theta subset integrates on its own", {
   # M = 2: theta = (theta_x0, theta_lk).
   Phi_M2 <- matrix(c(1, 0, 0, k), nrow = 2, ncol = 2, byrow = TRUE,
                    dimnames = list(c("x", "k"), c("theta_x0", "theta_lk")))
-  res_M2 <- solveODE(mod, tvec, pars, sens1ini = Phi_M2,
+  res_M2 <- solveODE(mod, tvec, pars, tangent = Phi_M2,
                      abstol = 1e-10, reltol = 1e-10)
 
-  expect_equal(dim(res_M2$sens1), c(length(tvec), 1L, 2L))
-  expect_equal(dimnames(res_M2$sens1)$sens, c("theta_x0", "theta_lk"))
+  expect_equal(dim(res_M2$tangent), c(length(tvec), 1L, 2L))
+  expect_equal(dimnames(res_M2$tangent)$sens, c("theta_x0", "theta_lk"))
 
   # Analytical dx/dtheta for the log-reparam (same as existing test 1).
-  expect_equal(as.numeric(res_M2$sens1[, 1, 1]), exp(-k * tvec), tolerance = 1e-8)
-  expect_equal(as.numeric(res_M2$sens1[, 1, 2]),
+  expect_equal(as.numeric(res_M2$tangent[, 1, 1]), exp(-k * tvec), tolerance = 1e-8)
+  expect_equal(as.numeric(res_M2$tangent[, 1, 2]),
                -k * tvec * x0 * exp(-k * tvec), tolerance = 1e-8)
 
-  # Cross-check: calling the same model with a zero-padded M=3 sens1ini
+  # Cross-check: calling the same model with a zero-padded M=3 tangent
   # yields identical first 2 columns and zero third column.
   Phi_M3 <- cbind(Phi_M2, unused = c(0, 0))
-  res_M3 <- solveODE(mod, tvec, pars, sens1ini = Phi_M3,
+  res_M3 <- solveODE(mod, tvec, pars, tangent = Phi_M3,
                      abstol = 1e-10, reltol = 1e-10)
-  expect_equal(dim(res_M3$sens1), c(length(tvec), 1L, 3L))
-  expect_equal(as.numeric(res_M3$sens1[, , 1:2, drop = FALSE]),
-               as.numeric(res_M2$sens1), tolerance = 1e-8)
-  expect_equal(as.numeric(res_M3$sens1[, , 3]),
+  expect_equal(dim(res_M3$tangent), c(length(tvec), 1L, 3L))
+  expect_equal(as.numeric(res_M3$tangent[, , 1:2, drop = FALSE]),
+               as.numeric(res_M2$tangent), tolerance = 1e-8)
+  expect_equal(as.numeric(res_M3$tangent[, , 3]),
                rep(0, length(tvec)), tolerance = 1e-12)
 })
 
@@ -334,19 +334,19 @@ test_that("native deriv2: a theta subset integrates a partial Phi''", {
   Phi_pp_M2 <- array(0, dim = c(2, 2, 2))
   Phi_pp_M2[2, 2, 2] <- k  # d^2 k / d theta_lk^2 = k
 
-  res <- solveODE(mod, tvec, pars, sens1ini = Phi_M2, sens2ini = Phi_pp_M2,
+  res <- solveODE(mod, tvec, pars, tangent = Phi_M2, hessian = Phi_pp_M2,
                   abstol = 1e-10, reltol = 1e-10)
 
-  expect_equal(dim(res$sens1), c(length(tvec), 1L, 2L))
-  expect_equal(dim(res$sens2), c(length(tvec), 1L, 2L, 2L))
+  expect_equal(dim(res$tangent), c(length(tvec), 1L, 2L))
+  expect_equal(dim(res$hessian), c(length(tvec), 1L, 2L, 2L))
 
   # Same analytic Hessian as the two-theta test.
-  expect_equal(as.numeric(res$sens2[, 1, 1, 1]),
+  expect_equal(as.numeric(res$hessian[, 1, 1, 1]),
                rep(0, length(tvec)), tolerance = 1e-8)
-  expect_equal(as.numeric(res$sens2[, 1, 1, 2]),
+  expect_equal(as.numeric(res$hessian[, 1, 1, 2]),
                -k * tvec * exp(-k * tvec), tolerance = 1e-8)
   # Same component and tolerance as the two-theta test above.
-  expect_equal(as.numeric(res$sens2[, 1, 2, 2]),
+  expect_equal(as.numeric(res$hessian[, 1, 2, 2]),
                x0 * exp(-k * tvec) * k * tvec * (k * tvec - 1),
                tolerance = 1e-6)
 })
@@ -371,14 +371,14 @@ test_that("CVODE: a theta subset matches the native reparam", {
   mod_nat <- mod_AB
   mod_cv  <- cv_AB
 
-  res_n <- solveODE(mod_nat, tvec, pars, sens1ini = Phi_M2,
+  res_n <- solveODE(mod_nat, tvec, pars, tangent = Phi_M2,
                     abstol = tight$abstol, reltol = tight$reltol)
-  res_c <- solveODE(mod_cv,  tvec, pars, sens1ini = Phi_M2,
+  res_c <- solveODE(mod_cv,  tvec, pars, tangent = Phi_M2,
                     abstol = tight$abstol, reltol = tight$reltol)
 
-  expect_equal(dim(res_n$sens1), c(length(tvec), 2L, 2L))
-  expect_equal(dim(res_c$sens1), c(length(tvec), 2L, 2L))
-  expect_equal(as.numeric(res_n$sens1), as.numeric(res_c$sens1),
+  expect_equal(dim(res_n$tangent), c(length(tvec), 2L, 2L))
+  expect_equal(dim(res_c$tangent), c(length(tvec), 2L, 2L))
+  expect_equal(as.numeric(res_n$tangent), as.numeric(res_c$tangent),
                tolerance = 1e-6)
 })
 
@@ -390,24 +390,24 @@ test_that("same model supports per-call varying M (condition heterogeneity)", {
   # Call 1: M=1, just theta_lk.
   Phi1 <- matrix(c(0, k), nrow = 2, ncol = 1,
                  dimnames = list(c("x", "k"), "theta_lk"))
-  r1 <- solveODE(mod, tvec, pars, sens1ini = Phi1,
+  r1 <- solveODE(mod, tvec, pars, tangent = Phi1,
                  abstol = 1e-10, reltol = 1e-10)
 
   # Call 2: M=2, theta_x0 + theta_lk.
   Phi2 <- matrix(c(1, 0, 0, k), nrow = 2, ncol = 2, byrow = TRUE,
                  dimnames = list(c("x", "k"), c("theta_x0", "theta_lk")))
-  r2 <- solveODE(mod, tvec, pars, sens1ini = Phi2,
+  r2 <- solveODE(mod, tvec, pars, tangent = Phi2,
                  abstol = 1e-10, reltol = 1e-10)
 
-  expect_equal(dim(r1$sens1), c(length(tvec), 1L, 1L))
-  expect_equal(dim(r2$sens1), c(length(tvec), 1L, 2L))
-  expect_equal(dimnames(r1$sens1)$sens, "theta_lk")
-  expect_equal(dimnames(r2$sens1)$sens, c("theta_x0", "theta_lk"))
+  expect_equal(dim(r1$tangent), c(length(tvec), 1L, 1L))
+  expect_equal(dim(r2$tangent), c(length(tvec), 1L, 2L))
+  expect_equal(dimnames(r1$tangent)$sens, "theta_lk")
+  expect_equal(dimnames(r2$tangent)$sens, c("theta_x0", "theta_lk"))
 
   # The two calls agree to BLAS round-off: the tangent slab reaches the same
   # algebra through daxpy / dscal, whose FMA rounds differently from mul+add.
-  expect_equal(as.numeric(r1$sens1[, 1, 1]),
-               as.numeric(r2$sens1[, 1, 2]),
+  expect_equal(as.numeric(r1$tangent[, 1, 1]),
+               as.numeric(r2$tangent[, 1, 2]),
                tolerance = 1e-7)
 })
 
@@ -418,10 +418,10 @@ test_that("M = 0 fast-path: empty sens slot, state integration intact", {
 
   Phi0 <- matrix(0, nrow = 2, ncol = 0,
                  dimnames = list(c("x", "k"), character(0)))
-  r <- solveODE(mod, tvec, pars, sens1ini = Phi0,
+  r <- solveODE(mod, tvec, pars, tangent = Phi0,
                 abstol = 1e-10, reltol = 1e-10)
 
-  expect_equal(dim(r$sens1), c(length(tvec), 1L, 0L))
+  expect_equal(dim(r$tangent), c(length(tvec), 1L, 0L))
   expect_equal(as.numeric(r$variable[, 1]),
                exp(-0.5 * tvec), tolerance = 1e-8)
 })
@@ -435,17 +435,17 @@ test_that("CVODE: M = 0 fast-path skips sensitivity integration", {
 
   Phi0 <- matrix(0, nrow = 2, ncol = 0,
                  dimnames = list(c("x", "k"), character(0)))
-  r <- solveODE(mod, tvec, pars, sens1ini = Phi0,
+  r <- solveODE(mod, tvec, pars, tangent = Phi0,
                 abstol = 1e-10, reltol = 1e-10)
 
-  expect_equal(dim(r$sens1), c(length(tvec), 1L, 0L))
+  expect_equal(dim(r$tangent), c(length(tvec), 1L, 0L))
   expect_equal(as.numeric(r$variable[, 1]),
                exp(-0.5 * tvec), tolerance = 1e-8)
 })
 
-# -- Partial-row sens1ini (rowname-driven implicit fixed) --------------------
+# -- Partial-row tangent (rowname-driven implicit fixed) ---------------------
 
-test_that("partial-row sens1ini matches zero-padded full Phi'", {
+test_that("partial-row tangent matches zero-padded full Phi'", {
   mod <- mod_AB
   pars <- c(A = 1.0, B = 0.0, k1 = 0.3, k2 = 0.1)
   tvec <- seq(0, 5, length.out = 11)
@@ -454,22 +454,22 @@ test_that("partial-row sens1ini matches zero-padded full Phi'", {
   # Perturb only k1: partial form supplies a single row.
   Phi_partial <- matrix(c(0.3), nrow = 1, ncol = 1,
                         dimnames = list("k1", "log_k1"))
-  res_p <- solveODE(mod, tvec, pars, sens1ini = Phi_partial,
+  res_p <- solveODE(mod, tvec, pars, tangent = Phi_partial,
                     abstol = tight$abstol, reltol = tight$reltol)
 
   # Equivalent full Phi': zero on (A, B, k2), 0.3 on k1.
   Phi_full <- matrix(c(0, 0, 0.3, 0), nrow = 4, ncol = 1,
                      dimnames = list(c("A", "B", "k1", "k2"), "log_k1"))
-  res_f <- solveODE(mod, tvec, pars, sens1ini = Phi_full,
+  res_f <- solveODE(mod, tvec, pars, tangent = Phi_full,
                     abstol = tight$abstol, reltol = tight$reltol)
 
-  expect_equal(dim(res_p$sens1), c(length(tvec), 2L, 1L))
-  expect_equal(dimnames(res_p$sens1)$sens, "log_k1")
-  expect_equal(as.numeric(res_p$sens1), as.numeric(res_f$sens1),
+  expect_equal(dim(res_p$tangent), c(length(tvec), 2L, 1L))
+  expect_equal(dimnames(res_p$tangent)$sens, "log_k1")
+  expect_equal(as.numeric(res_p$tangent), as.numeric(res_f$tangent),
                tolerance = 1e-9)
 })
 
-test_that("partial-row sens1ini accepts mixed state/param rows in any order", {
+test_that("partial-row tangent accepts mixed state/param rows in any order", {
   mod <- mod_AB
   pars <- c(A = 1.0, B = 0.0, k1 = 0.3, k2 = 0.1)
   tvec <- seq(0, 3, length.out = 7)
@@ -482,7 +482,7 @@ test_that("partial-row sens1ini accepts mixed state/param rows in any order", {
                         nrow = 2, ncol = 2, byrow = TRUE,
                         dimnames = list(c("k2", "A"),
                                         c("log_k2", "A0")))
-  res_p <- solveODE(mod, tvec, pars, sens1ini = Phi_partial,
+  res_p <- solveODE(mod, tvec, pars, tangent = Phi_partial,
                     abstol = tight$abstol, reltol = tight$reltol)
 
   # Full equivalent: zeros except k2 in col 1, A in col 2.
@@ -491,49 +491,49 @@ test_that("partial-row sens1ini accepts mixed state/param rows in any order", {
                                      c("log_k2", "A0")))
   Phi_full["k2", "log_k2"] <- 0.1
   Phi_full["A",  "A0"]     <- 1.0
-  res_f <- solveODE(mod, tvec, pars, sens1ini = Phi_full,
+  res_f <- solveODE(mod, tvec, pars, tangent = Phi_full,
                     abstol = tight$abstol, reltol = tight$reltol)
 
-  expect_equal(as.numeric(res_p$sens1), as.numeric(res_f$sens1),
+  expect_equal(as.numeric(res_p$tangent), as.numeric(res_f$tangent),
                tolerance = 1e-9)
 })
 
-test_that("partial-row sens1ini without rownames is rejected", {
+test_that("partial-row tangent without rownames is rejected", {
   mod <- mod_AB
   pars <- c(A = 1.0, B = 0.0, k1 = 0.3, k2 = 0.1)
   # 1 row, n_active = 4 columns, no rownames -> ambiguous.
   Phi_bad <- matrix(0, nrow = 1, ncol = 4)
   expect_error(
-    solveODE(mod, c(0, 1), pars, sens1ini = Phi_bad,
+    solveODE(mod, c(0, 1), pars, tangent = Phi_bad,
              abstol = 1e-10, reltol = 1e-10),
     "expected"
   )
 })
 
-test_that("partial-row sens1ini with unknown rownames is rejected", {
+test_that("partial-row tangent with unknown rownames is rejected", {
   mod <- mod_x
   pars <- c(x = 1.0, k = 0.5)
   Phi_bad <- matrix(0.5, nrow = 1, ncol = 1,
                     dimnames = list("not_a_name", "theta"))
   expect_error(
-    solveODE(mod, c(0, 1), pars, sens1ini = Phi_bad,
+    solveODE(mod, c(0, 1), pars, tangent = Phi_bad,
              abstol = 1e-10, reltol = 1e-10),
     "unknown row names"
   )
 })
 
-test_that("partial-row sens1ini rejects 'fixed' argument", {
+test_that("partial-row tangent rejects 'fixed' argument", {
   mod <- mod_x
   Phi_partial <- matrix(0.5, nrow = 1, ncol = 1,
                         dimnames = list("k", "log_k"))
   expect_error(
     solveODE(mod, c(0, 1), c(x = 1, k = 0.5),
-             sens1ini = Phi_partial, fixed = "k"),
+             tangent = Phi_partial, fixed = "k"),
     "not supported"
   )
 })
 
-test_that("partial-row sens2ini matches zero-padded full Phi''", {
+test_that("partial-row hessian matches zero-padded full Phi''", {
   mod <- mod_A_d2
   pars <- c(A = 1.0, k = 0.5)
   tvec <- seq(0, 2, by = 0.5)
@@ -546,7 +546,7 @@ test_that("partial-row sens2ini matches zero-padded full Phi''", {
   Phi2_partial <- array(0.5, dim = c(1, 1, 1),
                         dimnames = list("k", "log_k", "log_k"))
   res_p <- solveODE(mod, tvec, pars,
-                    sens1ini = Phi1, sens2ini = Phi2_partial,
+                    tangent = Phi1, hessian = Phi2_partial,
                     abstol = tight$abstol, reltol = tight$reltol)
 
   # Equivalent full Phi''.
@@ -554,10 +554,10 @@ test_that("partial-row sens2ini matches zero-padded full Phi''", {
                      dimnames = list(c("A", "k"), "log_k", "log_k"))
   Phi2_full["k", "log_k", "log_k"] <- 0.5
   res_f <- solveODE(mod, tvec, pars,
-                    sens1ini = Phi1, sens2ini = Phi2_full,
+                    tangent = Phi1, hessian = Phi2_full,
                     abstol = tight$abstol, reltol = tight$reltol)
 
-  expect_equal(as.numeric(res_p$sens2), as.numeric(res_f$sens2),
+  expect_equal(as.numeric(res_p$hessian), as.numeric(res_f$hessian),
                tolerance = 1e-9)
 })
 

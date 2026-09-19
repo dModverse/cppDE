@@ -337,7 +337,7 @@ inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
     SEXP tr = Rf_getAttrib(seedSEXP, Rf_install("adjointGrid"));
     a.adj_trace = (!Rf_isNull(tr) && Rf_asLogical(tr) == TRUE);
     read_err_weights(Rf_getAttrib(seedSEXP, Rf_install("errWeights")), a.weights);
-    SEXP stg = Rf_getAttrib(seedSEXP, Rf_install("seedTangent"));
+    SEXP stg = Rf_getAttrib(seedSEXP, Rf_install("curvature"));
     if (!Rf_isNull(stg) && TYPEOF(stg) == REALSXP) {
       SEXP sd = Rf_getAttrib(stg, R_DimSymbol);
       if (TYPEOF(sd) == INTSXP && Rf_length(sd) == 4) {
@@ -510,7 +510,7 @@ inline SEXP build_adjoint_grid(const solve_result& r) {
   return ans;
 }
 
-// Build list(time, variable, [sens1], [sens2], diagnostics, trace).
+// Build list(time, variable, [tangent], [hessian], diagnostics, trace).
 inline SEXP build_result_sexp(const solve_result& r, int n_variables,
                               bool deriv, bool deriv2) {
   const int n_out  = r.n_out;
@@ -528,10 +528,10 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
   int slot = 0;
   SET_STRING_ELT(names, slot++, Rf_mkChar("time"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("variable"));
-  if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("sens1"));
-  if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("sens2"));
-  if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint"));
-  if (adj2)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint2"));
+  if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("tangent"));
+  if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("hessian"));
+  if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("cotangent"));
+  if (adj2)   SET_STRING_ELT(names, slot++, Rf_mkChar("curvature"));
   if (grid)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjointGrid"));
   if (keep)   SET_STRING_ELT(names, slot++, Rf_mkChar("store"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
@@ -748,10 +748,10 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
   int slot = 0;
   SET_STRING_ELT(names, slot++, Rf_mkChar("time"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("variable"));
-  if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("sens1"));
-  if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("sens2"));
-  if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint"));
-  if (adj2)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjoint2"));
+  if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("tangent"));
+  if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("hessian"));
+  if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("cotangent"));
+  if (adj2)   SET_STRING_ELT(names, slot++, Rf_mkChar("curvature"));
   if (grid)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjointGrid"));
   if (keep)   SET_STRING_ELT(names, slot++, Rf_mkChar("store"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
@@ -880,8 +880,8 @@ inline std::vector<pre_ctx> prealloc_batch(SEXP out, const std::vector<solve_arg
     int slot = 0;
     SET_STRING_ELT(names, slot++, Rf_mkChar("time"));
     SET_STRING_ELT(names, slot++, Rf_mkChar("variable"));
-    if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("sens1"));
-    if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("sens2"));
+    if (deriv)  SET_STRING_ELT(names, slot++, Rf_mkChar("tangent"));
+    if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("hessian"));
     SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
     SET_STRING_ELT(names, slot++, Rf_mkChar("trace"));
     Rf_setAttrib(ans, R_NamesSymbol, names);

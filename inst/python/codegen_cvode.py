@@ -572,7 +572,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
     const int expected_len = phi_rows_rt * Ns_active;
     if (args.n_sens1 != expected_len) {{
       char _m[160];
-      snprintf(_m, sizeof(_m), "sens1ini length %d != expected %d (phi_rows * Ns_active)",
+      snprintf(_m, sizeof(_m), "tangent length %d != expected %d (phi_rows * Ns_active)",
                args.n_sens1, expected_len);
       cleanup();
       return res.fail(cppde::RC_ILL_INPUT, _m);
@@ -1263,7 +1263,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
   if (args.seed == nullptr) {
     cleanup();
     return res.fail(cppde::RC_ILL_INPUT,
-                    "a model compiled with derivMode = reverse needs a seed");
+                    "a model compiled with derivMode = reverse needs a cotangent");
   }
   if (CVodeAdjInit(cvode_mem, ASA_CHECKPOINTS, CV_POLYNOMIAL) < 0) {
     cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeAdjInit failed");
@@ -1279,13 +1279,13 @@ static std::vector<RootEvent> build_root_events(const double* params,
     if (args.n_seed_rows != n_out_b) {
       char m[192];
       std::snprintf(m, sizeof(m),
-                    "seed has %d rows but the run produced %d output rows",
+                    "cotangent has %d rows but the run produced %d output rows",
                     args.n_seed_rows, n_out_b);
       cleanup(); return res.fail(cppde::RC_ILL_INPUT, m);
     }
     if (args.n_seed_states != NEQ) {
       cleanup(); return res.fail(cppde::RC_ILL_INPUT,
-                                 "seed has the wrong state count");
+                                 "cotangent has the wrong state count");
     }
 
     const int n_phi_rows = NEQ + NPAR_ADJ;
@@ -1443,7 +1443,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
     if reverse:
         seed_guard = (
             '  if (a.seed == nullptr)\n'
-            '    Rf_error("a model compiled with derivMode = reverse needs a seed");')
+            '    Rf_error("a model compiled with derivMode = reverse needs a cotangent");')
     else:
         seed_guard = (
             '  if (a.seed != nullptr)\n'
@@ -1827,7 +1827,7 @@ try {{
   cppde::ndf_detail::trace_scope _cppde_trace_scope(res.trace);
 
   if (args.sens2ini != nullptr)
-    return res.fail(cppde::RC_ILL_INPUT, "sens2ini not supported by CVODES backend");
+    return res.fail(cppde::RC_ILL_INPUT, "hessian not supported by CVODES backend");
 
   constexpr bool deriv = {deriv_flag};
 
@@ -1853,7 +1853,7 @@ try {{
   int Ns_active_tmp = 0;
   if (deriv) {{
     if (args.sens1ini == nullptr)
-      return res.fail(cppde::RC_ILL_INPUT, "sens1ini is required when deriv = TRUE");
+      return res.fail(cppde::RC_ILL_INPUT, "tangent is required when deriv = TRUE");
     Ns_active_tmp = args.n_sens1_cols;
   }}
   const int Ns_active = Ns_active_tmp;

@@ -59,8 +59,8 @@ sweep_one <- function(model, pars, times, pname, pvals, rtol, atol) {
 # Forward sensitivity at the sweep centre, for the scale the error is judged on.
 sens_at <- function(model, pars, times, pname, rtol, atol) {
   r <- solveODE(model, times, pars, abstol = atol, reltol = rtol)
-  idx <- which(dimnames(r$sens1)$sens == pname)
-  r$sens1[dim(r$sens1)[1], , idx]
+  idx <- which(dimnames(r$tangent)$sens == pname)
+  r$tangent[dim(r$tangent)[1], , idx]
 }
 
 # --- Analysis of one model ---------------------------------------------------

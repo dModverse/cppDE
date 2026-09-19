@@ -100,10 +100,10 @@ if (isTRUE(cvodeConfig$klu_available)) {
 }
 
 # w' S contracted over times and states, the quantity the sweep returns.
-contract <- function(sens1, W) {
+contract <- function(tangent, W) {
   vapply(seq_len(dim(W)[3]),
-         function(k) apply(sens1 * as.vector(W[, , k]), 3, sum),
-         numeric(dim(sens1)[3]))
+         function(k) apply(tangent * as.vector(W[, , k]), 3, sum),
+         numeric(dim(tangent)[3]))
 }
 
 seed_for <- function(res, n_seed = 1L, seed = 1L) {
@@ -121,15 +121,15 @@ test_that("a reverse model answers what the forward sensitivities answer", {
 
   fwd <- do.call(solveODE, c(list(mf, times, pars), tol))
   W   <- seed_for(fwd, n_seed = 2L)
-  rev <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
+  rev <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
 
-  expect_null(rev$sens1)
-  expect_equal(dim(rev$adjoint), c(length(pars), 2L))
-  expect_equal(rownames(rev$adjoint), names(pars))
+  expect_null(rev$tangent)
+  expect_equal(dim(rev$cotangent), c(length(pars), 2L))
+  expect_equal(rownames(rev$cotangent), names(pars))
   expect_equal(rev$variable, fwd$variable, tolerance = 1e-7)
 
-  ref <- contract(fwd$sens1, W)
-  expect_equal(unname(rev$adjoint[rownames(ref), ]), unname(ref), tolerance = 1e-6)
+  ref <- contract(fwd$tangent, W)
+  expect_equal(unname(rev$cotangent[rownames(ref), ]), unname(ref), tolerance = 1e-6)
 })
 
 test_that("the gap to the forward mode falls with the tolerance", {
@@ -140,9 +140,9 @@ test_that("the gap to the forward mode falls with the tolerance", {
     o   <- list(abstol = tt, reltol = tt)
     fwd <- do.call(solveODE, c(list(mf, times, pars), o))
     W   <- seed_for(fwd)
-    rv  <- do.call(solveODE, c(list(mr, times, pars, seed = W), o))
-    ref <- contract(fwd$sens1, W)[, 1]
-    max(abs(ref - rv$adjoint[names(ref), 1])) / max(abs(ref))
+    rv  <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), o))
+    ref <- contract(fwd$tangent, W)[, 1]
+    max(abs(ref - rv$cotangent[names(ref), 1])) / max(abs(ref))
   }, numeric(1))
 
   # Six decades of tolerance have to buy something close to six decades of
@@ -164,11 +164,11 @@ test_that("the reverse mode carries events, roots and forcings", {
     expect_gt(nrow(fwd$variable), length(times))
 
     W   <- seed_for(fwd)
-    rev <- do.call(solveODE, c(list(mr, times, p, forcings = fc, seed = W), tol))
+    rev <- do.call(solveODE, c(list(mr, times, p, forcings = fc, cotangent = W), tol))
 
     expect_equal(rev$variable, fwd$variable, tolerance = 1e-6, info = m)
-    ref <- contract(fwd$sens1, W)[, 1]
-    expect_equal(unname(rev$adjoint[names(ref), 1]), unname(ref),
+    ref <- contract(fwd$tangent, W)[, 1]
+    expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref),
                  tolerance = 1e-5, info = m)
   }
 })
@@ -181,9 +181,9 @@ test_that("a sparse model jumps backwards too", {
     mr <- sparse_models$ev_rev[[m]]
     fwd <- do.call(solveODE, c(list(mf, times, pe), tol))
     W   <- seed_for(fwd)
-    rv  <- do.call(solveODE, c(list(mr, times, pe, seed = W), tol))
-    ref <- contract(fwd$sens1, W)[, 1]
-    expect_equal(unname(rv$adjoint[names(ref), 1]), unname(ref),
+    rv  <- do.call(solveODE, c(list(mr, times, pe, cotangent = W), tol))
+    ref <- contract(fwd$tangent, W)[, 1]
+    expect_equal(unname(rv$cotangent[names(ref), 1]), unname(ref),
                  tolerance = 1e-5, info = m)
   }
 })
@@ -198,27 +198,27 @@ test_that("the reverse mode goes through the batch entry", {
   fwd <- do.call(solveODEBatch, c(list(mf, conds, times = times), tol))
   W   <- lapply(fwd, seed_for)
   rev <- do.call(solveODEBatch,
-                 c(list(mr, mapply(function(cc, w) c(cc, list(seed = w)),
+                 c(list(mr, mapply(function(cc, w) c(cc, list(cotangent = w)),
                                    conds, W, SIMPLIFY = FALSE),
                         times = times), tol))
 
   for (k in seq_along(conds)) {
-    ref <- contract(fwd[[k]]$sens1, W[[k]])[, 1]
-    expect_equal(unname(rev[[k]]$adjoint[names(ref), 1]), unname(ref),
+    ref <- contract(fwd[[k]]$tangent, W[[k]])[, 1]
+    expect_equal(unname(rev[[k]]$cotangent[names(ref), 1]), unname(ref),
                  tolerance = 1e-6)
   }
 })
 
-test_that("the seed and the mode have to agree", {
+test_that("the cotangent and the mode have to agree", {
   mf <- models$fwd$bdf
   mr <- models$rev$bdf
 
   fwd <- solveODE(mf, times, pars)
   W   <- seed_for(fwd)
 
-  expect_error(solveODE(mf, times, pars, seed = W), "derivMode")
-  expect_error(solveODE(mr, times, pars), "needs a 'seed'")
-  expect_error(solveODE(mr, times, pars, seed = W[, 1, , drop = FALSE]),
+  expect_error(solveODE(mf, times, pars, cotangent = W), "derivMode")
+  expect_error(solveODE(mr, times, pars), "needs a 'cotangent'")
+  expect_error(solveODE(mr, times, pars, cotangent = W[, 1, , drop = FALSE]),
                "state columns")
   expect_error(cppODE(eqns, modelname = "rev_no2nd", derivMode = "reverse",
                       deriv2 = TRUE),
@@ -237,9 +237,9 @@ test_that("a written Rosenbrock adjoint carries a multiplicative forcing", {
     mr <- models$fc_rev[[m]]
     fwd <- do.call(solveODE, c(list(mf, times, pf, forcings = fc), tol))
     W   <- seed_for(fwd)
-    rv  <- do.call(solveODE, c(list(mr, times, pf, forcings = fc, seed = W), tol))
-    ref <- contract(fwd$sens1, W)[, 1]
-    expect_equal(unname(rv$adjoint[names(ref), 1]), unname(ref),
+    rv  <- do.call(solveODE, c(list(mr, times, pf, forcings = fc, cotangent = W), tol))
+    ref <- contract(fwd$tangent, W)[, 1]
+    expect_equal(unname(rv$cotangent[names(ref), 1]), unname(ref),
                  tolerance = 1e-5, info = m)
   }
 })
@@ -259,11 +259,11 @@ test_that("an equilibrated run goes backwards", {
     val <- do.call(solveODE, c(list(mv, tt, pe), tol))
     expect_lt(nrow(val$variable), length(tt))   # it really did stop early
     W   <- seed_for(val)
-    rv  <- do.call(solveODE, c(list(mr, tt, pe, seed = W), tol))
+    rv  <- do.call(solveODE, c(list(mr, tt, pe, cotangent = W), tol))
     expect_identical(rv$variable, val$variable)
-    expect_equal(dim(rv$adjoint), c(length(pe), 1L), info = m)
-    expect_true(all(is.finite(rv$adjoint)), info = m)
-    expect_gt(max(abs(rv$adjoint)), 1e-6)
+    expect_equal(dim(rv$cotangent), c(length(pe), 1L), info = m)
+    expect_true(all(is.finite(rv$cotangent)), info = m)
+    expect_gt(max(abs(rv$cotangent)), 1e-6)
   }
 })
 
@@ -273,9 +273,9 @@ test_that("rb4 goes backwards on a sparse Jacobian", {
   mr <- sparse_models$rev$rb4
   fwd <- do.call(solveODE, c(list(mf, times, pars), tol))
   W   <- seed_for(fwd)
-  rv  <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
-  ref <- contract(fwd$sens1, W)[, 1]
-  expect_equal(unname(rv$adjoint[names(ref), 1]), unname(ref), tolerance = 1e-5)
+  rv  <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
+  ref <- contract(fwd$tangent, W)[, 1]
+  expect_equal(unname(rv$cotangent[names(ref), 1]), unname(ref), tolerance = 1e-5)
 })
 
 test_that("every method carries the reverse mode", {
@@ -284,9 +284,9 @@ test_that("every method carries the reverse mode", {
     mr <- models$rev[[m]]
     fwd <- do.call(solveODE, c(list(mf, times, pars), tol))
     W   <- seed_for(fwd)
-    rv  <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
-    ref <- contract(fwd$sens1, W)[, 1]
-    expect_equal(unname(rv$adjoint[names(ref), 1]), unname(ref),
+    rv  <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
+    ref <- contract(fwd$tangent, W)[, 1]
+    expect_equal(unname(rv$cotangent[names(ref), 1]), unname(ref),
                  tolerance = 1e-5, info = m)
   }
 })
@@ -297,9 +297,9 @@ test_that("the reverse mode carries a model wider than its history is deep", {
     mr <- models$wide_rev[[m]]
     fwd <- do.call(solveODE, c(list(mf, times, wpars), tol))
     W   <- seed_for(fwd)
-    rv  <- do.call(solveODE, c(list(mr, times, wpars, seed = W), tol))
-    ref <- contract(fwd$sens1, W)[, 1]
-    expect_equal(unname(rv$adjoint[names(ref), 1]), unname(ref),
+    rv  <- do.call(solveODE, c(list(mr, times, wpars, cotangent = W), tol))
+    ref <- contract(fwd$tangent, W)[, 1]
+    expect_equal(unname(rv$cotangent[names(ref), 1]), unname(ref),
                  tolerance = 1e-5, info = m)
   }
 })
@@ -311,11 +311,11 @@ test_that("adjointGrid reports the grid the sweep ran on", {
   val <- do.call(solveODE, c(list(mv, times, pars), tol))
   W   <- seed_for(val, n_seed = 2L)
 
-  plain <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
+  plain <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
   expect_null(plain$adjointGrid)
 
   rv <- do.call(solveODE,
-                c(list(mr, times, pars, seed = W, adjointGrid = TRUE), tol))
+                c(list(mr, times, pars, cotangent = W, adjointGrid = TRUE), tol))
   G  <- rv$adjointGrid
   expect_named(G, c("time", "h", "eta", "lambda"))
 
@@ -335,7 +335,7 @@ test_that("adjointGrid reports the grid the sweep ran on", {
 
   # Turning the trace on must not move the answer, to the last bit: it is the
   # same sweep either way, with two more vectors written down.
-  expect_identical(rv$adjoint, plain$adjoint)
+  expect_identical(rv$cotangent, plain$cotangent)
   expect_equal(diagnostics(rv)$accepted, diagnostics(plain)$accepted)
 })
 
@@ -351,7 +351,7 @@ test_that("the refinement indicator is alive on every method", {
     val <- solveODE(mv, times, pars, abstol = 1e-8, reltol = 1e-6)
     W   <- seed_for(val)
     rv  <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6,
-                    seed = W, adjointGrid = TRUE)
+                    cotangent = W, adjointGrid = TRUE)
     G <- rv$adjointGrid
 
     expect_gt(max(abs(G$eta)), 1e-12, label = paste("max |eta| on", m))
@@ -359,7 +359,7 @@ test_that("the refinement indicator is alive on every method", {
     # Loosening the tolerance a hundredfold has to raise the indicator: it is
     # an error estimate, not a property of the trajectory.
     rv2 <- solveODE(mr, times, pars, abstol = 1e-6, reltol = 1e-4,
-                    seed = W, adjointGrid = TRUE)
+                    cotangent = W, adjointGrid = TRUE)
     expect_gt(sum(abs(rv2$adjointGrid$eta)), sum(abs(G$eta)), label = m)
   }
 })
@@ -375,26 +375,26 @@ test_that("lambda weights can only refine the grid, never coarsen it", {
   W   <- seed_for(val)
 
   base <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6,
-                   seed = W, adjointGrid = TRUE)
+                   cotangent = W, adjointGrid = TRUE)
   G <- base$adjointGrid
   wts <- list(time = G$time, lambda = G$lambda[, , 1])
 
   # Loose enough that the weighted term cannot bind: the grid has to come back
   # bit for bit, or the term is doing something beyond the maximum.
-  slack <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, seed = W,
+  slack <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, cotangent = W,
                     adjointGrid = TRUE,
                     errWeights = c(wts, list(gradtol = 1e6)))
   expect_identical(slack$adjointGrid$h, G$h)
-  expect_identical(slack$adjoint, base$adjoint)
+  expect_identical(slack$cotangent, base$cotangent)
 
   # Tight enough that it must bind, and it may only add steps.
-  tight <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, seed = W,
+  tight <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, cotangent = W,
                     adjointGrid = TRUE,
                     errWeights = c(wts, list(gradtol = 1e-11)))
   expect_gt(length(tight$adjointGrid$h), length(G$h))
 
   # A finer grid must not move the answer beyond the tolerance it was asked for.
-  expect_equal(unname(tight$adjoint[, 1]), unname(base$adjoint[, 1]),
+  expect_equal(unname(tight$cotangent[, 1]), unname(base$cotangent[, 1]),
                tolerance = 1e-4)
 })
 
@@ -405,16 +405,16 @@ test_that("every method takes lambda weights", {
     val <- solveODE(mv, times, pars, abstol = 1e-8, reltol = 1e-6)
     W   <- seed_for(val)
     b   <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6,
-                    seed = W, adjointGrid = TRUE)
+                    cotangent = W, adjointGrid = TRUE)
     G   <- b$adjointGrid
     wts <- list(time = G$time, lambda = G$lambda[, , 1])
 
-    slack <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, seed = W,
+    slack <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, cotangent = W,
                       adjointGrid = TRUE,
                       errWeights = c(wts, list(gradtol = 1e6)))
     expect_identical(slack$adjointGrid$h, G$h, info = m)
 
-    tight <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, seed = W,
+    tight <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, cotangent = W,
                       adjointGrid = TRUE,
                       errWeights = c(wts, list(gradtol = 1e-11)))
     expect_gt(length(tight$adjointGrid$h), length(G$h))
@@ -430,7 +430,7 @@ test_that("malformed lambda weights are an error, not a silent no-op", {
   nx  <- length(attr(mr, "variables"))
   ok$lambda <- matrix(1, 3, nx)
 
-  run <- function(w) solveODE(mr, times, pars, seed = W, errWeights = w)
+  run <- function(w) solveODE(mr, times, pars, cotangent = W, errWeights = w)
 
   expect_error(run(list(time = c(0, 1))), "missing: lambda")
   expect_error(run(c(ok["lambda"], list(time = c(2, 1, 0)))), "ascending")
@@ -441,8 +441,8 @@ test_that("malformed lambda weights are an error, not a silent no-op", {
   expect_error(run(c(ok, list(gradtol = 0))), "must be positive")
   expect_error(run(c(ok, list(floor = 1))), "must be in")
   expect_error(run(c(ok, list(breaks = 99L))), "must index")
-  # Weights without a seed weight nothing, so saying so beats ignoring them.
-  expect_error(solveODE(mv, times, pars, errWeights = ok), "needs a 'seed'")
+  # Weights without a cotangent weight nothing: saying so beats ignoring them.
+  expect_error(solveODE(mv, times, pars, errWeights = ok), "needs a 'cotangent'")
 })
 # -- CVODES adjoint sensitivity analysis, stage 8 -------------------------------
 #
@@ -479,14 +479,14 @@ test_that("the CVODE backend takes derivatives backwards", {
 
   fwd <- do.call(solveODE, c(list(mf, times, pars), tol))
   W   <- seed_for(fwd, n_seed = 2L)
-  asa <- do.call(solveODE, c(list(ma, times, pars, seed = W), tol))
+  asa <- do.call(solveODE, c(list(ma, times, pars, cotangent = W), tol))
 
-  expect_null(asa$sens1)
-  expect_equal(dim(asa$adjoint), c(length(pars), 2L))
+  expect_null(asa$tangent)
+  expect_equal(dim(asa$cotangent), c(length(pars), 2L))
   expect_equal(asa$variable, fwd$variable, tolerance = 1e-7)
 
-  ref <- contract(fwd$sens1, W)
-  expect_equal(unname(asa$adjoint[rownames(ref), ]), unname(ref),
+  ref <- contract(fwd$tangent, W)
+  expect_equal(unname(asa$cotangent[rownames(ref), ]), unname(ref),
                tolerance = 1e-6)
 })
 
@@ -502,17 +502,17 @@ test_that("ASA goes through the batch entry too", {
     seed_for(do.call(solveODE, c(list(mv, times, cc$parms), tol))))
 
   one <- lapply(seq_along(conds), function(k)
-    do.call(solveODE, c(list(ma, times, conds[[k]]$parms, seed = W[[k]]), tol)))
+    do.call(solveODE, c(list(ma, times, conds[[k]]$parms, cotangent = W[[k]]), tol)))
   bat <- do.call(solveODEBatch,
-                 c(list(ma, mapply(function(cc, w) c(cc, list(seed = w)),
+                 c(list(ma, mapply(function(cc, w) c(cc, list(cotangent = w)),
                                    conds, W, SIMPLIFY = FALSE),
                         times = times), tol))
 
   # The batch used to size its results before the solve, which left no slot for
-  # the adjoint and reported success without it.
+  # the cotangent and reported success without it.
   for (k in seq_along(conds)) {
-    expect_false(is.null(bat[[k]]$adjoint))
-    expect_identical(bat[[k]]$adjoint, one[[k]]$adjoint)
+    expect_false(is.null(bat[[k]]$cotangent))
+    expect_identical(bat[[k]]$cotangent, one[[k]]$cotangent)
   }
 })
 
@@ -525,14 +525,14 @@ test_that("ASA and the native adjoint answer the same question", {
 
   val <- do.call(solveODE, c(list(mv, times, pars), tol))
   W   <- seed_for(val)
-  rev <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
-  asa <- do.call(solveODE, c(list(ma, times, pars, seed = W), tol))
+  rev <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
+  asa <- do.call(solveODE, c(list(ma, times, pars, cotangent = W), tol))
 
   # Two implementations with nothing in common but the mathematics. They differ
   # by the discretisation, so this is a loose tolerance on purpose; a systematic
   # error in either would be orders wider.
-  expect_equal(unname(asa$adjoint[, 1]),
-               unname(rev$adjoint[rownames(asa$adjoint), 1]),
+  expect_equal(unname(asa$cotangent[, 1]),
+               unname(rev$cotangent[rownames(asa$cotangent), 1]),
                tolerance = 1e-6)
 })
 
@@ -556,8 +556,8 @@ test_that("the two CVODE directions refuse each other's arguments", {
   ma <- asa_models$rev
   val <- solveODE(mf, times, pars)
   W   <- seed_for(val)
-  expect_error(solveODE(mf, times, pars, seed = W), "derivMode")
-  expect_error(solveODE(ma, times, pars), "needs a .seed.")
+  expect_error(solveODE(mf, times, pars, cotangent = W), "derivMode")
+  expect_error(solveODE(ma, times, pars), "needs a .cotangent.")
 })
 test_that("the ASA backward problem gets the caller's step budget", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
@@ -576,44 +576,44 @@ test_that("the ASA backward problem gets the caller's step budget", {
 
   fwd <- do.call(solveODE, c(list(mf, tr, pr), otol))
   # A weight that no linear invariant annihilates: Robertson conserves
-  # y1 + y2 + y3, so a constant seed would make the gradient exactly zero and
-  # the test would pass on a solver that did nothing.
+  # y1 + y2 + y3, so a constant cotangent would make the gradient exactly zero
+  # and the test would pass on a solver that did nothing.
   W <- array(rep(1 / seq_len(3), each = nrow(fwd$variable)),
              c(nrow(fwd$variable), 3L, 1L))
 
-  asa <- do.call(solveODE, c(list(ma, tr, pr, seed = W), otol))
+  asa <- do.call(solveODE, c(list(ma, tr, pr, cotangent = W), otol))
   expect_equal(diagnostics(asa)$return_code, 0)
 
-  ref <- contract(fwd$sens1, W)[, 1]
-  expect_equal(unname(asa$adjoint[names(ref), 1]), unname(ref), tolerance = 1e-4)
+  ref <- contract(fwd$tangent, W)[, 1]
+  expect_equal(unname(asa$cotangent[names(ref), 1]), unname(ref), tolerance = 1e-4)
 })
 test_that("a reverse solve can hand its checkpoints to the next one", {
-  # A gradient needs two solves at the same theta: one for the values the seed
-  # is built from, one for the sweep. Without this the states are integrated
-  # twice. What has to hold is that the pair answers exactly what one seeded
-  # call answers: the store is a saving, never a different number.
+  # A gradient needs two solves at the same theta: one for the values the
+  # cotangent is built from, one for the sweep. Without this the states are
+  # integrated twice. What has to hold is that the pair answers exactly what one
+  # seeded call answers: the store is a saving, never a different number.
   mr <- models$rev$bdf
 
-  one <- do.call(solveODE, c(list(mr, times, pars, seed = NULL,
+  one <- do.call(solveODE, c(list(mr, times, pars, cotangent = NULL,
                                   keepStore = TRUE), tol))
   expect_identical(typeof(one$store), "externalptr")
-  expect_null(one$adjoint)
+  expect_null(one$cotangent)
 
   W <- seed_for(one, n_seed = 2L)
-  plain <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
-  reuse <- do.call(solveODE, c(list(mr, times, pars, seed = W,
+  plain <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
+  reuse <- do.call(solveODE, c(list(mr, times, pars, cotangent = W,
                                     store = one$store), tol))
 
   expect_equal(one$variable, plain$variable)
   expect_equal(reuse$variable, plain$variable)
   # Bit for bit: the same checkpoints replayed the same way, so anything but
   # exact equality means the reuse changed what was differentiated.
-  expect_identical(reuse$adjoint, plain$adjoint)
+  expect_identical(reuse$cotangent, plain$cotangent)
 
   # The store may be spent more than once.
-  again <- do.call(solveODE, c(list(mr, times, pars, seed = W,
+  again <- do.call(solveODE, c(list(mr, times, pars, cotangent = W,
                                     store = one$store), tol))
-  expect_identical(again$adjoint, plain$adjoint)
+  expect_identical(again$cotangent, plain$cotangent)
 })
 
 test_that("a store from another point is refused, not quietly used", {
@@ -625,39 +625,39 @@ test_that("a store from another point is refused, not quietly used", {
   W   <- seed_for(one)
 
   p2 <- pars; p2["k1"] <- pars[["k1"]] * 1.1
-  expect_error(do.call(solveODE, c(list(mr, times, p2, seed = W,
+  expect_error(do.call(solveODE, c(list(mr, times, p2, cotangent = W,
                                         store = one$store), tol)),
                "different times or parameters")
 
   t2 <- c(times, max(times) + 1)
   expect_error(do.call(solveODE, c(list(mr, t2, pars,
-                                        seed = seed_for(one), store = one$store),
+                                        cotangent = seed_for(one), store = one$store),
                                    tol)),
                "rows|different times or parameters")
 
   # And the two arguments belong to the reverse mode alone.
   mf <- models$fwd$bdf
   expect_error(solveODE(mf, times, pars, keepStore = TRUE), "derivMode")
-  expect_error(solveODE(mr, times, pars, store = "not a pointer", seed = W),
+  expect_error(solveODE(mr, times, pars, store = "not a pointer", cotangent = W),
                "element of an earlier solve")
-  expect_error(solveODE(mr, times, pars), "needs a 'seed'")
+  expect_error(solveODE(mr, times, pars), "needs a 'cotangent'")
 })
 
 # ---------------------------------------------------------------------------
 #  Second order: the same Hessian from both directions
 #
 #  forward-forward propagates a nested dual through the states and answers with
-#  sens2; forward-reverse runs the backward sweep itself over a dual and answers
-#  with adjoint2. Contracted against the same seed the two are the same matrix,
-#  so each is the other's oracle, and the gap is the discretisation gap the file
-#  header describes.
+#  the hessian; forward-reverse runs the backward sweep itself over a dual and
+#  answers with the curvature. Contracted against the same cotangent the two are
+#  the same matrix, so each is the other's oracle, and the gap is the
+#  discretisation gap the file header describes.
 # ---------------------------------------------------------------------------
 
 # The Hessian of w' x, from the forward second derivatives.
 hess_forward <- function(res, W) {
-  n_sens <- dim(res$sens2)[3]
+  n_sens <- dim(res$hessian)[3]
   outer(seq_len(n_sens), seq_len(n_sens),
-        Vectorize(function(a, b) sum(as.vector(W) * res$sens2[, , a, b])))
+        Vectorize(function(a, b) sum(as.vector(W) * res$hessian[, , a, b])))
 }
 
 test_that("forward-reverse answers the Hessian forward-forward answers", {
@@ -673,13 +673,13 @@ test_that("forward-reverse answers the Hessian forward-forward answers", {
 
     ff <- do.call(solveODE, c(list(mf, times, pars), tol))
     W  <- seed_for(ff)
-    fr <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
+    fr <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
 
     # The gradient first: forward-reverse keeps the first-order answer.
-    expect_equal(unname(fr$adjoint[, 1]),
-                 unname(contract(ff$sens1, W)[, 1]),
+    expect_equal(unname(fr$cotangent[, 1]),
+                 unname(contract(ff$tangent, W)[, 1]),
                  tolerance = 1e-6, info = m)
-    expect_equal(unname(fr$adjoint2[, , 1]), unname(hess_forward(ff, W)),
+    expect_equal(unname(fr$curvature[, , 1]), unname(hess_forward(ff, W)),
                  tolerance = 1e-6, info = m)
   }
 })
@@ -693,21 +693,21 @@ test_that("every method answers the same Hessian backwards", {
     mr <- models$fr[[m]]
     if (is.null(W)) {
       W <- seed_for(do.call(solveODE, c(list(mr, times, pars,
-                                             seed = array(0, c(length(times), 2L, 1L))), tol)))
+                                             cotangent = array(0, c(length(times), 2L, 1L))), tol)))
     }
-    fr <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
-    if (is.null(ref)) ref <- unname(fr$adjoint2[, , 1])
-    else expect_equal(unname(fr$adjoint2[, , 1]), ref, tolerance = 1e-5, info = m)
+    fr <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
+    if (is.null(ref)) ref <- unname(fr$curvature[, , 1])
+    else expect_equal(unname(fr$curvature[, , 1]), ref, tolerance = 1e-5, info = m)
   }
 })
 
 test_that("forward-reverse names its answer and refuses the older spelling", {
   mr <- models$fr$bdf
   ff <- do.call(solveODE, c(list(mr, times, pars,
-                                 seed = array(1, c(length(times), 2L, 1L))), tol))
-  expect_identical(dim(ff$adjoint2), c(5L, 5L, 1L))
-  expect_identical(dimnames(ff$adjoint2)[[1]], names(pars))
-  expect_identical(dimnames(ff$adjoint2)[[2]], names(pars))
+                                 cotangent = array(1, c(length(times), 2L, 1L))), tol))
+  expect_identical(dim(ff$curvature), c(5L, 5L, 1L))
+  expect_identical(dimnames(ff$curvature)[[1]], names(pars))
+  expect_identical(dimnames(ff$curvature)[[2]], names(pars))
 
   expect_error(cppODE(eqns, modelname = "rev2_refused", derivMode = "reverse",
                       deriv2 = TRUE),
@@ -724,6 +724,6 @@ test_that("the second-order forward mode is repeatable on every method", {
     mm <- models$ff[[m]]
     a <- do.call(solveODE, c(list(mm, times, pars), tol))
     b <- do.call(solveODE, c(list(mm, times, pars), tol))
-    expect_identical(a$sens2, b$sens2, info = m)
+    expect_identical(a$hessian, b$hessian, info = m)
   }
 })

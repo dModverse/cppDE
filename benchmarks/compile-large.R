@@ -96,7 +96,7 @@ jac_note <- function(src) {
 check_forward <- function(m, prob) {
   tt <- chk_times(prob)
   r <- do.call(solveODE, c(list(m, tt, prob$parms), tol))
-  ps <- head(intersect(dimnames(r$sens1)[[3]], prob$sens), 2L)
+  ps <- head(intersect(dimnames(r$tangent)[[3]], prob$sens), 2L)
   err <- 0
   for (p in ps) {
     h <- 1e-6 * max(1, abs(prob$parms[[p]]))
@@ -104,7 +104,7 @@ check_forward <- function(m, prob) {
     pm <- prob$parms; pm[[p]] <- pm[[p]] - h
     fd <- (do.call(solveODE, c(list(m, tt, pp), tol))$variable -
            do.call(solveODE, c(list(m, tt, pm), tol))$variable) / (2 * h)
-    err <- max(err, relerr(r$sens1[, , p], fd))
+    err <- max(err, relerr(r$tangent[, , p], fd))
   }
   c(finite = all(is.finite(r$variable)), check = err)
 }
@@ -114,10 +114,10 @@ check_reverse <- function(m, mf, prob) {
   rf <- do.call(solveODE, c(list(mf, tt, prob$parms), tol))
   set.seed(1)
   W <- array(rnorm(prod(dim(rf$variable))), c(dim(rf$variable), 1L))
-  rr <- do.call(solveODE, c(list(m, tt, prob$parms, seed = W), tol))
-  ref <- apply(rf$sens1 * as.vector(W[, , 1L]), 3, sum)
-  c(finite = all(is.finite(rr$adjoint)),
-    check = relerr(rr$adjoint[names(ref), 1L], ref))
+  rr <- do.call(solveODE, c(list(m, tt, prob$parms, cotangent = W), tol))
+  ref <- apply(rf$tangent * as.vector(W[, , 1L]), 3, sum)
+  c(finite = all(is.finite(rr$cotangent)),
+    check = relerr(rr$cotangent[names(ref), 1L], ref))
 }
 
 run_one <- function(prob) {

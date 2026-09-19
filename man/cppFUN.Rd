@@ -58,23 +58,27 @@ named, and the default \code{c("forward", "reverse")} builds both.
 \item \code{"forward"}: forward-mode AD on \code{cppde::dual}, delivering \code{jac},
 \code{hess}, \code{evaluate} and \code{evaluateBatch}.
 \item \code{"reverse"}: the vector-Jacobian product \code{vjp}, differentiated at
-code-generation time, and \code{vjp2}, the same contraction over a dual.
+code-generation time, together with its forward-reverse form.
 Naming one direction alone omits the other's entries, and its compile
 time with them.
 }}
 }
 \value{
 A list with components \code{func}, \code{jac}, \code{hess}, \code{evaluate},
-\code{evaluateBatch}, \code{vjp} and \code{vjp2}, each \code{NULL} when not generated.
-\code{jac}, \code{hess}, \code{evaluate} and \code{evaluateBatch} need \code{"forward"};
-\code{evaluateBatch(sets, cores, deriv2)} runs \code{evaluate} over a list of
-argument lists in one call. \code{vjp} and \code{vjp2} need \code{"reverse"}.
-\code{vjp(vars, params, w)} contracts the Jacobian with a cotangent \code{w} of the
-outputs, \verb{[n_obs, n_out]} or \verb{[n_obs, n_out, n_seed]}, and returns \code{y},
-\code{wx} and \code{wp}; \code{wp} sums over observations because the parameters are
-shared across them. \code{vjp2(vars, params, w, vx, vp, dw)} differentiates
-that contraction along the tangents \code{vx}, \code{vp} of the inputs and \code{dw} of
-the cotangent, and adds \code{dwx} and \code{dwp}. Carries attributes \code{equations},
+\code{evaluateBatch} and \code{vjp}, each \code{NULL} when not generated.
+\code{jac}, \code{hess}, \code{evaluate} and \code{evaluateBatch} need \code{"forward"}.
+\code{evaluate(..., tangentX, tangentP, hessianX, hessianP, deriv2)} returns
+\code{y}, \code{tangent} and, with \code{deriv2 = TRUE}, \code{hessian}: the outputs' tangent
+and Hessian in \eqn{\theta}. \code{evaluateBatch(sets, cores, deriv2)} runs
+\code{evaluate} over a list of argument lists in one call.
+
+\code{vjp} needs \code{"reverse"}. \code{vjp(vars, params, cotangent)} contracts the
+Jacobian with a cotangent of the outputs, \verb{[n_obs, n_out]} or
+\verb{[n_obs, n_out, n_seed]}, and returns \code{y}, \code{cotangentX} and \code{cotangentP};
+\code{cotangentP} sums over observations because the parameters are shared
+across them. Given \code{tangentX}, \code{tangentP} or \code{curvature}, the derivative
+of the cotangent along the tangent, the same call runs forward-reverse and
+adds \code{curvatureX} and \code{curvatureP}. Carries attributes \code{equations},
 \code{variables}, \code{parameters}, \code{fixed}, \code{modelname}, \code{srcfile} and
 \code{derivMode}.
 }
@@ -85,8 +89,10 @@ optional first- and second-order derivatives. There is no time
 integration; the principal use cases are observation maps for
 likelihood-based inference and reparametrisation Jacobians for
 \code{\link[=solveODE]{solveODE()}}. \code{derivMode} selects which derivative products are built.
-The chain rule is available through the optional seed arguments \code{dX},
-\code{dP}, \code{dX2}, and \code{dP2}. Every entry runs compiled code: an object built
+The chain rule is available through the optional arguments \code{tangentX},
+\code{tangentP}, \code{hessianX} and \code{hessianP}, the tangent and the Hessian in
+\eqn{\theta} of the variables and parameters. Every entry runs compiled
+code: an object built
 with \code{compile = FALSE} is evaluable only after \code{\link[=compile]{compile()}}. See
 \code{vignette("Methods", package = "cppDE")} for the computational paths and
 the pass-through convention for unmodelled inputs.

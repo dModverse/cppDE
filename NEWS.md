@@ -1,5 +1,19 @@
 # cppDE 0.10.0
 
+* **Derivative arguments and results are renamed.** A map has a tangent and a
+  Hessian, a functional has a cotangent and a curvature, and argument and
+  result carry the same name. `solveODE()`, `solveODEBatch()`, `prepareBatch()`
+  and `solveBatch()` take `tangent`, `hessian`, `cotangent` and `curvature`
+  instead of `sens1ini`, `sens2ini`, `seed` and `attr(seed, "seedTangent")`,
+  and return `$tangent`, `$hessian`, `$cotangent` and `$curvature` instead of
+  `$sens1`, `$sens2`, `$adjoint` and `$adjoint2`. `cppFUN()` objects take
+  `tangentX`, `tangentP`, `hessianX` and `hessianP` instead of `dX`, `dP`, `dX2`
+  and `dP2`, and `evaluate()` returns `list(y, tangent, hessian)` instead of
+  `list(y, dy, d2y)`. `vjp2()` is folded into
+  `vjp(vars, params, cotangent, tangentX, tangentP, curvature)`, which returns
+  `cotangentX` and `cotangentP` instead of `wx` and `wp` and, given any of the
+  last three arguments, `curvatureX` and `curvatureP` instead of `dwx` and
+  `dwp`. The old names are gone, without aliases.
 * **Derivatives come from automatic differentiation on an expression graph.**
   `cppODE()`, `cvode()` and `cppFUN()` parse a model into a hash-consed graph
   and differentiate it there; SymPy is left for unusual syntax and for the
@@ -66,7 +80,7 @@
   autonomous cases never showed it. The fix matches the one for root events
   below; `dev/cxx/test_reverse_events2.cpp` went from 1.8e-1 to 7e-14.
 * `nStack` is gone. Tangent storage is heap-allocated and the per-call width is
-  `ncol(sens1ini)`, so there is no compile-time ceiling. Heap matches a fixed
+  `ncol(tangent)`, so there is no compile-time ceiling. Heap matches a fixed
   slab bit for bit and beats it on time, 0.74 of it for forward over forward on
   forty directions.
 * A backward sweep can arm a heap dual. It zero-arms its buffers before writing
@@ -122,12 +136,13 @@
   reads `t*` itself, where one blind to the clock reads only the state there.
 * `saltation_fixed_analytical()` splits into `saltation_fixed_to_surface()` and
   `saltation_shift_back()`. A backward sweep needs the state on the surface.
-* A reverse seed can carry its own tangents, as `attr(seed, "seedTangent")` of
-  shape `[n_out, n_states, n_seed, n_sens]`. Without it the Hessian was wrong in
-  the columns of whatever sat above the ODE.
-* `derivMode = "reverse"` on `cppFUN()` builds `vjp2` beside `vjp`. Over a dual
-  the written vjp returns `J' dW` and `W' H V` in one pass, so an observation
-  function contributes its curvature without a symbolic Hessian.
+* `solveODE(..., curvature = )` gives the cotangent its own derivative along
+  the tangent, of shape `[n_out, n_states, n_seed, n_sens]`. Without it the
+  Hessian was wrong in the columns of whatever sat above the ODE.
+* `derivMode = "reverse"` on `cppFUN()` gives `vjp()` a forward-over-reverse
+  form. Given `tangentX`, `tangentP` or `curvature`, the written vjp runs over a
+  dual and returns `J' dW` and `W' H V` in one pass, so an observation function
+  contributes its curvature without a symbolic Hessian.
 * `derivMode = "forward-forward"` compiles with a sparse Jacobian.
   `max_deriv_size` lacked the compressed-column overload.
 * `store` and `keepStore` are refused under `derivMode = "forward-reverse"`. A
@@ -148,27 +163,28 @@
   zero either side.
 * A `derivMode = "reverse"` model emits `J' lambda` and `(df/dp)' lambda` in
   plain `double` for the written step adjoints.
-* **Bug fix.** A CVODES adjoint through `solveODEBatch()` returned no `$adjoint`
-  and reported success. The batch sized its results before the solve.
+* **Bug fix.** A CVODES adjoint through `solveODEBatch()` returned no
+  `$cotangent` and reported success. The batch sized its results before the
+  solve.
 * The batch entries carry the whole reverse mode: `adjointGrid`, `errWeights`,
-  `keepStore` and `store` beside `seed`, and `solveBatch()` takes a new seed and
-  new weights on a prepared handle.
+  `keepStore` and `store` beside `cotangent`, and `solveBatch()` takes a new
+  cotangent and new weights on a prepared handle.
 * `solveODE(..., keepStore = TRUE)` returns the checkpoints as `$store` for a
   second solve at the same parameter. A store handed back elsewhere is an error.
   Worth about a tenth of a reverse gradient.
 * The reverse mode's tape records about three times faster: 9.3 to 3.1 ns per
   node, and a reverse step from 167 to 79 times a plain evaluation.
 * `cvode(..., derivMode = "reverse")` compiles CVODES adjoint sensitivity
-  analysis behind the same `seed`/`$adjoint` interface. It refuses events and
-  `rootfunc`.
+  analysis behind the same `cotangent`/`$cotangent` interface. It refuses
+  events and `rootfunc`.
 * `solveODE(..., errWeights = list(time =, lambda =))` weights the step-size
   controller by the adjoint. The grid stays at least as fine as the tolerances
   ask, so a wrong weight costs time and never accuracy.
 * `solveODE(..., adjointGrid = TRUE)` returns `$adjointGrid`: step times and
   sizes, the cotangents of both, the adjoint state per step, and `eta`.
 * `cppODE(..., derivMode = "reverse")` compiles a fourth object beside the
-  value, first- and second-order ones. `solveODE(..., seed = W)` returns
-  `$adjoint` at a cost that does not grow with the parameter count. All four
+  value, first- and second-order ones. `solveODE(..., cotangent = W)` returns
+  `$cotangent` at a cost that does not grow with the parameter count. All four
   methods, with events, roots, forcings, the batch entry and the sparse solver.
 * A reverse gradient belongs to the trajectory a value-only solve produces.
   Forward sensitivities adapt on a finer grid; the two agree to O(tol).
@@ -190,7 +206,7 @@
   stream, so `set.seed()` repeated it, and a model inside a combined shared
   object could then resolve another's entry points. The name now comes from
   `tempfile()`, and the random stream is left alone.
-* **Bug fix.** `sens2` read the upper half of each Hessian from slots the
+* **Bug fix.** `$hessian` read the upper half of each Hessian from slots the
   integrator does not carry through its steps; on a long stiff run at tight
   tolerances they drifted by tens of orders of magnitude. Both halves now come
   from the lower triangle.

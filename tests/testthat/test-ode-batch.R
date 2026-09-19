@@ -82,7 +82,7 @@ test_that("solveODEBatch matches solveODE exactly, with sensitivities", {
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
 
   expect_named(bat, names(conds))
-  expect_batch_identical(bat, ser, c("time", "variable", "sens1"))
+  expect_batch_identical(bat, ser, c("time", "variable", "tangent"))
 })
 
 test_that("solveODEBatch matches solveODE exactly without sensitivities", {
@@ -96,7 +96,7 @@ test_that("second-order sensitivities survive the batch path", {
   m <- m_d2
   ser <- serial_ref(m)
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
-  expect_batch_identical(bat, ser, c("time", "variable", "sens1", "sens2"))
+  expect_batch_identical(bat, ser, c("time", "variable", "tangent", "hessian"))
 })
 
 # The arena is thread-local and pops when solve_impl returns, so heap AD is
@@ -105,7 +105,7 @@ test_that("heap AD batches correctly", {
   m <- m_sens
   ser <- serial_ref(m)
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
-  expect_batch_identical(bat, ser, c("time", "variable", "sens1"))
+  expect_batch_identical(bat, ser, c("time", "variable", "tangent"))
 })
 
 # -- Thread count must not change the answer ----------------------------------
@@ -116,7 +116,7 @@ test_that("results are invariant in the number of threads", {
   many <- solveODEBatch(m, conds, times = tt, cores = 4)
   for (i in seq_along(conds)) {
     expect_identical(one[[i]]$variable, many[[i]]$variable)
-    expect_identical(one[[i]]$sens1,    many[[i]]$sens1)
+    expect_identical(one[[i]]$tangent,  many[[i]]$tangent)
   }
 })
 
@@ -181,7 +181,7 @@ test_that("the CVODE backend batches like the native one", {
   m <- mc_sens
   ser <- serial_ref(m)
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
-  expect_batch_identical(bat, ser, c("time", "variable", "sens1"))
+  expect_batch_identical(bat, ser, c("time", "variable", "tangent"))
 })
 
 test_that("the sparse KLU path batches correctly", {
@@ -198,7 +198,7 @@ test_that("the sparse KLU path batches correctly", {
   bat <- solveODEBatch(m, cs, times = tt, cores = 2)
   for (i in seq_along(ser)) {
     expect_identical(bat[[i]]$variable, ser[[i]]$variable)
-    expect_identical(bat[[i]]$sens1,    ser[[i]]$sens1)
+    expect_identical(bat[[i]]$tangent,  ser[[i]]$tangent)
   }
 })
 
@@ -213,7 +213,7 @@ test_that("solveBatch on a prepared handle equals solveODEBatch", {
   expect_named(a, names(conds))
   for (i in seq_along(conds)) {
     expect_identical(a[[i]]$variable, b[[i]]$variable)
-    expect_identical(a[[i]]$sens1,    b[[i]]$sens1)
+    expect_identical(a[[i]]$tangent,  b[[i]]$tangent)
   }
 })
 
@@ -265,24 +265,24 @@ test_that("solveODEBatch reports the thread count it used", {
 
 ## ---- per-condition inputs -------------------------------------------------
 
-test_that("conditions may carry their own sens1ini labels", {
+test_that("conditions may carry their own tangent labels", {
   # dMod's normal case: each condition depends on a different outer parameter
   # set, so the batch cannot hand one shared dimnames pair to the C++ side.
   m <- m_sens
   mk <- function(k, lab) {
     s <- matrix(0, 3, 2, dimnames = list(c("A", "B", "k"), c("shared", lab)))
     s["A", 1] <- 1; s["k", 2] <- 1
-    list(parms = c(A = 1, B = 0, k = k), sens1ini = s)
+    list(parms = c(A = 1, B = 0, k = k), tangent = s)
   }
   cs <- list(a = mk(0.3, "pa"), b = mk(0.7, "pb"), c = mk(1.4, "pc"))
   bat <- solveODEBatch(m, cs, times = tt, cores = 2L)
 
   for (i in seq_along(cs)) {
     ser <- solveODE(m, times = tt, parms = cs[[i]]$parms,
-                    sens1ini = cs[[i]]$sens1ini)
+                    tangent = cs[[i]]$tangent)
     expect_identical(bat[[i]]$variable, ser$variable)
-    expect_identical(bat[[i]]$sens1, ser$sens1)
-    expect_identical(dimnames(bat[[i]]$sens1)[[3]], colnames(cs[[i]]$sens1ini))
+    expect_identical(bat[[i]]$tangent, ser$tangent)
+    expect_identical(dimnames(bat[[i]]$tangent)[[3]], colnames(cs[[i]]$tangent))
   }
 })
 
@@ -294,11 +294,11 @@ test_that("conditions may fix different parameters", {
              fixA  = list(parms = c(A = 1, B = 0, k = 0.5), fixed = "A"))
   bat <- solveODEBatch(m, cs, times = tt, cores = 2L)
 
-  widths <- vapply(bat, function(b) dim(b$sens1)[3], 0L)
+  widths <- vapply(bat, function(b) dim(b$tangent)[3], 0L)
   expect_true(widths[["free"]] > widths[["fixk"]])
   for (i in seq_along(cs)) {
     ser <- solveODE(m, times = tt, parms = cs[[i]]$parms, fixed = cs[[i]]$fixed)
-    expect_identical(bat[[i]]$sens1, ser$sens1)
+    expect_identical(bat[[i]]$tangent, ser$tangent)
   }
 })
 
@@ -360,7 +360,7 @@ test_that("a batch with events matches the serial path", {
   for (i in seq_along(cs)) {
     ser <- solveODE(m, times = te, parms = cs[[i]]$parms)
     expect_identical(bat[[i]]$variable, ser$variable)
-    expect_identical(bat[[i]]$sens1, ser$sens1)
+    expect_identical(bat[[i]]$tangent, ser$tangent)
   }
 })
 
@@ -384,7 +384,7 @@ test_that("a time event takes the preallocated path when it is on the grid", {
       ser <- solveODE(m, times = tt, parms = cs[[i]]$parms)
       expect_identical(bat[[i]]$time,     ser$time)
       expect_identical(bat[[i]]$variable, ser$variable)
-      expect_identical(bat[[i]]$sens1,    ser$sens1)
+      expect_identical(bat[[i]]$tangent,  ser$tangent)
     }
   }
 
@@ -397,7 +397,7 @@ test_that("a time event takes the preallocated path when it is on the grid", {
     ser <- solveODE(m, times = off, parms = cs2[[i]]$parms)
     expect_identical(b2[[i]]$time,     ser$time)
     expect_identical(b2[[i]]$variable, ser$variable)
-    expect_identical(b2[[i]]$sens1,    ser$sens1)
+    expect_identical(b2[[i]]$tangent,  ser$tangent)
     expect_length(b2[[i]]$time, length(off) + 1L)
   }
 })
@@ -414,7 +414,7 @@ test_that("a root event keeps the dynamic path and still matches the serial solv
     ser <- solveODE(m, times = tt, parms = cs[[i]]$parms)
     expect_identical(bat[[i]]$time,     ser$time)
     expect_identical(bat[[i]]$variable, ser$variable)
-    expect_identical(bat[[i]]$sens1,    ser$sens1)
+    expect_identical(bat[[i]]$tangent,  ser$tangent)
   }
   expect_gt(length(bat[[1]]$time), length(tt))   # the root inserted rows
 })
@@ -469,13 +469,13 @@ test_that("the CVODE batch preallocates when the grid is fixed", {
   tt <- seq(0.5, 50, length.out = 60)
   si <- diag(4); dimnames(si) <- list(NULL, c("A", "B", "k1", "k2"))
   cs <- lapply(c(0.08, 0.12, 0.2), function(k)
-    list(parms = c(A = 1, B = 0, k1 = k, k2 = 0.05), sens1ini = si))
+    list(parms = c(A = 1, B = 0, k1 = k, k2 = 0.05), tangent = si))
   bat <- solveODEBatch(m, cs, times = tt, cores = 3L)
   for (i in seq_along(cs)) {
-    ser <- solveODE(m, times = tt, parms = cs[[i]]$parms, sens1ini = si)
+    ser <- solveODE(m, times = tt, parms = cs[[i]]$parms, tangent = si)
     expect_identical(bat[[i]]$time,     ser$time)
     expect_identical(bat[[i]]$variable, ser$variable)
-    expect_identical(bat[[i]]$sens1,    ser$sens1)
+    expect_identical(bat[[i]]$tangent,  ser$tangent)
   }
   expect_identical(dimnames(bat[[1]]$variable)[[2]], c("A", "B"))
 })

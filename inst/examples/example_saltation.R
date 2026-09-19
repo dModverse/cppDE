@@ -124,12 +124,12 @@ comparison <- function(expr, at, res, var) {
   for (a in seq_len(np))
     panels[[length(panels) + 1L]] <-
       panel(1L, lab1(var, at$names[a]), series(expr, at, at$syms[a]),
-            res$sens1[i, var, at$names[a]])
+            res$tangent[i, var, at$names[a]])
   for (a in seq_len(np)) for (b in a:np)
     panels[[length(panels) + 1L]] <-
       panel(2L, lab2(var, at$names[a], at$names[b]),
             series(expr, at, at$syms[c(a, b)]),
-            res$sens2[i, var, at$names[a], at$names[b]])
+            res$hessian[i, var, at$names[a], at$names[b]])
 
   labels <- vapply(panels, `[[`, "", "quantity")
   data.frame(
@@ -165,7 +165,7 @@ reverseSeries <- function(expr, at, res, model, pars, var, states,
   i    <- rowsAt(res, at$times)[keep]
   W    <- array(0, c(nrow(res$variable), length(states), length(keep)))
   for (r in seq_along(keep)) W[i[r], match(var, states), r] <- 1
-  rev <- do.call(solveODE, c(list(model, at$times, pars, seed = W), opts))
+  rev <- do.call(solveODE, c(list(model, at$times, pars, cotangent = W), opts))
 
   np  <- length(at$syms)
   out <- list()
@@ -176,11 +176,11 @@ reverseSeries <- function(expr, at, res, model, pars, var, states,
 
   for (a in seq_len(np))
     add(1L, lab1(var, at$names[a]),
-        series(expr, at, at$syms[a])[keep], rev$adjoint[at$names[a], ])
+        series(expr, at, at$syms[a])[keep], rev$cotangent[at$names[a], ])
   for (a in seq_len(np)) for (b in a:np)
     add(2L, lab2(var, at$names[a], at$names[b]),
         series(expr, at, at$syms[c(a, b)])[keep],
-        rev$adjoint2[at$names[a], at$names[b], ])
+        rev$curvature[at$names[a], at$names[b], ])
 
   df <- do.call(rbind, out)
   for (o in 1:2) {

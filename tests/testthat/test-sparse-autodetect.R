@@ -140,7 +140,7 @@ test_that("sparse Jacobian and dense Jacobian agree on first-order sensitivities
   expect_identical(out_sp$time, tt)
   expect_identical(out_sp$diagnostics$return_code, 0L)
   expect_equal(out_sp$variable, out_dn$variable, tolerance = 1e-6)
-  expect_equal(out_sp$sens1, out_dn$sens1, tolerance = 1e-6)
+  expect_equal(out_sp$tangent, out_dn$tangent, tolerance = 1e-6)
 })
 
 test_that("an incomplete integration is an error, not partial results", {

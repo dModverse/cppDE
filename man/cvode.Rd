@@ -50,7 +50,7 @@ and exported C symbols. A random identifier is used when \code{NULL}.}
 
 \item{derivMode}{Direction the derivatives are taken in. \code{"forward"} (default)
 is the CVODES forward sensitivity solver, driven by \code{deriv}. \code{"reverse"}
-is CVODES adjoint sensitivity analysis, one backward solve per seed
+is CVODES adjoint sensitivity analysis, one backward solve per cotangent
 column. It needs \code{deriv = FALSE} and refuses \code{events} and \code{rootfunc}.}
 
 \item{asaCheckpoints}{Accepted forward steps between checkpoints under
@@ -96,7 +96,7 @@ selection guidance are described in
 Available methods are \code{"bdf"} (default) and \code{"adams"}. Sensitivities
 are first-order forward only; \code{deriv2} is not supported.
 \code{derivMode = "reverse"} compiles the CVODES adjoint instead, returning
-\verb{$adjoint} the way the native backend's reverse mode does. Events,
+\verb{$cotangent} the way the native backend's reverse mode does. Events,
 forcings, \code{rootfunc}, and \code{fixed} behave as in \code{\link[=cppODE]{cppODE()}}.
 
 SUNDIALS (>= 6.0) must be available at install time; otherwise
@@ -124,11 +124,11 @@ compile(plain, sens, adj, output = "cvode_examples")
 times <- 0:10
 parms <- c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)
 solveODE(plain, times, parms)$variable[11, ]
-solveODE(sens, times, parms)$sens1[11, "B", ]   # forward sensitivities
+solveODE(sens, times, parms)$tangent[11, "B", ] # forward sensitivities
 
 ## CVODES adjoint: the gradient of sum(B) over the grid
-seed <- cbind(A = 0, B = rep(1, length(times)))
-solveODE(adj, times, parms, seed = seed)$adjoint
+onB <- cbind(A = 0, B = rep(1, length(times)))
+solveODE(adj, times, parms, cotangent = onB)$cotangent
 }
 }
 \references{

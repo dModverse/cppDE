@@ -36,25 +36,25 @@ res <- solveODE(model, times, parms)
 
 n_out    <- length(res$time)
 n_states <- ncol(res$variable)
-n_sens   <- dim(res$sens1)[3]
+n_sens   <- dim(res$tangent)[3]
 
 dims <- attr(model, "dimNames")
 
-## ---------- sens1 ----------
-sens1_matrix <- matrix(res$sens1,
-                       nrow = n_out,
-                       ncol = n_states * n_sens)
+## ---------- tangent ----------
+tangent_matrix <- matrix(res$tangent,
+                         nrow = n_out,
+                         ncol = n_states * n_sens)
 
-sens1_colnames <-
+tangent_colnames <-
   as.vector(outer(paste0("d", dims$variable),
                   paste0("d", dims$sens),
                   paste, sep = "/"))
-colnames(sens1_matrix) <- sens1_colnames
+colnames(tangent_matrix) <- tangent_colnames
 
-levels <- c(colnames(res$variable), sens1_colnames)
+levels <- c(colnames(res$variable), tangent_colnames)
 
 ## ---------- combine everything ----------
-out <- cbind(time = res$time, res$variable, sens1_matrix) %>%
+out <- cbind(time = res$time, res$variable, tangent_matrix) %>%
   as.data.frame() %>%
   pivot_longer(
     cols = -time,

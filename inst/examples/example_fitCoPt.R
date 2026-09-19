@@ -149,7 +149,7 @@ traceSignal <- function(p, k, tt) {
   if (is.null(sol)) return(NULL)
 
   xi      <- sol$variable[-1, "xi_z"]
-  dxi     <- sol$sens1[-1, "xi_z", , drop = TRUE]
+  dxi     <- sol$tangent[-1, "xi_z", , drop = TRUE]
   viaRest <- function(d) dxi[, "th"] * d[["th"]] + dxi[, "lam"] * d[["lam"]]
   prec    <- -S * K * xi
   T1 <- 10^p[[bn[2]]]

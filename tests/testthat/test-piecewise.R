@@ -62,9 +62,9 @@ test_that("a time switch integrates and differentiates like its closed form", {
   expect_equal(unname(out$variable[, "A"]), A, tolerance = 1e-6)
   expect_equal(unname(out$variable[, "B"]), p[["A"]] - A, tolerance = 1e-6)
 
-  expect_equal(unname(out$sens1[, "B", "kf"]), tk * A, tolerance = 1e-6)
-  expect_equal(unname(out$sens1[, "B", "ks"]), tl * A, tolerance = 1e-6)
-  expect_equal(unname(out$sens1[, "B", "A"]), 1 - A / p[["A"]], tolerance = 1e-6)
+  expect_equal(unname(out$tangent[, "B", "kf"]), tk * A, tolerance = 1e-6)
+  expect_equal(unname(out$tangent[, "B", "ks"]), tl * A, tolerance = 1e-6)
+  expect_equal(unname(out$tangent[, "B", "A"]), 1 - A / p[["A"]], tolerance = 1e-6)
 })
 
 test_that("both branches of a state switch are taken", {
@@ -94,16 +94,16 @@ test_that("select carries value, gradient and Hessian on both branches", {
   f <- pw_mod$d2
   branch <- list(quote(b*a + a^3), quote(a^2*b))
   for (a in c(0.5, 2)) {
-    out <- f$evaluate(a = a, b = 3, dP = dP, dP2 = dP2, deriv2 = TRUE)
+    out <- f$evaluate(a = a, b = 3, tangentP = dP, hessianP = dP2, deriv2 = TRUE)
     e <- branch[[1L + (a - 1 > 0)]]
     env <- list(a = a, b = 3)
     H <- matrix(0, 2, 2)
     for (k in 1:2) for (l in 1:2) H[k, l] <- eval(D(D(e, nms[k]), nms[l]), env)
     expect_equal(unname(out$y[1, 1]), eval(e, env))
-    expect_equal(unname(out$dy[1, 1, ]),
+    expect_equal(unname(out$tangent[1, 1, ]),
                  vapply(nms, function(v) eval(D(e, v), env), 0),
                  tolerance = 1e-12, ignore_attr = TRUE)
-    expect_equal(unname(out$d2y[1, 1, , ]), H, tolerance = 1e-12)
+    expect_equal(unname(out$hessian[1, 1, , ]), H, tolerance = 1e-12)
   }
 })
 
@@ -120,10 +120,10 @@ test_that("a branch that is a literal clears the tangents it replaces", {
   tk <- pmin(times, p[["ts"]])          # the decay freezes at ts
   A  <- p[["A"]] * exp(-p[["ks"]] * tk)
   expect_equal(unname(out$variable[, "A"]), A, tolerance = 1e-7)
-  expect_equal(unname(out$sens1[, "A", "ks"]), -tk * A, tolerance = 1e-7)
-  expect_equal(unname(out$sens1[, "A", "A"]), A / p[["A"]], tolerance = 1e-7)
-  expect_equal(unname(out$sens2[, "A", "ks", "ks"]), tk^2 * A, tolerance = 1e-7)
-  expect_equal(unname(out$sens2[, "A", "ks", "A"]), -tk * A / p[["A"]],
+  expect_equal(unname(out$tangent[, "A", "ks"]), -tk * A, tolerance = 1e-7)
+  expect_equal(unname(out$tangent[, "A", "A"]), A / p[["A"]], tolerance = 1e-7)
+  expect_equal(unname(out$hessian[, "A", "ks", "ks"]), tk^2 * A, tolerance = 1e-7)
+  expect_equal(unname(out$hessian[, "A", "ks", "A"]), -tk * A / p[["A"]],
                tolerance = 1e-7)
 })
 
@@ -171,5 +171,5 @@ test_that("Heaviside survives differentiation", {
 
   # The decay switches off at 0.5 and the state holds there.
   expect_equal(unname(res$variable[nrow(res$variable), 1]), 0.5, tolerance = 1e-3)
-  expect_false(anyNA(res$sens1))
+  expect_false(anyNA(res$tangent))
 })

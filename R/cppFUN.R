@@ -6,8 +6,10 @@
 #' integration; the principal use cases are observation maps for
 #' likelihood-based inference and reparametrisation Jacobians for
 #' [solveODE()]. `derivMode` selects which derivative products are built.
-#' The chain rule is available through the optional seed arguments `dX`,
-#' `dP`, `dX2`, and `dP2`. Every entry runs compiled code: an object built
+#' The chain rule is available through the optional arguments `tangentX`,
+#' `tangentP`, `hessianX` and `hessianP`, the tangent and the Hessian in
+#' \eqn{\theta} of the variables and parameters. Every entry runs compiled
+#' code: an object built
 #' with `compile = FALSE` is evaluable only after [compile()]. See
 #' `vignette("Methods", package = "cppDE")` for the computational paths and
 #' the pass-through convention for unmodelled inputs.
@@ -38,21 +40,25 @@
 #'   * `"forward"`: forward-mode AD on `cppde::dual`, delivering `jac`,
 #'     `hess`, `evaluate` and `evaluateBatch`.
 #'   * `"reverse"`: the vector-Jacobian product `vjp`, differentiated at
-#'     code-generation time, and `vjp2`, the same contraction over a dual.
+#'     code-generation time, together with its forward-reverse form.
 #'     Naming one direction alone omits the other's entries, and its compile
 #'     time with them.
 #'
 #' @return A list with components `func`, `jac`, `hess`, `evaluate`,
-#'   `evaluateBatch`, `vjp` and `vjp2`, each `NULL` when not generated.
-#'   `jac`, `hess`, `evaluate` and `evaluateBatch` need `"forward"`;
-#'   `evaluateBatch(sets, cores, deriv2)` runs `evaluate` over a list of
-#'   argument lists in one call. `vjp` and `vjp2` need `"reverse"`.
-#'   `vjp(vars, params, w)` contracts the Jacobian with a cotangent `w` of the
-#'   outputs, `[n_obs, n_out]` or `[n_obs, n_out, n_seed]`, and returns `y`,
-#'   `wx` and `wp`; `wp` sums over observations because the parameters are
-#'   shared across them. `vjp2(vars, params, w, vx, vp, dw)` differentiates
-#'   that contraction along the tangents `vx`, `vp` of the inputs and `dw` of
-#'   the cotangent, and adds `dwx` and `dwp`. Carries attributes `equations`,
+#'   `evaluateBatch` and `vjp`, each `NULL` when not generated.
+#'   `jac`, `hess`, `evaluate` and `evaluateBatch` need `"forward"`.
+#'   `evaluate(..., tangentX, tangentP, hessianX, hessianP, deriv2)` returns
+#'   `y`, `tangent` and, with `deriv2 = TRUE`, `hessian`: the outputs' tangent
+#'   and Hessian in \eqn{\theta}. `evaluateBatch(sets, cores, deriv2)` runs
+#'   `evaluate` over a list of argument lists in one call.
+#'
+#'   `vjp` needs `"reverse"`. `vjp(vars, params, cotangent)` contracts the
+#'   Jacobian with a cotangent of the outputs, `[n_obs, n_out]` or
+#'   `[n_obs, n_out, n_seed]`, and returns `y`, `cotangentX` and `cotangentP`;
+#'   `cotangentP` sums over observations because the parameters are shared
+#'   across them. Given `tangentX`, `tangentP` or `curvature`, the derivative
+#'   of the cotangent along the tangent, the same call runs forward-reverse and
+#'   adds `curvatureX` and `curvatureP`. Carries attributes `equations`,
 #'   `variables`, `parameters`, `fixed`, `modelname`, `srcfile` and
 #'   `derivMode`.
 #'
@@ -113,7 +119,6 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   evaluate_impl <- if (fwd)     function(...) .evaluate_impl(st, ...)
   evaluateBatch_impl <- if (fwd) function(...) .evaluateBatch_impl(st, ...)
   vjp_impl      <- if (use_vjp) function(...) .vjp_impl(st, ...)
-  vjp2_impl     <- if (use_vjp) function(...) .vjp2_impl(st, ...)
 
   # --- Output ---
   ## Installed with keep.source, cppFUN's body carries srcrefs, so the wrappers
@@ -125,14 +130,12 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     hess     = if (convenient) .makeDerivWrapper(st, hess_impl, TRUE) else hess_impl,
     evaluate = if (convenient) .makeEvalWrapper(st, evaluate_impl) else evaluate_impl,
     evaluateBatch = evaluateBatch_impl,
-    vjp      = vjp_impl,
-    vjp2     = vjp2_impl
+    vjp      = vjp_impl
   )
   attr(outfn, "equations") <- eqns; attr(outfn, "variables") <- variables; attr(outfn, "parameters") <- parameters
   attr(outfn, "fixed") <- fixed; attr(outfn, "modelname") <- modelname; attr(outfn, "srcfile") <- normalizePath(cpp_file, "/", FALSE)
   attr(outfn, "derivMode") <- derivMode
-  for (nm in c("func", "jac", "hess", "evaluate", "evaluateBatch", "vjp",
-               "vjp2")) {
+  for (nm in c("func", "jac", "hess", "evaluate", "evaluateBatch", "vjp")) {
     if (!is.null(outfn[[nm]])) {
       attr(outfn[[nm]], "modelname") <- modelname
       attr(outfn[[nm]], "srcfile")   <- attr(outfn, "srcfile")
@@ -236,63 +239,64 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 # --- Chain-rule helpers ---
 
 # Pull theta names from any seed; raise if seeds disagree.
-.resolveTheta <- function(dX, dP, dX2 = NULL, dP2 = NULL) {
+.resolveTheta <- function(tangentX, tangentP, hessianX = NULL, hessianP = NULL) {
   cands <- list()
-  if (!is.null(dX))  cands[[length(cands) + 1L]] <- dimnames(dX)[[3]]
-  if (!is.null(dP))  cands[[length(cands) + 1L]] <- colnames(dP)
-  if (!is.null(dX2)) cands[[length(cands) + 1L]] <- dimnames(dX2)[[3]]
-  if (!is.null(dP2)) cands[[length(cands) + 1L]] <- dimnames(dP2)[[2]]
+  if (!is.null(tangentX))  cands[[length(cands) + 1L]] <- dimnames(tangentX)[[3]]
+  if (!is.null(tangentP))  cands[[length(cands) + 1L]] <- colnames(tangentP)
+  if (!is.null(hessianX)) cands[[length(cands) + 1L]] <- dimnames(hessianX)[[3]]
+  if (!is.null(hessianP)) cands[[length(cands) + 1L]] <- dimnames(hessianP)[[2]]
   cands <- cands[lengths(cands) > 0]
   if (!length(cands)) return(character(0))
   theta <- cands[[1]]
   for (k in seq_along(cands)[-1])
     if (!identical(theta, cands[[k]]) && !setequal(theta, cands[[k]]))
-      stop("Seed theta names disagree across dX/dP/dX2/dP2")
+      stop("Seed theta names disagree across tangentX/tangentP/hessianX/hessianP")
   theta
 }
 
 # Align seeds onto the function's internal (vars, params) order, flat and ready
-# for the dual-mode .C() entries. Absent dX2/dP2 go in as length-zero vectors,
-# which the C side guards with the `has_dX2` / `has_dP2` flags.
-.alignSeedsDual <- function(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt) {
+# for the dual-mode .C() entries. An absent hessianX or hessianP goes in as a
+# length-zero vector, which the C side guards with `has_dX2` / `has_dP2`.
+.alignSeedsDual <- function(st, tangentX, tangentP, hessianX, hessianP, n_obs,
+                            theta, fixed_rt) {
   n_vars <- length(st$innames); n_params <- length(st$parameters); n_theta <- length(theta)
   dX_arr <- array(0, c(n_obs, n_vars, n_theta))
   dP_mat <- matrix(0, n_params, n_theta)
   if (n_theta > 0) {
-    if (!is.null(dX) && n_vars > 0) {
-      idx <- match(st$innames, dimnames(dX)[[2]]); pres <- !is.na(idx)
+    if (!is.null(tangentX) && n_vars > 0) {
+      idx <- match(st$innames, dimnames(tangentX)[[2]]); pres <- !is.na(idx)
       # Character selection over n_theta names costs a lookup per element.
-      tX <- if (identical(dimnames(dX)[[3]], theta)) TRUE else theta
-      if (any(pres)) dX_arr[, pres, ] <- dX[, idx[pres], tX, drop = FALSE]
+      tX <- if (identical(dimnames(tangentX)[[3]], theta)) TRUE else theta
+      if (any(pres)) dX_arr[, pres, ] <- tangentX[, idx[pres], tX, drop = FALSE]
     }
-    if (!is.null(dP) && n_params > 0) {
-      idx <- match(st$parameters, rownames(dP)); pres <- !is.na(idx)
-      tP <- if (identical(colnames(dP), theta)) TRUE else theta
-      if (any(pres)) dP_mat[pres, ] <- dP[idx[pres], tP, drop = FALSE]
+    if (!is.null(tangentP) && n_params > 0) {
+      idx <- match(st$parameters, rownames(tangentP)); pres <- !is.na(idx)
+      tP <- if (identical(colnames(tangentP), theta)) TRUE else theta
+      if (any(pres)) dP_mat[pres, ] <- tangentP[idx[pres], tP, drop = FALSE]
     }
     if (length(fixed_rt) && n_params > 0) {
       fp <- match(fixed_rt, st$parameters); fp <- fp[!is.na(fp)]
       if (length(fp)) dP_mat[fp, ] <- 0
     }
   }
-  has_dX2 <- !is.null(dX2) && n_theta > 0 && n_vars > 0
-  has_dP2 <- !is.null(dP2) && n_theta > 0 && n_params > 0
+  has_dX2 <- !is.null(hessianX) && n_theta > 0 && n_vars > 0
+  has_dP2 <- !is.null(hessianP) && n_theta > 0 && n_params > 0
   dX2_arr <- if (has_dX2) {
     r <- array(0, c(n_obs, n_vars, n_theta, n_theta))
-    idx <- match(st$innames, dimnames(dX2)[[2]]); pres <- !is.na(idx)
-    dn <- dimnames(dX2)
+    idx <- match(st$innames, dimnames(hessianX)[[2]]); pres <- !is.na(idx)
+    dn <- dimnames(hessianX)
     t3 <- if (identical(dn[[3]], theta)) TRUE else theta
     t4 <- if (identical(dn[[4]], theta)) TRUE else theta
-    if (any(pres)) r[, pres, , ] <- dX2[, idx[pres], t3, t4, drop = FALSE]
+    if (any(pres)) r[, pres, , ] <- hessianX[, idx[pres], t3, t4, drop = FALSE]
     r
   } else double(0)
   dP2_arr <- if (has_dP2) {
     r <- array(0, c(n_params, n_theta, n_theta))
-    idx <- match(st$parameters, dimnames(dP2)[[1]]); pres <- !is.na(idx)
-    dn <- dimnames(dP2)
+    idx <- match(st$parameters, dimnames(hessianP)[[1]]); pres <- !is.na(idx)
+    dn <- dimnames(hessianP)
     t2 <- if (identical(dn[[2]], theta)) TRUE else theta
     t3 <- if (identical(dn[[3]], theta)) TRUE else theta
-    if (any(pres)) r[pres, , ] <- dP2[idx[pres], t2, t3, drop = FALSE]
+    if (any(pres)) r[pres, , ] <- hessianP[idx[pres], t2, t3, drop = FALSE]
     if (length(fixed_rt)) {
       fp <- match(fixed_rt, st$parameters); fp <- fp[!is.na(fp)]
       if (length(fp)) r[fp, , ] <- 0
@@ -301,25 +305,25 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   } else double(0)
   # Kept as arrays: .C() and .Call() both read the REALSXP directly, and
   # as.double() on an array is a full copy of the largest object in play.
-  list(dX = dX_arr, dP = dP_mat,
-       dX2 = dX2_arr, dP2 = dP2_arr,
+  list(tangentX = dX_arr, tangentP = dP_mat,
+       hessianX = dX2_arr, hessianP = dP2_arr,
        has_dX2 = as.integer(has_dX2), has_dP2 = as.integer(has_dP2))
 }
 
-# Identity seeds for raw J/H: dX = I on vars, dP = I on params, over the
-# combined basis c(st$innames, st$parameters). A `fixed` parameter seeds zero
-# but keeps its column.
+# Identity seeds for raw J/H: tangentX = I on vars, tangentP = I on params,
+# over the combined basis c(st$innames, st$parameters). A `fixed` parameter
+# seeds zero but keeps its column.
 .identitySeedsRaw <- function(st, n_obs, fixed_rt) {
   n_vars <- length(st$innames); n_params <- length(st$parameters)
   theta_full <- c(st$innames, st$parameters)
   n_theta <- length(theta_full)
-  dX <- array(0, c(n_obs, n_vars, n_theta), dimnames = list(NULL, st$innames, theta_full))
-  if (n_vars > 0) for (i in seq_along(st$innames)) dX[, st$innames[i], st$innames[i]] <- 1
-  dP <- matrix(0, n_params, n_theta, dimnames = list(st$parameters, theta_full))
+  tangentX <- array(0, c(n_obs, n_vars, n_theta), dimnames = list(NULL, st$innames, theta_full))
+  if (n_vars > 0) for (i in seq_along(st$innames)) tangentX[, st$innames[i], st$innames[i]] <- 1
+  tangentP <- matrix(0, n_params, n_theta, dimnames = list(st$parameters, theta_full))
   for (i in seq_along(st$parameters))
     if (!(st$parameters[i] %in% fixed_rt))
-      dP[st$parameters[i], st$parameters[i]] <- 1
-  list(dX = dX, dP = dP, theta = theta_full)
+      tangentP[st$parameters[i], st$parameters[i]] <- 1
+  list(tangentX = tangentX, tangentP = tangentP, theta = theta_full)
 }
 
 # --- Core implementations (outputs time-first) ---
@@ -343,20 +347,27 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 # --- Reverse path ---
 
 # Vector-Jacobian product: cotangents of the variables and parameters from a
-# cotangent w of the outputs, [n_obs, n_out] or [n_obs, n_out, n_seed].
-# wp sums over observations because the parameters are shared across them.
-.vjp_impl <- function(st, vars, params = numeric(0), w) {
+# cotangent of the outputs, [n_obs, n_out] or [n_obs, n_out, n_seed].
+# cotangentP sums over observations because the parameters are shared.
+# With a tangent or a curvature the same contraction runs over a dual, forward
+# over reverse, and adds the curvature of the inputs.
+.vjp_impl <- function(st, vars, params = numeric(0), cotangent,
+                      tangentX = NULL, tangentP = NULL, curvature = NULL) {
   chk <- .checkInputs(st, vars, params); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
   n_vars <- length(st$innames); n_params <- length(st$parameters)
   n_out  <- length(st$outnames)
 
+  w <- cotangent
   if (is.null(dim(w))) w <- matrix(w, n_obs, n_out)
   n_seed <- if (length(dim(w)) == 3L) dim(w)[3L] else 1L
   if (dim(w)[1L] != n_obs || dim(w)[2L] != n_out)
-    stop("w must be [n_obs, n_out] or [n_obs, n_out, n_seed].")
+    stop("cotangent must be [n_obs, n_out] or [n_obs, n_out, n_seed].")
 
   dn_x <- list(NULL, st$innames, NULL)
   dn_p <- list(st$parameters, NULL)
+  second <- !is.null(tangentX) || !is.null(tangentP) || !is.null(curvature)
+  if (second) return(.vjpDual(st, M, p, w, tangentX, tangentP, curvature,
+                              n_obs, n_seed, dn_x, dn_p))
 
   funsym <- paste0(st$modelname, "_vjp")
   symc <- .nativeSym(paste0(funsym, "_c"))
@@ -364,9 +375,9 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     r <- .callSym(symc, .asdbl(M), .asdbl(p), .asdbl(w),
                   as.integer(n_obs), as.integer(n_seed))
     y <- r[[1L]]; dimnames(y) <- list(NULL, st$outnames)
-    wx <- r[[2L]]; dimnames(wx) <- dn_x
-    wp <- r[[3L]]; dimnames(wp) <- dn_p
-    return(list(y = y, wx = wx, wp = wp))
+    cx <- r[[2L]]; dimnames(cx) <- dn_x
+    cp <- r[[3L]]; dimnames(cp) <- dn_p
+    return(list(y = y, cotangentX = cx, cotangentP = cp))
   }
 
   sym <- .nativeSym(funsym)
@@ -383,41 +394,32 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
             n_params = as.integer(n_params),
             n_out    = as.integer(n_out),
             n_seed   = as.integer(n_seed))
-  list(y  = matrix(out$y, n_obs, n_out, dimnames = list(NULL, st$outnames)),
-       wx = array(out$wx, c(n_obs, n_vars, n_seed), dimnames = dn_x),
-       wp = matrix(out$wp, n_params, n_seed, dimnames = dn_p))
+  list(y          = matrix(out$y, n_obs, n_out, dimnames = list(NULL, st$outnames)),
+       cotangentX = array(out$wx, c(n_obs, n_vars, n_seed), dimnames = dn_x),
+       cotangentP = matrix(out$wp, n_params, n_seed, dimnames = dn_p))
 }
 
-# The same contraction over a dual: forward over reverse. `vx`, `vp` are the
-# tangents the inputs carry, `dw` those of the cotangent, and both terms of
-# d/dv (w' J) come back in one pass. Compiled entry only, like `vjp` itself.
-.vjp2_impl <- function(st, vars, params = numeric(0), w,
-                       vx = NULL, vp = NULL, dw = NULL, n_dir = NULL) {
-  chk <- .checkInputs(st, vars, params); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
-  n_vars <- length(st$innames); n_params <- length(st$parameters)
-  n_out  <- length(st$outnames)
-
-  if (is.null(dim(w))) w <- matrix(w, n_obs, n_out)
-  n_seed <- if (length(dim(w)) == 3L) dim(w)[3L] else 1L
-  if (dim(w)[1L] != n_obs || dim(w)[2L] != n_out)
-    stop("w must be [n_obs, n_out] or [n_obs, n_out, n_seed].")
-  if (is.null(n_dir))
-    n_dir <- if (!is.null(vx)) utils::tail(dim(vx), 1L)
-             else if (!is.null(vp)) utils::tail(dim(vp), 1L)
-             else if (!is.null(dw)) utils::tail(dim(dw), 1L) else 0L
-  n_dir <- as.integer(n_dir)
+# Forward over reverse: the tangents of the inputs and the curvature of the
+# cotangent go in, and both terms of the derivative of the cotangent contraction
+# come back in one pass. Compiled entry only.
+.vjpDual <- function(st, M, p, w, tangentX, tangentP, curvature,
+                     n_obs, n_seed, dn_x, dn_p) {
+  n_dir <- if (!is.null(tangentX)) utils::tail(dim(tangentX), 1L)
+           else if (!is.null(tangentP)) utils::tail(dim(tangentP), 1L)
+           else utils::tail(dim(curvature), 1L)
 
   symc <- .nativeSym(paste0(st$modelname, "_vjp_ad_c"))
   if (is.null(symc)) .notCompiled(st)
   r <- .callSym(symc, .asdbl(M), .asdbl(p), .asdbl(w),
-                if (is.null(vx)) NULL else .asdbl(vx),
-                if (is.null(vp)) NULL else .asdbl(vp),
-                if (is.null(dw)) NULL else .asdbl(dw),
-                as.integer(n_obs), as.integer(n_seed), n_dir)
+                if (is.null(tangentX)) NULL else .asdbl(tangentX),
+                if (is.null(tangentP)) NULL else .asdbl(tangentP),
+                if (is.null(curvature)) NULL else .asdbl(curvature),
+                as.integer(n_obs), as.integer(n_seed), as.integer(n_dir))
   y <- r[[1L]]; dimnames(y) <- list(NULL, st$outnames)
-  wx <- r[[2L]]; dimnames(wx) <- list(NULL, st$innames, NULL)
-  wp <- r[[3L]]; dimnames(wp) <- list(st$parameters, NULL)
-  list(y = y, wx = wx, wp = wp, dwx = r[[4L]], dwp = r[[5L]])
+  cx <- r[[2L]]; dimnames(cx) <- dn_x
+  cp <- r[[3L]]; dimnames(cp) <- dn_p
+  list(y = y, cotangentX = cx, cotangentP = cp,
+       curvatureX = r[[4L]], curvatureP = r[[5L]])
 }
 
 # --- Dual-path .C() helpers ---
@@ -464,9 +466,9 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   funsym <- paste0(st$modelname, "_eval_ad2"); n_out <- length(st$outnames); n_theta <- length(theta)
   symc <- .nativeSym(paste0(funsym, "_c"))
   if (!is.null(symc)) {
-    r <- .callSym(symc, .asdbl(M), .asdbl(p), .asdbl(aligned$dX), .asdbl(aligned$dP),
-               if (aligned$has_dX2 != 0L) .asdbl(aligned$dX2) else NULL,
-               if (aligned$has_dP2 != 0L) .asdbl(aligned$dP2) else NULL,
+    r <- .callSym(symc, .asdbl(M), .asdbl(p), .asdbl(aligned$tangentX), .asdbl(aligned$tangentP),
+               if (aligned$has_dX2 != 0L) .asdbl(aligned$hessianX) else NULL,
+               if (aligned$has_dP2 != 0L) .asdbl(aligned$hessianP) else NULL,
                as.integer(n_obs), as.integer(n_theta))
     y <- r[[1L]]; dimnames(y) <- list(NULL, st$outnames)
     if (n_theta > 0) {
@@ -483,10 +485,10 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   out <- .cSym(sym,
             x        = as.double(M),
             p        = as.double(p),
-            dX       = as.double(aligned$dX),
-            dP       = as.double(aligned$dP),
-            dX2_in   = as.double(aligned$dX2),
-            dP2_in   = as.double(aligned$dP2),
+            dX       = as.double(aligned$tangentX),
+            dP       = as.double(aligned$tangentP),
+            dX2_in   = as.double(aligned$hessianX),
+            dP2_in   = as.double(aligned$hessianP),
             has_dX2  = aligned$has_dX2,
             has_dP2  = aligned$has_dP2,
             y        = double(n_out * n_obs),
@@ -512,22 +514,22 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
 # --- Public derivative implementations ---
 
-.jac_impl <- function(st, vars, params = numeric(0), dX = NULL, dP = NULL,
+.jac_impl <- function(st, vars, params = numeric(0), tangentX = NULL, tangentP = NULL,
                                 attach.input = FALSE, fixed = NULL) {
-  if (is.null(dX)) dX <- attr(vars, "deriv")
-  if (is.null(dP)) dP <- attr(params, "deriv")
-  has_seeds <- !is.null(dX) || !is.null(dP)
+  if (is.null(tangentX)) tangentX <- attr(vars, "deriv")
+  if (is.null(tangentP)) tangentP <- attr(params, "deriv")
+  has_seeds <- !is.null(tangentX) || !is.null(tangentP)
   chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
   fixed_rt <- .fixedAt(st, fixed)
 
   # Identity seed for the raw case.
   if (!has_seeds) {
     seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
-    dX <- seeds$dX; dP <- seeds$dP
+    tangentX <- seeds$tangentX; tangentP <- seeds$tangentP
   }
-  theta <- .resolveTheta(dX, dP)
-  aligned <- .alignSeedsDual(st, dX, dP, NULL, NULL, n_obs, theta, fixed_rt)
-  res <- .call_eval_ad(st, M, p, aligned$dX, aligned$dP, n_obs, theta)
+  theta <- .resolveTheta(tangentX, tangentP)
+  aligned <- .alignSeedsDual(st, tangentX, tangentP, NULL, NULL, n_obs, theta, fixed_rt)
+  res <- .call_eval_ad(st, M, p, aligned$tangentX, aligned$tangentP, n_obs, theta)
   arr <- res$dy
   if (!has_seeds) {
     # Drop runtime-fixed columns from the canonical-basis output.
@@ -538,22 +540,24 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 }
 
 .hess_impl <- function(st, vars, params = numeric(0),
-                                  dX = NULL, dP = NULL, dX2 = NULL, dP2 = NULL,
+                                  tangentX = NULL, tangentP = NULL,
+                                  hessianX = NULL, hessianP = NULL,
                                   attach.input = FALSE, fixed = NULL) {
-  if (is.null(dX))  dX  <- attr(vars,   "deriv")
-  if (is.null(dP))  dP  <- attr(params, "deriv")
-  if (is.null(dX2)) dX2 <- attr(vars,   "deriv2")
-  if (is.null(dP2)) dP2 <- attr(params, "deriv2")
-  has_seeds <- !is.null(dX) || !is.null(dP) || !is.null(dX2) || !is.null(dP2)
+  if (is.null(tangentX)) tangentX <- attr(vars,   "deriv")
+  if (is.null(tangentP)) tangentP <- attr(params, "deriv")
+  if (is.null(hessianX)) hessianX <- attr(vars,   "deriv2")
+  if (is.null(hessianP)) hessianP <- attr(params, "deriv2")
+  has_seeds <- !is.null(tangentX) || !is.null(tangentP) ||
+               !is.null(hessianX) || !is.null(hessianP)
   chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
   fixed_rt <- .fixedAt(st, fixed)
 
   if (!has_seeds) {
     seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
-    dX <- seeds$dX; dP <- seeds$dP
+    tangentX <- seeds$tangentX; tangentP <- seeds$tangentP
   }
-  theta <- .resolveTheta(dX, dP, dX2, dP2)
-  aligned <- .alignSeedsDual(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt)
+  theta <- .resolveTheta(tangentX, tangentP, hessianX, hessianP)
+  aligned <- .alignSeedsDual(st, tangentX, tangentP, hessianX, hessianP, n_obs, theta, fixed_rt)
   res <- .call_eval_ad2(st, M, p, aligned, n_obs, theta)
   arr <- res$d2y
   if (!has_seeds) {
@@ -565,7 +569,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
 # Many argument sets in one .Call. Only the first-order dual path is batched,
 # everything else loops, so the caller never has to branch. `sets` is a list of
-# evaluate() argument lists: vars, params and optionally dX, dP, fixed.
+# evaluate() argument lists: vars, params and optionally tangentX, tangentP, fixed.
 .evaluateBatch_impl <- function(st, sets, cores = 1L, deriv2 = FALSE) {
 
   one <- function(a) do.call(.evaluate_impl,
@@ -582,11 +586,12 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   th_key <- NULL; th_val <- NULL
   prep <- lapply(sets, function(a) {
     vars <- a$vars; params <- if (is.null(a$params)) numeric(0) else a$params
-    dX <- if (is.null(a$dX)) attr(vars, "deriv")   else a$dX
-    dP <- if (is.null(a$dP)) attr(params, "deriv") else a$dP
-    dX2 <- if (deriv2) (if (is.null(a$dX2)) attr(vars,   "deriv2") else a$dX2)
-    dP2 <- if (deriv2) (if (is.null(a$dP2)) attr(params, "deriv2") else a$dP2)
-    has_seeds <- !is.null(dX) || !is.null(dP) || !is.null(dX2) || !is.null(dP2)
+    tangentX <- if (is.null(a$tangentX)) attr(vars, "deriv")   else a$tangentX
+    tangentP <- if (is.null(a$tangentP)) attr(params, "deriv") else a$tangentP
+    hessianX <- if (deriv2) (if (is.null(a$hessianX)) attr(vars,   "deriv2") else a$hessianX)
+    hessianP <- if (deriv2) (if (is.null(a$hessianP)) attr(params, "deriv2") else a$hessianP)
+    has_seeds <- !is.null(tangentX) || !is.null(tangentP) ||
+                 !is.null(hessianX) || !is.null(hessianP)
     att <- isTRUE(a$attach.input)
     chk <- .checkInputs(st, vars, params, att)
     if (is.null(a$fixed)) {
@@ -599,17 +604,17 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     }
     if (!has_seeds) {
       sd <- .identitySeedsRaw(st, chk$n_obs, fixed_rt)
-      dX <- sd$dX; dP <- sd$dP
+      tangentX <- sd$tangentX; tangentP <- sd$tangentP
     }
-    key <- list(dimnames(dX)[[3]], colnames(dP),
-                if (deriv2) dimnames(dX2)[[3]], if (deriv2) dimnames(dP2)[[2]])
+    key <- list(dimnames(tangentX)[[3]], colnames(tangentP),
+                if (deriv2) dimnames(hessianX)[[3]], if (deriv2) dimnames(hessianP)[[2]])
     if (!is.null(th_key) && identical(th_key, key)) {
       theta <- th_val
     } else {
-      theta <- .resolveTheta(dX, dP, dX2, dP2)
+      theta <- .resolveTheta(tangentX, tangentP, hessianX, hessianP)
       th_key <<- key; th_val <<- theta
     }
-    al <- .alignSeedsDual(st, dX, dP, dX2, dP2, chk$n_obs, theta, fixed_rt)
+    al <- .alignSeedsDual(st, tangentX, tangentP, hessianX, hessianP, chk$n_obs, theta, fixed_rt)
     list(M = chk$M, p = chk$p, n_obs = chk$n_obs, theta = theta,
          aligned = al, has_seeds = has_seeds, fixed_rt = fixed_rt,
          extra_vars = chk$extra_vars, extra_params = chk$extra_params)
@@ -619,12 +624,12 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     if (is.null(x) || !length(x)) NULL else if (is.double(x)) x else as.double(x)
   call_sets <- lapply(prep, function(q) {
     head <- list(as.double(q$M), as.double(q$p),
-                 nullIf(q$aligned$dX), nullIf(q$aligned$dP))
+                 nullIf(q$aligned$tangentX), nullIf(q$aligned$tangentP))
     if (deriv2)
       head <- c(head, list(if (identical(q$aligned$has_dX2, 1L))
-                             nullIf(q$aligned$dX2) else NULL,
+                             nullIf(q$aligned$hessianX) else NULL,
                            if (identical(q$aligned$has_dP2, 1L))
-                             nullIf(q$aligned$dP2) else NULL))
+                             nullIf(q$aligned$hessianP) else NULL))
     c(head, list(as.integer(q$n_obs), as.integer(length(st$innames)),
                  as.integer(length(st$parameters)), as.integer(n_out),
                  as.integer(length(q$theta))))
@@ -642,8 +647,8 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
             c(q$n_obs, n_out, nt), list(NULL, st$outnames, q$theta))
     else array(0, c(q$n_obs, n_out, 0L), list(NULL, st$outnames, NULL))
     if (!q$has_seeds) dy <- dy[, , keep, drop = FALSE]
-    res <- list(y  = .attachExtras(y,  q$n_obs, q$extra_vars, q$extra_params, "fun"),
-                dy = .attachExtras(dy, q$n_obs, q$extra_vars, q$extra_params, "jac"))
+    res <- list(y       = .attachExtras(y,  q$n_obs, q$extra_vars, q$extra_params, "fun"),
+                tangent = .attachExtras(dy, q$n_obs, q$extra_vars, q$extra_params, "jac"))
     if (deriv2) {
       d2y <- if (nt > 0)
         array(raw[[i]][[3L]][seq_len(n_out * nt * nt * q$n_obs)],
@@ -651,7 +656,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
               list(NULL, st$outnames, q$theta, q$theta))
       else array(0, c(q$n_obs, n_out, 0L, 0L),
                  list(NULL, st$outnames, NULL, NULL))
-      res$d2y <- if (q$has_seeds) d2y else d2y[, , keep, keep, drop = FALSE]
+      res$hessian <- if (q$has_seeds) d2y else d2y[, , keep, keep, drop = FALSE]
     }
     res
   })
@@ -659,25 +664,26 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
 
 .evaluate_impl <- function(st, vars, params = numeric(0),
-                                          dX = NULL, dP = NULL,
-                                          dX2 = NULL, dP2 = NULL,
+                                          tangentX = NULL, tangentP = NULL,
+                                          hessianX = NULL, hessianP = NULL,
                                           deriv2 = FALSE,
                                           attach.input = FALSE, fixed = NULL) {
-  if (is.null(dX))  dX  <- attr(vars,   "deriv")
-  if (is.null(dP))  dP  <- attr(params, "deriv")
-  if (is.null(dX2)) dX2 <- attr(vars,   "deriv2")
-  if (is.null(dP2)) dP2 <- attr(params, "deriv2")
-  has_seeds <- !is.null(dX) || !is.null(dP) || !is.null(dX2) || !is.null(dP2)
+  if (is.null(tangentX)) tangentX <- attr(vars,   "deriv")
+  if (is.null(tangentP)) tangentP <- attr(params, "deriv")
+  if (is.null(hessianX)) hessianX <- attr(vars,   "deriv2")
+  if (is.null(hessianP)) hessianP <- attr(params, "deriv2")
+  has_seeds <- !is.null(tangentX) || !is.null(tangentP) ||
+               !is.null(hessianX) || !is.null(hessianP)
   chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
   fixed_rt <- .fixedAt(st, fixed)
   n_out <- length(st$outnames)
 
   if (!has_seeds) {
     seeds <- .identitySeedsRaw(st, n_obs, fixed_rt)
-    dX <- seeds$dX; dP <- seeds$dP
+    tangentX <- seeds$tangentX; tangentP <- seeds$tangentP
   }
-  theta <- .resolveTheta(dX, dP, dX2, dP2)
-  aligned <- .alignSeedsDual(st, dX, dP, dX2, dP2, n_obs, theta, fixed_rt)
+  theta <- .resolveTheta(tangentX, tangentP, hessianX, hessianP)
+  aligned <- .alignSeedsDual(st, tangentX, tangentP, hessianX, hessianP, n_obs, theta, fixed_rt)
   if (deriv2) {
     res <- .call_eval_ad2(st, M, p, aligned, n_obs, theta)
     y <- res$y; dy <- res$dy; d2y <- res$d2y
@@ -687,7 +693,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
       d2y <- d2y[, , dsyms, dsyms, drop = FALSE]
     }
   } else {
-    res <- .call_eval_ad(st, M, p, aligned$dX, aligned$dP, n_obs, theta)
+    res <- .call_eval_ad(st, M, p, aligned$tangentX, aligned$tangentP, n_obs, theta)
     y <- res$y; dy <- res$dy; d2y <- NULL
     if (!has_seeds) {
       dsyms <- setdiff(theta, fixed_rt)
@@ -697,8 +703,8 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
   y   <- .attachExtras(y,   n_obs, chk$extra_vars, chk$extra_params, "fun")
   dy  <- .attachExtras(dy,  n_obs, chk$extra_vars, chk$extra_params, "jac")
-  out <- list(y = y, dy = dy)
-  if (deriv2) out$d2y <- .attachExtras(d2y, n_obs, chk$extra_vars, chk$extra_params, "hess")
+  out <- list(y = y, tangent = dy)
+  if (deriv2) out$hessian <- .attachExtras(d2y, n_obs, chk$extra_vars, chk$extra_params, "hess")
   out
 }
 
@@ -717,31 +723,31 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 .makeDerivWrapper <- function(st, impl, has_d2 = FALSE) {
   if (is.null(impl)) return(NULL)
   if (has_d2) {
-    function(..., dX = NULL, dP = NULL, dX2 = NULL, dP2 = NULL,
-             attach.input = FALSE, fixed = NULL) {
+    function(..., tangentX = NULL, tangentP = NULL, hessianX = NULL,
+             hessianP = NULL, attach.input = FALSE, fixed = NULL) {
       args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
       if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
       for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
-      impl(M, p, dX, dP, dX2, dP2, attach.input, fixed)
+      impl(M, p, tangentX, tangentP, hessianX, hessianP, attach.input, fixed)
     }
   } else {
-    function(..., dX = NULL, dP = NULL,
+    function(..., tangentX = NULL, tangentP = NULL,
              attach.input = FALSE, fixed = NULL) {
       args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
       if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
       for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
-      impl(M, p, dX, dP, attach.input, fixed)
+      impl(M, p, tangentX, tangentP, attach.input, fixed)
     }
   }
 }
 
 .makeEvalWrapper <- function(st, impl) {
   if (is.null(impl)) return(NULL)
-  function(..., dX = NULL, dP = NULL, dX2 = NULL, dP2 = NULL, deriv2 = FALSE,
-           attach.input = FALSE, fixed = NULL) {
+  function(..., tangentX = NULL, tangentP = NULL, hessianX = NULL,
+           hessianP = NULL, deriv2 = FALSE, attach.input = FALSE, fixed = NULL) {
     args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
     if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
     for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
-    impl(M, p, dX, dP, dX2, dP2, deriv2, attach.input, fixed)
+    impl(M, p, tangentX, tangentP, hessianX, hessianP, deriv2, attach.input, fixed)
   }
 }

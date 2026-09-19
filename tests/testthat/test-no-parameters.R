@@ -53,9 +53,9 @@ test_that("cppDE deriv = TRUE with zero parameters seeds initial-state sens", {
   res  <- solveODE(mod, times = tvec, parms = c(x = 1),
                    abstol = 1e-10, reltol = 1e-10)
 
-  expect_equal(dim(res$sens1), c(length(tvec), 1L, 1L))
+  expect_equal(dim(res$tangent), c(length(tvec), 1L, 1L))
   # dx(t)/dx0 = exp(-t) for dx/dt = -x
-  expect_equal(as.numeric(res$sens1[, 1, 1]),
+  expect_equal(as.numeric(res$tangent[, 1, 1]),
                exp(-tvec), tolerance = 1e-8)
 })
 
@@ -88,8 +88,8 @@ test_that("CVODE deriv = TRUE with zero parameters seeds initial-state sens", {
   res  <- solveODE(mod, times = tvec, parms = c(x = 1),
                    abstol = 1e-10, reltol = 1e-10)
 
-  expect_equal(dim(res$sens1), c(length(tvec), 1L, 1L))
-  expect_equal(as.numeric(res$sens1[, 1, 1]),
+  expect_equal(dim(res$tangent), c(length(tvec), 1L, 1L))
+  expect_equal(as.numeric(res$tangent[, 1, 1]),
                exp(-tvec), tolerance = 1e-8)
 })
 
@@ -125,30 +125,30 @@ test_that("cppFUN dual mode evaluates with zero parameters", {
   dP <- matrix(numeric(0), nrow = 0L, ncol = 1L,
                dimnames = list(NULL, "x"))
 
-  jac <- obj$jac(x = c(1, 2, 3), dX = dX, dP = dP)
+  jac <- obj$jac(x = c(1, 2, 3), tangentX = dX, tangentP = dP)
   # dy/dx = 2 along the lone theta = "x"
   expect_equal(as.numeric(jac[, "y", "x"]), rep(2, n_obs))
 
-  # Combined evaluate() returns y and dy in one nested-dual pass.
-  ev <- obj$evaluate(x = c(1, 2, 3), dX = dX, dP = dP)
-  expect_equal(as.numeric(ev$y[, "y"]),         c(5, 7, 9))
-  expect_equal(as.numeric(ev$dy[, "y", "x"]),   rep(2, n_obs))
+  # Combined evaluate() returns y and tangent in one nested-dual pass.
+  ev <- obj$evaluate(x = c(1, 2, 3), tangentX = dX, tangentP = dP)
+  expect_equal(as.numeric(ev$y[, "y"]),             c(5, 7, 9))
+  expect_equal(as.numeric(ev$tangent[, "y", "x"]),  rep(2, n_obs))
 })
 
 test_that("cppFUN dual mode supports deriv2 with zero parameters", {
   obj <- fun_d2
 
-  # raw hess (identity seed) at x = c(1, 2)
+  # raw hess (identity tangent) at x = c(1, 2)
   hess <- obj$hess(x = c(1, 2))
   expect_equal(dim(hess), c(2L, 1L, 1L, 1L))
   # d2y/dx2 = 2
   expect_equal(as.numeric(hess[, "y", "x", "x"]), c(2, 2))
 
-  # explicit identity seed via dX should give the same.
+  # explicit identity tangent via tangentX should give the same.
   n_obs <- 2L
   dX <- array(0, c(n_obs, 1L, 1L), list(NULL, "x", "x"))
   dX[, "x", "x"] <- 1
-  hess2 <- obj$hess(x = c(1, 2), dX = dX)
+  hess2 <- obj$hess(x = c(1, 2), tangentX = dX)
   expect_equal(hess, hess2)
 })
 

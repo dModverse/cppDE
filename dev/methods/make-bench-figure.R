@@ -4,6 +4,7 @@
 #   fig-gradient.pdf  cost of one gradient, forward and reverse, against M
 #   fig-hessian.pdf   cost of one Hessian, forward-forward and forward-reverse
 #   fig-sparse.pdf    gain of the sparse linear solver against n_x
+#   fig-adjoint.pdf   CVODES adjoint against the discrete adjoint (adjoint.csv)
 #
 # Reads the results.csv of one benchmark run. Run it from the package root after
 # a new run, then re-render the vignette with dev/render-methods.R.
@@ -220,3 +221,43 @@ p <- ggplot(sg, aes(nstates, gain, colour = backend, shape = backend)) +
        y = expression(italic(t)["dense"] / italic(t)["sparse"])) +
   theme_fig()
 save(p, "fig-sparse.pdf", width = 3.1, height = 2.3)
+
+
+## ---------------------------------------------------------------------
+##  One gradient in reverse: CVODES adjoint against the discrete adjoint
+## ---------------------------------------------------------------------
+
+## A separate run over the models with M >= 40, both backends in reverse.
+adj_file <- file.path(RUN, "adjoint.csv")
+if (file.exists(adj_file)) {
+  a  <- read.csv(adj_file, stringsAsFactors = FALSE)
+  a  <- a[a$ok, ]
+  aw <- merge(a[a$backend == "cppde", c("problem", "rtol", "nsens", "nstates", "time_ms")],
+              a[a$backend == "cvode", c("problem", "rtol", "time_ms")],
+              by = c("problem", "rtol"), suffixes = c(".cp", ".cv"))
+  aw$ratio <- aw$time_ms.cv / aw$time_ms.cp
+  lab <- unique(a[a$backend == "cppde" & a$problem %in% aw$problem,
+                  c("problem", "nsens", "nstates")])
+  lab$label <- sprintf("%s  (M = %d, n = %d)", sub("_.*", "", lab$problem),
+                       lab$nsens, lab$nstates)
+  lab <- lab[order(lab$nsens), ]
+  aw$label <- factor(lab$label[match(aw$problem, lab$problem)], levels = lab$label)
+  aw$rtol  <- factor(format(aw$rtol, scientific = TRUE),
+                     levels = format(sort(unique(aw$rtol), decreasing = TRUE),
+                                     scientific = TRUE))
+  RCOL <- c("#9ec5f3", "#2a78d6", "#0d3b73")
+  names(RCOL) <- levels(aw$rtol)
+
+  p <- ggplot(aw, aes(ratio, label, colour = rtol, shape = rtol)) +
+    geom_vline(xintercept = 1, linewidth = 0.35, colour = "grey30") +
+    geom_point(size = 2, stroke = 0.8) +
+    do.call(scale_x_continuous, log2_axis(c(0.5, 1, 2, 4, 8, 16, 32), "×",
+                                          expand = expansion(mult = 0.05))) +
+    scale_colour_manual(values = RCOL, name = "rtol") +
+    scale_shape_manual(values = c(1, 2, 0), name = "rtol") +
+    labs(x = expression(italic(t)["CVODES adjoint"] / italic(t)["discrete adjoint"]),
+         y = NULL) +
+    theme_fig() +
+    theme(legend.position.inside = c(0.3, 0.95), legend.justification = c(0, 1))
+  save(p, "fig-adjoint.pdf", height = 2.4)
+}

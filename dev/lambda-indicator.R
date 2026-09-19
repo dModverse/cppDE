@@ -97,8 +97,8 @@ models <- list(
 
 # --- Build ------------------------------------------------------------------
 # A value model beside the reverse one: its solve fixes the output row count,
-# which a root event makes larger than length(times), and the seed's first
-# dimension has to match it.
+# which a root event makes larger than length(times), and the first dimension
+# of the cotangent has to match it.
 
 build <- function(name, m) {
   cat("compiling ", name, " ...\n", sep = "")
@@ -114,25 +114,25 @@ build <- function(name, m) {
   ## J = sum over observed times and states, weighted 1, 1/2, 1/3, ... over
   ## the states. A weight that is constant across states is annihilated by a
   ## linear conservation law. Robertson conserves y1+y2+y3, so an all-ones
-  ## seed makes J the constant 1 per time point and its gradient exactly zero.
-  ## Nothing about the study needs a residual-shaped objective; what matters is
-  ## that lambda is not trivial.
-  m$seed  <- array(rep(1 / seq_len(n_x), each = n_out),
-                   dim = c(n_out, n_x, 1L))
-  m$n_out <- n_out
+  ## cotangent makes J the constant 1 per time point and its gradient exactly
+  ## zero. Nothing about the study needs a residual-shaped objective; what
+  ## matters is that lambda is not trivial.
+  m$cotangent <- array(rep(1 / seq_len(n_x), each = n_out),
+                       dim = c(n_out, n_x, 1L))
+  m$n_out     <- n_out
   m
 }
 
 gradient <- function(m, rtol, grid = FALSE) {
   solveODE(m$rev, m$times, m$pars,
            abstol = if (is.null(m$atol)) rtol else m$atol, reltol = rtol,
-           seed = m$seed, adjointGrid = grid)
+           cotangent = m$cotangent, adjointGrid = grid)
 }
 
-# The functional the seed defines: J = sum over observed times and states of
+# The functional the cotangent defines: J = sum over observed times and states of
 # W * x. The reverse pass returns its gradient, so this is the value its
 # adjoint belongs to.
-functional <- function(r, m) sum(r$variable * m$seed[, , 1])
+functional <- function(r, m) sum(r$variable * m$cotangent[, , 1])
 
 # Worst relative deviation over the components that carry something. A
 # component three decades below the largest contributes nothing to any use of
@@ -156,12 +156,12 @@ study <- function(name, m) {
   m <- build(name, m)
 
   ref   <- gradient(m, if (is.null(m$rtol_ref)) RTOL_REF else m$rtol_ref)
-  g_ref <- as.numeric(ref$adjoint[, 1])
+  g_ref <- as.numeric(ref$cotangent[, 1])
   J_ref <- functional(ref, m)
 
   out <- do.call(rbind, lapply(RTOLS, function(rt) {
     r <- gradient(m, rt, grid = TRUE)
-    g <- as.numeric(r$adjoint[, 1])
+    g <- as.numeric(r$cotangent[, 1])
     G <- r$adjointGrid
     eta <- abs(G$eta[, 1])
     wdt <- abs(G$wdt[, 1]) * G$h

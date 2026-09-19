@@ -247,11 +247,11 @@ evaluateAt <- function(p) {
 gradientAt <- function(o) {
   g <- setNames(numeric(length(parNames)), parNames)
   for (e in experiments) {
-    u    <- o$runs[[e]]
-    seed <- dObserve(u$sol$variable[, names(eqs)],
-                     u$r / rep(sigma, each = length(times)))
-    adj  <- solveODE(model, times, parsOf(o$p, e), abstol = tol, reltol = tol,
-                     seed = seed, store = u$sol$store)$adjoint[, 1]
+    u   <- o$runs[[e]]
+    w   <- dObserve(u$sol$variable[, names(eqs)],
+                    u$r / rep(sigma, each = length(times)))
+    adj <- solveODE(model, times, parsOf(o$p, e), abstol = tol, reltol = tol,
+                    cotangent = w, store = u$sol$store)$cotangent[, 1]
     g <- g + adj[parNames]
     for (L in coLayers) {
       cells <- lmN[layerOf[coCells] == L]
@@ -302,11 +302,11 @@ gradientForward <- function(p) {
       magnetisation(p[[nm("lgTc", L)]])$dlm
   g <- setNames(numeric(length(parNames)), parNames)
   for (e in experiments) {
-    sol <- solveODE(modelF, times, parsOf(p, e), sens1ini = S,
+    sol <- solveODE(modelF, times, parsOf(p, e), tangent = S,
                     abstol = tol, reltol = tol)
     x <- sol$variable[, names(eqs)]
     w <- dObserve(x, (observe(x) - data[[e]]) / rep(sigma^2, each = length(times)))
-    g <- g + vapply(parNames, function(j) sum(w * sol$sens1[, names(eqs), j]), 0)
+    g <- g + vapply(parNames, function(j) sum(w * sol$tangent[, names(eqs), j]), 0)
   }
   g
 }

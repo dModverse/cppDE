@@ -75,8 +75,8 @@ test_that("equilibrate works with first-order sensitivities", {
     mod <- eq_mod[[m]]
     res <- solveODE(mod, times, pars, roottol = 1e-05)
 
-    expect_true(!is.null(res$sens1), label = paste(m, "sens1 present"))
-    expect_true(all(is.finite(res$sens1)), label = paste(m, "sens1 finite"))
+    expect_true(!is.null(res$tangent), label = paste(m, "tangent present"))
+    expect_true(all(is.finite(res$tangent)), label = paste(m, "tangent finite"))
 
     # At steady state, sensitivity derivatives should be near zero
     # (that's what the termination checks)
@@ -95,7 +95,7 @@ test_that("warm start converges in fewer steps than cold start", {
     # Cold start -> equilibrium
     res1 <- solveODE(mod, times, pars, roottol = 1e-05)
     yini    <- res1$variable[nrow(res1$variable), ]
-    sensini <- res1$sens1[length(res1$time), , ]
+    sensini <- res1$tangent[length(res1$time), , ]
 
     # Small parameter perturbation
     pars2 <- pars
@@ -104,10 +104,10 @@ test_that("warm start converges in fewer steps than cold start", {
     pars2["k2"] <- pars["k2"] * 0.99   # -1%
 
     # Warm start (with sensitivity initial values)
-    res_warm <- solveODE(mod, times, pars2, sens1ini = sensini,
+    res_warm <- solveODE(mod, times, pars2, tangent = sensini,
                          roottol = 1e-05)
 
-    # Cold start (same perturbed params, no sens1ini)
+    # Cold start (same perturbed params, no tangent)
     res_cold <- solveODE(mod, times, pars2, roottol = 1e-05)
 
     d_warm <- diagnostics(res_warm)
@@ -126,14 +126,14 @@ test_that("warm start converges to correct new steady state", {
   # First equilibration
   res1 <- solveODE(mod, times, pars, roottol = 1e-06)
   yini    <- res1$variable[nrow(res1$variable), ]
-  sensini <- res1$sens1[length(res1$time), , ]
+  sensini <- res1$tangent[length(res1$time), , ]
 
   # Perturb parameters
   pars2 <- pars
   pars2[names(yini)] <- yini
   pars2["k_act"] <- 0.15  # changed from 0.1
 
-  res2 <- solveODE(mod, times, pars2, sens1ini = sensini, roottol = 1e-06)
+  res2 <- solveODE(mod, times, pars2, tangent = sensini, roottol = 1e-06)
 
   # New analytical steady state
   ss_R2  <- unname(0.15 / pars["k_deact"])
