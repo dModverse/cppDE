@@ -2082,30 +2082,29 @@ as \texttt{curvatureX} and \texttt{curvatureP}. This is forward over
 reverse as in Section \ref{sec:fwdrev}: an observation map contributes
 its curvature to a backward chain without forming a Hessian.
 
-## Tangent, Hessian, cotangent and curvature
+## Tangent, hessian, cotangent and curvature
 
 A map has a tangent and a Hessian, a functional has a cotangent and a
-curvature. For the upstream map $\Phi: \theta \mapsto (x, p)$ the
-tangent is $V = \Phi'(\theta)$ and the Hessian is $\Phi''(\theta)$. For
-a scalar functional of the outputs the cotangent $W$ is its gradient in
-the outputs, and the curvature $\dot W$ is the derivative of $W$ along
-the tangent, which is the Hessian of the functional applied to the
-tangent. An argument and its result carry the same name: a forward
-argument lives on the inputs and its result on the outputs, a reverse
-argument lives on the outputs and its result on the inputs.
-Table \ref{tab:derivative-names} lists the names.
+curvature. For the upstream map $\Phi: \theta \mapsto (x, p)$ these are
+the \texttt{tangent} $\partial\Phi(\theta)$ and the \texttt{hessian}
+$\partial^2\Phi(\theta)$. For a scalar functional $L$ of the outputs $y$
+they are the \texttt{cotangent} $\partial L(y)$ and the
+\texttt{curvature} $\partial^2 L(y)\,\partial y$, the derivative of the
+cotangent along the tangent. An argument and its result carry the same
+name: a forward argument lives on the inputs and its result on the
+outputs, a reverse argument lives on the outputs and its result on the
+inputs. Table \ref{tab:derivative-names} lists the names.
 
 \begin{table}[h]
 \centering
-\small
-\begin{tabular}{@{} l l l l @{}}
+\begin{tabular}{@{} l l l @{}}
 \toprule
-object & \texttt{solveODE()} & \texttt{cppFUN()} argument & \texttt{cppFUN()} result \\
+\texttt{solveODE()} & \texttt{cppFUN()} argument & \texttt{cppFUN()} result \\
 \midrule
-tangent $V$        & \texttt{tangent}   & \texttt{tangentX}, \texttt{tangentP} & \texttt{tangent} \\
-Hessian $\Phi''$   & \texttt{hessian}   & \texttt{hessianX}, \texttt{hessianP} & \texttt{hessian} \\
-cotangent $W$      & \texttt{cotangent} & \texttt{cotangent}                   & \texttt{cotangentX}, \texttt{cotangentP} \\
-curvature $\dot W$ & \texttt{curvature} & \texttt{curvature}                   & \texttt{curvatureX}, \texttt{curvatureP} \\
+\texttt{tangent}   & \texttt{tangentX}, \texttt{tangentP} & \texttt{tangent} \\
+\texttt{hessian}   & \texttt{hessianX}, \texttt{hessianP} & \texttt{hessian} \\
+\texttt{cotangent} & \texttt{cotangent}                   & \texttt{cotangentX}, \texttt{cotangentP} \\
+\texttt{curvature} & \texttt{curvature}                   & \texttt{curvatureX}, \texttt{curvatureP} \\
 \bottomrule
 \end{tabular}
 \caption{Names of the four derivative objects in R. \texttt{solveODE()}
@@ -2115,14 +2114,14 @@ uses one name for the argument and the element of its result; the
 \label{tab:derivative-names}
 \end{table}
 
-Forward over forward takes $\Phi''$ as \texttt{hessian} and returns
-\texttt{hessian}, the second derivatives of every output in every pair of
-directions of the tangent. Forward over reverse takes $\dot W$ as
-\texttt{curvature} and returns \texttt{curvature}, the Hessian of the
-seeded functional applied to the tangent; with the identity tangent,
-the columns of that Hessian.
+Forward over forward takes the \texttt{hessian} of the inputs and
+returns the \texttt{hessian} of the outputs, the second derivatives of
+every output in every pair of directions of the tangent. Forward over
+reverse takes the \texttt{curvature} of the outputs and returns that of
+the inputs, the Hessian of the seeded functional applied to the tangent;
+with the identity tangent, the columns of that Hessian.
 
-\textbf{Chain rule.} \texttt{cppFUN()} takes the tangent and the Hessian
+\textbf{Chain rule.} \texttt{cppFUN()} takes the tangent and the hessian
 of its inputs in two blocks each:
 \begin{itemize}
 \item \texttt{tangentX[obs, name, theta]}: $\partial x_i/\partial\theta_a$,
@@ -2141,39 +2140,39 @@ They may also be supplied as the attributes \texttt{deriv} and
 parameters listed in \texttt{fixed} are set to zero, and symbols absent
 from the tangent contribute zero.
 
-With the tangents bundled into one array
-$V \in \mathbb{R}^{n_{\mathrm{obs}} \times n_{\mathrm{diff}} \times
-n_\theta}$ over the $n_{\mathrm{diff}} = n_x + n_p$ inputs, and $\Phi''$
-for the Hessians, the chain rule for the Jacobian reads
+With the tangent $\partial\Phi \in \mathbb{R}^{n_{\mathrm{obs}} \times
+n_{\mathrm{diff}} \times n_\theta}$ over the
+$n_{\mathrm{diff}} = n_x + n_p$ inputs and the hessian $\partial^2\Phi$,
+the chain rule for the Jacobian reads
 \begin{equation}
   \frac{\partial y}{\partial\theta}\bigg|_{\mathrm{obs}}
-    = J\bigl(x_{\mathrm{obs}}, p\bigr) \cdot V_{\mathrm{obs}},
+    = J\bigl(x_{\mathrm{obs}}, p\bigr) \cdot \partial\Phi_{\mathrm{obs}},
 \end{equation}
 and for the Hessian of output $o$ two contributions combine,
 \begin{equation}
   \frac{\partial^2 y_o}{\partial\theta\,\partial\theta^\top}\bigg|_{\mathrm{obs}}
-    = V_{\mathrm{obs}}^\top \, H_o\bigl(x_{\mathrm{obs}}, p\bigr) \,
-      V_{\mathrm{obs}}
+    = \partial\Phi_{\mathrm{obs}}^\top \, H_o\bigl(x_{\mathrm{obs}}, p\bigr) \,
+      \partial\Phi_{\mathrm{obs}}
     + \sum_{i} J_{o, i}\bigl(x_{\mathrm{obs}}, p\bigr) \,
-        \Phi''_{\mathrm{obs}, i, \cdot, \cdot},
+        \partial^2\Phi_{\mathrm{obs}, i, \cdot, \cdot},
 \end{equation}
 the second of which vanishes when $\Phi$ is affine.
 
 Neither $J$ nor $H$ is formed. Both contractions follow from seeding the
 tangent slots of the duals. Each input scalar $x_i$ becomes
 \begin{equation*}
-  \tilde x_i = (x_i + V_{i,\cdot}\,\varepsilon_{\mathrm{in}})
-             + \bigl(V_{i,\cdot}
-                     + \Phi''_{i,\cdot,\cdot}\,\varepsilon_{\mathrm{in}}\bigr)\,\varepsilon_{\mathrm{out}},
+  \tilde x_i = (x_i + \partial\Phi_{i,\cdot}\,\varepsilon_{\mathrm{in}})
+             + \bigl(\partial\Phi_{i,\cdot}
+                     + \partial^2\Phi_{i,\cdot,\cdot}\,\varepsilon_{\mathrm{in}}\bigr)\,\varepsilon_{\mathrm{out}},
 \end{equation*}
 a nested dual whose inner tangent slots carry $\partial x_i/\partial\theta$
 and whose outer tangent slot $k$ is itself an inner dual with value
 $\partial x_i/\partial\theta_k$ and inner tangents
 $\partial^2 x_i/\partial\theta_k\partial\theta$. The multiplication rule
-then propagates both the $V^\top H V$ and the $J \cdot \Phi''$ terms in one
-evaluation; the inner tangents of $\tilde y$ are
-$\partial y/\partial\theta$, and the cross slots $\tilde y[k][m]$ are
-$\partial^2 y/\partial\theta_k\partial\theta_m$.
+then propagates both the $\partial\Phi^\top H\, \partial\Phi$ and the
+$J \cdot \partial^2\Phi$ terms in one evaluation; the inner tangents of
+$\tilde y$ are $\partial y/\partial\theta$, and the cross slots
+$\tilde y[k][m]$ are $\partial^2 y/\partial\theta_k\partial\theta_m$.
 
 ## Pass-through of unmodelled inputs
 
@@ -2189,135 +2188,85 @@ integrator output as an identity, as with the partial-shape
 
 # Benchmarks \label{sec:bench}
 
-Both backends solve the same problem from the same model equations.
-Right-hand side, analytic Jacobian, events, linear-solver selection,
-and tolerances are shared, and both backends take their right-hand
-side and Jacobian from the same expression graph, so a head-to-head
-measurement isolates the numerical core rather than the model
-formulation.
+Both backends take the right-hand side, the Jacobian, the events and the
+linear-solver choice from the same expression graph and run at the same
+tolerances, so a head-to-head measurement compares the numerical cores.
 
 \textbf{Setup.} The suite comprises $43$ problems: $33$ published
-systems-biology models from a PEtab benchmark collection and $10$
-classical test problems (van der Pol at $\mu = 1000$, Robertson,
-OREGO, HIRES, E5, Pollution, and method-of-lines semidiscretisations
-of the one-dimensional Brusselator and FitzHugh-Nagumo systems at
-$N = 24$ and $N = 64$). The state dimension ranges from $n_x = 2$ to
-$504$. First-order sensitivities run forward for up to $M = 32$
-differentiated parameters, the first $32$ where a model estimates more,
-and in reverse from $M = 120$ on, which concerns
+systems-biology models from the PEtab benchmark collection and $10$
+classical test problems (van der Pol at $\mu = 1000$, Robertson, OREGO,
+HIRES, E5, Pollution, and the one-dimensional Brusselator and
+FitzHugh-Nagumo systems at $N = 24$ and $64$), with $n_x = 2$ to $504$
+states. First-order sensitivities run forward for up to $M = 32$
+parameters and in reverse from $M = 120$ on, which concerns
 Lang\_PLOSComputBiol2024 ($n_x = 124$, $M = 164$) and Chen\_MSB2009
-($n_x = 504$, $M = 152$). Both backends run their BDF/NDF method with
-the automatically selected linear solver at
+($n_x = 504$, $M = 152$). Both backends use BDF/NDF with the
+automatically selected linear solver at
 $(\mathrm{rtol}, \mathrm{atol}) \in \{(10^{-4}, 10^{-6}),
-(10^{-7}, 10^{-9}), (10^{-10}, 10^{-12})\}$. Each cell repeats the
-solve until one batch exceeds $0.25$ s and reports the median of five
-such batches. The suite ran on two AMD EPYC 7513 nodes with twelve
-workers each; both backends of a cell run in the same worker, so a
-ratio compares like with like, while absolute times are comparable
-within one node only. Figure \ref{fig:bench} shows the ratio
-$r = t_{\texttt{cvode()}} / t_{\texttt{cppODE()}}$ per problem,
-aggregated over the three tolerances by geometric mean.
+(10^{-7}, 10^{-9}), (10^{-10}, 10^{-12})\}$, and a cell reports the
+median of five batches of at least $0.25$ s. The suite ran on AMD EPYC
+7513 nodes with twelve workers each; both backends of a cell ran in the
+same worker. Ratios are geometric means over the three tolerances;
+Figure \ref{fig:bench} shows $t_{\texttt{cvode()}} / t_{\texttt{cppODE()}}$
+per problem.
 
 \begin{figure}[h]
 \centering
 \includegraphics[width=\textwidth]{fig-speedup.pdf}
 \caption{Head-to-head ratio of the two backends, one marker per
-problem and mode; above the line \texttt{cppODE()} is faster. The
-abscissa is the number of parameters the model differentiates, which
-the plain solve does not use. Its markers are placed at the same
-abscissa as their sensitivity counterparts, and their flat course
-shows that the $M$ dependence belongs to the sensitivity mode alone.}
+problem and mode; above the line \texttt{cppODE()} is faster. The plain
+solve is placed at the $M$ of its sensitivity counterpart.}
 \label{fig:bench}
 \end{figure}
 
-\textbf{Plain solves.} The in-tree backend is faster on all
-$43$ problems, by a geometric mean of $1.17$, and the ratio is flat in
-$M$. The two backends take the same steps: the geometric means of the
-accepted-step and right-hand-side evaluation ratios are $1.02$ and
-$1.06$, which rules out a margin bought by integrating more loosely.
-The controller, the order selection, and the error constants of the
-in-tree multistepper are those of CVODE, so the margin is a
-cost-per-step effect. It arises from model specialisation: the
-right-hand side and the Jacobian are emitted as straight-line C++ and
-instantiated into the stepper as a functor template, so the calls
-inline, whereas CVODES reaches them through a function pointer with a
-\texttt{void*} user-data argument; the in-tree state vectors are
-contiguous with the extent known at the call site, whereas every
-SUNDIALS vector operation is dispatched through the operation table of
-the \texttt{N\_Vector} it acts on.
+\textbf{Plain solves.} \texttt{cppODE()} is faster on $41$ of $43$
+problems, by a geometric mean of $1.15$, and takes the same steps as
+CVODE: the ratios of accepted steps and right-hand-side evaluations are
+$1.02$ and $1.06$. The margin is a cost per step. The model functions
+are inlined into the stepper, whereas CVODE calls them through function
+pointers and dispatches every vector operation through the
+\texttt{N\_Vector} table.
 
-\textbf{Forward sensitivities.} The in-tree backend is faster on
-$33$ of $41$ problems, by a geometric mean of $1.28$, and
-Figure \ref{fig:bench} shows that the ratio grows with $M$: $0.99$
-over the nine problems with $M \le 3$, $1.22$ over the fourteen with
-$4 \le M \le 12$, and $1.51$ over the eighteen with $13 \le M \le 32$.
-CVODES is driven in staggered mode with an analytic sensitivity
-right-hand side, one Jacobian-vector product per differentiated
-parameter and corrector iteration. The in-tree backend obtains the same
-$M$ columns from a single evaluation of $f$ on a dual-typed state that
-carries all $M$ tangents, and reaches the same trajectories with about
-one eleventh of the right-hand-side evaluations.
+\textbf{Forward sensitivities.} \texttt{cppODE()} is faster on $34$ of
+$41$ problems, by $1.29$, and the ratio grows with $M$: $1.01$ for
+$M \le 3$, $1.22$ for $4 \le M \le 12$ and $1.52$ for
+$13 \le M \le 32$. CVODES evaluates one Jacobian-vector product per
+parameter; the in-tree backend evaluates $f$ once on a dual state that
+carries all $M$ tangents and needs about one eleventh of the
+right-hand-side evaluations. The dual evaluation has a cost per state
+component that does not depend on $M$, so problems with few parameters
+fall below parity: six of the seven have $M \le 6$, the lowest being
+SalazarCavazos\_MBoC2020 ($n_x = 75$, $M = 6$) at $0.67$.
 
-\textbf{Problems below parity.} The dual evaluation carries a
-cost per state component that is independent of $M$: the arithmetic on
-the value part, the tangent-slab bookkeeping, and the loss of the
-vectorisation the scalar loop admits. The in-tree sensitivity work
-therefore scales as $n_x\,(a + b\,M)$ with $a > 0$, whereas the CVODES
-work scales as $M$ times the cost of one Jacobian-vector product. For a
-method-of-lines discretisation that product costs
-$\mathcal{O}(n_x)$, the state dimension cancels, and the comparison
-reduces to $a + b\,M$ against $\mathcal{O}(M)$: small $M$ favours
-CVODES, and the more so the larger $n_x$ is, since $a$ is paid per
-component and amortised only over $M$. Six of the eight problems below
-the parity line with sensitivities have $M \le 6$:
-SalazarCavazos\_MBoC2020 ($n_x = 75$, $M = 6$) at $0.68$, van der Pol
-($M = 1$) at $0.78$, the Brusselator at $N = 64$ and $N = 24$
-($M = 3$) at $0.83$ and $0.88$, Perelson\_Science1996 ($M = 2$) at
-$0.87$ and Bertozzi\_PNAS2020 ($M = 3$) at $0.95$. The remaining two,
-Giordano\_Nature2020 and Oliveira\_NatCommun2021, lie within
-$3\,\%$ of parity.
-
-\textbf{Reverse sensitivities.} From $M = 120$ on the suite computes the
-gradient of the sum of all outputs with the discrete adjoint of
-Section \ref{sec:reverse}, one backward sweep over the recorded steps.
-Figure \ref{fig:gradient} expresses every gradient in units of the
-plain solve of the same problem. The forward cost is linear in $M$,
-$1.9 + 0.60\,M$ for the in-tree backend and $1.1 + 0.85\,M$ for
-CVODES, which extrapolates to about $93$ and $130$ plain solves at
-$M = 152$. The adjoint costs $6.3$ plain solves for
-Chen\_MSB2009 and $3.6$ for Lang\_PLOSComputBiol2024, independent of
-$M$. Against a reference gradient at the reference tolerance, the
-Chen gradient deviates by $4.9 \cdot 10^{-11}$ at
-$\mathrm{rtol} = 10^{-10}$.
+\textbf{Reverse sensitivities.} Measured in plain solves, the cost of one
+gradient by forward sensitivities is linear in $M$
+(Figure \ref{fig:gradient}):
+$1.8 + 0.60\,M$ for \texttt{cppODE()} and $1.2 + 0.84\,M$ for CVODES,
+about $92$ and $129$ at $M = 152$. The discrete adjoint of
+Section \ref{sec:reverse} costs $6.3$ plain solves on Chen\_MSB2009 and
+$3.6$ on Lang\_PLOSComputBiol2024, independent of $M$. The CVODES
+adjoint of Section \ref{sec:asa} costs $27$ on Lang, $8.8$ to $13.7$
+times the discrete adjoint; Chen carries events, which it does not
+support.
 
 \begin{figure}[h]
 \centering
 \includegraphics[width=\textwidth]{fig-gradient.pdf}
-\caption{Cost of one gradient in units of the plain solve of the same
-problem, one marker per problem, geometric mean over the three
-tolerances. The lines are least-squares fits of the forward cost,
-linear in $M$, continued dashed beyond the measured range to the two
-models that run in reverse.}
+\caption{Cost of one gradient by forward sensitivities in units of the
+plain solve of the same problem and backend, with least-squares lines.}
 \label{fig:gradient}
 \end{figure}
 
-\textbf{Discrete and CVODES adjoint.} A separate run computes the same
-gradient with both adjoints on the six models with $M \ge 40$, on one
-node with one core per model. Two of them, Chen\_MSB2009 and
-Giordano\_Nature2020, carry events, which the CVODES adjoint module does
-not support. On the other four (Figure \ref{fig:adjoint}) the CVODES
-adjoint takes $8.7$ to $18.8$ times as long as the discrete adjoint on
-Lang\_PLOSComputBiol2024, Lucarelli\_CellSystems2018 and
-Raimundez\_PCB2020, and $1.0$ to $1.5$ times on Zheng\_PNAS2012
-($n_x = 15$), where a solve takes about a millisecond. The discrete
-adjoint runs backward over the recorded steps of the forward solve;
-CVODES integrates the backward problem with its own step-size control
-and recomputes the forward state between checkpoints. At
-$\mathrm{rtol} = 10^{-10}$ both gradients deviate from the reference by
-$10^{-10}$ to $5 \cdot 10^{-7}$; the reference is the CVODES adjoint at
-the reference tolerance, which favours CVODES. On Zheng\_PNAS2012 the
-gradient of the summed outputs vanishes, so that model contributes a
-timing only.
+A separate run on the six models with $M \ge 40$, one core per model,
+compares the two adjoints directly (Figure \ref{fig:adjoint}). The
+CVODES adjoint takes $8.7$ to $18.8$ times as long on Lang,
+Lucarelli\_CellSystems2018 and Raimundez\_PCB2020, and $1.0$ to $1.5$
+times on Zheng\_PNAS2012 ($n_x = 15$), where a solve takes about a
+millisecond. The discrete adjoint runs backward over the steps of the
+forward solve; CVODES chooses its own backward steps and recomputes the
+forward state between checkpoints. At $\mathrm{rtol} = 10^{-10}$ both
+gradients deviate from the reference by $10^{-10}$ to
+$5 \cdot 10^{-7}$.
 
 \begin{figure}[h]
 \centering
@@ -2328,28 +2277,23 @@ discrete adjoint is faster.}
 \label{fig:adjoint}
 \end{figure}
 
-\textbf{Second order.} The Hessian of the sum of all outputs is
-measured for the in-tree backend alone, on models with at most
-$30$ states: forward over reverse (Section \ref{sec:fwdrev}) with up to
-$32$ directions, and forward over forward, whose $M(M+1)/2$
-second-order directions restrict it to models with at most $10$ states
-and $10$ directions. Where both run they share the directions.
-Figure \ref{fig:hessian} shows the cost in plain solves. Fitted in
-log-log, forward over forward grows with an exponent of $1.9$, forward
-over reverse with $0.6$. The two meet at $M \approx 3$: the ratio of
-forward over forward to forward over reverse is $0.76$ at $M \le 2$,
-$1.06$ at $M = 3$, $3.5$ at $M = 6$ and $7$, and $9.5$ at $M = 9$ and
-$10$. At $\mathrm{rtol} = 10^{-10}$ the two Hessians deviate from the
-forward-over-forward Hessian at the reference tolerance by a median of
-$8.1 \cdot 10^{-10}$ and $1.8 \cdot 10^{-8}$.
+\textbf{Second order.} The Hessian of the summed outputs is measured for
+\texttt{cppODE()} alone, on models with at most $30$ states: forward over
+reverse (Section \ref{sec:fwdrev}) with up to $32$ directions, forward
+over forward up to $10$ states and $10$ directions. Fitted in log-log,
+the cost grows with exponent $1.9$ forward over forward and $0.6$
+forward over reverse (Figure \ref{fig:hessian}). The two break even at
+$M = 3$; forward over reverse is $3.0$ times faster at $M = 6$ and $9$
+to $14$ times at $M = 9$ and $10$. At $\mathrm{rtol} = 10^{-10}$ the
+Hessians deviate from the forward-over-forward Hessian at the reference
+tolerance by a median of $8.1 \cdot 10^{-10}$ (forward over forward)
+and $1.8 \cdot 10^{-8}$ (forward over reverse).
 
 \begin{figure}[h]
 \centering
 \includegraphics[width=\textwidth]{fig-hessian.pdf}
 \caption{Cost of one Hessian of the summed outputs in units of the
-plain solve, one marker per problem and mode, geometric mean over the
-three tolerances. The lines are power laws fitted in log-log over
-$M > 1$; their exponents are given in the legend.}
+plain solve. The lines are power laws fitted in log-log over $M > 1$.}
 \label{fig:hessian}
 \end{figure}
 
@@ -2357,38 +2301,25 @@ $M > 1$; their exponents are given in the legend.}
 \centering
 \includegraphics[width=0.5\textwidth]{fig-sparse.pdf}
 \caption{Gain of the sparse over the dense linear solver, one marker
-per model and backend, geometric mean over tolerances and modes.}
+per model and backend.}
 \label{fig:sparse}
 \end{figure}
 
-\textbf{Linear solver and accuracy.} Seventeen of the models were
-additionally solved with the linear solver pinned to dense and to
-sparse. Figure \ref{fig:sparse} shows that the gain of the sparse path
-grows with the state dimension in the same way for both backends, from
-$1.08$ at $n_x = 8$ to about $3$ at $n_x \ge 128$, and the
-auto-detection selected the sparse path, the faster one, in every
-swept case, so Figure \ref{fig:bench} is a comparison at matched linear
-algebra. Every solve was additionally scored against a reference
-trajectory at $\mathrm{atol} = 10^{-14}$, $\mathrm{rtol} = 10^{-12}$.
-Per problem, the deviation of the in-tree backend is a median $1.01$
-times that of CVODE without sensitivities, with the central $90\,\%$ of
-the problems between $0.43$ and $1.52$, and $1.00$ with
-sensitivities, between $0.49$ and $1.64$. The two are not on equal
-footing there: the reference is itself a CVODE solution, so CVODE is
-measured against a tighter run of the same method through the same
-code, whose truncation error is structurally its own, while the
-in-tree backend is measured across implementations. The bias runs in
-CVODE's favour, which makes the quoted ratio an upper bound.
+\textbf{Linear solver and accuracy.} Seventeen models were solved again
+with the linear solver pinned to dense and to sparse. The sparse gain is
+the same for both backends and grows from $1.09$ at $n_x = 8$ to $3.3$
+at $n_x = 504$ (Figure \ref{fig:sparse}); the automatic selection chose
+the sparse path in every case. Against a reference at
+$\mathrm{atol} = 10^{-14}$, $\mathrm{rtol} = 10^{-12}$ the error of
+\texttt{cppODE()} is a median $0.99$ times that of CVODE without
+sensitivities, with the central $90\,\%$ of the problems between $0.51$
+and $1.51$, and $1.09$ with sensitivities, between $0.66$ and $2.37$.
+The reference is itself a CVODE solution, which favours CVODE.
 
-Fifteen of the $1083$ cells failed and are excluded from the
-aggregates: the CVODES adjoint on Lang\_PLOSComputBiol2024 on each of
-its three linear-solver settings and tolerances, which stalled at the
-final time while its gradient quadrature was part of the error test and
-completes in the configuration of Section \ref{sec:asa}, and at
-$\mathrm{rtol} = 10^{-10}$ the in-tree forward sensitivities of
-Oliveira\_NatCommun2021 on its three linear-solver settings and of
-Weber\_BMC2015, as well as forward over forward on the same two
-models.
+Six of the $1083$ cells failed, all at $\mathrm{rtol} = 10^{-10}$: the
+forward sensitivities of \texttt{cppODE()} on Oliveira\_NatCommun2021
+with each linear solver and on Weber\_BMC2015, and forward over forward
+on the same two models.
 
 \clearpage
 

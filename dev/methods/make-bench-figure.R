@@ -1,7 +1,7 @@
 #!/usr/bin/env Rscript
 # Regenerate the figures of Section "Benchmarks" in Methods.Rmd:
 #   fig-speedup.pdf   head-to-head ratio t_CVODE / t_cppDE against M
-#   fig-gradient.pdf  cost of one gradient, forward and reverse, against M
+#   fig-gradient.pdf  cost of one gradient by forward sensitivities against M
 #   fig-hessian.pdf   cost of one Hessian, forward-forward and forward-reverse
 #   fig-sparse.pdf    gain of the sparse linear solver against n_x
 #   fig-adjoint.pdf   CVODES adjoint against the discrete adjoint (adjoint.csv)
@@ -101,51 +101,33 @@ save(p, "fig-speedup.pdf")
 
 
 ## ---------------------------------------------------------------------
-##  One gradient: forward sensitivities against the discrete adjoint
+##  One gradient by forward sensitivities
 ## ---------------------------------------------------------------------
 
-g <- merge(auto[auto$mode == "sens1", c("problem", "backend", "rtol", "deriv",
-                                        "nsens", "time_ms")],
+g <- merge(auto[auto$mode == "sens1" & auto$deriv == "forward",
+                c("problem", "backend", "rtol", "nsens", "time_ms")],
            plain, by = c("problem", "backend", "rtol"))
 g$cost <- g$time_ms / g$t_plain
-g <- aggregate(cost ~ problem + backend + deriv + nsens, data = g, FUN = gm)
-g$series <- ifelse(g$deriv == "reverse", "reverse",
-                   paste(g$backend, "forward"))
-GLAB <- c(`cppde forward` = "cppDE, forward sensitivities",
-          `cvode forward` = "CVODES, forward sensitivities",
-          reverse         = "cppDE, discrete adjoint")
-g$series <- factor(g$series, levels = names(GLAB))
+g <- aggregate(cost ~ problem + backend + nsens, data = g, FUN = gm)
+GLAB <- c(cppde = "cppDE", cvode = "CVODES")
 
-## The forward cost is linear in M; the fit is drawn over the measured range
-## and continued, dashed, to the models that run in reverse.
-fwd <- g[g$deriv == "forward", ]
-Mmax <- max(g$nsens) * 1.08
-fit_line <- do.call(rbind, lapply(c("cppde", "cvode"), function(b) {
-  f  <- lm(cost ~ nsens, data = fwd[fwd$backend == b, ])
-  hi <- max(fwd$nsens[fwd$backend == b])
-  M  <- exp(seq(log(1), log(Mmax), length.out = 200))
-  data.frame(series = paste(b, "forward"), M = M,
-             cost = predict(f, data.frame(nsens = M)),
-             part = ifelse(M <= hi, "measured", "extrapolated"))
+## The forward cost is linear in M; one least-squares line per backend.
+fit_line <- do.call(rbind, lapply(names(GLAB), function(b) {
+  f <- lm(cost ~ nsens, data = g[g$backend == b, ])
+  M <- exp(seq(log(1), log(max(g$nsens)), length.out = 200))
+  data.frame(backend = b, M = M, cost = predict(f, data.frame(nsens = M)))
 }))
-fit_line$series <- factor(fit_line$series, levels = names(GLAB))
 
-p <- ggplot(g, aes(nsens, cost, colour = series)) +
-  geom_line(data = fit_line, aes(M, cost, linetype = part), linewidth = 0.45,
-            show.legend = FALSE) +
-  geom_point(aes(shape = series), size = 1.7, stroke = 0.7, alpha = 0.9) +
-  geom_text(data = g[g$deriv == "reverse", ],
-            aes(label = sub("_.*", "", problem)), colour = "black",
-            family = "serif", size = 2.6, hjust = 1.15, vjust = -0.4) +
-  do.call(scale_x_continuous, log2_axis(c(1, 2, 4, 8, 16, 32, 64, 128),
+p <- ggplot(g, aes(nsens, cost, colour = backend)) +
+  geom_line(data = fit_line, aes(M, cost), linewidth = 0.45, show.legend = FALSE) +
+  geom_point(aes(shape = backend), size = 1.7, stroke = 0.7, alpha = 0.9) +
+  do.call(scale_x_continuous, log2_axis(c(1, 2, 4, 8, 16, 32),
                                         expand = expansion(mult = 0.04))) +
-  do.call(scale_y_continuous, log2_axis(c(1, 2, 4, 8, 16, 32, 64, 128), "×",
+  do.call(scale_y_continuous, log2_axis(c(1, 2, 4, 8, 16, 32), "×",
                                         expand = expansion(mult = 0.05))) +
-  scale_colour_manual(values = c(`cppde forward` = BLUE, `cvode forward` = ORANGE,
-                                 reverse = GREEN), labels = GLAB, name = NULL) +
-  scale_shape_manual(values = c(`cppde forward` = 1, `cvode forward` = 2,
-                                reverse = 15), labels = GLAB, name = NULL) +
-  scale_linetype_manual(values = c(measured = "solid", extrapolated = "22")) +
+  scale_colour_manual(values = c(cppde = BLUE, cvode = ORANGE), labels = GLAB,
+                      name = NULL) +
+  scale_shape_manual(values = c(cppde = 1, cvode = 2), labels = GLAB, name = NULL) +
   labs(x = expression("differentiated parameters" ~ italic(M)),
        y = "gradient cost / plain solve") +
   theme_fig()
