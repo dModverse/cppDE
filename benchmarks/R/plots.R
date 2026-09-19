@@ -234,27 +234,33 @@ plot_sens_overhead <- function(df) {
 plot_sens2_cost <- function(df) {
   d <- df[df$ok & is.finite(df$time_ms) & df$mode == "sens2", ]
   if (!nrow(d)) return(NULL)
-  key <- c("problem", "condition", "solver", "atol", "rtol")
-  base <- df[df$ok & df$mode == "nosens", c(key, "time_ms")]
+  key  <- c("problem", "condition", "atol", "rtol")
+  base <- df[df$ok & df$mode == "nosens" & df$solver == "cppDE_ndf" &
+               df$pinned == "auto", c(key, "time_ms")]
   names(base)[names(base) == "time_ms"] <- "t_plain"
   m <- merge(d, base, by = key, all.x = TRUE)
   m$rel <- m$time_ms / m$t_plain
-  agg <- stats::aggregate(cbind(time_ms, rel) ~ problem + nsens + nstates,
+  agg <- stats::aggregate(cbind(time_ms, rel) ~ problem + solver + nsens + nstates,
                           data = m[is.finite(m$rel), , drop = FALSE], FUN = geo_mean)
   if (!nrow(agg)) return(NULL)
 
-  ggplot(agg, aes(nsens, rel)) +
-    geom_point(colour = BENCH_COLS[["cppDE_ndf"]], size = 2.4, alpha = 0.9) +
-    geom_text(aes(label = problem), hjust = -0.12, size = 2.7, colour = "grey35") +
+  ggplot(agg, aes(nsens, rel, colour = solver)) +
+    geom_point(size = 2.4, alpha = 0.9) +
+    geom_text(aes(label = problem), hjust = -0.12, size = 2.7, colour = "grey35",
+              show.legend = FALSE) +
+    scale_colour_manual(values = c(cppDE_ff = BENCH_COLS[["cppDE_ndf"]],
+                                   cppDE_fr = "#eb6834"),
+                        labels = c(cppDE_ff = "forward-forward",
+                                   cppDE_fr = "forward-reverse")) +
     scale_x_log10(breaks = count_breaks,
                   labels = scales::label_number(accuracy = 1),
                   expand = expansion(mult = c(0.08, 0.35))) + log_y +
-    labs(title = "Cost of second-order sensitivities",
+    labs(title = "Cost of the Hessian of the summed outputs",
          subtitle = "cppDE only, CVODES has no second-order sensitivities",
          x = "number of sensitivity parameters M",
-         y = "cost relative to a plain solve",
-         caption = paste("Forward-over-forward AD carries M(M+1)/2 second-order",
-                         "directions, so the expected growth is quadratic in M.")) +
+         y = "cost relative to a plain solve", colour = NULL,
+         caption = paste("Forward-forward carries M(M+1)/2 second-order directions,",
+                         "forward-reverse M tangents through one backward sweep.")) +
     theme_bench()
 }
 

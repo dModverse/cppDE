@@ -487,7 +487,7 @@ if (tf(OPT$`sparse-sweep`))
                                 max_density = as.numeric(OPT$`max-density`),
                                 min_states  = as.integer(OPT$`min-sweep-states`))
 
-sh <- balance_shards(problems, n_shards)
+sh <- balance_shards(problems, n_shards, max_sens = as.integer(OPT$`max-sens`))
 shards <- sh$shards
 
 cov <- tier_coverage(problems, OPT$tier)
@@ -604,7 +604,8 @@ invisible(dMod2::runbg(
                             configs = cfgs, sweep_configs = sweep_cfgs,
                             nrep = nrep, cores = bench_cores,
                             max_sens2 = maxs2, min_time = min_time,
-                            compile_slots = compile_slots)
+                            compile_slots = compile_slots,
+                            max_sens = as.integer(OPT$`max-sens`))
     ## Stamp the hardware: absolute times are only comparable across rows
     ## that ran on the same host, and here nothing guaranteed they did.
     if (!is.null(out) && nrow(out)) {

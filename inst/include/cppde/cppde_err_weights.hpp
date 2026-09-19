@@ -1,29 +1,10 @@
 /*
  lambda as a step-size weight: the goal-oriented half of the error norm.
 
- A grid chosen from the state error alone need not be good enough for the
- adjoint. lambda solves backwards, and where it grows a step's contribution to
- the gradient error is large even where its own state error is small: the order
- carries over to the gradient, the constant does not.
-
- lambda at step k is not available while step k runs, because it depends on
- every step after it, so the forward pass cannot compute this term itself. It
- is available across *runs*, which is what this header carries: a sweep leaves
- lambda on its own grid, and the next run reads it back as a weight.
-
- Two properties make that sound rather than merely cheap.
-
-   err = max(err_state, err_lambda)
-
- is the shape the dual path already uses. A max can only shrink a step, so the
- grid stays at least as fine as atol/rtol demand and is finer only where lambda
- asks. The trajectory therefore keeps its own accuracy, and a wrong weight costs
- time and never accuracy: too large means needlessly small steps, too small
- means the state term governs as before. That is what makes an *estimated*
- lambda, from a previous run at a nearby theta, admissible at all.
-
- Plain double throughout, and deliberately: this is a controller input, and the
- controller is not differentiated. See dev/adjoint-plan.md, stage 9.
+ A sweep leaves lambda on its own grid, and the next run reads it back as a
+ weight in err = max(err_state, err_lambda). The max only shrinks steps, so a
+ wrong weight costs time and never accuracy. Plain double: the controller is
+ not differentiated. See vignette("Methods"), "Goal-oriented step-size control".
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -44,15 +25,9 @@ namespace cppde {
 //  lambda sampled at times t[0..n), n_x components each, row-major:
 //  lam[i * n_x + j] is component j at t[i]. Read back by linear interpolation.
 //
-//  Linear and not PCHIP, for three reasons. A forcing is AD-aware because a
-//  forcing belongs on the tape, and this must not; lambda jumps where the
-//  objective seeds it and where an event resets the state, so an interpolant
-//  spanning those points would smear the jump; and shape preservation buys
-//  nothing for a weight, whose overshoots cost only time under the max.
-//
-//  `breaks` names sample indices the interpolant must not span. A query inside
-//  a broken interval takes the nearer endpoint rather than a blend of two
-//  values that belong to different sides of a jump.
+//  `breaks` names sample indices where lambda jumps (seeds, events), which the
+//  interpolant must not span: a query inside a broken interval takes the
+//  nearer endpoint.
 // ============================================================================
 
 class err_weights {
@@ -78,16 +53,13 @@ public:
   std::size_t n_states() const { return m_n_x; }
   std::size_t n_samples() const { return m_t.size(); }
 
-  // The objective's own tolerance. Without it the two halves of the norm are
-  // not comparable, and a large lambda would make the weighted term govern
-  // everywhere, which is only atol/rtol set tighter, by a route that hides
-  // what it did.
+  // The objective's own tolerance, which puts the weighted half of the norm on
+  // the same scale as the state half.
   double gradtol() const { return m_gradtol; }
   void gradtol(double g) { if (g > 0.0) m_gradtol = g; }
 
-  // Weights below this fraction of the largest are lifted to it. lambda is the
-  // *linearised* influence of a state, so a state it weights near zero can
-  // still drift nonlinearly; under the max this is caution and not necessity.
+  // Weights below this fraction of the largest are lifted to it, so a state
+  // the linearised lambda weights near zero still counts.
   double floor() const { return m_floor; }
   void floor(double f) { if (f >= 0.0 && f < 1.0) m_floor = f; }
 
@@ -107,8 +79,8 @@ public:
     const std::size_t lo = hi - 1;
 
     if (spans_break(lo, hi)) {
-      // Two values from opposite sides of a jump do not average into anything;
-      // the nearer sample is the honest answer.
+      // Two values from opposite sides of a jump are not averaged; the nearer
+      // sample is used.
       copy_row((t - m_t[lo] <= m_t[hi] - t) ? lo : hi, out);
       return;
     }
@@ -151,12 +123,9 @@ private:
   double                   m_floor   = 0.0;
 };
 
-// Where the controllers look for the weights. Per-thread and per-solve, the way
-// the step trace's sink is, and for the same reason: a batch runs several
-// solves at once and they do not share a grid. Null means "no weighting", which
-// is the shipped state.
-//
-// Pointer, not thread_local object: see cppde_tls.hpp.
+// Where the controllers look for the weights, per thread and per solve because
+// a batch runs several solves at once. Null means "no weighting". A pointer,
+// not a thread_local object: see cppde_tls.hpp.
 inline const err_weights*& err_weight_sink() {
   thread_local const err_weights* p = nullptr;
   return p;
@@ -174,12 +143,9 @@ struct err_weight_scope {
 
 namespace detail {
 
-// The weighted half of the error norm: |lambda(t)' e| / gradtol, the step's
-// contribution to the error in the objective measured against its own
-// tolerance. Zero when no weights are set, so the caller's max is unchanged.
-//
-// `get` scalarises, because an AD run weights the value layer: the tangent
-// columns have their own term in the norm already.
+// The weighted half of the error norm, |lambda(t)' e| / gradtol, and zero
+// without weights. `get` scalarises: an AD run weights the value layer only,
+// the tangent columns having their own term in the norm.
 template<class V, class Get>
 inline double weighted_error(const std::vector<V>& xerr, double t, Get get) {
   const err_weights* w = err_weight_sink();

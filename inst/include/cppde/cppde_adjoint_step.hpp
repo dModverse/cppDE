@@ -1,31 +1,18 @@
 /**
  * @file cppde_adjoint_step.hpp
- * @brief The adjoint of one accepted step, written rather than recorded.
+ * @brief The adjoint of one accepted step, written out per stepper family.
  *
- * The reverse mode used to obtain a step's adjoint by re-running the step on a
- * tape type and sweeping the tape. On a stiff model that cost about three
- * hundred right-hand-side evaluations per step, for a step whose forward
- * variant costs twenty-seven. It bought generality that is not needed: the
- * accepted grid is frozen, so a step is a fixed map and its adjoint can be
- * stated.
- *
- * What a step does to the Nordsieck history splits in three:
+ * The accepted grid is frozen, so a step is a fixed map and its adjoint is
+ * stated. What a multistep step does to the Nordsieck history splits in three:
  *
  *   zn_pred = A zn_in                      rescale and Pascal shift
  *   res(y, zn_pred, theta) = 0             the corrector, closed by the IFT
  *   zn_out  = B zn_pred + c acor           the tail, acor = y - zn_pred[0]
  *
- * A, B and c act on the slot index alone, with plain-double coefficients that
- * follow from the carry. They are therefore the same small matrices for every
- * state component, and they are obtained from the stepper itself: the same
- * routines the forward step runs, applied to a unit slot on a one-state copy.
- * Nothing here restates what the stepper does, so nothing here can drift from
- * it.
- *
- * The model supplies two contractions, which the code generator emits:
- * `jac_t_vec` for J' lambda, which sizes its own output, and
- * `dfdp_t_vec_axpy` for (df/dp)' lambda, scaled and added into what the caller
- * already holds. So nothing here has to know the model's dimensions.
+ * A, B and c are read off the stepper by running its own routines on a unit
+ * slot. The model supplies `jac_t_vec` (J' lambda) and `dfdp_t_vec_axpy`
+ * ((df/dp)' lambda, scaled and added). See vignette("Methods"), section
+ * "The step map and its adjoint".
  *
  * Copyright (C) 2026 Simon Beyer
  */
@@ -70,14 +57,9 @@ inline double clamp_to_step(const Checkpoint& cp, double t) {
 }
 
 // ---------------------------------------------------------------------------
-//  n zeros with their tangent storage bound.
-//
-//  Everything the sweep hands to the model or to the stepper goes through
-//  this. Those open a dual_arena::scope of their own, and a tangent allocated
-//  inside one is reclaimed when it pops; a buffer that already has one bound
-//  is written in place instead. In plain double it is an assign and nothing
-//  more. Sizing to exactly what the callee writes matters: a later growth
-//  copy-constructs the new elements unarmed.
+//  n zeros with their tangent storage bound, so a callee that opens its own
+//  dual_arena::scope writes into them in place. Sized to exactly what the
+//  callee writes: a later growth copy-constructs the new elements unarmed.
 // ---------------------------------------------------------------------------
 template<class T>
 inline void zero_armed(std::vector<T>& v, std::size_t n) {
@@ -136,14 +118,9 @@ struct multistep_operators {
 };
 
 // ---------------------------------------------------------------------------
-//  Building the operators.
-//
-//  Every one of them acts on the slot index with coefficients that follow from
-//  the carry, identically for each state component. So a probe whose states
-//  are the slots themselves gives every column in one pass: put the identity
-//  into the [slot x component] array and read the result back as a matrix.
-//  One pass instead of one per column, which is what makes reading the
-//  operators off the stepper affordable.
+//  Building the operators. They act on the slot index identically for every
+//  state component, so a probe whose states are the slots gives every column
+//  in one pass: put the identity in and read the result back as a matrix.
 // ---------------------------------------------------------------------------
 
 /// A: what the rescale and the Pascal shift do, plus the step's coefficients.
@@ -219,15 +196,9 @@ struct multistep_probe {
   using probe_stepper = typename Stepper::template rebind_value<double>;
   probe_stepper pre, tail_probe;
 
-  // What the operators depend on. Long stretches of a run hold the order and
-  // the step size, and then every step asks for the same matrices; comparing
-  // is a handful of doubles against reading them off again.
-  //
-  // The carry's qwait is deliberately not here. It counts down to the next
-  // order decision and so moves almost every step, but it reaches only the
-  // error constants for going up or down an order, never l, gamma or the
-  // Nordsieck shift. Those constants belong to the controller, which is not
-  // differentiated. Keeping it in would cost every hit in the cache.
+  // What the operators depend on; a step whose key matches reuses them. qwait
+  // is left out: it reaches only the controller's order-change constants,
+  // never l, gamma or the Nordsieck shift.
   struct key {
     int q = -1, L = 0;
     bool started = false;
@@ -291,18 +262,9 @@ multistep_operators<Stepper> build_multistep_operators(
 }
 
 // ---------------------------------------------------------------------------
-//  The adjoint of one step.
-//
-//    w_pred = B' w_out,  w_acor = c' w_out
-//    acor = y - zn_pred[0]        ->  w_y = w_acor,  w_pred[0] -= w_acor
-//    res  = (y - zn_pred0) + rl1 zn_pred1 - gamma f(y, t_new) = 0
-//         ->  mu = (I - gamma J)^-T w_y
-//             w_pred[0] += mu,  w_pred[1] -= rl1 mu
-//             w_theta   += gamma (df/dp)' mu
-//    w_in = A' w_pred
-//
-//  `solver` is the same equation_solver the tape path uses: prepared on the
-//  step's own Jacobian, its transposed apply already carries the gamma scale.
+//  The adjoint of one step: w_pred = B' w_out, mu = (I - gamma J)^-T w_y for
+//  the corrector, w_in = A' w_pred. See vignette("Methods"), "The step map and
+//  its adjoint". `solver`'s transposed apply carries the gamma scale.
 // ---------------------------------------------------------------------------
 /// What the step above hands down, carried back through the tail onto the
 /// predicted history and onto acor. Separate from the step adjoint itself
@@ -444,24 +406,9 @@ void collapse_restart(const std::vector<T>& w_carry, std::size_t n,
 }
 
 // ---------------------------------------------------------------------------
-//  The adjoint of one jump.
-//
-//  The engine carries a discontinuity across on a Heun sandwich: a forward
-//  shift to the event surface, the resets, a backward shift to the grid time.
-//  The shift is by the event time's own residual, whose value is subtracted off
-//  before it is used, so it is numerically zero and only its derivative
-//  survives. In value the jump is therefore a jump, and the sandwich collapses
-//  to the classical saltation:
-//
-//    dx = R'(dx_before + f_before s) - f_after s
-//
-//  with R the resets and s the residual's differential. For a root event
-//  s = -(grad g . dx + dg/dp . dp) / g_dot, for a fixed one it is the
-//  differential of the event's time. The second-order correction of the root's
-//  dt* multiplies dt* itself and drops with it.
-//
-//  So a jump's adjoint needs the right-hand side at the two ends and the model's
-//  own derivatives of the event expressions.
+//  The adjoint of one jump. In value the Heun sandwich collapses to the
+//  saltation dx = R'(dx_before + f_before s) - f_after s, with s the event
+//  time's differential. See vignette("Methods"), "The adjoint of an event".
 // ---------------------------------------------------------------------------
 template<class T = double>
 struct jump_workspace {
@@ -551,17 +498,9 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   }
   const T t_s = t_ad + s;
 
-  // Forward the jump is
-  //
-  //   x_e = x_b + f_b s,   x_* = x_b + (f_b + f_e) s / 2,   x_a = R(x_*),
-  //   x_k = x_a - f_a s,   x_out = x_a - (f_a + f_k) s / 2,
-  //
-  // and this is its transpose, term for term. Nothing is dropped for being
-  // small in s: a product vanishes only when both factors are zero in value,
-  // so J' w_f against f survives where s against s does not.
-  //
-  // x_k equals the stored state in value and in tangent, so f_k is f there and
-  // x_a is that state carried forward onto the surface.
+  // Forward: x_e = x_b + f_b s, x_* = x_b + (f_b + f_e) s / 2, x_a = R(x_*),
+  // x_k = x_a - f_a s = the stored state, x_out = x_a - (f_a + f_k) s / 2.
+  // Transposed below; see vignette("Methods"), "Transposing the root sandwich".
   zero_armed(ws.fa, n);
   sys.first(x_after, ws.fa, t);
   std::vector<T> xe, xst, xa, xk, fe, fa, fk;
@@ -852,22 +791,10 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
 }
 
 // ---------------------------------------------------------------------------
-//  A whole trajectory backwards, without a tape.
-//
-//  The same store the recorder walks, the same order, the same outputs. What
-//  changes is what happens inside a step: the operators are read off the
-//  stepper and the adjoint is applied, rather than the step being re-run on a
-//  tape type and the tape swept.
-//
-//  Observations inside a step reach it through the dense output, and their row
-//  is read off the same probe: after the tail the probe carries a valid
-//  interpolant over B, so evaluating it at the observation time gives
-//  d x_interp / d (zn_pred, acor) directly. The probe's interpolant belongs to
-//  the step whose tail last ran on it, so a step that is observed rebuilds
-//  rather than taking the cached operators.
-//
-//  Events are not here yet: a jump is its own map between two steps and comes
-//  with the saltation adjoint.
+//  A whole multistep trajectory backwards, step adjoints and jump adjoints in
+//  reverse order. An observation inside a step takes its row
+//  d x_interp / d (zn_pred, acor) from the probe's interpolant, so an observed
+//  step rebuilds the operators rather than taking the cached ones.
 // ---------------------------------------------------------------------------
 template<class Stepper>
 class closed_multistep_trajectory {
@@ -1103,21 +1030,9 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-//  The adjoint of one explicit Runge-Kutta step.
-//
-//    X_i    = x + h sum_{j<i} a_ij k_j,   k_i = f(X_i, t + c_i h)
-//    x_out  = x + h sum_i b_i k_i
-//
-//  and backwards, with u_j = J(X_j, t_j)' m_j,
-//
-//    m_i    = h b_i w + h sum_{j>i} a_ji u_j
-//    w_x    = w + sum_i u_i
-//    w_th  += sum_i (df/dp)(X_i, t_i)' m_i
-//
-//  The stage states are not checkpointed, so the step is run forward once in
-//  plain double to recover them. That is the same work the forward step did,
-//  and it is why an explicit method's adjoint costs about twice its step
-//  rather than the three hundred right-hand sides a tape costs.
+//  The adjoint of one explicit Runge-Kutta step, stages recomputed by one
+//  forward run: m_i = h b_i w + h sum_{j>i} a_ji u_j with u_j = J(X_j)' m_j,
+//  w_x = w + sum_i u_i. See vignette("Methods"), "The step map and its adjoint".
 // ---------------------------------------------------------------------------
 template<class T = double>
 struct onestep_workspace {
@@ -1199,27 +1114,9 @@ void apply_onestep_adjoint(Stepper& st, System& sys,
 }
 
 // ---------------------------------------------------------------------------
-//  The adjoint of one Rosenbrock step.
-//
-//  Six solves against one matrix W = I/(gamma h) - J(x, t):
-//
-//    X_i   = x + sum_{j<i} a_ij g_j,     F_i = f(X_i, t + node_i h)
-//    g_i   = W^-1 ( F_i + h d_i D + sum_{j<i} (c_ij/h) g_j )
-//    X_6   = X_5 + g_5,   e = W^-1 ( F_6 + sum_j (c_6j/h) g_j )
-//    x_out = X_6 + e
-//
-//  with F_1 = f(x, t) and D = df/dt(x, t).
-//
-//  W is built from the Jacobian, so a stage depends on x and theta through the
-//  matrix as well as through its right-hand side: g = W^-1 r gives
-//  dg = W^-1 (dr + (dJ) g), whose adjoint is the contraction of lambda with the
-//  derivative of J g. That is a second derivative, which a tape supplied
-//  silently and a written adjoint has to ask the model for.
-//
-//  The transposed solves go through the stepper's own factorisation, which is
-//  the one the stages solved against. A corrector method may not do that, its
-//  iteration matrix being stale by design; a Rosenbrock stage is a direct solve
-//  and the matrix it used is the matrix its derivative needs.
+//  The adjoint of one Rosenbrock step. dg = W^-1 (dr + (dJ) g), so besides the
+//  transposed solves against the step's own W it needs lambda contracted with
+//  d(J g). See vignette("Methods"), section "The step map and its adjoint".
 // ---------------------------------------------------------------------------
 template<class T = double>
 struct rosenbrock_workspace {
@@ -1369,17 +1266,9 @@ struct has_stage_vectors<S, std::void_t<decltype(std::declval<const S&>().stage_
 : std::true_type {};
 
 // ---------------------------------------------------------------------------
-//  A whole trajectory backwards on a one-step method, without a tape.
-//
-//  The same store, the same order, the same outputs as the multistep form, and
-//  a simpler shape: a one-step method carries only the state across a step
-//  boundary, so there is no history to collapse and no start boundary.
-//
-//  An observation inside a step reaches it through the continuous extension,
-//  which for tsit5 is a Hermite cubic over (x_old, x_new, h k1, h k7) and whose
-//  weights the stepper hands out. Two of those four are right-hand sides, so an
-//  observation puts a cotangent on f at both ends of the step, and that is one
-//  J' and one (df/dp)' contraction apiece.
+//  A whole trajectory backwards on a one-step method, which carries only the
+//  state across a step boundary. An observation inside a step goes through the
+//  continuous extension, whose weights the stepper hands out.
 // ---------------------------------------------------------------------------
 template<class Stepper>
 class closed_onestep_trajectory {

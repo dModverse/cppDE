@@ -5,8 +5,8 @@
  controller append one row per step attempt into an in-memory buffer.  The
  generated `solve_<model>()` entry point marshals this buffer into an R list
  (element `$trace` of the result), and `solveODE()` either attaches it as a
- data.frame or writes it to a user-supplied CSV path.  No compile-time
- filename is required, and no stdio hardcoding leaks into the .so.
+ data.frame or writes it to a user-supplied CSV path. The .so writes no file
+ itself.
 
  Schema (kept in sync with the CVODE backend's trace in codegen_cvode.py):
 

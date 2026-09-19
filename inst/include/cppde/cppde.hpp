@@ -2,12 +2,12 @@
  Main header for cppDE: ODE integration and sensitivity calculation
  using in-tree dual numbers forwards and a written adjoint backwards.
 
- This is the ODE surface, not the whole library. The batch entry point, the
- chain-rule kernels and the return codes are included by the generated sources
- that need them, so they are not reachable from here.
+ This is the ODE surface, not the whole library. The R batch entry point
+ (cppde_r_batch.hpp) and the written adjoint (cppde_adjoint_step.hpp) are
+ included by the generated sources that need them.
 
  The stepper architecture (Rosenbrock4, NDF/BDF) is derived from Boost.Odeint
- by Karsten Ahnert, Mario Mulansky, and Christoph Koke (2011–2015),
+ by Karsten Ahnert, Mario Mulansky, and Christoph Koke (2011-2015),
  distributed under the Boost Software License, Version 1.0.
  Substantially rewritten: LAPACK/KLU linear algebra, AD-aware LU
  decomposition, event handling, NDF/BDF support, PI step-size control.
@@ -72,9 +72,8 @@
 // ============================================================================
 //  cppDE single-step methods (Rosenbrock4, Tsit5)
 //
-//  Unified onestep_controller and onestep_dense_output work with any
-//  single-step stepper.  The old rosenbrock4_controller / _dense_output
-//  headers are thin wrappers that include these.
+//  onestep_controller and onestep_dense_output work with any single-step
+//  stepper.
 // ============================================================================
 #include <cppde/cppde_rosenbrock4.hpp>
 #include <cppde/cppde_tsit5.hpp>

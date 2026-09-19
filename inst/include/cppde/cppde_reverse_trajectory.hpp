@@ -2,30 +2,17 @@
  The trajectory backwards: checkpoint store, reverse loop, seeds at the
  observation times.
 
- The forward run integrates in double and drops one checkpoint per accepted
- step, plus a note of which observation fell where and of every intervention.
- That is what this header holds. The backward walk over it is written rather
- than recorded and lives in cppde_adjoint_step.hpp.
+ The forward run drops one checkpoint per accepted step, plus a note of which
+ observation fell where and of every intervention; this header holds them. The
+ backward walk lives in cppde_adjoint_step.hpp and returns the cotangent of the
+ trajectory start and, summed over every step, that of the parameters.
 
- What comes out there is the cotangent of the trajectory start and, summed over
- every step, the cotangent of the parameters. The parameter accumulator has no
- state dimension: it is the quadrature the continuous adjoint writes as an
- integral.
+ Observations sit at interpolated times, so a step's continuous extension
+ carries them; one before the first step reaches the initial state directly.
 
- Observations sit at interpolated times, not at step ends, so a step's own
- continuous extension carries them. An observation before the first step reaches
- the initial state directly.
-
- The step grid is the forward run's and is not differentiated. A step reads one
- thing from the one before it, the state; the size it took is a constant read
- off its checkpoint. This is Bock's internal numerical differentiation: the
- nominal run adapts freely, and the derivative is taken of the scheme that run
- actually applied.
-
- Differentiating the controller instead puts spurious derivatives of the time
- steps into the chain rule, which make the discrete adjoint inconsistent with
- the adjoint ODE. cppDE did that behind a switch until 2026-09-09; the term was
- measured at O(tol) and the switch is gone. See dev/adjoint-plan.md.
+ The step grid is not differentiated: a step reads the state from the one
+ before it, and its size is a constant read off its checkpoint. See
+ vignette("Methods"), "Internal numerical differentiation".
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -134,7 +121,7 @@ public:
   // after the event note depending on which site fired it, so the marking runs
   // in both directions: push_event scans backwards over what already stands at
   // that time, observe() forwards while the window is open. A root event also
-  // observes just before the jump, at t minus a whisker, which is why the
+  // observes just before the jump, at a time just below t, which is why the
   // backward scan stops on the first time that differs.
   void observe(double t) {
     std::size_t ev = event_record<T>::npos;

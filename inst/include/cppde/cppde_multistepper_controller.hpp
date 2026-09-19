@@ -263,9 +263,9 @@ public:
       // ============================================================
       double dsm = m_stepper.error_norm();
 
-      // The goal-oriented term, stage 9. The local error is acor times the
-      // order's error constant, and the weight contracts against that: steps of
-      // different order are otherwise not comparable. A max, so it only refines.
+      // The goal-oriented term. The weight contracts against the local error,
+      // acor times the order's error constant, so steps of different order are
+      // comparable. Under the max it only refines.
       {
         const double tq2 = static_cast<double>(
             ndf_detail::scalar_value(m_stepper.error_constant()));

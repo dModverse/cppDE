@@ -56,7 +56,7 @@ arguments rather than the low-level \verb{(vars, params)} signature.}
 named, and the default \code{c("forward", "reverse")} builds both.
 \itemize{
 \item \code{"forward"}: forward-mode AD on \code{cppde::dual}, delivering \code{jac},
-\code{hess} and \code{evaluate}.
+\code{hess}, \code{evaluate} and \code{evaluateBatch}.
 \item \code{"reverse"}: the vector-Jacobian product \code{vjp}, differentiated at
 code-generation time, and \code{vjp2}, the same contraction over a dual.
 Naming one direction alone omits the other's entries, and its compile
@@ -64,18 +64,19 @@ time with them.
 }}
 }
 \value{
-A list with components \code{func}, \code{jac}, \code{hess}, \code{evaluate} and,
-under \code{derivMode = "reverse"}, \code{vjp} and \code{vjp2} (\code{NULL} when not
-generated). \code{vjp2(vars, params, w, vx, vp, dw)} runs the same contraction
-over a dual, which is forward over reverse: \code{vx} and \code{vp} are the tangents
-the inputs carry, \code{dw} those of the cotangent, and it returns \code{dwx} and
-\code{dwp} beside \code{y}, \code{wx} and \code{wp}. \code{vjp(vars, params, w)} is the reverse counterpart of \code{evaluate}: it contracts the
-Jacobian with a cotangent \code{w} of the outputs, at a cost independent of the
-number of upstream parameters, and returns \code{y}, \code{wx} and \code{wp}. \code{w} is
-\verb{[n_obs, n_out]} or \verb{[n_obs, n_out, n_seed]}, and \code{wp} sums over
-observations because the parameters are shared across them. Carries
-attributes \code{equations}, \code{variables}, \code{parameters}, \code{fixed}, \code{modelname},
-\code{srcfile} and \code{derivMode}.
+A list with components \code{func}, \code{jac}, \code{hess}, \code{evaluate},
+\code{evaluateBatch}, \code{vjp} and \code{vjp2}, each \code{NULL} when not generated.
+\code{jac}, \code{hess}, \code{evaluate} and \code{evaluateBatch} need \code{"forward"};
+\code{evaluateBatch(sets, cores, deriv2)} runs \code{evaluate} over a list of
+argument lists in one call. \code{vjp} and \code{vjp2} need \code{"reverse"}.
+\code{vjp(vars, params, w)} contracts the Jacobian with a cotangent \code{w} of the
+outputs, \verb{[n_obs, n_out]} or \verb{[n_obs, n_out, n_seed]}, and returns \code{y},
+\code{wx} and \code{wp}; \code{wp} sums over observations because the parameters are
+shared across them. \code{vjp2(vars, params, w, vx, vp, dw)} differentiates
+that contraction along the tangents \code{vx}, \code{vp} of the inputs and \code{dw} of
+the cotangent, and adds \code{dwx} and \code{dwp}. Carries attributes \code{equations},
+\code{variables}, \code{parameters}, \code{fixed}, \code{modelname}, \code{srcfile} and
+\code{derivMode}.
 }
 \description{
 Generates and compiles C++ code that evaluates a system of algebraic

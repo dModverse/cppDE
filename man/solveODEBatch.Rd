@@ -49,7 +49,7 @@ Names must include all of
 
 \item{sens1ini}{Optional numeric matrix of first-order sensitivity
 initial values, interpreted as the Jacobian \eqn{\Phi'(\theta)}.
-Accepts three shapes (see Details): legacy \verb{[n_states, n_active]}
+Accepts three shapes (see Details): state-only \verb{[n_states, n_active]}
 (auto-extended with identity on parameter rows), full
 \verb{[n_states + n_params, M]}, or partial \verb{[k, M]} with row names
 identifying a subset of \code{c(variables, parameters)} (missing rows
@@ -60,7 +60,7 @@ seeding on the active sensitivity basis.}
 \item{sens2ini}{Optional numeric array of second-order sensitivity
 initial values, interpreted as the Hessian tensor
 \eqn{\Phi''(\theta)}. Shapes are analogous to those of \code{sens1ini}:
-\verb{[n_states, n_active, n_active]} (legacy),
+\verb{[n_states, n_active, n_active]} (state-only),
 \verb{[n_states + n_params, M, M]} (full), or \verb{[k, M, M]} with dim-1
 names identifying a subset of \code{c(variables, parameters)} (partial,
 zero-padded). Allowed only when \code{attr(model, "deriv2")} is \code{TRUE}.
@@ -121,14 +121,19 @@ completes, naming the ones that failed. Unlike \code{\link[=solveODE]{solveODE()
 does not discard the results that did succeed until every condition has
 been run.}
 
-\item{seed}{Reverse-mode seed, for a model compiled with
-\code{cppODE(..., derivMode = "reverse")} and required by one. A
-\verb{[n_out, n_states]} matrix or an \verb{[n_out, n_states, n_seed]} array, whose
-first dimension is the solve's own output row count: a root event observes
-at times it was not asked for, so that count is not \code{length(times)} in
-general. What comes back is \verb{w' * dx/dtheta} summed over times and states,
-one column per seed column. Supplying it to a forward model is an error, as
-is leaving it out on a reverse one.}
+\item{seed}{Reverse-mode seed, required by a model compiled with
+\code{derivMode = "reverse"} or \code{"forward-reverse"} (\code{\link[=cppODE]{cppODE()}}) or with
+\code{derivMode = "reverse"} (\code{\link[=cvode]{cvode()}}). A \verb{[n_out, n_states]} matrix or an
+\verb{[n_out, n_states, n_seed]} array, whose first dimension is the solve's
+own output row count: a root event adds output times, so that count is
+not \code{length(times)} in general. What comes back is \verb{w' * dx/dtheta}
+summed over times and states, one column per seed column. Supplying it
+to a forward model is an error, as is leaving it out on a reverse one.
+
+Under \code{"forward-reverse"} the seed may carry its own tangents in theta
+as the attribute \code{seedTangent}, an array
+\verb{[n_out, n_states, n_seed, n_sens]} on the seed's first three dimensions.
+Without it \code{adjoint2} omits the seed's dependence on the parameters.}
 
 \item{adjointGrid}{Whether the sweep also reports the grid it ran on, as
 \verb{$adjointGrid}. \code{FALSE} by default; requires a \code{seed} and the native
@@ -136,9 +141,10 @@ backend. Costs one
 \verb{[n_steps, n_states, n_seed]} array, so it is a diagnostic.}
 
 \item{errWeights}{Optional lambda from an earlier sweep, used as a
-step-size weight. Native backend only. A list with \code{time} (ascending, length \code{n}), \code{lambda}
-(\verb{[n, n_states]}), and optionally \code{breaks} (indices into \code{time} the
-interpolant must not span), \code{gradtol} (default \code{1e-6}) and \code{floor}
+step-size weight. Native backend only. A list with \code{time} (ascending,
+length \code{n}), \code{lambda} (\verb{[n, n_states]}), and optionally \code{breaks}
+(indices into \code{time} the interpolant must not span), \code{gradtol}
+(default \code{1e-6}) and \code{floor}
 (smallest weight as a fraction of the largest, default \code{0}). The
 controller then takes the maximum of its own error norm and
 \eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
@@ -187,8 +193,8 @@ Two situations silently fall back to a serial loop, both deliberately:
 inside a forked child (\code{mclapply()}), because the OpenMP thread pool does
 not survive \code{fork()}; and inside an existing OpenMP region, because the
 caller that spread the wider axis across threads already owns them.
-A model compiled before this entry point existed, or a build without
-OpenMP, falls back to \code{\link[=solveODE]{solveODE()}} per condition.
+A model without a batch entry point, or a build without OpenMP, falls
+back to \code{\link[=solveODE]{solveODE()}} per condition.
 }
 \examples{
 \donttest{

@@ -36,25 +36,25 @@
 #' @param derivMode Which derivative products to build. More than one may be
 #'   named, and the default `c("forward", "reverse")` builds both.
 #'   * `"forward"`: forward-mode AD on `cppde::dual`, delivering `jac`,
-#'     `hess` and `evaluate`.
+#'     `hess`, `evaluate` and `evaluateBatch`.
 #'   * `"reverse"`: the vector-Jacobian product `vjp`, differentiated at
 #'     code-generation time, and `vjp2`, the same contraction over a dual.
 #'     Naming one direction alone omits the other's entries, and its compile
 #'     time with them.
 #'
-#' @return A list with components `func`, `jac`, `hess`, `evaluate` and,
-#'   under `derivMode = "reverse"`, `vjp` and `vjp2` (`NULL` when not
-#'   generated). `vjp2(vars, params, w, vx, vp, dw)` runs the same contraction
-#'   over a dual, which is forward over reverse: `vx` and `vp` are the tangents
-#'   the inputs carry, `dw` those of the cotangent, and it returns `dwx` and
-#'   `dwp` beside `y`, `wx` and `wp`. `vjp(vars,
-#'   params, w)` is the reverse counterpart of `evaluate`: it contracts the
-#'   Jacobian with a cotangent `w` of the outputs, at a cost independent of the
-#'   number of upstream parameters, and returns `y`, `wx` and `wp`. `w` is
-#'   `[n_obs, n_out]` or `[n_obs, n_out, n_seed]`, and `wp` sums over
-#'   observations because the parameters are shared across them. Carries
-#'   attributes `equations`, `variables`, `parameters`, `fixed`, `modelname`,
-#'   `srcfile` and `derivMode`.
+#' @return A list with components `func`, `jac`, `hess`, `evaluate`,
+#'   `evaluateBatch`, `vjp` and `vjp2`, each `NULL` when not generated.
+#'   `jac`, `hess`, `evaluate` and `evaluateBatch` need `"forward"`;
+#'   `evaluateBatch(sets, cores, deriv2)` runs `evaluate` over a list of
+#'   argument lists in one call. `vjp` and `vjp2` need `"reverse"`.
+#'   `vjp(vars, params, w)` contracts the Jacobian with a cotangent `w` of the
+#'   outputs, `[n_obs, n_out]` or `[n_obs, n_out, n_seed]`, and returns `y`,
+#'   `wx` and `wp`; `wp` sums over observations because the parameters are
+#'   shared across them. `vjp2(vars, params, w, vx, vp, dw)` differentiates
+#'   that contraction along the tangents `vx`, `vp` of the inputs and `dw` of
+#'   the cotangent, and adds `dwx` and `dwp`. Carries attributes `equations`,
+#'   `variables`, `parameters`, `fixed`, `modelname`, `srcfile` and
+#'   `derivMode`.
 #'
 #' @seealso [compile()] for compilation; [cppODE()] and [cvode()] for ODE
 #'   integration; `vignette("Methods", package = "cppDE")`.
@@ -84,7 +84,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   if (!is.null(fixed)) { variables <- setdiff(variables, fixed); parameters <- union(parameters, fixed) }
   innames <- variables; diff_params <- setdiff(parameters, fixed); diff_syms <- c(variables, diff_params)
   if (!dir.exists(outdir)) stop("outdir does not exist: ", outdir)
-  modelname <- modelname %||% paste0("f", paste(sample(c(letters, 0:9), 8, TRUE), collapse = ""))
+  modelname <- modelname %||% randomModelname("f")
   modelname <- unique_modelname(modelname)
 
   # --- C++ codegen ---
@@ -326,8 +326,8 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
 .fun_impl <- function(st, vars, params = numeric(0), attach.input = FALSE, fixed = NULL) {
   chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
-  # `.C()` copies every argument in and every result out; the _c entries take
-  # them by reference. Objects built by an older cppDE have no _c symbol.
+  # The _c entry takes its arguments by reference; the .C() entry, used when
+  # no _c symbol exists, copies every argument in and every result out.
   symc <- .nativeSym(paste0(st$modelname, "_eval_c"))
   sym <- if (is.null(symc)) .nativeSym(paste0(st$modelname, "_eval")) else NULL
   if (!is.null(symc)) {
@@ -342,13 +342,9 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
 # --- Reverse path ---
 
-# One vector-Jacobian product per seed row: given the cotangent w of the
-# outputs, return the cotangents of the variables and of the parameters. Cost is
-# independent of the upstream parameter count, unlike .call_eval_ad(), which
-# propagates one tangent per parameter.
-#
-# w is [n_obs, n_out] for a single seed or [n_obs, n_out, n_seed] for several.
-# wp is summed over observations because the parameters are shared across them.
+# Vector-Jacobian product: cotangents of the variables and parameters from a
+# cotangent w of the outputs, [n_obs, n_out] or [n_obs, n_out, n_seed].
+# wp sums over observations because the parameters are shared across them.
 .vjp_impl <- function(st, vars, params = numeric(0), w) {
   chk <- .checkInputs(st, vars, params); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
   n_vars <- length(st$innames); n_params <- length(st$parameters)

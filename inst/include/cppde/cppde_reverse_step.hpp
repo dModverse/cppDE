@@ -7,8 +7,8 @@
  accepted step; the adjoint of that map is written in cppde_adjoint_step.hpp.
 
  The controller is not differentiated: the size is read off the checkpoint and
- the grid is a constant. That is Bock's internal numerical differentiation, and
- dev/adjoint-plan.md says why the alternative is not the wanted quantity.
+ the grid is a constant (Bock's internal numerical differentiation, see
+ vignette("Methods"), "Internal numerical differentiation").
 
  Acceptance, order, iteration and rebuild counts are piecewise constant and stay
  control decisions; what is smooth within one control path is differentiated.
@@ -79,9 +79,8 @@ struct has_error_constant<S, std::void_t<decltype(std::declval<const S&>().error
 // ----------------------------------------------------------------------------
 //  tsit5: an explicit one-step method carries nothing across a step boundary.
 //
-//  FSAL is an optimisation, not a dependence. The recycled k1 is f(x, t) at the
-//  checkpointed x, so the replay recomputes it bit for bit. Storing k7 would save
-//  one right-hand-side call and cost the tape the dependence of k1 on x.
+//  FSAL is an optimisation, not a dependence: the recycled k1 is f(x, t) at the
+//  checkpointed x, so the replay recomputes it bit for bit and k7 is not stored.
 // ----------------------------------------------------------------------------
 
 template<class Stepper, class T>

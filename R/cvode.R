@@ -25,9 +25,6 @@
 #' install time, not per model; [install_libs()] enables the LAPACK
 #' interface whenever R reports a BLAS. Sparse Jacobians use KLU.
 #'
-#' It concerns the CVODE backend alone. [cppODE()] reaches LAPACK
-#' through R for every dense factorisation regardless.
-#'
 #' @inheritParams cppODE
 #' @param includeTimeZero Logical. Ensure that `0` is part of the integration
 #'   times, as [cppODE()] does. Both backends then return the same output grid.
@@ -37,13 +34,9 @@
 #'   them, so fewer steps means less interpolation error and more memory.
 #'   Ignored under `derivMode = "forward"`.
 #' @param derivMode Direction the derivatives are taken in. `"forward"` (default)
-#'   is the CVODES staggered forward sensitivity solver, driven by `deriv`.
-#'   `"reverse"` is CVODES adjoint sensitivity analysis: the forward pass
-#'   stores checkpoints, and one backward solve per seed column integrates
-#'   \eqn{\lambda' = -J^T \lambda} with the quadrature
-#'   \eqn{-(\partial f/\partial p)^T \lambda} riding along. It needs
-#'   `deriv = FALSE`, and refuses `events` and `rootfunc`: CVODES integrates
-#'   the adjoint over checkpointed states and cannot be told about a jump.
+#'   is the CVODES forward sensitivity solver, driven by `deriv`. `"reverse"`
+#'   is CVODES adjoint sensitivity analysis, one backward solve per seed
+#'   column. It needs `deriv = FALSE` and refuses `events` and `rootfunc`.
 #' @param stepTrace Logical. Compile to record per-step diagnostics
 #'   (returned as `$trace` from [solveODE()]). Without `events` or
 #'   `rootfunc` the integrator is driven in `CV_ONE_STEP` mode and one row
@@ -177,7 +170,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
 
   # --- Unique model name ---
   if (is.null(modelname)) {
-    modelname <- paste(c("c", sample(c(letters, 0:9), 8, TRUE)), collapse = "")
+    modelname <- randomModelname("c")
   }
   modelname <- unique_modelname(modelname)
 
@@ -257,18 +250,14 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   attr(modelname, "deriv")       <- isTRUE(deriv)
   attr(modelname, "deriv2")      <- FALSE
   attr(modelname, "derivMode")   <- derivMode
-  # CVODE always uses runtime-sized sensitivity slots (CVodeSensInit1 allocates
-  # Ns_active vectors at solve time), so it's effectively heap AD from the
-  # compile-time-width perspective.
   attr(modelname, "sparse")      <- use_sparse
   attr(modelname, "lapackDense") <- use_lapack
   attr(modelname, "method")      <- method
   attr(modelname, "useNDF")      <- NA  # not meaningful for CVODE
   attr(modelname, "backend")     <- "cvode"
 
-  # The sens dim defaults to model-parameter names (legacy / identity seeding
-  # basis). solveODE() overrides this per call when sens1ini is supplied with
-  # full Phi'(theta) shape (uses colnames(sens1ini) or theta1..M).
+  # The sens dim defaults to model-parameter names; solveODE() overrides it per
+  # call when sens1ini carries a full Phi' shape.
   attr(modelname, "dimNames") <- if (deriv) {
     list(time = "time", variable = variables, sens = sens_names)
   } else {

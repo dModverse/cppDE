@@ -547,10 +547,8 @@ public:
 template<class T, unsigned N>
 inline auto value_of(const dual<T, N>& d) { return value_of(d.x()); }
 
-// dual2nd<T, N> is now a distinct class (cppde_dual2nd.hpp): a public-
-// inheritance refinement of dual<dual<T, N>, N> with hand-derived symmetric
-// math primitives. The previous typedef alias has been removed; downstream
-// code should #include <cppde/cppde_dual2nd.hpp> when needed.
+// dual2nd<T, N>, a refinement of dual<dual<T, N>, N>, lives in
+// cppde_dual2nd.hpp.
 
 } // namespace cppde
 

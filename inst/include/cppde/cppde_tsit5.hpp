@@ -2,8 +2,7 @@
  Tsitouras 5(4) explicit Runge-Kutta stepper.
 
  A 7-stage, 5th-order explicit method with embedded 4th-order error
- estimator and FSAL (First Same As Last) property.  Widely used as
- the default non-stiff solver in DifferentialEquations.jl.
+ estimator and FSAL (First Same As Last) property.
 
  Reference:
  Tsitouras, Ch. (2011). "Runge-Kutta pairs of order 5(4) satisfying
@@ -105,10 +104,9 @@ public:
     if constexpr (detail::is_dynamic_dual<value_type>::value) {
       if (n_sens == 0) return;
 
-      // Bind the seven k stages into one contiguous tangent block via
-      // m_K. This lets the FSAL recycle (copy stage 7 -> stage 1
-      // between steps) be a flat std::memcpy on the column-7 slice
-      // instead of a per-element copy + slab pointer swap.
+      // Bind the seven k stages into one contiguous tangent block via m_K,
+      // so the FSAL recycle (stage 7 -> stage 1 between steps) is a copy of
+      // the column-7 slice.
       const std::size_t n_k = m_k1.m_v.size();
       bool ks_ready = (n_k > 0)
                    && (m_k2.m_v.size() == n_k) && (m_k3.m_v.size() == n_k)
@@ -247,20 +245,15 @@ public:
   // ====================================================================
   //  Dense output
   //
-  //  The Tsit5 continuous extension uses the 7 FSAL stages to build
-  //  a 4th-order interpolant.  Coefficients from Tsitouras (2011),
-  //  Section 3.
+  //  A cubic Hermite interpolant over (x_old, x_new, h k1, h k7), see
+  //  dense_weights() below.
   // ====================================================================
 
   void prepare_dense_output()
   {
-  // After an accepted step FSAL is only flagged valid: the recycle of k7 into
-  // the next k1 happens as a memcpy at the start of the next do_step.
-  //
-  //   m_k1 = f(x_old, t_old), m_k7 = f(x_new, t_new)
-  //
-  // calc_state builds the dense coefficients lazily from k1..k7, so the stages
-  // must survive until the next do_step.
+  // After an accepted step FSAL is only flagged valid: k7 is copied into the
+  // next k1 at the start of the next do_step. Until then calc_state reads
+  // m_k1 = f(x_old, t_old) and m_k7 = f(x_new, t_new).
     m_fsal_valid = true;
   }
 
@@ -398,8 +391,8 @@ private:
   detail::tangent_slab<value_type> m_xtmp_slab;
   // Permanently-empty stub for the externally-owned input state x (controller
   // owns it; it is not slab-bound here). vec_*_with_slab sees primed=false
-  // and falls through to the per-element loop. mutable so we can hand out
-  // non-const refs to the helper signature without lying about constness.
+  // and falls through to the per-element loop. Mutable because the helper
+  // signatures take non-const references.
   mutable detail::tangent_slab<value_type> m_x_in_unslabbed;
   unsigned m_n_sens = 0;
 

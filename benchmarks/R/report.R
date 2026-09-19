@@ -100,19 +100,20 @@ write_run_readme <- function(df, outdir, info = list()) {
     s2 <- df[df$mode == "sens2" & df$ok, , drop = FALSE]
     if (!nrow(s2)) return(NULL)
     pl <- stats::aggregate(time_ms ~ problem,
-                           data = df[df$mode == "nosens" & df$ok, , drop = FALSE],
+                           data = df[df$mode == "nosens" & df$ok &
+                                       df$solver == "cppDE_ndf", , drop = FALSE],
                            FUN = stats::median)
     names(pl)[2] <- "plain"
-    m <- merge(stats::aggregate(cbind(time_ms, nsens) ~ problem, data = s2,
+    m <- merge(stats::aggregate(cbind(time_ms, nsens) ~ problem + deriv, data = s2,
                                 FUN = stats::median), pl, by = "problem")
     if (!nrow(m)) return(NULL)
-    m <- m[order(-m$time_ms / m$plain), ]
-    c("", "**Second order**: cppDE only, CVODES has no second-order",
-      "sensitivities, so this is a cost, not a comparison:", "",
-      "| problem | M | plain [ms] | Hessian [ms] | factor |",
-      "|---|---:|---:|---:|---:|",
-      sprintf("| %s | %d | %.2f | %.1f | %.0f× |", m$problem, as.integer(m$nsens),
-              m$plain, m$time_ms, m$time_ms / m$plain))
+    m <- m[order(m$problem, m$deriv), ]
+    c("", "**Second order**: the Hessian of the summed outputs, cppDE only;",
+      "CVODES has no second-order sensitivities, so this is a cost, not a comparison:", "",
+      "| problem | mode | M | plain [ms] | Hessian [ms] | factor |",
+      "|---|---|---:|---:|---:|---:|",
+      sprintf("| %s | %s | %d | %.2f | %.1f | %.0f× |", m$problem, m$deriv,
+              as.integer(m$nsens), m$plain, m$time_ms, m$time_ms / m$plain))
   })
 
   ## -- what ran ---------------------------------------------------------

@@ -2,13 +2,42 @@
 
 skip_on_cran()
 
+# -- Models --------------------------------------------------------------------
+
+# Every model the file solves, one shared object per backend. Tests that compare
+# an identity seeding with a reparametrised one call the same model twice.
+rhs_x  <- c(x = "-k*x")
+rhs_AB <- c(A = "-k1*A + k2*B",
+            B =  "k1*A - k2*B")
+
+mod_x    <- cppODE(rhs_x, modelname = "rep_x", deriv = TRUE, compile = FALSE)
+mod_x_d2 <- cppODE(rhs_x, modelname = "rep_x_d2", deriv = TRUE, deriv2 = TRUE,
+                   compile = FALSE)
+mod_AB    <- cppODE(rhs_AB, modelname = "rep_AB", deriv = TRUE, compile = FALSE)
+mod_AB_d2 <- cppODE(rhs_AB, modelname = "rep_AB_d2", deriv = TRUE, deriv2 = TRUE,
+                    compile = FALSE)
+mod_A_d2  <- cppODE(c(A = "-k*A"), modelname = "rep_A_d2", deriv = TRUE,
+                    deriv2 = TRUE, compile = FALSE)
+compile(mod_x, mod_x_d2, mod_AB, mod_AB_d2, mod_A_d2,
+        output = "test_ode_reparam", cores = 1)
+
+if (isTRUE(cvodeConfig$available)) {
+  evt_x <- data.frame(var = "x", time = "t_e", value = "dose",
+                      method = "add", root = NA, stringsAsFactors = FALSE)
+  cv_AB   <- cvode(rhs_AB, modelname = "rep_AB_cv", deriv = TRUE, compile = FALSE)
+  cv_x    <- cvode(rhs_x, modelname = "rep_x_cv", deriv = TRUE, compile = FALSE)
+  cv_x_ev <- cvode(rhs_x, events = evt_x, modelname = "rep_x_ev_cv", deriv = TRUE,
+                   compile = FALSE)
+  compile(cv_AB, cv_x, cv_x_ev, output = "test_ode_reparam_cvode", cores = 1)
+}
+
 # -- Simple scalar log-transform -----------------------------------------------
 
 test_that("log-transform reparam matches analytical dx/dtheta", {
   # Model: dx/dt = -k*x, x(0) = x0. p = (x0, k).
   # Reparametrize: theta = (x0, log(k)) -> Phi(theta) = (theta_x0, exp(theta_lk))
   # Phi_prime = [[1, 0], [0, k]]
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_log", deriv = TRUE)
+  mod <- mod_x
 
   pars <- c(x = 1.0, k = 0.5)
   Phi_prime <- matrix(c(1, 0, 0, 0.5), nrow = 2, ncol = 2,
@@ -31,21 +60,16 @@ test_that("log-transform reparam matches analytical dx/dtheta", {
 # -- Parity: direct integration vs post-hoc S * Phi' --------------------------
 
 test_that("reparam sens equals post-hoc S * Phi' (two-state model)", {
-  rhs <- c(A = "-k1*A + k2*B",
-           B =  "k1*A - k2*B")
-
   pars <- c(A = 1.0, B = 0.0, k1 = 0.3, k2 = 0.1)
   tvec <- seq(0, 5, length.out = 21)
 
   tight <- list(abstol = 1e-10, reltol = 1e-10)
 
-  # Identity model
-  mod_id <- cppODE(rhs, modelname = "rep_id", deriv = TRUE)
-  res_id <- solveODE(mod_id, tvec, pars,
+  # Identity seeding
+  res_id <- solveODE(mod_AB, tvec, pars,
                      abstol = tight$abstol, reltol = tight$reltol)
 
-  # Reparametrized model: theta = (A0, B0, log(k1), log(k2))
-  mod_th <- cppODE(rhs, modelname = "rep_th", deriv = TRUE)
+  # Reparametrized: theta = (A0, B0, log(k1), log(k2))
   k1 <- pars["k1"]; k2 <- pars["k2"]
   Phi_prime <- matrix(
     c(1, 0, 0, 0,
@@ -56,7 +80,7 @@ test_that("reparam sens equals post-hoc S * Phi' (two-state model)", {
     dimnames = list(c("A", "B", "k1", "k2"),
                     c("A0", "B0", "log_k1", "log_k2"))
   )
-  res_th <- solveODE(mod_th, tvec, pars, sens1ini = Phi_prime,
+  res_th <- solveODE(mod_AB, tvec, pars, sens1ini = Phi_prime,
                      abstol = tight$abstol, reltol = tight$reltol)
 
   # Post-hoc: S_theta[t, i, j] = sum_p S_id[t, i, p] * Phi_prime[p, j]
@@ -75,7 +99,7 @@ test_that("reparam sens equals post-hoc S * Phi' (two-state model)", {
 test_that("rank-reduced reparam integrates over smaller theta space", {
   # Model: dx/dt = -k*x
   # Reparametrize to theta = (log(k)), with x0 = exp(theta) (ties IC to rate).
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_rank1", deriv = TRUE)
+  mod <- mod_x
 
   k <- 0.4; theta <- log(k); x0 <- exp(theta)   # x0 = k by this parametrization
   pars <- c(x = x0, k = k)
@@ -98,13 +122,13 @@ test_that("rank-reduced reparam integrates over smaller theta space", {
 # -- Guard rails --------------------------------------------------------------
 
 test_that("identity seeding works when sens1ini is NULL", {
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_missing_sens", deriv = TRUE)
+  mod <- mod_x
   res <- expect_silent(solveODE(mod, c(0, 1), c(x = 1, k = 0.5)))
   expect_equal(dim(res$sens1), c(2L, 1L, 2L))
 })
 
 test_that("reparam rejects 'fixed' argument", {
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_fixed_reject", deriv = TRUE)
+  mod <- mod_x
   Phi_prime <- matrix(c(1, 0, 0, 0.5), 2, 2)
   expect_error(solveODE(mod, c(0, 1), c(x = 1, k = 0.5),
                         sens1ini = Phi_prime, fixed = "k"),
@@ -117,8 +141,7 @@ test_that("deriv2 + log-reparam matches analytical d^2x/dtheta^2", {
   # p = Phi(theta) = (theta_x0, exp(theta_lk))
   # Phi'  = [[1, 0], [0, k]]
   # Phi'' = all zero except Phi''[k_row, theta_lk, theta_lk] = k
-  mod <- cppODE(c(x = "-k*x"), modelname = "d2_rep_log",
-                deriv = TRUE, deriv2 = TRUE)
+  mod <- mod_x_d2
 
   pars <- c(x = 1.0, k = 0.5); k <- 0.5; x0 <- 1.0
   Phi_prime <- matrix(c(1, 0, 0, k), 2, 2)
@@ -149,8 +172,6 @@ test_that("deriv2 + log-reparam matches analytical d^2x/dtheta^2", {
 test_that("CVODE reparam matches Native reparam (no events)", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
-  rhs <- c(A = "-k1*A + k2*B",
-           B =  "k1*A - k2*B")
   pars <- c(A = 1.0, B = 0.0, k1 = 0.3, k2 = 0.1)
   tvec <- seq(0, 5, length.out = 11)
   tight <- list(abstol = 1e-10, reltol = 1e-10)
@@ -163,10 +184,8 @@ test_that("CVODE reparam matches Native reparam (no events)", {
       0, 0, 0, k2),
     nrow = 4, ncol = 4, byrow = TRUE)
 
-  mod_native <- cppODE(rhs, modelname = "rep_par_nat",
-                       deriv = TRUE)
-  mod_cvode  <- cvode(rhs,  modelname = "rep_par_cv",
-                      deriv = TRUE)
+  mod_native <- mod_AB
+  mod_cvode  <- cv_AB
 
   res_n <- solveODE(mod_native, tvec, pars, sens1ini = Phi_prime,
                     abstol = tight$abstol, reltol = tight$reltol)
@@ -184,9 +203,6 @@ test_that("CVODE reparam with time event: chain-rule saltation (post-hoc parity)
   # dx/dt = -k*x with a parameterised-time event: at t = t_e, x += dose.
   # Reparametrize theta = (x0, log(k), t_e, dose); Phi'(theta) has
   # a non-identity on the k row (dp_k/dtheta_lk = k).
-  eqns <- c(x = "-k*x")
-  evt  <- data.frame(var = "x", time = "t_e", value = "dose",
-                     method = "add", root = NA, stringsAsFactors = FALSE)
   pars <- c(x = 1.0, k = 0.3, t_e = 2.0, dose = 0.5)
 
   k <- pars["k"]
@@ -202,15 +218,11 @@ test_that("CVODE reparam with time event: chain-rule saltation (post-hoc parity)
   tight <- list(abstol = 1e-10, reltol = 1e-10)
 
   # CVODE non-reparam (reference in p-coordinates, with event saltation)
-  mod_id <- cvode(eqns, events = evt, modelname = "rep_ev_cv_id",
-                  deriv = TRUE)
-  res_id <- solveODE(mod_id, tvec, pars,
+  res_id <- solveODE(cv_x_ev, tvec, pars,
                      abstol = tight$abstol, reltol = tight$reltol)
 
   # CVODE reparam (uses chain-rule saltation internally)
-  mod_cv <- cvode(eqns, events = evt, modelname = "rep_ev_cv_th",
-                  deriv = TRUE)
-  res_cv <- solveODE(mod_cv, tvec, pars, sens1ini = Phi_prime,
+  res_cv <- solveODE(cv_x_ev, tvec, pars, sens1ini = Phi_prime,
                      abstol = tight$abstol, reltol = tight$reltol)
 
   # Post-hoc composition: S_theta[t, i, j] = sum_p S_id[t, i, p] * Phi_prime[p, j]
@@ -225,21 +237,15 @@ test_that("CVODE reparam with time event: chain-rule saltation (post-hoc parity)
 
 test_that("sens2 chain-rule parity: direct vs post-hoc composition", {
   # Nonlinear reparametrization over a 2-state model: theta -> p
-  rhs <- c(A = "-k1*A + k2*B",
-           B =  "k1*A - k2*B")
-
   pars <- c(A = 1.0, B = 0.2, k1 = 0.3, k2 = 0.1)
   tvec <- seq(0, 3, length.out = 7)
   tight <- list(abstol = 1e-10, reltol = 1e-10)
 
-  # Identity model with deriv2 for post-hoc composition
-  mod_id <- cppODE(rhs, modelname = "d2_par_id", deriv = TRUE, deriv2 = TRUE)
-  res_id <- solveODE(mod_id, tvec, pars,
+  # Identity seeding with deriv2 for post-hoc composition
+  res_id <- solveODE(mod_AB_d2, tvec, pars,
                      abstol = tight$abstol, reltol = tight$reltol)
 
-  # Reparametrized model: theta = (A0, B0, log(k1), log(k2))
-  mod_th <- cppODE(rhs, modelname = "d2_par_th",
-                   deriv = TRUE, deriv2 = TRUE)
+  # Reparametrized: theta = (A0, B0, log(k1), log(k2))
   k1 <- pars["k1"]; k2 <- pars["k2"]
   Phi_prime <- matrix(
     c(1, 0, 0,  0,
@@ -252,7 +258,7 @@ test_that("sens2 chain-rule parity: direct vs post-hoc composition", {
   Phi_pp[3, 3, 3] <- k1  # d^2 k1 / d(log_k1)^2 = k1
   Phi_pp[4, 4, 4] <- k2  # d^2 k2 / d(log_k2)^2 = k2
 
-  res_th <- solveODE(mod_th, tvec, pars,
+  res_th <- solveODE(mod_AB_d2, tvec, pars,
                      sens1ini = Phi_prime, sens2ini = Phi_pp,
                      abstol = tight$abstol, reltol = tight$reltol)
 
@@ -287,8 +293,7 @@ test_that("sens2 chain-rule parity: direct vs post-hoc composition", {
 
 test_that("native: a theta subset integrates on its own", {
   # Call with only M = 2 active thetas.
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_M_lt_ntheta",
-                deriv = TRUE)
+  mod <- mod_x
   pars <- c(x = 1.0, k = 0.5); k <- 0.5; x0 <- 1.0
   tvec <- seq(0, 2, by = 0.5)
 
@@ -319,8 +324,7 @@ test_that("native: a theta subset integrates on its own", {
 })
 
 test_that("native deriv2: a theta subset integrates a partial Phi''", {
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_M_lt_ntheta_d2",
-                deriv = TRUE, deriv2 = TRUE)
+  mod <- mod_x_d2
   pars <- c(x = 1.0, k = 0.5); k <- 0.5; x0 <- 1.0
   tvec <- c(0, 0.5, 1, 1.5, 2)
 
@@ -350,8 +354,6 @@ test_that("native deriv2: a theta subset integrates a partial Phi''", {
 test_that("CVODE: a theta subset matches the native reparam", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
-  rhs <- c(A = "-k1*A + k2*B",
-           B =  "k1*A - k2*B")
   pars <- c(A = 1.0, B = 0.0, k1 = 0.3, k2 = 0.1)
   tvec <- seq(0, 5, length.out = 11)
   tight <- list(abstol = 1e-10, reltol = 1e-10)
@@ -366,8 +368,8 @@ test_that("CVODE: a theta subset matches the native reparam", {
                    dimnames = list(c("A", "B", "k1", "k2"),
                                    c("log_k1", "log_k2")))
 
-  mod_nat <- cppODE(rhs, modelname = "rep_M_lt_nat", deriv = TRUE)
-  mod_cv  <- cvode(rhs,  modelname = "rep_M_lt_cv",  deriv = TRUE)
+  mod_nat <- mod_AB
+  mod_cv  <- cv_AB
 
   res_n <- solveODE(mod_nat, tvec, pars, sens1ini = Phi_M2,
                     abstol = tight$abstol, reltol = tight$reltol)
@@ -381,8 +383,7 @@ test_that("CVODE: a theta subset matches the native reparam", {
 })
 
 test_that("same model supports per-call varying M (condition heterogeneity)", {
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_varying_M",
-                deriv = TRUE)
+  mod <- mod_x
   pars <- c(x = 1.0, k = 0.5); k <- 0.5; x0 <- 1.0
   tvec <- seq(0, 2, by = 0.5)
 
@@ -411,8 +412,7 @@ test_that("same model supports per-call varying M (condition heterogeneity)", {
 })
 
 test_that("M = 0 fast-path: empty sens slot, state integration intact", {
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_M_zero",
-                deriv = TRUE)
+  mod <- mod_x
   pars <- c(x = 1.0, k = 0.5)
   tvec <- seq(0, 2, by = 0.5)
 
@@ -429,8 +429,7 @@ test_that("M = 0 fast-path: empty sens slot, state integration intact", {
 test_that("CVODE: M = 0 fast-path skips sensitivity integration", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
-  mod <- cvode(c(x = "-k*x"), modelname = "rep_M_zero_cv",
-               deriv = TRUE)
+  mod <- cv_x
   pars <- c(x = 1.0, k = 0.5)
   tvec <- seq(0, 2, by = 0.5)
 
@@ -447,9 +446,7 @@ test_that("CVODE: M = 0 fast-path skips sensitivity integration", {
 # -- Partial-row sens1ini (rowname-driven implicit fixed) --------------------
 
 test_that("partial-row sens1ini matches zero-padded full Phi'", {
-  rhs <- c(A = "-k1*A + k2*B",
-           B =  "k1*A - k2*B")
-  mod <- cppODE(rhs, modelname = "rep_partial", deriv = TRUE)
+  mod <- mod_AB
   pars <- c(A = 1.0, B = 0.0, k1 = 0.3, k2 = 0.1)
   tvec <- seq(0, 5, length.out = 11)
   tight <- list(abstol = 1e-10, reltol = 1e-10)
@@ -473,9 +470,7 @@ test_that("partial-row sens1ini matches zero-padded full Phi'", {
 })
 
 test_that("partial-row sens1ini accepts mixed state/param rows in any order", {
-  rhs <- c(A = "-k1*A + k2*B",
-           B =  "k1*A - k2*B")
-  mod <- cppODE(rhs, modelname = "rep_partial_mix", deriv = TRUE)
+  mod <- mod_AB
   pars <- c(A = 1.0, B = 0.0, k1 = 0.3, k2 = 0.1)
   tvec <- seq(0, 3, length.out = 7)
   tight <- list(abstol = 1e-10, reltol = 1e-10)
@@ -504,9 +499,7 @@ test_that("partial-row sens1ini accepts mixed state/param rows in any order", {
 })
 
 test_that("partial-row sens1ini without rownames is rejected", {
-  rhs <- c(A = "-k1*A + k2*B",
-           B =  "k1*A - k2*B")
-  mod <- cppODE(rhs, modelname = "rep_partial_noname", deriv = TRUE)
+  mod <- mod_AB
   pars <- c(A = 1.0, B = 0.0, k1 = 0.3, k2 = 0.1)
   # 1 row, n_active = 4 columns, no rownames -> ambiguous.
   Phi_bad <- matrix(0, nrow = 1, ncol = 4)
@@ -518,8 +511,7 @@ test_that("partial-row sens1ini without rownames is rejected", {
 })
 
 test_that("partial-row sens1ini with unknown rownames is rejected", {
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_partial_unknown",
-                deriv = TRUE)
+  mod <- mod_x
   pars <- c(x = 1.0, k = 0.5)
   Phi_bad <- matrix(0.5, nrow = 1, ncol = 1,
                     dimnames = list("not_a_name", "theta"))
@@ -531,8 +523,7 @@ test_that("partial-row sens1ini with unknown rownames is rejected", {
 })
 
 test_that("partial-row sens1ini rejects 'fixed' argument", {
-  mod <- cppODE(c(x = "-k*x"), modelname = "rep_partial_fixed",
-                deriv = TRUE)
+  mod <- mod_x
   Phi_partial <- matrix(0.5, nrow = 1, ncol = 1,
                         dimnames = list("k", "log_k"))
   expect_error(
@@ -543,9 +534,7 @@ test_that("partial-row sens1ini rejects 'fixed' argument", {
 })
 
 test_that("partial-row sens2ini matches zero-padded full Phi''", {
-  rhs <- c(A = "-k*A")
-  mod <- cppODE(rhs, modelname = "rep_partial_d2",
-                deriv = TRUE, deriv2 = TRUE)
+  mod <- mod_A_d2
   pars <- c(A = 1.0, k = 0.5)
   tvec <- seq(0, 2, by = 0.5)
   tight <- list(abstol = 1e-10, reltol = 1e-10)

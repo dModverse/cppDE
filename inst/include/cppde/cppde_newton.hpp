@@ -6,17 +6,10 @@
  solve for a single NDF/BDF step.  Takes the LU solver by reference --
  works with any lu_W<Value, is_sparse>.
 
- Unified code path for both AD and non-AD types:
-
- For AD types (F<double,N>, F<F<double,N>,M>, ...):
- lu.solve(tempv) performs full IFT at every iteration, giving correct
- value AND derivative corrections each time.  Newton convergence is
- checked AD-aware (derivative components included) so that sensitivity
- blow-ups trigger fresh Jacobian evaluations.
-
- For non-AD types (double):
- lu.solve() is a standard forward/back-substitution.
- wrms_norm_correction == wrms_norm (no derivative components).
+ One code path for AD and non-AD types. For cppde::dual / dual2nd,
+ lu.solve(tempv) runs the full IFT at every iteration, so value and tangents
+ are corrected together, and with sens_err_con the convergence test includes
+ the tangents. For double it is a plain forward/back substitution.
 
  Separated from the NDF stepper for testability.
 
@@ -230,10 +223,8 @@ double wrms_max_ewt(const std::vector<T>& v,
 // ============================================================================
 //  ndf_newton_solve
 //
-//  Performs one Newton iteration for one NDF/BDF step.
-//
-//  For AD types: adaptive scalar-solve / IFT split.
-//  For double:   standard Newton (no AD overhead).
+//  The Newton iteration for one NDF/BDF step, with the full IFT solve at
+//  every iteration for AD types.
 // ============================================================================
 
 template<class LU, class DerivFunc, class Value, class TimeType>

@@ -195,16 +195,7 @@ def generate_cvode_cpp(
             if direction not in (-1, 0, 1):
                 raise ValueError(
                     f"Event {i}: direction must be -1, 0, or 1, got {direction}")
-            terminal_raw = _get("terminal", i)
-            if isinstance(terminal_raw, bool):
-                terminal = terminal_raw
-            elif terminal_raw is None:
-                terminal = False
-            else:
-                try:
-                    terminal = bool(terminal_raw)
-                except Exception:
-                    terminal = False
+            terminal = str(_get("terminal", i)).lower() == "true"
             item.update({
                 "r": rn,
                 "dr_dx": [(j, lines(b, " " * 10)) for j, b in ev.cases_x(rn)],
@@ -289,8 +280,8 @@ def generate_cvode_cpp(
         "jac_nnz_rows": jac_rows,
         "jac_nnz_cols": jac_cols,
         "use_sparse": use_sparse,
-        "use_lapack": use_lapack,
         "compile_defs": compile_defs,
+        "use_lapack": use_lapack,
         "codegen_stats": {"strategy": strategy, "lin_rows": model.nlin,
                           "graph_nodes": len(g),
                           "seconds": time.perf_counter() - t_start},
@@ -350,12 +341,9 @@ def _render_source(
     has_root_events = len(root_events) > 0
     has_events      = has_time_events or has_root_events
 
-    # PchipForcing storage lives in UserData so the SUNDIALS callbacks and the event
-    # lambdas can read it. `F` is always present, empty without forcings, so the
-    # lambdas capture it uniformly. Forcings reach df/dx but never df/dp.
-    need_pchip = has_forcings  # include the PCHIP header
-    # Event lambdas always capture F even when no forcings, so UserData
-    # must have F available.  With events-only we still include pchip.
+    # UserData holds the PchipForcing storage and F whenever forcings or event
+    # lambdas read it; the event lambdas capture F even without forcings.
+    need_pchip = has_forcings
     if has_events and not has_forcings:
         need_pchip = True
 
@@ -371,9 +359,8 @@ def _render_source(
         forcing_ud_members = ""
         forcing_local = ""
 
-    # Root-event fire counters live in UserData so the C-style root_fn
-    # callback can see them (they're modified from the main loop).  Kept
-    # small so unused models pay nothing extra.
+    # Root-event fire counters live in UserData, where root_fn reads them and
+    # the main loop increments them.
     events_ud_members = (
         "  std::vector<int> root_fired;           // per event-root fire count\n"
         "  int              maxroot = 1;          // cap from solveODE(maxroot=)\n"
@@ -572,8 +559,6 @@ static std::vector<RootEvent> build_root_events(const double* params,
 """
 
     # ---- Conditional sens code snippets ----
-    # Defined here (rather than alongside the linear-solver setup lower
-    # down) because the event and main-loop blocks below reference them.
     if deriv:
         phi_rows = n_states + n_params
         sens_init_block = f"""  if (Ns_active > 0) {{
@@ -909,7 +894,6 @@ static std::vector<RootEvent> build_root_events(const double* params,
     # root event, -1 for an error, with return_code carrying the raw CVODE flag.
     # On 1 and 2 the caller pushes the final output row.
     if has_events:
-        time_check = "has_time_events = true; (void)has_time_events;"  # placeholder
         if deriv:
             sens_get_lambda = """      {
         int flag_gs = CVodeGetSens(cvode_mem, &tret, yS);
@@ -1018,12 +1002,9 @@ static std::vector<RootEvent> build_root_events(const double* params,
     else:
         do_cvode_step_lambda = ""
 
-    # --- Zero-copy sink: the batch entry can size the results before the solve
-    # when nothing dynamic adds points. A time event adds a row unless its time is
-    # already requested, and those times are per-condition; roots stay dynamic.
-    # Under ASA the result carries an adjoint the pre-allocated skeleton has no
-    # slot for, and the skeleton is fixed before the solve runs. The native
-    # emitter declines the sink for the same reason.
+    # --- Zero-copy sink: the batch entry sizes the results before the solve when
+    # the grid is fixed (no root event, no rootfunc, no ASA adjoint). Time-event
+    # rows are counted per condition through <model>_fixed_event_times.
     cv_fixed_grid = (len(root_events) == 0 and rootfunc_mode == "none"
                      and not reverse)
     n_cv_ev = len(time_events) if cv_fixed_grid else 0
@@ -1069,9 +1050,8 @@ static std::vector<RootEvent> build_root_events(const double* params,
         cv_finish_block = ""
 
     # --- Main integration loop body ---
-    # Under ASA the forward pass has to leave checkpoints behind, which is
-    # what CVodeF does that CVode does not. Defined before the loop templates,
-    # which interpolate it; ncheck counts checkpoints and is not read.
+    # Under ASA the forward pass runs CVodeF, which stores the checkpoints;
+    # ncheck_ is not read.
     if reverse:
         cv_fwd_call = ("    int ncheck_ = 0;\n"
                        "    int flag = CVodeF(cvode_mem, times[k], y, &tret, "
@@ -1132,10 +1112,8 @@ static std::vector<RootEvent> build_root_events(const double* params,
 
         main_loop_body = f"""  bool stop = false;
 #ifdef CVODE_STEP_TRACE
-  // ---- Output-point trace mode (events active) ----
-  // The event interleave needs CV_NORMAL, so one row is emitted per output
-  // point plus one per applied event.  `nst` is cumulative; `h` and `q` are
-  // the last accepted step and order at that point.
+  // Trace with events: CV_NORMAL, one row per output point and per applied
+  // event; `nst` is cumulative, `h` and `q` are the last accepted step and order.
   N_Vector _ele_buf = N_VClone(y);
   N_Vector _ewt_buf = N_VClone(y);
 #endif
@@ -1176,11 +1154,8 @@ static std::vector<RootEvent> build_root_events(const double* params,
         main_loop_body = f"""
 #ifdef CVODE_STEP_TRACE
   {{
-    // ---- CV_ONE_STEP trace mode: one CSV row per accepted internal step,
-    //      user-time outputs via dense interpolation (CVodeGetDky /
-    //      CVodeGetSensDky).  Events and rootfunc are not supported in
-    //      this path: the simple `else`-branch here is entered only
-    //      when neither is active in the model.
+    // Trace without events: CV_ONE_STEP, one row per accepted step, outputs
+    // interpolated by CVodeGetDky / CVodeGetSensDky; no rootfunc check.
     N_Vector _ele_buf    = N_VClone(y);
     N_Vector _ewt_buf    = N_VClone(y);
     N_Vector _y_interp   = N_VClone(y);
@@ -1278,23 +1253,13 @@ static std::vector<RootEvent> build_root_events(const double* params,
 #endif
 """
 
-    # --- ASA: allocation before the forward pass, sweep after it -------------
-    #
-    # The forward pass stores checkpoints; the backward one integrates
-    # lambda' = -J'lambda from T to t0 with the quadrature q' = -(df/dp)'lambda
-    # riding along, and stops at every observation time to add that row of the
-    # seed. Those additions are what makes the objective's cotangent enter: J
-    # is a sum over observation times, so lambda jumps by W_o at each one.
-    #
-    # One backward solve per seed column. Unlike the native reverse mode, which
-    # sweeps one tape per column over a shared checkpoint store, CVODES has to
-    # re-integrate; the checkpoints are shared, the trajectory is not.
+    # --- ASA: checkpoint allocation before the forward pass, sweep after it ---
+    # Per seed column, lambda' = -J'lambda and q' = -(df/dp)'lambda run from T
+    # to t0, and lambda jumps by the seed row W_o at each output time.
     if reverse:
         asa_init_block = """
   // --- adjoint sensitivity analysis: checkpoint allocation ---
-  // CV_HERMITE matches the forward method's own dense output. 200 steps between
-  // checkpoints is SUNDIALS' own example default and trades memory for repeated
-  // forward re-integration during the sweep.
+  // CV_POLYNOMIAL interpolation of the forward state between checkpoints.
   if (args.seed == nullptr) {
     cleanup();
     return res.fail(cppde::RC_ILL_INPUT,
@@ -1306,10 +1271,8 @@ static std::vector<RootEvent> build_root_events(const double* params,
 """
         asa_sweep_block = """
   // --- the backward sweep ---
-  //
-  // What comes out is indexed like a forward sens1ini seed: state rows first,
-  // then parameters. lambda(t0) is the state half and the quadrature the
-  // parameter half, the same split the native reverse mode reports.
+  // The result is indexed like sens1ini: state rows from lambda(t0), then
+  // parameter rows from the quadrature.
   if (return_code == 0) {
     const int n_seed = args.n_seed_cols;
     const int n_out_b = (int)out_t.size();
@@ -1338,6 +1301,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
     auto cleanupB = [&]() {
       if (LSB) { SUNLinSolFree(LSB); LSB = nullptr; }
       if (AB)  { SUNMatDestroy(AB);  AB = nullptr; }
+      if (ud.Jscratch) { SUNMatDestroy(ud.Jscratch); ud.Jscratch = nullptr; }
       if (qB)  { N_VDestroy(qB); qB = nullptr; }
       if (yB)  { N_VDestroy(yB); yB = nullptr; }
     };
@@ -1367,15 +1331,13 @@ static std::vector<RootEvent> build_root_events(const double* params,
           solver_msg = "adjoint initialisation failed";
           break;
         }
-        // The backward problem gets the caller's own step budget. Otherwise it
-        // keeps the CVODES default of 500, which a stiff model reaches long
-        // before t0 and reports as an integration failure rather than as a
-        // step limit.
+        // The backward problem gets the caller's maxsteps, not the CVODES
+        // default of 500.
         CVodeSetMaxNumStepsB(cvode_mem, indexB, maxsteps);
-        AB  = SUNDenseMatrix(NEQ, NEQ, ctx);
-        LSB = SUNLinSol_Dense(yB, AB, ctx);
-        if (!AB || !LSB ||
-            CVodeSetLinearSolverB(cvode_mem, indexB, LSB, AB) < 0) {
+@LSB_SETUP@        ud.Jscratch = SUNMatClone(A);
+        if (!AB || !LSB || !ud.Jscratch ||
+            CVodeSetLinearSolverB(cvode_mem, indexB, LSB, AB) < 0 ||
+            CVodeSetJacFnB(cvode_mem, indexB, jacB_fn) < 0) {
           return_code = cppde::RC_LINIT_FAIL;
           solver_msg = "adjoint linear solver failed";
           break;
@@ -1387,14 +1349,13 @@ static std::vector<RootEvent> build_root_events(const double* params,
             solver_msg = "adjoint quadrature failed";
             break;
           }
-          // The quadrature carries the whole parameter half of the answer, so
-          // it belongs in the error test rather than riding along uncontrolled.
-          CVodeSetQuadErrConB(cvode_mem, indexB, SUNTRUE);
+          // The quadrature stays out of the error test, the SUNDIALS default:
+          // gradient entries of very different scale would stall the step.
+          CVodeSetQuadErrConB(cvode_mem, indexB, SUNFALSE);
         }
       } else {
-        // Every further column reuses the one backward problem. CVodeB advances
-        // every backward problem that exists, so a second one would leave the
-        // first to be driven past its own start time.
+        // Later columns re-initialise the one backward problem: CVodeB advances
+        // every backward problem that exists.
         if (CVodeReInitB(cvode_mem, indexB, out_t.back(), yB) < 0) {
           return_code = cppde::RC_UNRECOGNIZED_ERR;
           solver_msg = "CVodeReInitB failed between seed columns"; break;
@@ -1425,16 +1386,11 @@ static std::vector<RootEvent> build_root_events(const double* params,
                                      (size_t)n_out_b * NEQ * c];
           if (w != 0.0) { lam[i] += w; jumped = true; }
         }
-        // A seeded jump is a new initial condition for what remains, and
-        // CVODES has to be told rather than left to interpolate across it.
-        // Only where there is a jump: a re-init restarts the backward method at
-        // order one, so doing it at every output time would cost accuracy for
-        // nothing on the times the objective does not observe.
+        // A seeded jump is a new initial condition, so CVODES is re-initialised
+        // there, and only there: a re-init restarts the method at order one.
         if (jumped && k > 0) {
-          // The quadrature keeps its own Nordsieck history, and a state re-init
-          // leaves that history describing an interval the state no longer
-          // follows. Reading the accumulated value out and handing it straight
-          // back restarts the history without losing what it has integrated.
+          // Reading the quadrature out and re-initialising it with that value
+          // restarts its history and keeps what it has integrated.
           if (NPAR_ADJ > 0) {
             sunrealtype tq_;
             if (CVodeGetQuadB(cvode_mem, indexB, &tq_, qB) < 0) {
@@ -1467,10 +1423,9 @@ static std::vector<RootEvent> build_root_events(const double* params,
         const double* q   = N_VGetArrayPointer(qB);
         for (int i = 0; i < NEQ; ++i)
           res.adjoint[i + (size_t)n_phi_rows * c] = lam[i];
-        // CVODES integrates the backward quadrature from T down to t0 with
-        // xi(T) = 0, so xi(t0) = -int_{t0}^{T} fQB dt. fQB is written with the
-        // adjoint equation's own minus sign, and the two cancel: what comes
-        // back is already int lambda' (df/dp) dt.
+        // CVODES integrates the quadrature from T down to t0 with xi(T) = 0, so
+        // xi(t0) = -int_{t0}^{T} fQB dt; fQB carries the adjoint's minus sign,
+        // and the two cancel to int lambda' (df/dp) dt.
         for (int k = 0; k < NPAR_ADJ; ++k)
           res.adjoint[(NEQ + k) + (size_t)n_phi_rows * c] = q[k];
       }
@@ -1571,6 +1526,68 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
   if (CVodeSetJacFn(cvode_mem, jac_fn) < 0) {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeSetJacFn failed"); }}
 """
 
+    # The backward problem lambda' = -J' lambda gets the forward solver kind and
+    # its Jacobian -J', formed from jac_fn into a scratch matrix of the forward
+    # pattern.
+    asa_ud_members = ""
+    jacB_decl = jacB_impl = lsB_setup = ""
+    if reverse:
+        asa_ud_members = ("  SUNMatrix Jscratch = nullptr;              // J for jacB_fn\n"
+                          "  std::vector<sunindextype> jacB_next;       // CSC transpose cursor\n")
+        jacB_decl = ("static int jacB_fn(sunrealtype t, N_Vector y, N_Vector yB, "
+                     "N_Vector fyB, SUNMatrix JB, void* ud_vp, N_Vector, N_Vector, "
+                     "N_Vector);")
+        if use_sparse:
+            jacB_fill = """  // -J' in CSC is J in CSR: count per row, then scatter.
+  const sunindextype* Jp = SUNSparseMatrix_IndexPointers(J);
+  const sunindextype* Ji = SUNSparseMatrix_IndexValues(J);
+  const sunrealtype*  Jx = SUNSparseMatrix_Data(J);
+  sunindextype* Bp = SUNSparseMatrix_IndexPointers(JB);
+  sunindextype* Bi = SUNSparseMatrix_IndexValues(JB);
+  sunrealtype*  Bx = SUNSparseMatrix_Data(JB);
+  for (sunindextype c = 0; c <= NEQ; ++c) Bp[c] = 0;
+  for (sunindextype k = 0; k < Jp[NEQ]; ++k) ++Bp[Ji[k] + 1];
+  for (sunindextype c = 0; c < NEQ; ++c) Bp[c + 1] += Bp[c];
+  ud->jacB_next.assign(Bp, Bp + NEQ);
+  for (sunindextype j = 0; j < NEQ; ++j)
+    for (sunindextype k = Jp[j]; k < Jp[j + 1]; ++k) {
+      const sunindextype pos = ud->jacB_next[Ji[k]]++;
+      Bi[pos] = j;
+      Bx[pos] = -Jx[k];
+    }"""
+            lsB_setup = f"""        AB  = SUNSparseMatrix(NEQ, NEQ, {nnz_total}, CSC_MAT, ctx);
+        LSB = AB ? SUNLinSol_KLU(yB, AB, ctx) : nullptr;
+        if (LSB) {{
+          sun_klu_common* klu_cB = SUNLinSol_KLUGetCommon(LSB);
+          if (klu_cB) {{ klu_cB->btf = {klu_btf}; klu_cB->ordering = {klu_ord}; }}
+        }}
+"""
+        else:
+            jacB_fill = """  for (sunindextype j = 0; j < NEQ; ++j)
+    for (sunindextype i = 0; i < NEQ; ++i)
+      SM_ELEMENT_D(JB, i, j) = -SM_ELEMENT_D(J, j, i);"""
+            lsB_setup = f"""        AB  = SUNDenseMatrix(NEQ, NEQ, ctx);
+        LSB = AB ? {ls_ctor}(yB, AB, ctx) : nullptr;
+"""
+        jacB_impl = f"""
+// ---- Backward Jacobian: d(lambda')/d(lambda) = -J(x,p)' ----
+static int jacB_fn(sunrealtype t, N_Vector y, N_Vector yB, N_Vector fyB,
+                   SUNMatrix JB, void* ud_vp,
+                   N_Vector tmp1B, N_Vector tmp2B, N_Vector tmp3B) {{
+  (void)yB; (void)fyB; (void)tmp1B; (void)tmp2B; (void)tmp3B;
+  try {{
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  SUNMatrix J = ud->Jscratch;
+  if (jac_fn(t, y, nullptr, J, ud_vp, nullptr, nullptr, nullptr) != 0) return -1;
+{jacB_fill}
+  return 0;
+  }} catch (...) {{
+    return -1;
+  }}
+}}
+"""
+    asa_sweep_block = asa_sweep_block.replace("@LSB_SETUP@", lsB_setup)
+
     sens_decl = ""
     sens_impl = ""
     if deriv:
@@ -1615,12 +1632,7 @@ static int sens_rhs1_fn(int Ns, sunrealtype t,
             "                       N_Vector qBdot, void* ud_vp);")
         adj_impl = f"""
 // ---- Adjoint right-hand side: lambda' = -J(x,p)' lambda ----
-//
-// The transpose of the forward sensitivity multiply, over the same Jacobian
-// entries. CVODES supplies the forward state y by interpolating its own
-// checkpoints, which is what makes the two discretisations differ: the states
-// the adjoint sees here are not bit-for-bit the ones the forward run stepped
-// through, as they are in the native reverse mode's replay.
+// y is the forward state as CVODES interpolates it from the checkpoints.
 static int adj_rhs_fn(sunrealtype t, N_Vector y, N_Vector yB,
                       N_Vector yBdot, void* ud_vp) {{
   (void)t;
@@ -1640,7 +1652,6 @@ static int adj_rhs_fn(sunrealtype t, N_Vector y, N_Vector yB,
 }}
 
 // ---- Adjoint quadrature: q' = -(df/dp)' lambda ----
-//
 // Integrated backwards from T to t0, so what it accumulates is the parameter
 // half of the gradient. The state half needs no quadrature: it is lambda(t0).
 static int adj_quad_fn(sunrealtype t, N_Vector y, N_Vector yB,
@@ -1696,20 +1707,18 @@ constexpr int NPARMS = {n_global};           // n_states + n_params (flat layout
 // Rows the adjoint quadrature carries: the dynamic parameters. The state half
 // of the answer is lambda(t0) and needs no quadrature.
 constexpr int NPAR_ADJ = NPARMS - NEQ;
-// Accepted forward steps between checkpoints. The adjoint reads the forward
-// state by interpolating between them, so this trades memory for how well it
-// sees the trajectory it is differentiating, the one error source the
-// adjoint's own tolerance does not control.
+// Accepted forward steps between checkpoints (Nd of CVodeAdjInit).
 constexpr int ASA_CHECKPOINTS = {asa_checkpoints};
 
 struct UserData {{
   std::vector<double> params;               // length NPARMS
-{reparam_ud_members}{forcing_ud_members}{events_ud_members}}};
+{reparam_ud_members}{forcing_ud_members}{events_ud_members}{asa_ud_members}}};
 
 static int rhs_fn(sunrealtype t, N_Vector y, N_Vector ydot, void* ud_vp);
 {jac_decl}
 {sens_decl}
 {adj_decl}
+{jacB_decl}
 {rootfunc_decl}
 
 // ---- RHS ----
@@ -1733,17 +1742,13 @@ static int rhs_fn(sunrealtype t, N_Vector y, N_Vector ydot, void* ud_vp) {{
 {jac_impl}
 {sens_impl}
 {adj_impl}
+{jacB_impl}
 {rootfunc_impl}
 {event_struct}
 
 // ---- Step trace (CVODE_STEP_TRACE) ----
-// When compiled with -DCVODE_STEP_TRACE, the generated main loop drives the
-// integrator in CV_ONE_STEP mode and appends one row per accepted internal
-// step into the cppDE trace buffer (see cppde_step_trace.hpp).  After
-// integration the entry point marshals the buffer into the `trace` element
-// of the returned R list; `solveODE()` then decides whether to attach it
-// as a data.frame or write a CSV.  Fields not exposed by the CVODES public
-// API (`tq[2]`, pre-scale `dsm`, Nordsieck `gamma`) are pushed as NaN.
+// Appends trace rows to the buffer of cppde_step_trace.hpp, which reaches R as
+// the `trace` element; fields the CVODES API does not expose are NaN.
 #ifdef CVODE_STEP_TRACE
 static void cvode_emit_trace_row(void* cvode_mem,
                                  N_Vector ele_buf, N_Vector ewt_buf,
@@ -1762,28 +1767,9 @@ static void cvode_emit_trace_row(void* cvode_mem,
   CVodeGetLastOrder(cvode_mem, &last_order);
   CVodeGetLastStep(cvode_mem, &last_h);
 
-  // Reconstruct dsm from ele + ewt.  IMPORTANT: `CVodeGetEstLocalErrors`
-  // returns `ele = acor · tq[2]`: already the *scaled* local-error
-  // estimate, not the raw corrector-predictor difference.  Therefore
-  // `WRMS(ele · ewt)` yields the controller's state-side `dsm` directly,
-  // not a raw `acnrm`.  The CVODES public API exposes neither `acor` nor
-  // `tq[2]` separately, so only `dsm_state` can be reconstructed; `acnrm`
-  // is emitted as NaN in this trace.
-  //
-  // STATE-ONLY: This trace shows the STATE contribution only.  The full
-  // dsm CVODES uses internally for step control includes per-sensitivity
-  // contributions via `cvSensUpdateNorm` (CV_STAGGERED) when sensErrCon
-  // is on: but `CVodeGetSensEstLocalErrors` does not exist in SUNDIALS
-  // 6.4.x's public API, and `cv_acorS`/`cv_tq[2]` are not exposed via
-  // any post-step Get function.  Reading them would require including
-  // <cvodes/cvodes_impl.h>, which is not shipped with libsundials-dev.
-  //
-  // For apples-to-apples comparison against cppDE: compute
-  //   cppDE_state_dsm = trace$acnrm_state * trace$tq2
-  // and compare against this trace's `dsm` column.  cppDE's `dsm`
-  // column is the full sens-aware controller value (max over state and
-  // each sensitivity vector); CVODE's effective full dsm is unobservable
-  // via the public API.
+  // dsm = WRMS(ele * ewt) over the states: CVodeGetEstLocalErrors returns the
+  // scaled estimate acor * tq[2]. The public API exposes neither acor, tq[2]
+  // nor the sensitivity part of the error test, so those fields are NaN.
   (void)eleS_buf; (void)ewtS_buf; (void)ns_active;
   double sumsq = 0.0;
   long   N_eff = 0;
@@ -1830,7 +1816,7 @@ static void cvode_emit_trace_row(void* cvode_mem,
 }} // anonymous namespace
 
 // =====================================================================
-// R entry point: matches cppDE's 14-SEXP signature
+// R entry points, with the signature of the native solve_<model>
 // =====================================================================
 
 // Pure C++ solve: no R API, no escaping exceptions.
@@ -1862,11 +1848,8 @@ try {{
   }}
 
 {forcing_init_block}
-  // R always supplies a full-shape sens1ini = [NEQ + n_params, M] when
-  // deriv = TRUE: legacy [n_states, n_active] input is auto-extended with
-  // identity-on-non-fixed-params, runtime `fixed` is translated into zero
-  // rows of Phi'. Ns_active = M is read from ncol(sens1ini); M = 0 is a
-  // valid fast path (skips sensitivity integration via the gate below).
+  // With deriv, R supplies sens1ini as [NEQ + n_params, M], zero rows for fixed
+  // entries; Ns_active = M, and M = 0 skips the sensitivity integration.
   int Ns_active_tmp = 0;
   if (deriv) {{
     if (args.sens1ini == nullptr)

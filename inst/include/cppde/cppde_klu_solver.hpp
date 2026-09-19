@@ -2,7 +2,7 @@
  KLU sparse LU solver wrapper for cppDE: raw CSC interface.
 
  Takes raw int, double pointers (Ap, Ai, Ax) directly.
- Uses klu_refactor() after the first klu_factor() for maximum speed.
+ Uses klu_refactor() after the first klu_factor(), guarded by pivot growth.
 
  KLU settings (BTF, ordering) are determined at codegen time by
  analyzing the Jacobian sparsity pattern in Python and passed as
@@ -139,18 +139,9 @@ public:
                             const_cast<int*>(Ai),
                             const_cast<double*>(Ax),
                             m_symbolic, m_numeric, &m_common);
-      // klu_refactor keeps the pivot order the first factorisation chose. That
-      // is what makes it fast and what makes it unsafe on its own: it reports
-      // success even when the reused order has become numerically hopeless for
-      // these values, which on a stiff model it does as soon as gamma moves far.
-      //
-      // A Newton corrector forgives that, being an iteration that converges on
-      // the equation rather than on the matrix. The reverse mode does not: it
-      // uses the solve once and directly, and a bad factorisation goes straight
-      // into the gradient. Bachmann is where that showed, four orders of
-      // magnitude on the stiff modes while the dense path was exact.
-      //
-      // So the pivot growth decides, as SUNDIALS' own KLU interface does it.
+      // klu_refactor reuses the first pivot order and reports success even when
+      // that order is unstable for the new values. The reverse mode uses each
+      // solve directly, so the reciprocal pivot growth decides, as in SUNDIALS.
       if (ok) {
         klu_rgrowth(const_cast<int*>(Ap), const_cast<int*>(Ai),
                     const_cast<double*>(Ax), m_symbolic, m_numeric, &m_common);

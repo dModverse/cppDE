@@ -36,7 +36,8 @@ def generate_ode_cpp(
         num_type, ad_level, arena: the C++ scalar (see cppde_model.Scalar).
         sparse: None (decide), True or False.
         skip_jacobian: emit a Jacobian stub (explicit methods).
-        emit_contractions, emit_jvp: emit adjoint_terms, with the rb4 pairs.
+        emit_contractions: emit adjoint_terms; emit_jvp adds its jvp_* and
+            dfdt_* pairs (reverse mode with Rosenbrock4).
         fixed_states, fixed_params: unused.
 
     Returns:
@@ -196,18 +197,11 @@ def generate_rootfunc_code(rootfunc, states_list, params_list, n_states,
 # =====================================================================
 
 def decide_sparse(sparse, n_states, jac_nnz, has_jacobian=True):
-    """
-    Dense vs sparse linear solver, shared by the cppDE and CVODE backends.
+    """Sparse (True) or dense (False) linear solver, for both backends.
 
-    `sparse` arrives already normalised by R (None = auto, True/False = pinned);
-    the KLU-availability downgrade happens there, above this call.
-
-    Auto-detection selects sparse from 8 states unless the structural Jacobian
-    is denser than 0.4.  Both bounds are calibrated on the benchmark suite
-    (benchmarks/run-benchmarks.R --sparse-sweep).
-
-    `has_jacobian` is False for explicit methods, whose nnz count is 0; the
-    auto path stays dense there.
+    `sparse` is None (auto) or pinned by R, which also handles a missing KLU.
+    Auto picks sparse from 8 states at a Jacobian density <= 0.4 (bounds from
+    benchmarks/run-benchmarks.R --sparse-sweep); without a Jacobian, dense.
     """
     if sparse is not None:
         return bool(sparse)
@@ -218,25 +212,14 @@ def decide_sparse(sparse, n_states, jac_nnz, has_jacobian=True):
 
 
 def analyze_klu_settings(n, jac_nnz_rows, jac_nnz_cols):
-    """
-    Analyze the Jacobian sparsity pattern to determine optimal KLU settings.
+    """KLU settings from the Jacobian pattern: BTF when its digraph has more
+    than one strongly connected component; COLAMD when the coefficient of
+    variation of the row degrees exceeds 0.5, else AMD.
 
-    Returns a dict with:
-      - use_btf (bool):  True if BTF decomposition is beneficial
-      - ordering (int):  0=AMD, 1=COLAMD
-
-    BTF decision:
-      Find strongly connected components of the directed graph defined
-      by the Jacobian pattern.  If nblocks > 1, BTF can decompose the
-      problem into smaller independent blocks, so BTF pays.
-      If nblocks == 1 (strongly connected), BTF is pure overhead and stays off.
-
-    Ordering decision:
-      For PDE-like patterns (uniform row degree, wide bandwidth),
-      AMD typically produces less fill-in than COLAMD.
-      For irregular patterns (high degree variance, hub nodes),
-      COLAMD often wins.
-      Heuristic: if the coefficient of variation of row degrees > 0.5, use COLAMD.
+    Returns:
+        dict with use_btf, ordering (0 = AMD, 1 = COLAMD), nblocks,
+        ordering_name, cv_row_degree and mean_row_degree; only the first two
+        for an empty pattern.
     """
     rows = list(jac_nnz_rows)
     cols = list(jac_nnz_cols)

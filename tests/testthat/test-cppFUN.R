@@ -18,17 +18,75 @@ skip_on_cran()
   H
 }
 
+# Every object the tests below evaluate, built once and linked into one shared
+# object. The tests on uncompiled objects and on rejected names build their own.
+fx_trafo  <- c(y1 = "a * exp(-b * x)", y2 = "a + b * x")
+vjp_trafo <- c(y1 = "a * exp(-k * t) + b", y2 = "log(a + k * k) * t")
+collide_orders <- list(c("p", "x", "y", "k", "x_obs", "y_local"),
+                       c("y_local", "x_obs", "k", "y", "x", "p"),
+                       c("k", "p", "y_local", "x", "y", "x_obs"))
+
+fx <- list(
+  basic  = cppFUN(fx_trafo, parameters = c("a", "b", "x"), deriv = TRUE,
+                  modelname = "fun_basic", convenient = TRUE),
+  tokens = cppFUN(c(o1 = "std * exp(ini * log(10)) + default",
+                    o2 = "sqrt(int) + std^2"),
+                  variables = "int", parameters = c("std", "ini", "default"),
+                  deriv = TRUE, derivMode = c("forward", "reverse"),
+                  modelname = "cxx_tokens", convenient = TRUE),
+  jac    = cppFUN(fx_trafo, parameters = c("a", "b", "x"),
+                  deriv = TRUE, derivMode = "forward",
+                  modelname = "fun_jac", convenient = TRUE),
+  hess   = cppFUN(c(y = "a * b * x^2"), parameters = c("a", "b", "x"),
+                  deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
+                  modelname = "fun_hess", convenient = TRUE),
+  fixed  = cppFUN(c(y = "a * b + c"), parameters = c("a", "b", "c"),
+                  fixed = "c", deriv = TRUE, derivMode = "forward",
+                  modelname = "fun_fixed", convenient = TRUE),
+  xs     = cppFUN(c(y1 = "a*x^2 + b", y2 = "sin(c*x)"),
+                  parameters = c("a", "b", "c", "x"),
+                  deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
+                  modelname = "xs_d2"),
+  passthru = cppFUN(c(la = "la", y2 = "la^2 + b", zero = "0"),
+                    parameters = c("la", "b"),
+                    deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
+                    modelname = "xs_passthru"),
+  vjp_rev = cppFUN(vjp_trafo, variables = "t", parameters = c("a", "b", "k"),
+                   deriv = TRUE, derivMode = "reverse", modelname = "vjp_rev",
+                   convenient = FALSE),
+  vjp_fwd = cppFUN(vjp_trafo, variables = "t", parameters = c("a", "b", "k"),
+                   deriv = TRUE, derivMode = "forward", modelname = "vjp_fwd",
+                   convenient = FALSE),
+  vjp_seeds = cppFUN(c(y1 = "a * b", y2 = "sin(a) + b * b"), variables = NULL,
+                     parameters = c("a", "b"), deriv = TRUE,
+                     derivMode = "reverse", modelname = "vjp_seeds",
+                     convenient = FALSE),
+  dm_fwd  = cppFUN(c(y = "a * a"), parameters = "a", deriv = TRUE,
+                   derivMode = "forward", modelname = "dm_fwd",
+                   convenient = FALSE),
+  dm_rev  = cppFUN(c(y = "a * a"), parameters = "a", deriv = TRUE,
+                   derivMode = "reverse", modelname = "dm_rev",
+                   convenient = FALSE),
+  dm_both = cppFUN(c(y = "a * a"), parameters = "a", deriv = TRUE,
+                   derivMode = c("forward", "reverse"), modelname = "dm_both",
+                   convenient = FALSE),
+  vjp2 = cppFUN(c(y1 = "a * x1^2 + b * x1 * x2", y2 = "sin(a * x2) + b^2 * x1"),
+                variables = c("x1", "x2"), parameters = c("a", "b"),
+                deriv2 = TRUE, derivMode = c("forward", "reverse"),
+                modelname = "cf_vjp2")
+)
+fx_collide <- lapply(seq_along(collide_orders), function(i)
+  cppFUN(c(o1 = "p + 2 * x", o2 = "y * k",
+           o3 = "x_obs + y_local", o4 = "p * y_local - k"),
+         parameters = collide_orders[[i]], deriv = TRUE, derivMode = "forward",
+         modelname = paste0("collide_", i), convenient = TRUE))
+do.call(compile, c(unname(fx), fx_collide,
+                   list(output = "test_cppFUN", cores = 1)))
+
 # -- Basic cppFUN output structure ---------------------------------------------
 
 test_that("cppFUN returns correct output", {
-  trafo <- c(
-    y1 = "a * exp(-b * x)",
-    y2 = "a + b * x"
-  )
-
-  f <- cppFUN(trafo, parameters = c("a", "b", "x"), deriv = TRUE,
-              modelname = "fun_basic", compile = TRUE, convenient = TRUE)
-
+  f <- fx$basic
   res <- f$func(a = 2, b = 0.5, x = 1)
 
   expect_true(is.matrix(res))
@@ -54,18 +112,12 @@ test_that("an object that was not compiled says so", {
 test_that("parameters named like the generated arrays do not collide", {
   # The emitted code indexes p[] and x_obs[]. A parameter of that name is
   # substituted for its own slot, in whatever order the parameters are listed.
-  trafo <- c(o1 = "p + 2 * x", o2 = "y * k",
-             o3 = "x_obs + y_local", o4 = "p * y_local - k")
-  pars   <- c(p = 2, x = 3, y = 5, k = 7, x_obs = 11, y_local = 13)
-  orders <- list(names(pars), rev(names(pars)),
-                 c("k", "p", "y_local", "x", "y", "x_obs"))
+  pars <- c(p = 2, x = 3, y = 5, k = 7, x_obs = 11, y_local = 13)
 
-  for (i in seq_along(orders)) {
-    f <- cppFUN(trafo, parameters = orders[[i]], deriv = TRUE,
-                derivMode = "forward", modelname = paste0("collide_", i),
-                compile = TRUE, convenient = TRUE)
-    res <- do.call(f$func, as.list(pars[orders[[i]]]))
-    jac <- do.call(f$jac, as.list(pars[orders[[i]]]))[1, , ]
+  for (i in seq_along(collide_orders)) {
+    f <- fx_collide[[i]]
+    res <- do.call(f$func, as.list(pars[collide_orders[[i]]]))
+    jac <- do.call(f$jac, as.list(pars[collide_orders[[i]]]))[1, , ]
 
     expect_equal(unname(res[1, ]), c(8, 35, 24, 19), tolerance = 1e-10,
                  label = paste("values, order", i))
@@ -78,12 +130,7 @@ test_that("parameters named like the generated arrays do not collide", {
 test_that("symbols named after C++ tokens do not reach the generated source", {
   # The printer writes std::pow and spells a reserved word default_. A symbol
   # of either name is substituted for its slot, so neither reaches the source.
-  trafo <- c(o1 = "std * exp(ini * log(10)) + default",
-             o2 = "sqrt(int) + std^2")
-
-  f <- cppFUN(trafo, variables = "int", parameters = c("std", "ini", "default"),
-              deriv = TRUE, derivMode = c("forward", "reverse"), compile = TRUE,
-              modelname = "cxx_tokens", convenient = TRUE)
+  f <- fx$tokens
   res <- f$func(int = 4, std = 2, ini = 0.5, default = 3)
   jac <- f$jac(int = 4, std = 2, ini = 0.5, default = 3)[1, , ]
 
@@ -117,15 +164,7 @@ test_that("a Python keyword as a symbol name is rejected", {
 # -- Jacobian correctness -----------------------------------------------------
 
 test_that("cppFUN Jacobian matches analytical derivatives", {
-  trafo <- c(
-    y1 = "a * exp(-b * x)",
-    y2 = "a + b * x"
-  )
-
-  f <- cppFUN(trafo, parameters = c("a", "b", "x"),
-              deriv = TRUE, derivMode = "forward", compile = TRUE,
-              modelname = "fun_jac", convenient = TRUE)
-
+  f <- fx$jac
   jac <- f$jac(a = 2, b = 0.5, x = 1)
 
   # jac is [obs, outputs, params] array
@@ -149,12 +188,7 @@ test_that("cppFUN Jacobian matches analytical derivatives", {
 # -- Hessian structure ---------------------------------------------------------
 
 test_that("cppFUN Hessian has correct dimensions and is symmetric", {
-  trafo <- c(y = "a * b * x^2")
-
-  f <- cppFUN(trafo, parameters = c("a", "b", "x"),
-              deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
-              compile = TRUE, modelname = "fun_hess", convenient = TRUE)
-
+  f <- fx$hess
   hess_arr <- f$hess(a = 2, b = 3, x = 4)
 
   expect_true(!is.null(hess_arr))
@@ -178,12 +212,7 @@ test_that("cppFUN Hessian has correct dimensions and is symmetric", {
 # -- Fixed parameters in cppFUN ------------------------------------------------
 
 test_that("cppFUN fixed parameters are excluded from derivatives", {
-  trafo <- c(y = "a * b + c")
-
-  f <- cppFUN(trafo, parameters = c("a", "b", "c"),
-              fixed = "c", deriv = TRUE, derivMode = "forward",
-              compile = TRUE, modelname = "fun_fixed", convenient = TRUE)
-
+  f <- fx$fixed
   jac <- f$jac(a = 2, b = 3, c = 1)
 
   # Only 2 params in Jacobian (a, b), not c
@@ -196,11 +225,8 @@ test_that("cppFUN fixed parameters are excluded from derivatives", {
 # -- raw derivatives against closed forms ---------------------------------------
 
 test_that("cppFUN raw jac/hess match the closed forms", {
-  trafo <- c(y1 = "a*x^2 + b", y2 = "sin(c*x)")
   pars  <- list(a = 2, b = 1, c = 0.3, x = 3)
-  f <- cppFUN(trafo, parameters = c("a", "b", "c", "x"),
-              deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
-              compile = TRUE, modelname = "xs_raw")
+  f <- fx$xs
   y    <- do.call(f$func, pars)
   jac  <- do.call(f$jac,  pars)
   hess <- do.call(f$hess, pars)
@@ -214,7 +240,6 @@ test_that("cppFUN raw jac/hess match the closed forms", {
 # -- second-order chain rule, including dX2/dP2 ---------------------------------
 
 test_that("cppFUN evaluates the second-order chain rule", {
-  trafo <- c(y1 = "a*x^2 + b", y2 = "sin(c*x)")
   th    <- c("th1", "th2", "th3")
   s     <- c("a", "b", "c", "x")
   # Linear part of Phi: theta -> (a, b, c) = (2*th1, 1*th2, 1*th3 + th1)
@@ -228,8 +253,7 @@ test_that("cppFUN evaluates the second-order chain rule", {
   dP2["a", "th1", "th2"] <- 0.5
   dP2["a", "th2", "th1"] <- 0.5
   pars <- list(a = 2, b = 1, c = 0.3, x = 3)
-  f <- cppFUN(trafo, parameters = s, deriv = TRUE, deriv2 = TRUE,
-              derivMode = "forward", compile = TRUE, modelname = "xs_chain")
+  f <- fx$xs
   out <- do.call(f$evaluate, c(pars, list(dP = dP, dP2 = dP2, deriv2 = TRUE)))
 
   J <- do.call(.xs_jac, pars)
@@ -248,11 +272,8 @@ test_that("cppFUN evaluates the second-order chain rule", {
 # dual2nd writeback has to reach it through the bounds-safe const overload.
 
 test_that("cppFUN forward deriv2 handles identity pass-through", {
-  trafo <- c(la = "la", y2 = "la^2 + b", zero = "0")
   pars  <- list(la = 1.5, b = 0.7)
-  f <- cppFUN(trafo, parameters = c("la", "b"),
-              deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
-              compile = TRUE, modelname = "xs_passthru")
+  f <- fx$passthru
   d <- do.call(f$evaluate, c(pars, list(deriv2 = TRUE)))
   H <- array(0, c(3, 2, 2))
   H[2, 1, 1] <- 2
@@ -266,17 +287,12 @@ test_that("cppFUN forward deriv2 handles identity pass-through", {
 # -- Reverse mode ---------------------------------------------------------------
 
 test_that("vjp contracts the Jacobian the forward path returns", {
-  trafo <- c(y1 = "a * exp(-k * t) + b", y2 = "log(a + k * k) * t")
   pars  <- c(a = 2, b = -0.5, k = 0.7)
   M     <- matrix(c(0.3, 1.1, 2.7), ncol = 1, dimnames = list(NULL, "t"))
   w     <- matrix(c(0.4, -1.3, 2.2, 0.9, -0.6, 1.7), nrow = 3, ncol = 2)
 
-  fr <- cppFUN(trafo, variables = "t", parameters = names(pars), deriv = TRUE,
-               derivMode = "reverse", modelname = "vjp_rev", compile = TRUE,
-               convenient = FALSE)
-  ff <- cppFUN(trafo, variables = "t", parameters = names(pars), deriv = TRUE,
-               derivMode = "forward", modelname = "vjp_fwd", compile = TRUE,
-               convenient = FALSE)
+  fr <- fx$vjp_rev
+  ff <- fx$vjp_fwd
 
   r <- fr$vjp(M, pars, w)
   J <- ff$jac(M, pars)
@@ -295,12 +311,8 @@ test_that("vjp contracts the Jacobian the forward path returns", {
 })
 
 test_that("vjp sweeps several seeds against one recording", {
-  trafo <- c(y1 = "a * b", y2 = "sin(a) + b * b")
   pars  <- c(a = 0.6, b = 1.4)
-
-  f <- cppFUN(trafo, variables = NULL, parameters = names(pars), deriv = TRUE,
-              derivMode = "reverse", modelname = "vjp_seeds", compile = TRUE,
-              convenient = FALSE)
+  f     <- fx$vjp_seeds
 
   # Seeding the identity over the outputs recovers the full Jacobian row by row.
   w <- array(0, c(1, 2, 2))
@@ -327,20 +339,16 @@ test_that("derivMode builds exactly the directions it names", {
                "no reverse counterpart")
 
   # Each direction is its own build product, and naming one omits the other.
-  ff <- cppFUN(eq, parameters = "a", deriv = TRUE, derivMode = "forward",
-               modelname = "dm_fwd", compile = TRUE, convenient = FALSE)
+  ff <- fx$dm_fwd
   expect_null(ff$vjp)
   expect_false(is.null(ff$jac))
 
-  fr <- cppFUN(eq, parameters = "a", deriv = TRUE, derivMode = "reverse",
-               modelname = "dm_rev", compile = TRUE, convenient = FALSE)
+  fr <- fx$dm_rev
   expect_null(fr$jac)
   expect_false(is.null(fr$vjp))
   expect_false(is.null(fr$func))
 
-  fb <- cppFUN(eq, parameters = "a", deriv = TRUE,
-               derivMode = c("forward", "reverse"),
-               modelname = "dm_both", compile = TRUE, convenient = FALSE)
+  fb <- fx$dm_both
   expect_false(is.null(fb$jac))
   expect_false(is.null(fb$vjp))
 
@@ -359,23 +367,8 @@ test_that("derivMode builds exactly the directions it names", {
 #  derivatives of the same expressions, so the gap is rounding.
 # ---------------------------------------------------------------------------
 
-# One compilation for the three tests below: rebuilding under the same name
-# warns, and a warning is a failure here.
-.vjp2_fx <- local({
-  f <- NULL
-  function() {
-    if (is.null(f)) {
-      eq <- c(y1 = "a * x1^2 + b * x1 * x2", y2 = "sin(a * x2) + b^2 * x1")
-      f <<- cppFUN(eq, variables = c("x1", "x2"), parameters = c("a", "b"),
-                   deriv2 = TRUE, derivMode = c("forward", "reverse"),
-                   compile = TRUE, modelname = "cf_vjp2")
-    }
-    f
-  }
-})
-
 test_that("the dual vjp keeps the first order it already answered", {
-  f <- .vjp2_fx()
+  f <- fx$vjp2
   set.seed(3)
   X <- matrix(rnorm(8), 4L, 2L, dimnames = list(NULL, c("x1", "x2")))
   P <- c(a = 0.7, b = -0.4)
@@ -393,7 +386,7 @@ test_that("the dual vjp keeps the first order it already answered", {
 })
 
 test_that("the dual vjp answers the curvature the forward Hessian carries", {
-  f <- .vjp2_fx()
+  f <- fx$vjp2
   set.seed(3)
   n <- 4L; nd <- 3L
   X <- matrix(rnorm(n * 2), n, 2L, dimnames = list(NULL, c("x1", "x2")))
@@ -425,7 +418,7 @@ test_that("the dual vjp answers the curvature the forward Hessian carries", {
 test_that("a cotangent's own tangents go through linearly", {
   # The vjp is linear in w, so seeding only dw has to reproduce a first-order
   # vjp taken with that direction as the cotangent.
-  f <- .vjp2_fx()
+  f <- fx$vjp2
   set.seed(5)
   n <- 4L; nd <- 2L
   X <- matrix(rnorm(n * 2), n, 2L, dimnames = list(NULL, c("x1", "x2")))

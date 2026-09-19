@@ -186,6 +186,22 @@
   simulated Co/Pt multilayer, fitted by `optim()` on the reverse gradient, with
   the forward gradient timed beside it. The examples that compared against cOde
   are gone.
+* **Bug fix.** A model built without `modelname` drew its name from the random
+  stream, so `set.seed()` repeated it, and a model inside a combined shared
+  object could then resolve another's entry points. The name now comes from
+  `tempfile()`, and the random stream is left alone.
+* **Bug fix.** `sens2` read the upper half of each Hessian from slots the
+  integrator does not carry through its steps; on a long stiff run at tight
+  tolerances they drifted by tens of orders of magnitude. Both halves now come
+  from the lower triangle.
+* **Bug fix.** `cvode()` took a `terminal` event column given as text for true
+  whatever it said; it now reads it as `cppODE()` does.
+* `cvode(..., derivMode = "reverse")` gives the backward problem the analytic
+  Jacobian -J' and the forward linear solver, KLU where the model is sparse,
+  instead of a dense difference-quotient Jacobian. The quadrature of the
+  parameter gradient stays out of the error test, as SUNDIALS does by default;
+  with it, the backward problem stalled at the final time on models with many
+  parameters of different scale.
 * Every exported function has an example. Those that compile build into
   `tempdir()` and run under `\donttest`.
 

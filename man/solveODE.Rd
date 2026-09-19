@@ -41,7 +41,7 @@ Names must include all of
 
 \item{sens1ini}{Optional numeric matrix of first-order sensitivity
 initial values, interpreted as the Jacobian \eqn{\Phi'(\theta)}.
-Accepts three shapes (see Details): legacy \verb{[n_states, n_active]}
+Accepts three shapes (see Details): state-only \verb{[n_states, n_active]}
 (auto-extended with identity on parameter rows), full
 \verb{[n_states + n_params, M]}, or partial \verb{[k, M]} with row names
 identifying a subset of \code{c(variables, parameters)} (missing rows
@@ -52,7 +52,7 @@ seeding on the active sensitivity basis.}
 \item{sens2ini}{Optional numeric array of second-order sensitivity
 initial values, interpreted as the Hessian tensor
 \eqn{\Phi''(\theta)}. Shapes are analogous to those of \code{sens1ini}:
-\verb{[n_states, n_active, n_active]} (legacy),
+\verb{[n_states, n_active, n_active]} (state-only),
 \verb{[n_states + n_params, M, M]} (full), or \verb{[k, M, M]} with dim-1
 names identifying a subset of \code{c(variables, parameters)} (partial,
 zero-padded). Allowed only when \code{attr(model, "deriv2")} is \code{TRUE}.
@@ -101,9 +101,7 @@ than \code{reltol}.}
 return code. One of \code{"stop"} (default; raise an error with the solver
 message and no partial results), \code{"warn"} (emit a warning and return
 partial results up to \code{t_reached}), or \code{"silent"} (return the partial
-result without any signal). An incomplete integration otherwise
-surfaces far downstream, as a missing-time-point error that blames the
-data rather than the solver.}
+result without any signal).}
 
 \item{traceFile}{Optional character giving a CSV file path. If the
 model was compiled with \code{stepTrace = TRUE} and a non-empty path is
@@ -112,14 +110,19 @@ The trace is also attached to the returned list as \verb{$trace}. Ignored
 for models compiled without trace support (\verb{$trace} is \code{NULL} in
 that case).}
 
-\item{seed}{Reverse-mode seed, for a model compiled with
-\code{cppODE(..., derivMode = "reverse")} and required by one. A
-\verb{[n_out, n_states]} matrix or an \verb{[n_out, n_states, n_seed]} array, whose
-first dimension is the solve's own output row count: a root event observes
-at times it was not asked for, so that count is not \code{length(times)} in
-general. What comes back is \verb{w' * dx/dtheta} summed over times and states,
-one column per seed column. Supplying it to a forward model is an error, as
-is leaving it out on a reverse one.}
+\item{seed}{Reverse-mode seed, required by a model compiled with
+\code{derivMode = "reverse"} or \code{"forward-reverse"} (\code{\link[=cppODE]{cppODE()}}) or with
+\code{derivMode = "reverse"} (\code{\link[=cvode]{cvode()}}). A \verb{[n_out, n_states]} matrix or an
+\verb{[n_out, n_states, n_seed]} array, whose first dimension is the solve's
+own output row count: a root event adds output times, so that count is
+not \code{length(times)} in general. What comes back is \verb{w' * dx/dtheta}
+summed over times and states, one column per seed column. Supplying it
+to a forward model is an error, as is leaving it out on a reverse one.
+
+Under \code{"forward-reverse"} the seed may carry its own tangents in theta
+as the attribute \code{seedTangent}, an array
+\verb{[n_out, n_states, n_seed, n_sens]} on the seed's first three dimensions.
+Without it \code{adjoint2} omits the seed's dependence on the parameters.}
 
 \item{adjointGrid}{Whether the sweep also reports the grid it ran on, as
 \verb{$adjointGrid}. \code{FALSE} by default; requires a \code{seed} and the native
@@ -127,9 +130,10 @@ backend. Costs one
 \verb{[n_steps, n_states, n_seed]} array, so it is a diagnostic.}
 
 \item{errWeights}{Optional lambda from an earlier sweep, used as a
-step-size weight. Native backend only. A list with \code{time} (ascending, length \code{n}), \code{lambda}
-(\verb{[n, n_states]}), and optionally \code{breaks} (indices into \code{time} the
-interpolant must not span), \code{gradtol} (default \code{1e-6}) and \code{floor}
+step-size weight. Native backend only. A list with \code{time} (ascending,
+length \code{n}), \code{lambda} (\verb{[n, n_states]}), and optionally \code{breaks}
+(indices into \code{time} the interpolant must not span), \code{gradtol}
+(default \code{1e-6}) and \code{floor}
 (smallest weight as a fraction of the largest, default \code{0}). The
 controller then takes the maximum of its own error norm and
 \eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
@@ -178,12 +182,9 @@ list of \code{time} and \code{h}, the start and length of each accepted step; \c
 one column per seed, being \eqn{\lambda^T e_k}; and \code{lambda},
 \verb{[n_steps, n_states, n_seed]}, the adjoint state at each step's start. \code{eta}
 estimates the step's share of the error in the objective.
-A seed may carry its own tangents, attached as \code{seedTangent}, an array
-\verb{[n_out, n_states, n_seed, n_sens]} on the seed's own first three
-dimensions. Without them the second order misses the seed's dependence on
-the parameters. Only \code{derivMode = "forward-reverse"} has slots for them.
-With \code{keepStore = TRUE} it carries \verb{$store}, an external pointer to the
-checkpoints, for a later solve to take through \code{store}.
+
+With \code{keepStore = TRUE} a reverse solve also carries \verb{$store}, an external
+pointer to the checkpoints, for a later solve to take through \code{store}.
 }
 \description{
 Numerically integrates a compiled ODE model created by \code{\link[=cppODE]{cppODE()}} (or
@@ -192,81 +193,23 @@ when the model was compiled with sensitivities, first- and (optionally)
 second-order parameter sensitivities.
 }
 \details{
-\subsection{Sensitivity with respect to a reparametrization}{
-
-By default, the compiled solver computes sensitivities of the state
-trajectory \eqn{x(t)} with respect to the full input vector
-\eqn{p = (p_{\text{init}}, p_{\text{dyn}}) \in \mathbb{R}^{n_x + n_p}},
-i.e. all initial conditions stacked on all dynamic parameters. In
-fitting and identifiability workflows the quantity of interest is
-often instead the gradient with respect to a smaller set of free
-variables \eqn{\theta \in \mathbb{R}^{M}}, where the model inputs are
-obtained from a smooth reparametrization
-
-\deqn{p = \Phi(\theta) \in \mathbb{R}^{n_x + n_p}.}
-
-Typical examples are log-parametrization
-(\eqn{p_i = \exp \theta_i}) to enforce positivity, parameters that
-are shared across compartments or experimental conditions, and
-components of \eqn{p} that are held constant and therefore drop out
-of \eqn{\theta}.
-
-By the chain rule, the trajectory's first- and second-order
-sensitivities with respect to \eqn{\theta} are
-
-\deqn{\frac{\partial x(t)}{\partial \theta} \;=\;
-      \frac{\partial x(t)}{\partial p}\,\Phi'(\theta),}
-
-\deqn{\frac{\partial^{2} x(t)}{\partial \theta\,\partial \theta^{\top}}
-      \;=\;
-      \Phi'(\theta)^{\top}\,
-      \frac{\partial^{2} x(t)}{\partial p\,\partial p^{\top}}\,
-      \Phi'(\theta) \;+\;
-      \frac{\partial x(t)}{\partial p}\,\Phi''(\theta),}
-
-where \eqn{\Phi'(\theta)} is an \eqn{(n_x + n_p) \times M} Jacobian
-and \eqn{\Phi''(\theta)} is the corresponding
-\eqn{(n_x + n_p) \times M \times M} Hessian tensor (contracted on its
-first index in the formula above).
-
-Rather than first computing \eqn{\partial x(t)/\partial p} along all
-\eqn{n_x + n_p} canonical directions and contracting with
-\eqn{\Phi'(\theta)} afterwards, the solver applies the chain rule
-\emph{inside} the AD pass: each of the \eqn{M} forward-AD directions is
-seeded with the corresponding column of \eqn{\Phi'(\theta)}, so the
-integrator directly returns
-\eqn{\partial x(t)/\partial \theta} (and analogously
-\eqn{\partial^{2} x(t)/\partial \theta\,\partial \theta^{\top}} when
-\eqn{\Phi''(\theta)} is supplied for the second-order seeds). The
-parameter sweep then has cost \eqn{O(M)} rather than
-\eqn{O(n_x + n_p)}, which is the main practical benefit when
-\eqn{M \ll n_x + n_p}.
-
-The default identity reparametrization \eqn{\Phi(\theta) = \theta}
-corresponds to \eqn{\Phi'(\theta) = I_{(n_x + n_p) \times (n_x + n_p)}}
-and \eqn{\Phi''(\theta) = 0}; this is the legacy seeding emitted when
-\code{sens1ini} / \code{sens2ini} are omitted, restricted to the active
-(non-fixed) sensitivity columns.
-}
-
 \subsection{Sensitivity initial values}{
 
-\code{sens1ini} and \code{sens2ini} are exactly \eqn{\Phi'(\theta)} and
-\eqn{\Phi''(\theta)} from the chain-rule derivation above, evaluated
-at the current \eqn{\theta}. Three shapes are accepted, selected per
-call from the row count and row names of the supplied matrix:
+\code{sens1ini} and \code{sens2ini} are the Jacobian \eqn{\Phi'(\theta)} and the
+Hessian tensor \eqn{\Phi''(\theta)} of a reparametrisation
+\eqn{p = \Phi(\theta)} of the initial states and parameters; the returned
+sensitivities are then taken with respect to \eqn{\theta}. Omitting them
+seeds the identity on the active (non-fixed) sensitivities. Three shapes
+are accepted, selected per call from the row count and row names:
 \itemize{
-\item \strong{Legacy shape} \verb{[n_states, n_active]}: identity seeding on the
+\item \strong{State-only shape} \verb{[n_states, n_active]}: identity seeding on the
 parameter block is implied. The active set equals the model's
 sensitivity names minus \code{fixed}. Detected when \code{nrow == n_states}
 and row names are absent or are a permutation of \code{variables}. This
-is the shape emitted by \code{solveODE()} itself (\code{res$sens1[t, , ]}) and
-can therefore be used directly for warm-starting subsequent solves.
+is the shape of \code{res$sens1[t, , ]}, so it can seed a following solve.
 \item \strong{Full shape} \verb{[n_states + n_params, M]}: \eqn{\Phi'(\theta)}
 directly. State rows seed state ICs; parameter rows seed the dynamic
-parameters. The column count \code{M} may vary across calls; under
-Tangent storage is heap-allocated, so \eqn{M} is free per call: a wide
-parameter set is answered in blocks of directions, all on one grid.
+parameters. The column count \code{M} may change from call to call.
 \item \strong{Partial shape} \verb{[k, M]} with \code{k < n_states + n_params}: row
 names are required and must be a subset of
 \code{c(variables, parameters)}. The supplied rows are placed at the
@@ -279,7 +222,7 @@ Run-time \code{fixed} is incompatible with the full and partial shapes
 (those already encode fixedness via row presence / row values).
 
 Column names, when present, must match the relevant column basis
-(the active sensitivity names for the legacy shape, user-chosen theta
+(the active sensitivity names for the state-only shape, user-chosen theta
 names for the full / partial shapes).
 }
 }

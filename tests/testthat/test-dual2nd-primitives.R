@@ -16,12 +16,29 @@ name_of <- function(expr) {
   gsub("^_|_$", "", gsub("[^A-Za-z0-9]+", "_", s))
 }
 
+# Every primitive the tests below evaluate, with its parameters, built once and
+# linked into one shared object. The list is keyed by name_of() of the model.
+d2prim_pars <- list("a + b" = c("a", "b"), "a * b" = c("a", "b"),
+                    "a / b" = c("a", "b"), "a - b" = c("a", "b"),
+                    "a^b" = c("a", "b"), "a^2" = "a",
+                    "a*sin(b) + exp(a)" = c("a", "b"),
+                    "a*b + b*c + a*c" = c("a", "b", "c"))
+for (fn in c("sin", "cos", "tan", "exp", "log", "sqrt", "sinh", "cosh", "tanh"))
+  d2prim_pars[[sprintf("%s(x)", fn)]] <- "x"
+d2prim <- Map(function(expr, parameters)
+  cppFUN(c(y = expr), parameters = parameters,
+         deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
+         modelname = paste0("d2prim_", name_of(expr))),
+  names(d2prim_pars), d2prim_pars)
+names(d2prim) <- vapply(names(d2prim_pars), name_of, "")
+do.call(compile, c(unname(d2prim),
+                   list(output = "test_dual2nd_primitives", cores = 1)))
+
 # Helper: the compiled forward result and its stats::D() reference, both as
 # (y, dy, d2y) arrays in the layout evaluate() returns.
 run_modes <- function(expr, parameters, x_vals, dP, dP2 = NULL) {
-  f <- cppFUN(expr, parameters = parameters,
-              deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
-              compile = TRUE, modelname = paste0("d2prim_", name_of(expr)))
+  f <- d2prim[[name_of(expr)]]
+  stopifnot(!is.null(f), identical(attr(f, "parameters"), parameters))
   args <- as.list(x_vals)
   args$dP <- dP
   if (!is.null(dP2)) args$dP2 <- dP2

@@ -27,14 +27,82 @@ seed_for <- function(n_t, n_x = 2L, n_seed = 1L, seed = 1L) {
 # B columns of the identity: the directions a block of a chunked Hessian takes.
 block_dirs <- function(B) { S <- matrix(0, n_phi, B); diag(S) <- 1; S }
 
+# ---------------------------------------------------------------------------
+#  Models, generated uncompiled and linked into one shared object. Tests that
+#  need the same model share it.
+# ---------------------------------------------------------------------------
+
+steppers <- c("bdf", "adams", "rb4", "tsit5")
+
+# One model per method, named <prefix><method>.
+per_method <- function(rhs, prefix, derivMode, meths = steppers, ...)
+  lapply(setNames(nm = meths), function(meth)
+    cppODE(rhs, method = meth, derivMode = derivMode,
+           modelname = paste0(prefix, meth), compile = FALSE, ...))
+
+# A forward-forward oracle and the forward-reverse model it checks, per method.
+oracle_pair <- function(rhs, tag, meths = steppers, ...)
+  list(ff = per_method(rhs, paste0("g2_", tag, "_ff_"), "forward-forward", meths, ...),
+       fr = per_method(rhs, paste0("g2_", tag, "_fr_"), "forward-reverse", meths, ...))
+
+# Models nest in lists; compile() takes them flat.
+flat <- function(x) if (is.list(x)) do.call(c, lapply(unname(x), flat)) else list(x)
+
+# A forcing, and a jump whose height is a parameter. Off the output grid, so
+# the jump shows up as its own pair of rows.
+eqns_u <- c(A = "-k1 * A + k2 * B + u",
+            B = "k1 * A - k2 * B - k3 * B * B")
+ev_fixed <- data.frame(var = "A", time = 1.1, value = "d_amt", method = "add",
+                       stringsAsFactors = FALSE)
+# A jump whose time is a parameter.
+ev_ptime <- data.frame(var = "A", time = "t_ev", value = 0.4, method = "add",
+                       stringsAsFactors = FALSE)
+# A root event whose height is a parameter.
+ev_root <- data.frame(var = "A", time = NA, value = "d_amt", root = "B - 0.55",
+                      method = "add", stringsAsFactors = FALSE)
+# A fixed and a root event, every slot an expression.
+ev_general <- data.frame(
+  var    = c("A", "B"),
+  time   = c("0.5 * t_ev + 0.4 * t_ev * t_ev", NA),
+  value  = c("k1 * A + d_amt * time", "0.3 * B + 0.2 * d_amt * A * time"),
+  root   = c(NA, "B * B + 0.1 * A - 0.40 - 0.02 * time"),
+  method = c("add", "add"),
+  stringsAsFactors = FALSE)
+# A right-hand side that reads the clock.
+eqns_t <- c(A = "-k1 * time * A + k2 * B", B = "k1 * A - k2 * B - k3 * B * B")
+# A root event whose height reads the clock.
+ev_clock <- data.frame(var = "A", time = NA, value = "d_amt * time",
+                       root = "B - 0.55", method = "add", stringsAsFactors = FALSE)
+
+m_r  <- per_method(eqns, "g2_r_",  "reverse")
+m_fr <- per_method(eqns, "g2_fr_", "forward-reverse")
+m_ff <- cppODE(eqns, modelname = "g2_ff", derivMode = "forward-forward",
+               compile = FALSE)
+pr_forcing <- oracle_pair(eqns_u, "ev", c("bdf", "tsit5"),
+                          events = ev_fixed, forcings = "u")
+pr_ptime   <- oracle_pair(eqns,   "pt",   "bdf", events = ev_ptime)
+pr_root    <- oracle_pair(eqns,   "rt",   events = ev_root)
+pr_general <- oracle_pair(eqns,   "gen",  events = ev_general)
+pr_clock   <- oracle_pair(eqns_t, "td",   events = ev_root)
+pr_rtol    <- oracle_pair(eqns,   "rtol", "bdf", events = ev_clock)
+do.call(compile, c(flat(list(m_r, m_fr, m_ff, pr_forcing, pr_ptime, pr_root,
+                             pr_general, pr_clock, pr_rtol)),
+                   output = "test_ode_reverse2", cores = 1))
+
+# Sparse models need KLU; their test skips without it.
+if (isTRUE(cppDE:::cvodeConfig$klu_available)) {
+  pr_sparse <- oracle_pair(eqns, "sp", "bdf", sparse = TRUE)
+  do.call(compile, c(flat(pr_sparse), output = "test_ode_reverse2_sparse",
+                     cores = 1))
+}
+
 test_that("a forward-reverse solve lands on the value run's grid at any width", {
-  mr <- do.call(cppODE, list(eqns, modelname = "g2_r", derivMode = "reverse"))
+  mr <- m_r$bdf
+  m  <- m_fr$bdf
   W  <- seed_for(length(times))
   rr <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
 
   for (B in c(1L, 3L, 5L)) {
-    m <- cppODE(eqns, modelname = paste0("g2_fr", B),
-                derivMode = "forward-reverse")
     fr <- do.call(solveODE,
                   c(list(m, times, pars, sens1ini = block_dirs(B), seed = W), tol))
     # The grid is the exact claim. The numbers on it are not bit-identical:
@@ -48,8 +116,7 @@ test_that("a forward-reverse solve lands on the value run's grid at any width", 
 })
 
 test_that("the grid does not depend on what the tangents contain", {
-  m <- cppODE(eqns, modelname = "g2_content",
-              derivMode = "forward-reverse")
+  m <- m_fr$bdf
   W <- seed_for(length(times))
   set.seed(7)
   dirs <- list(identity = block_dirs(3L),
@@ -77,11 +144,9 @@ test_that("every method takes the value grid backwards", {
   # zero.
   W <- seed_for(length(times))
   for (meth in c("bdf", "adams", "rb4", "tsit5")) {
-    mr <- cppODE(eqns, modelname = paste0("g2m_r_", meth),
-                 derivMode = "reverse", method = meth)
+    mr <- m_r[[meth]]
     rr <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
-    m  <- cppODE(eqns, modelname = paste0("g2m_fr_", meth),
-                 derivMode = "forward-reverse", method = meth)
+    m  <- m_fr[[meth]]
     fr <- do.call(solveODE,
                   c(list(m, times, pars, sens1ini = block_dirs(5L), seed = W), tol))
     expect_identical(fr$time, rr$time, info = meth)
@@ -103,8 +168,7 @@ test_that("blocks ride one grid on every method", {
   # steppers and with the runtime width differing from block to block.
   W <- seed_for(length(times))
   for (meth in c("bdf", "adams", "rb4", "tsit5")) {
-    m <- cppODE(eqns, modelname = paste0("g2b_", meth), method = meth,
-                derivMode = "forward-reverse")
+    m <- m_fr[[meth]]
     one <- do.call(solveODE, c(list(m, times, pars, seed = W), tol))
     H <- matrix(0, n_phi, n_phi)
     for (start in c(1L, 3L, 5L)) {
@@ -124,13 +188,10 @@ test_that("blocks ride one grid on every method", {
 })
 
 test_that("a Hessian assembled from blocks is the one a single pass gives", {
-  m5 <- cppODE(eqns, modelname = "g2_h5",
-               derivMode = "forward-reverse")
-  m2 <- cppODE(eqns, modelname = "g2_h2",
-               derivMode = "forward-reverse")
+  m  <- m_fr$bdf
   W  <- seed_for(length(times))
   one <- do.call(solveODE,
-                 c(list(m5, times, pars, sens1ini = block_dirs(5L), seed = W), tol))
+                 c(list(m, times, pars, sens1ini = block_dirs(5L), seed = W), tol))
 
   # Three blocks of two, the last one short, tiled into the full matrix.
   H <- matrix(NA_real_, n_phi, n_phi)
@@ -139,7 +200,7 @@ test_that("a Hessian assembled from blocks is the one a single pass gives", {
     S <- matrix(0, n_phi, 2L)
     for (j in seq_along(idx)) S[idx[j], j] <- 1
     blk <- do.call(solveODE,
-                   c(list(m2, times, pars, sens1ini = S, seed = W), tol))
+                   c(list(m, times, pars, sens1ini = S, seed = W), tol))
     expect_identical(blk$time, one$time, info = as.character(start))
     expect_equal(unname(blk$adjoint), unname(one$adjoint),
                  tolerance = 1e-12, info = as.character(start))
@@ -184,22 +245,13 @@ expect_second_order <- function(ff, fr, W, info, tol_g = 1e-5, tol_h = 1e-5) {
 test_that("forcings and a jump go backwards at second order", {
   # What works: a forcing, and a jump whose height is a parameter. What does
   # not: a jump whose TIME is a parameter, the case below.
-  eq <- c(A = "-k1 * A + k2 * B + u",
-          B = "k1 * A - k2 * B - k3 * B * B")
-  # Off the output grid, so the jump shows up as its own pair of rows.
-  ev <- data.frame(var = "A", time = 1.1, value = "d_amt", method = "add",
-                   stringsAsFactors = FALSE)
   p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, d_amt = 0.4)
   fc <- list(u = data.frame(time = c(0, 2, 5), value = c(0.1, 0.25, 0.05)))
   N  <- length(p)
 
   for (m in c("bdf", "tsit5")) {
-    mf <- cppODE(eq, events = ev, forcings = "u", method = m,
-                 modelname = paste0("g2_ev_ff_", m),
-                 derivMode = "forward-forward")
-    mr <- cppODE(eq, events = ev, forcings = "u", method = m,
-                 modelname = paste0("g2_ev_fr_", m),
-                 derivMode = "forward-reverse")
+    mf <- pr_forcing$ff[[m]]
+    mr <- pr_forcing$fr[[m]]
     ff <- do.call(solveODE, c(list(mf, times, p, forcings = fc), tol))
     # The jump has to be in the run, or the test proves nothing.
     expect_gt(nrow(ff$variable), length(times))
@@ -214,17 +266,12 @@ test_that("a jump whose time is a parameter goes backwards at second order", {
   # parameter. A seed on it makes w.x a different functional, and then no
   # derivative agrees with a difference quotient. The comparison is therefore
   # on the user times alone.
-  eq <- c(A = "-k1 * A + k2 * B", B = "k1 * A - k2 * B - k3 * B * B")
-  ev <- data.frame(var = "A", time = "t_ev", value = 0.4, method = "add",
-                   stringsAsFactors = FALSE)
   p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, t_ev = 1.1)
   N  <- length(p)
   tl <- list(abstol = 1e-12, reltol = 1e-12)
 
-  mf <- cppODE(eq, events = ev, method = "bdf",
-               modelname = "g2_pt_ff", derivMode = "forward-forward")
-  mr <- cppODE(eq, events = ev, method = "bdf",
-               modelname = "g2_pt_fr", derivMode = "forward-reverse")
+  mf <- pr_ptime$ff$bdf
+  mr <- pr_ptime$fr$bdf
   ff <- do.call(solveODE, c(list(mf, times, p), tl))
   expect_gt(nrow(ff$variable), length(times))
 
@@ -241,19 +288,12 @@ test_that("a root event goes backwards at second order", {
   # A root's t* moves with theta, and the grid carries the state either side of
   # the jump at that time. A seed there is not the same functional at two
   # parameter values, so both rows are zeroed.
-  eq <- c(A = "-k1 * A + k2 * B", B = "k1 * A - k2 * B - k3 * B * B")
-  ev <- data.frame(var = "A", time = NA, value = "d_amt", root = "B - 0.55",
-                   method = "add", stringsAsFactors = FALSE)
   p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, d_amt = 0.4)
   tl <- list(abstol = 1e-12, reltol = 1e-12)
 
   for (m in c("bdf", "adams", "rb4", "tsit5")) {
-    mf <- cppODE(eq, events = ev, method = m,
-                 modelname = paste0("g2_rt_ff_", m),
-                 derivMode = "forward-forward")
-    mr <- cppODE(eq, events = ev, method = m,
-                 modelname = paste0("g2_rt_fr_", m),
-                 derivMode = "forward-reverse")
+    mf <- pr_root$ff[[m]]
+    mr <- pr_root$fr[[m]]
     ff <- do.call(solveODE, c(list(mf, times, p), tl))
     # The jump has to be in the run, or the test proves nothing.
     expect_gt(nrow(ff$variable), length(times))
@@ -274,25 +314,13 @@ test_that("an event's root, time and value may be any expression", {
   # is quadratic in B, reads A and carries t, the event time is nonlinear in a
   # parameter, and both heights read the state, a parameter and the clock.
   # A clock-reading height rides on roottol rather than reltol.
-  eq <- c(A = "-k1 * A + k2 * B", B = "k1 * A - k2 * B - k3 * B * B")
-  ev <- data.frame(
-    var    = c("A", "B"),
-    time   = c("0.5 * t_ev + 0.4 * t_ev * t_ev", NA),
-    value  = c("k1 * A + d_amt * time", "0.3 * B + 0.2 * d_amt * A * time"),
-    root   = c(NA, "B * B + 0.1 * A - 0.40 - 0.02 * time"),
-    method = c("add", "add"),
-    stringsAsFactors = FALSE)
   p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1,
           d_amt = 0.4, t_ev = 1.0)
   tl <- list(abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
 
   for (m in c("bdf", "adams", "rb4", "tsit5")) {
-    mf <- cppODE(eq, events = ev, method = m,
-                 modelname = paste0("g2_gen_ff_", m),
-                 derivMode = "forward-forward")
-    mr <- cppODE(eq, events = ev, method = m,
-                 modelname = paste0("g2_gen_fr_", m),
-                 derivMode = "forward-reverse")
+    mf <- pr_general$ff[[m]]
+    mr <- pr_general$fr[[m]]
     ff <- do.call(solveODE, c(list(mf, times, p), tl))
 
     W <- seed_for(nrow(ff$variable))
@@ -310,19 +338,12 @@ test_that("an event's root, time and value may be any expression", {
 test_that("a right-hand side that reads the clock goes backwards too", {
   # f_e and f_a are evaluated at t*, which moves, so df/dt reaches the shift.
   # Every other model here is autonomous and leaves that term at zero.
-  eq <- c(A = "-k1 * time * A + k2 * B", B = "k1 * A - k2 * B - k3 * B * B")
-  ev <- data.frame(var = "A", time = NA, value = "d_amt", root = "B - 0.55",
-                   method = "add", stringsAsFactors = FALSE)
   p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, d_amt = 0.4)
   tl <- list(abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
 
   for (m in c("bdf", "adams", "rb4", "tsit5")) {
-    mf <- cppODE(eq, events = ev, method = m,
-                 modelname = paste0("g2_td_ff_", m),
-                 derivMode = "forward-forward")
-    mr <- cppODE(eq, events = ev, method = m,
-                 modelname = paste0("g2_td_fr_", m),
-                 derivMode = "forward-reverse")
+    mf <- pr_clock$ff[[m]]
+    mr <- pr_clock$fr[[m]]
     ff <- do.call(solveODE, c(list(mf, times, p), tl))
     W  <- seed_for(nrow(ff$variable))
     moving <- which(vapply(ff$time, function(x) min(abs(x - times)) > 1e-9, TRUE))
@@ -337,14 +358,9 @@ test_that("a clock-reading jump height rides on roottol", {
   # It reads t* itself, where a height blind to the clock only reads the state
   # there, so the localisation error reaches it undamped. Not a missing term:
   # the gap falls with roottol and floors at reltol.
-  eq <- c(A = "-k1 * A + k2 * B", B = "k1 * A - k2 * B - k3 * B * B")
-  ev <- data.frame(var = "A", time = NA, value = "d_amt * time",
-                   root = "B - 0.55", method = "add", stringsAsFactors = FALSE)
   p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, d_amt = 0.4)
-  mf <- cppODE(eq, events = ev, method = "bdf", modelname = "g2_rtol_ff",
-               derivMode = "forward-forward")
-  mr <- cppODE(eq, events = ev, method = "bdf", modelname = "g2_rtol_fr",
-               derivMode = "forward-reverse")
+  mf <- pr_rtol$ff$bdf
+  mr <- pr_rtol$fr$bdf
 
   gap <- vapply(c(1e-6, 1e-9), function(rt) {
     tl <- list(abstol = 1e-12, reltol = 1e-12, roottol = rt)
@@ -366,7 +382,7 @@ test_that("every direction runs on the heap and blocks ride one grid", {
   # The trap is silent: a heap dual with no width cannot arm, and a tangent read
   # off an unarmed one returns the out-of-bounds zero, which leaves the gradient
   # bit-identical and the Hessian wrong. Measure adjoint2, not just adjoint.
-  mh <- cppODE(eqns, modelname = "g2_heap", derivMode = "forward-reverse")
+  mh <- m_fr$bdf
   W  <- seed_for(length(times))
   one <- do.call(solveODE, c(list(mh, times, pars, seed = W), tol))
 
@@ -388,8 +404,8 @@ test_that("a seed that moves with theta carries its own tangents", {
   # A cotangent handed down from above the ODE depends on theta too, and
   # `seedTangent` is where that enters. Without it the Hessian loses the cross
   # term sum_r (dw_r/dtheta_b)(dx_r/dtheta_a), which is not small.
-  mf <- cppODE(eqns, modelname = "g2_stg_ff", derivMode = "forward-forward")
-  mr <- cppODE(eqns, modelname = "g2_stg_fr", derivMode = "forward-reverse")
+  mf <- m_ff
+  mr <- m_fr$bdf
   ff <- do.call(solveODE, c(list(mf, times, pars), tol))
   nt <- nrow(ff$variable)
 
@@ -420,10 +436,8 @@ test_that("a seed that moves with theta carries its own tangents", {
 
 test_that("a sparse Jacobian goes backwards at second order", {
   skip_if_not(isTRUE(cppDE:::cvodeConfig$klu_available), "KLU not available")
-  mf <- cppODE(eqns, modelname = "g2_sp_ff", sparse = TRUE,
-               derivMode = "forward-forward")
-  mr <- cppODE(eqns, modelname = "g2_sp_fr", sparse = TRUE,
-               derivMode = "forward-reverse")
+  mf <- pr_sparse$ff$bdf
+  mr <- pr_sparse$fr$bdf
   ff <- do.call(solveODE, c(list(mf, times, pars), tol))
   W  <- seed_for(nrow(ff$variable))
   fr <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
@@ -431,10 +445,8 @@ test_that("a sparse Jacobian goes backwards at second order", {
 })
 
 test_that("several seed columns each carry their own second order", {
-  mf <- cppODE(eqns, modelname = "g2_ns_ff",
-               derivMode = "forward-forward")
-  mr <- cppODE(eqns, modelname = "g2_ns_fr",
-               derivMode = "forward-reverse")
+  mf <- m_ff
+  mr <- m_fr$bdf
   ff <- do.call(solveODE, c(list(mf, times, pars), tol))
   W  <- seed_for(nrow(ff$variable), n_seed = 3L)
   fr <- do.call(solveODE, c(list(mr, times, pars, seed = W), tol))
@@ -455,10 +467,8 @@ test_that("a non-identity sens1ini reads the Hessian along its own directions", 
   # directions it is the full Hessian times S, not S' H S.
   set.seed(11)
   S  <- matrix(rnorm(n_phi * 3L), n_phi, 3L)
-  mf <- cppODE(eqns, modelname = "g2_rp_ff",
-               derivMode = "forward-forward")
-  mr <- cppODE(eqns, modelname = "g2_rp_fr",
-               derivMode = "forward-reverse")
+  mf <- m_ff
+  mr <- m_fr$bdf
   ff <- do.call(solveODE, c(list(mf, times, pars), tol))
   W  <- seed_for(nrow(ff$variable))
   fr <- do.call(solveODE, c(list(mr, times, pars, sens1ini = S, seed = W), tol))
@@ -471,8 +481,7 @@ test_that("a non-identity sens1ini reads the Hessian along its own directions", 
 test_that("a store is refused under second order rather than answered wrongly", {
   # A checkpoint's tangents live in the arena of the solve that filled it, so a
   # store handed to a later solve would give exact values and a wrong Hessian.
-  m <- cppODE(eqns, modelname = "g2_store",
-              derivMode = "forward-reverse")
+  m <- m_fr$bdf
   S <- block_dirs(n_phi)
   expect_error(
     do.call(solveODE, c(list(m, times, pars, sens1ini = S, keepStore = TRUE), tol)),
@@ -480,8 +489,7 @@ test_that("a store is refused under second order rather than answered wrongly", 
 })
 
 test_that("the batch entry carries the second order per condition", {
-  m <- cppODE(eqns, modelname = "g2_batch",
-              derivMode = "forward-reverse")
+  m <- m_fr$bdf
   S <- block_dirs(n_phi)
   p2 <- pars; p2["k1"] <- 0.9
   one <- do.call(solveODE, c(list(m, times, pars, sens1ini = S,

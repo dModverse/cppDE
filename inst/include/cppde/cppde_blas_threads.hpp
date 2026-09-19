@@ -1,33 +1,14 @@
 /*
  Keep BLAS single-threaded where a threaded BLAS would break the process.
 
- Two hazards share one lever.
+ Two hazards: MKL's default libiomp5 next to the models' libgomp puts two
+ OpenMP runtimes in one process, which is undefined behaviour; and a threaded
+ BLAS pool does not survive fork(), so the child's first threaded call hangs.
 
- A generated model is compiled with -fopenmp and runs on libgomp, while the
- default threading layer of Intel MKL's single dynamic library is libiomp5.  Two
- live OpenMP runtimes in one process is undefined behaviour.  It shows up as
- silently wrong sensitivity blocks, after which the step controller sees a
- diverging error estimate and gives up, rather than as a solve that returns a
- wrong answer.  (Confirmed by MKL_THREADING_LAYER=GNU and =SEQUENTIAL both
- making it go away, while MKL_NUM_THREADS=2 does not.)
-
- A threaded BLAS also does not survive fork().  Only the forking thread reaches
- the child, and the first BLAS call there large enough to thread spins forever
- on a team whose workers stayed behind.  It needs a warm pool in the parent, so
- it misses small tests and hits real fits.
-
- Neither is reachable through the environment: a threading runtime reads
- OMP_NUM_THREADS when its library is loaded, before any R code runs, and
- setenv() afterwards is neither effective nor thread-safe.  The runtime entry
- points probed below are the only lever left.
-
- Pinning to one thread costs cppDE nothing: parallelism lives one level up,
- where solveODEBatch() runs whole conditions concurrently, and the per-solve
- BLAS calls are far too small to thread usefully anyway.
-
- Every pin is scoped.  The thread count is process-global state that belongs to
- the caller, so a solve restores what was set before it and the fork guard
- restores it in the parent as soon as fork() has returned.
+ The environment cannot fix either, because a runtime reads OMP_NUM_THREADS
+ when it loads. The runtime entry points probed below are the lever. Every pin
+ is scoped: a solve restores the caller's count, and the fork guard restores it
+ in the parent once fork() has returned.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -104,7 +85,7 @@ struct blas_thread_api {
   blas_thread_api() {
     // FlexiBLAS first.  It dispatches to whichever backend is loaded and
     // exports the other vendors' names as aliases onto its own counter, so
-    // wherever it is in play its own name is the honest one to report.
+    // wherever it is in play its own name is the one to report.
     add("FlexiBLAS", "flexiblas_set_num_threads",  "flexiblas_get_num_threads");
     add("MKL",       "MKL_Set_Num_Threads",        "MKL_Get_Max_Threads");
     add("OpenBLAS",  "openblas_set_num_threads",   "openblas_get_num_threads");

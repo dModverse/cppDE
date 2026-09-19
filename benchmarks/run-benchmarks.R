@@ -37,6 +37,10 @@ OPTS <- list(
   conditions   = "1",         # integer, or "all"
   modes        = "nosens,sens1",
   `max-sens2`  = "10",
+  `max-sens2-fr` = "32",
+  `max-states-sens2` = "30",
+  `max-states-ff` = "10",
+  `reverse-from` = "120",
   tol          = "default",   # default | wp | loose | tight
   nrep         = "5",
   `min-time`   = "",           # seconds per timing batch; "" = auto
@@ -115,8 +119,15 @@ cppDE benchmark suite, cppDE vs SUNDIALS CVODE(S)
         sens2 measures second-order (Hessian) runtimes.  CVODES has no
         second-order sensitivities, so those rows are cppDE-only and
         carry timings without a cross-implementation comparison.
-  --max-sens2 <n>               cap on sensitivity parameters for sens2,
+  --max-sens2 <n>               directions for forward-forward sens2,
                                 whose cost grows with M^2            [10]
+  --max-sens2-fr <n>            directions for forward-reverse sens2 [32]
+  --max-states-sens2 <n>        sens2 only up to this many states    [30]
+  --max-states-ff <n>           forward-forward only up to this many
+                                states                               [10]
+  --reverse-from <n>            sens1 in reverse mode, cppDE against
+                                CVODES adjoints, from this many
+                                sensitivity parameters on           [120]
   --tol <default|wp|loose|tight>  tolerance set; 'wp' is a 5-point sweep
                                 for work-precision diagrams      [default]
   --nrep <n>                    timing batches per cell          [5]
@@ -343,7 +354,7 @@ if (OPTS$suite %in% c("all", "petab")) {
                      conditions = if (identical(n_conditions, "all")) "all" else NULL,
                      max_conditions = if (identical(n_conditions, "all")) Inf
                                       else n_conditions,
-                     max_sens = max_sens, min_points = as.integer(OPTS$`min-points`)),
+                     max_sens = Inf, min_points = as.integer(OPTS$`min-points`)),
       error = function(e) { message("  [skip] ", idx$name[i], ": ",
                                     sub("\n.*", "", conditionMessage(e))); list() })
     built <- if (cores > 1L && .Platform$OS.type == "unix" && nrow(idx) > 1L)
@@ -409,6 +420,10 @@ df <- run_all_problems(
   runnable, builddir = builddir, tolerances = tolerances, modes = modes,
   configs = configs, sweep_configs = sweep_configs, nrep = nrep, cores = cores,
   max_sens2 = as.integer(OPTS$`max-sens2`), max_sens = max_sens,
+  reverse_from = as.integer(OPTS$`reverse-from`),
+  max_states_sens2 = as.integer(OPTS$`max-states-sens2`),
+  max_states_ff = as.integer(OPTS$`max-states-ff`),
+  max_sens2_fr = as.integer(OPTS$`max-sens2-fr`),
   max_states = max_states, compile_slots = compile_slots,
   min_time = if (nzchar(OPTS$`min-time`)) as.numeric(OPTS$`min-time`) else NULL,
   on_skip = function(name, why) {

@@ -1,10 +1,10 @@
 """Structure of large right-hand sides.
 
-E: long sums sum_j c_j * x_j with numeric c_j become rows of a constant map
-C; the sum is replaced by a LINROW leaf whose value is (C x)[r]. Generated
-code evaluates C x once per call and assembles Jacobian rows as G C.
+Linear map: long sums sum_j c_j * x_j with numeric c_j become rows of a
+constant map C; the sum is replaced by a LINROW leaf whose value is (C x)[r].
+Generated code evaluates C x once per call and assembles Jacobian rows as G C.
 
-D: statements of equal structure become loops over index tables
+Loops: statements of equal structure become loops over index tables
 (vector_block).
 """
 
@@ -194,7 +194,7 @@ def linear_rows(g, roots, n_states, min_terms):
 
 
 # ===========================================================================
-# D: loops over statements of equal structure
+# Loops over statements of equal structure
 # ===========================================================================
 
 # Fewest instances of a class, or terms of a sum, emitted as a loop.

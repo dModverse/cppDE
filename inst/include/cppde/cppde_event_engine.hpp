@@ -141,13 +141,9 @@ public:
 
  void set_termination(TerminationFunc f) { m_termination = std::move(f); }
 
- // Called after every accepted step of the dense loop, which is where the
- // reverse mode drops its checkpoint. It reads the stepper itself, so it needs
- // no arguments. Unset costs one predictable branch per step.
- //
- // The controlled loop is not hooked: it steps in place and clips to the next
- // output time, so a checkpoint there needs the state before the step rather
- // than after it. That comes with the non-dense reverse path.
+ // Called after every accepted step of the dense loop, where the reverse mode
+ // drops its checkpoint; it reads the stepper itself. The controlled loop is
+ // not hooked, so the reverse mode needs dense output.
  void set_step_observer(StepObserver f) { m_step_obs = std::move(f); }
 
  // Called at every jump the dense loop applies, with the state on both sides of

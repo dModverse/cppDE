@@ -73,26 +73,18 @@ forces dense. Sparse LU requires KLU at install time.}
 \item{useNDF}{Logical. Use Klopfenstein-Shampine NDF coefficients in
 the BDF corrector. Applies to \code{method = "bdf"}; ignored otherwise.}
 
-\item{derivMode}{Direction the derivatives are taken in, one of four.
-\code{"forward"}, the default, propagates tangents alongside the states, which
-is what \code{deriv} builds. \code{"reverse"} compiles a different object: the states
-are integrated in plain \code{double} and the derivatives come out of one
-backward sweep over the recorded steps, so their cost does not grow with
-the number of parameters. A reverse model takes a \code{seed} in \code{\link[=solveODE]{solveODE()}}
-and answers with \verb{$adjoint}, one row per state and parameter, and carries
-no \code{sens1}.
+\item{derivMode}{Direction the derivatives are taken in.
+\itemize{
+\item \code{"forward"} (default): forward sensitivities as built by \code{deriv},
+returned as \verb{$sens1}.
+\item \code{"reverse"}: no forward sensitivities; the model takes a \code{seed} in
+\code{\link[=solveODE]{solveODE()}} and returns \verb{$adjoint}, one row per state and parameter.
+\item \code{"forward-forward"}: the same as \code{deriv2 = TRUE}, returning \verb{$sens2}.
+\item \code{"forward-reverse"}: returns \verb{$sens1}, \verb{$adjoint} and \verb{$adjoint2}, the
+derivatives of \verb{$adjoint} along each sensitivity direction.
+}
 
-The two second-order modes differ in how the inner derivative is taken.
-\code{"forward-forward"} is \code{deriv2 = TRUE} on the forward mode and answers with
-\verb{$sens2}, the second derivatives of every state. \code{"forward-reverse"} runs
-the backward sweep itself over tangents and answers with \verb{$adjoint2}, the
-derivatives of the gradient, which under the identity seeding is the
-Hessian of the seeded functional. The first
-scales with the square of the sensitivity count, the second with its
-product with the seed count.
-
-Reverse compiles only the dense-output path, which is what the multistep
-methods always use.}
+The reverse modes force \code{useDenseOutput = TRUE}.}
 
 \item{profile}{Logical. Compile with profiling counters.}
 
@@ -106,7 +98,7 @@ The compiled model name (character) carrying the attributes
 required by \code{\link[=solveODE]{solveODE()}}: \code{equations}, \code{srcfile}, \code{variables},
 \code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed}, \code{deriv},
 \code{deriv2}, \code{derivMode}, \code{sparse}, \code{method}, \code{useNDF}, \code{dimNames},
-\code{compileArgs}, \code{backend}.
+\code{compileArgs}, and \code{linkArgs} when OpenMP is available.
 }
 \description{
 Generates C++ source code for an ODE system \eqn{\dot{x} = f(x, p)},

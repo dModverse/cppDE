@@ -1,7 +1,7 @@
 /*
  AD-aware sparse LU solver for cppDE: raw CSC + KLU.
 
- Backend: KLU (KLU) or Eigen::SparseLU fallback.
+ Backend: KLU; without it the sparse path does not compile.
  Operates on csc_matrix<T> with raw Ap/Ai/Ax arrays.
 
  Copyright (C) 2026 Simon Beyer
@@ -55,8 +55,7 @@ extract_csc_values(const csc_matrix<AD>& W)
 // ============================================================================
 //  sparse_lu_solver<T>: Base case: T is a non-AD scalar
 //
-//  KLU: klu_lu_solver (preferred)
-//  otherwise: compile error (KLU is now required for sparse)
+//  KLU through klu_lu_solver; a compile error without KLU.
 // ============================================================================
 
 template<class T, class Enable = void>
@@ -652,7 +651,7 @@ private:
   // Persistent solve buffers.
   mutable std::vector<Inner> m_b_val;          // n scalars: value part (single)
   mutable std::vector<Inner> m_rhs_all;        // n × n_derivs (single)
-  mutable std::vector<F>     m_col_buf;        // legacy column buffer
+  mutable std::vector<F>     m_col_buf;        // unused
   mutable std::vector<Inner> m_b_val_batch;    // n × nrhs: value part (batched)
   mutable std::vector<Inner> m_rhs_all_batch;  // n × n_derivs × nrhs (batched)
 };

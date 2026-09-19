@@ -26,9 +26,7 @@ reuse the prepared values.}
 condition, or \code{NULL} to reuse. Shapes must match the prepared ones.}
 
 \item{seed}{List of reverse-mode seeds, one per condition, or \code{NULL} to
-reuse. A new objective seeds a new cotangent at every iteration while its
-shape stays put, which is what makes a prepared handle usable in reverse
-mode. Shapes must match the prepared ones.}
+reuse. Shapes must match the prepared ones.}
 
 \item{errWeights}{List of weightings for the step-size controller, one per
 condition, or \code{NULL} to keep the prepared ones. Each is the \code{errWeights}

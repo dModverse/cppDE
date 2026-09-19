@@ -4,10 +4,34 @@
 
 skip_on_cran()
 
+# The native and cppFUN models, compiled into one shared object.
+mod_nd   <- cppODE(c(x = "-x"), modelname = "noparm_cpp_nd", deriv = FALSE,
+                   compile = FALSE)
+mod_d    <- cppODE(c(x = "-x"), modelname = "noparm_cpp_d", deriv = TRUE,
+                   compile = FALSE)
+# convenient = FALSE so we can pass an explicit (n_obs, 0) matrix; the
+# convenient wrapper has no way to express n_obs when there are no vars.
+fun_lit  <- cppFUN(c(y = "5"), compile = FALSE, modelname = "noparm_fun_lit",
+                   convenient = FALSE)
+fun_dual <- cppFUN(c(y = "2*x + 3"), compile = FALSE,
+                   modelname = "noparm_fun_dual", derivMode = "forward")
+fun_d2   <- cppFUN(c(y = "x^2 + 3*x"), compile = FALSE,
+                   modelname = "noparm_fun_dual_d2",
+                   derivMode = "forward", deriv2 = TRUE)
+compile(mod_nd, mod_d, fun_lit, fun_dual, fun_d2,
+        output = "test_no_parameters", cores = 1)
+
+if (isTRUE(cvodeConfig$available)) {
+  cv_nd <- cvode(c(x = "-x"), modelname = "noparm_cv_nd", compile = FALSE)
+  cv_d  <- cvode(c(x = "-x"), modelname = "noparm_cv_d", deriv = TRUE,
+                 compile = FALSE)
+  compile(cv_nd, cv_d, output = "test_no_parameters_cvode", cores = 1)
+}
+
 # -- cppDE: pure decay, no parameters ----------------------------------------
 
 test_that("cppDE compiles and solves with zero parameters (deriv = FALSE)", {
-  mod <- cppODE(c(x = "-x"), modelname = "noparm_cpp_nd")
+  mod <- mod_nd
 
   expect_equal(attr(mod, "parameters"), character(0))
 
@@ -20,7 +44,7 @@ test_that("cppDE compiles and solves with zero parameters (deriv = FALSE)", {
 })
 
 test_that("cppDE deriv = TRUE with zero parameters seeds initial-state sens", {
-  mod <- cppODE(c(x = "-x"), modelname = "noparm_cpp_d", deriv = TRUE)
+  mod <- mod_d
 
   expect_equal(attr(mod, "parameters"), character(0))
   expect_equal(attr(mod, "dimNames")$sens, "x")
@@ -40,7 +64,7 @@ test_that("cppDE deriv = TRUE with zero parameters seeds initial-state sens", {
 test_that("CVODE compiles and solves with zero parameters (deriv = FALSE)", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
-  mod <- cvode(c(x = "-x"), modelname = "noparm_cv_nd")
+  mod <- cv_nd
 
   expect_equal(attr(mod, "parameters"), character(0))
 
@@ -55,7 +79,7 @@ test_that("CVODE compiles and solves with zero parameters (deriv = FALSE)", {
 test_that("CVODE deriv = TRUE with zero parameters seeds initial-state sens", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
-  mod <- cvode(c(x = "-x"), modelname = "noparm_cv_d", deriv = TRUE)
+  mod <- cv_d
 
   expect_equal(attr(mod, "parameters"), character(0))
   expect_equal(attr(mod, "dimNames")$sens, "x")
@@ -72,10 +96,7 @@ test_that("CVODE deriv = TRUE with zero parameters seeds initial-state sens", {
 # -- cppFUN: literal-only equations (no variables, no parameters) -------------
 
 test_that("cppFUN accepts literal-only equations", {
-  # convenient = FALSE so we can pass an explicit (n_obs, 0) matrix; the
-  # convenient wrapper has no way to express n_obs when there are no vars.
-  obj <- cppFUN(c(y = "5"), compile = TRUE, modelname = "noparm_fun_lit",
-                convenient = FALSE)
+  obj <- fun_lit
 
   expect_equal(attr(obj, "variables"), character(0))
   expect_null(attr(obj, "parameters"))
@@ -89,8 +110,7 @@ test_that("cppFUN accepts literal-only equations", {
 # -- cppFUN: state variables only, no parameters -------------------------------
 
 test_that("cppFUN dual mode evaluates with zero parameters", {
-  obj <- cppFUN(c(y = "2*x + 3"), compile = TRUE,
-                modelname = "noparm_fun_dual", derivMode = "forward")
+  obj <- fun_dual
 
   expect_equal(attr(obj, "variables"), "x")
   expect_null(attr(obj, "parameters"))
@@ -116,9 +136,7 @@ test_that("cppFUN dual mode evaluates with zero parameters", {
 })
 
 test_that("cppFUN dual mode supports deriv2 with zero parameters", {
-  obj <- cppFUN(c(y = "x^2 + 3*x"), compile = TRUE,
-                modelname = "noparm_fun_dual_d2",
-                derivMode = "forward", deriv2 = TRUE)
+  obj <- fun_d2
 
   # raw hess (identity seed) at x = c(1, 2)
   hess <- obj$hess(x = c(1, 2))
@@ -135,9 +153,7 @@ test_that("cppFUN dual mode supports deriv2 with zero parameters", {
 })
 
 test_that("cppFUN forward mode produces correct jac/hess with zero parameters", {
-  obj <- cppFUN(c(y = "x^2 + 3*x"), compile = TRUE,
-                modelname = "noparm_fun_fwd2",
-                derivMode = "forward", deriv2 = TRUE)
+  obj <- fun_d2
 
   expect_equal(attr(obj, "variables"), "x")
   expect_null(attr(obj, "parameters"))

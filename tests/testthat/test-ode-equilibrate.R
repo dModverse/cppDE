@@ -25,12 +25,21 @@ ss_A  <- total - ss_pA
 stiff_methods   <- c("bdf", "rb4")
 all_methods     <- c("bdf", "adams", "rb4", "tsit5")
 
+# One equilibrating model per method with sensitivities and one without,
+# generated uncompiled and linked into one shared object.
+eq_mod <- lapply(setNames(nm = all_methods), function(m)
+  cppODE(rhs, rootfunc = "equilibrate", method = m,
+         modelname = paste0("eq_", m), compile = FALSE))
+eq_nosens <- cppODE(rhs, rootfunc = "equilibrate", deriv = FALSE,
+                    modelname = "eq_at_ss", compile = FALSE)
+do.call(compile, c(unname(eq_mod), list(eq_nosens),
+                   output = "test_ode_equilibrate", cores = 1))
+
 # -- Basic equilibrate: reaches correct steady state ---------------------------
 
 test_that("equilibrate finds the analytical steady state", {
   for (m in all_methods) {
-    mod <- cppODE(rhs, rootfunc = "equilibrate", method = m,
-                  modelname = paste0("eq_ss_", m))
+    mod <- eq_mod[[m]]
     res <- solveODE(mod, times, pars, roottol = 1e-06)
 
     y_final <- res$variable[nrow(res$variable), ]
@@ -47,8 +56,7 @@ test_that("equilibrate finds the analytical steady state", {
 
 test_that("equilibrate stops integration before final time", {
   for (m in all_methods) {
-    mod <- cppODE(rhs, rootfunc = "equilibrate", method = m,
-                  modelname = paste0("eq_early_", m))
+    mod <- eq_mod[[m]]
     res <- solveODE(mod, times, pars, roottol = 1e-04)
 
     # Should stop well before t = 1000
@@ -64,8 +72,7 @@ test_that("equilibrate stops integration before final time", {
 
 test_that("equilibrate works with first-order sensitivities", {
   for (m in stiff_methods) {
-    mod <- cppODE(rhs, rootfunc = "equilibrate", method = m,
-                  deriv = TRUE, modelname = paste0("eq_sens_", m))
+    mod <- eq_mod[[m]]
     res <- solveODE(mod, times, pars, roottol = 1e-05)
 
     expect_true(!is.null(res$sens1), label = paste(m, "sens1 present"))
@@ -83,8 +90,7 @@ test_that("equilibrate works with first-order sensitivities", {
 
 test_that("warm start converges in fewer steps than cold start", {
   for (m in stiff_methods) {
-    mod <- cppODE(rhs, rootfunc = "equilibrate", method = m,
-                  deriv = TRUE, modelname = paste0("eq_warm_", m))
+    mod <- eq_mod[[m]]
 
     # Cold start -> equilibrium
     res1 <- solveODE(mod, times, pars, roottol = 1e-05)
@@ -115,8 +121,7 @@ test_that("warm start converges in fewer steps than cold start", {
 # -- Warm start reaches correct steady state -----------------------------------
 
 test_that("warm start converges to correct new steady state", {
-  mod <- cppODE(rhs, rootfunc = "equilibrate", deriv = TRUE,
-                modelname = "eq_warm_correct")
+  mod <- eq_mod$bdf
 
   # First equilibration
   res1 <- solveODE(mod, times, pars, roottol = 1e-06)
@@ -144,7 +149,7 @@ test_that("warm start converges to correct new steady state", {
 # -- Tight tolerance equilibrate -----------------------------------------------
 
 test_that("equilibrate respects tight roottol", {
-  mod <- cppODE(rhs, rootfunc = "equilibrate", modelname = "eq_tight")
+  mod <- eq_mod$bdf
 
   res_loose <- solveODE(mod, times, pars, roottol = 1e-02)
   res_tight <- solveODE(mod, times, pars, roottol = 1e-08)
@@ -157,8 +162,7 @@ test_that("equilibrate respects tight roottol", {
 # -- Already at steady state: immediate termination (no sensitivities) ---------
 
 test_that("equilibrate terminates immediately when starting at SS (deriv=FALSE)", {
-  mod <- cppODE(rhs, rootfunc = "equilibrate", deriv = FALSE,
-                modelname = "eq_at_ss")
+  mod <- eq_nosens
 
   # Start exactly at the analytical steady state
   pars_ss <- pars
@@ -176,8 +180,7 @@ test_that("equilibrate terminates immediately when starting at SS (deriv=FALSE)"
 # -- At SS with sensitivities: needs to equilibrate sens -----------------------
 
 test_that("equilibrate at SS with deriv=TRUE still needs sensitivity equilibration", {
-  mod <- cppODE(rhs, rootfunc = "equilibrate", deriv = TRUE,
-                modelname = "eq_at_ss_sens")
+  mod <- eq_mod$bdf
 
   pars_ss <- pars
   pars_ss["R"]  <- ss_R

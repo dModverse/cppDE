@@ -302,9 +302,8 @@ def _write_vjp_impl(buf, model, modelname):
 def _write_guarded(buf, emit_fn, nan_fill):
     """Wrap an emitted extern-C entry body in try/catch.
 
-    .C() has no error channel and these bodies allocate, so an escaping
-    bad_alloc would terminate the R session.  `nan_fill` runs in the
-    function's own scope and marks the output non-finite instead.
+    .C() has no error channel, so an escaping bad_alloc would end the R
+    session; `nan_fill` runs in the function's scope and fills the output NaN.
     """
     tmp = StringIO()
     emit_fn(tmp)
@@ -360,10 +359,9 @@ def _write_eval_function(buf, out_names, ctx, modelname):
 
 
 def _write_eval_ad_impl(buf, out_names, ctx, modelname):
-    """
-    Generate extern-C AD entry point. Takes upstream seeds dX (per-obs state
-    sensitivities) and dP (parameter Jacobian) and fills value + dY/dtheta
-    in a single forward-mode AD pass per observation.
+    """`<model>_eval_ad_impl`, shared by `_eval_ad`, `_eval_ad_c` and the batch
+    entry: value and dY/dtheta in one forward pass per observation, from the
+    seeds dX (per-obs state sensitivities) and dP (parameter Jacobian).
 
     Layouts (R column-major):
       x   [n_obs, n_vars]                    -> obs + n_obs * j      (as R holds it)
@@ -379,8 +377,7 @@ def _write_eval_ad_impl(buf, out_names, ctx, modelname):
 
     ad_t = "cppde::dual<double, 0>"
 
-    # The body lives in an impl taking values, so the .C entry and the batch
-    # entry share it. The batch entry calls it from worker threads.
+    # Called by the .C, .Call and batch entries, the last from worker threads.
     buf.write(
         f"static void {modelname}_eval_ad_impl(const double* x, const double* p,\n"
         f"                         const double* dX, const double* dP,\n"
@@ -453,10 +450,8 @@ def _write_call_entries(buf, modelname, n_vars, n_params, n_out,
                         ad=False, ad2=False, vjp=False):
     """Emit .Call entries beside the .C ones.
 
-    `.C()` copies every argument in and every result out; on a chain evaluated
-    once per condition that dominates the actual arithmetic. These take the
-    inputs by reference and allocate the results once. The .C entries stay so
-    an object file built by an older cppDE keeps working.
+    They take the inputs by reference and allocate the results once, where
+    `.C()` copies every argument in and every result out.
     """
     buf.write(f"""SEXP {modelname}_eval_c(SEXP xS, SEXP pS, SEXP nS) {{
   int n_obs = INTEGER(nS)[0], n_vars = {n_vars}, n_out = {n_out};
@@ -578,11 +573,10 @@ SEXP {modelname}_vjp_ad_c(SEXP xS, SEXP pS, SEXP wS, SEXP vxS, SEXP vpS,
 
 
 def _write_vjp_ad_impl(buf, modelname, ctx, out_names):
-    """The same contraction over a dual, which is forward over reverse.
+    """`<model>_vjp_ad_impl`: `_vjp_impl` over a dual, forward over reverse.
 
-    Both terms of d/dv (w' J) fall out of one pass: the Jacobian differentiated
-    along the tangents the inputs carry, and the Jacobian contracted with the
-    tangents the cotangent carries. No Hessian is emitted and none is stored.
+    One pass gives both terms of d/dv (w' J): J differentiated along the input
+    tangents and J contracted with the cotangent's tangents. No Hessian is formed.
     """
     n_vars = len(ctx.variables)
     n_params = len(ctx.parameters)
@@ -796,19 +790,17 @@ def _write_eval_ad2_batch(buf, modelname):
 
 
 def _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=False):
-    """
-    Generate extern-C nested-dual AD entry. Computes y, dy, d2y in one pass on
-    cppde::dual<cppde::dual<double, 0>, 0>. Accepts first-order seeds dX,
-    dP and optional second-order seeds dX2, dP2 (controlled by has_dX2,
-    has_dP2 flags so length-zero R vectors stay safe).
+    """`<model>_eval_ad2_impl` (`as_impl`) or its .C wrapper `<model>_eval_ad2`:
+    y, dy and d2y in one pass on cppde::dual2nd<double, 0>. The seeds dX2, dP2
+    are optional: nullptr in the impl, has_dX2 / has_dP2 == 0 in the wrapper.
 
     Layouts (R column-major):
-      x   [n_vars, n_obs]
+      x   [n_obs, n_vars]
       p   [n_params]
       dX  [n_obs, n_vars, n_theta]
       dP  [n_params, n_theta]
-      dX2 [n_obs, n_vars, n_theta, n_theta]   (skipped if has_dX2 == 0)
-      dP2 [n_params, n_theta, n_theta]        (skipped if has_dP2 == 0)
+      dX2 [n_obs, n_vars, n_theta, n_theta]
+      dP2 [n_params, n_theta, n_theta]
       y   [n_obs, n_out]
       dy  [n_obs, n_out, n_theta]
       d2y [n_obs, n_out, n_theta, n_theta]
@@ -820,8 +812,7 @@ def _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=False):
     inner_t = "cppde::dual<double, 0>"
     outer_t = "cppde::dual2nd<double, 0>"
 
-    # The body lives in an impl taking values, so the .C entry and the batch
-    # entry share it. The batch entry calls it from worker threads.
+    # Called by the .C, .Call and batch entries, the last from worker threads.
     if as_impl:
         buf.write(
             f"static void {modelname}_eval_ad2_impl(const double* x, const double* p,\n"
@@ -901,16 +892,11 @@ def _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=False):
         buf.write("        }\n")
     buf.write(f"        {modelname}_eval_one<AD>(x_ad.data(), p_ad.data(), y_ad.data());\n")
     buf.write("        for (int i = 0; i < n_out; ++i) {\n")
-    # Read through a const reference so d1_at / dd_at take the bounds-safe const
-    # overloads, which return a thread-local zero for a non-depend tangent layer.
-    # The non-const ones dereference the inner tan_ and fault on an unseeded seed.
     buf.write("            const AD& y_const = y_ad[i];\n")
     buf.write("            y[obs + (size_t)n_obs * i] = y_const.scalar();\n")
     buf.write("            for (int k = 0; k < n_theta; ++k) {\n")
-    buf.write("                // dy / d2y read from outer tangent slots (inline gradient and\n")
-    buf.write("                // Hessian rows). Const overloads of d1_at / dd_at are bounds-safe;\n")
-    buf.write("                // the non-const ones assume armed storage and would deref the\n")
-    buf.write("                // inner tan_ for outputs constant in all parameters.\n")
+    buf.write("                // dy / d2y from the outer tangent slots. The const d1_at / dd_at\n")
+    buf.write("                // return zero for an unseeded layer; the non-const ones fault.\n")
     buf.write("                dy[obs + (size_t)n_obs * (i + (size_t)n_out * k)] = y_const.d1_at(k);\n")
     buf.write("                for (int m = 0; m < n_theta; ++m) {\n")
     buf.write("                    d2y[obs + (size_t)n_obs * (i + (size_t)n_out * (k + (size_t)n_theta * m))]\n")

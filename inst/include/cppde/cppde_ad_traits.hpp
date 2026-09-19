@@ -1,12 +1,10 @@
 /*
  Centralized AD type traits for cppDE.
 
- Consolidates is_ad / is_reverse / inner_type / scalar_type / scalar_value
- plus the bulk value/derivative extraction helpers (extract_values,
- extract_derivs, max_deriv_size, bulk_extract_derivs, bulk_inject_results)
- into a single header. Specialized for cppde::dual<T,N>; second-order via
- cppde::dual2nd<T,N> = dual<dual<T,N>,N> falls out of the recursive
- specialisations: no separate trait entries.
+ is_ad / is_dual2nd / inner_type / scalar_type / scalar_value plus the bulk
+ value/derivative extraction helpers (extract_values, extract_derivs,
+ max_deriv_size, bulk_extract_derivs, bulk_inject_results). Specialised for
+ cppde::dual<T,N> and cppde::dual2nd<T,N>.
 
  The bulk helpers are written generically over any AD type that exposes the
  accessor surface: `.x()`, `.d(j)`, `.size()`, `.depend()`,
@@ -41,10 +39,9 @@ template<class T>           struct is_ad : std::false_type {};
 template<class T, unsigned N>     struct is_ad<cppde::dual<T, N>>    : std::true_type {};
 template<class T, unsigned N>     struct is_ad<cppde::dual2nd<T, N>> : std::true_type {};
 
-// is_dual2nd<T>: matches only cppde::dual2nd<S, N>, not its base class.
-// Used by the LU/slab/multistepper paths to dispatch to the dual2nd-aware
-// extraction routines (which read gradient from outer.tan_[k].x() rather
-// than from base.val_.tan_, so val_tan_block is not required).
+// is_dual2nd<T>: matches only cppde::dual2nd<S, N>, not its base class. The
+// LU, slab and multistepper paths dispatch on it to extraction routines that
+// read the gradient from outer.tan_[k].x().
 template<class T>           struct is_dual2nd : std::false_type {};
 template<class T, unsigned N>     struct is_dual2nd<cppde::dual2nd<T, N>> : std::true_type {};
 

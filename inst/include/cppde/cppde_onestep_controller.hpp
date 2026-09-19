@@ -1,5 +1,5 @@
 /*
- One-step controller with Gustafsson–Söderlind PI step-size control.
+ One-step controller with Gustafsson-Söderlind PI step-size control.
 
  Generic PI controller for any single-step stepper satisfying the
  do_step(sys, x, t, xout, dt, xerr [, hint]) interface.  Works with
@@ -21,13 +21,13 @@
  - Error order derived from Stepper::error_order
  - SFINAE-based Jacobian hint dispatch
  - Added reset_after_event() for event-driven integration
- - Implemented Gustafsson–Söderlind PI control algorithm
+ - Implemented Gustafsson-Söderlind PI control algorithm
  - Unified double and AD handling in a single class
 
  PI controller based on:
  Gustafsson, K., Lundh, M. & Söderlind, G. (1988).
  "A PI stepsize control for the numerical solution of ordinary differential equations".
- BIT 28, 270–287. https://doi.org/10.1007/BF01934091
+ BIT 28, 270-287. https://doi.org/10.1007/BF01934091
  */
 
 #ifndef CPPDE_ONESTEP_CONTROLLER_HPP
@@ -72,13 +72,9 @@ struct has_jacobian_api<S, std::void_t<decltype(std::declval<const S&>().has_val
 // ----------------------------------------------------------------------------
 //  The error norm and the control law, written on the value type.
 //
-//  Templated and spelled with the cppde:: math names so one statement of each
-//  formula serves every value type the forward run instantiates. The reverse
-//  replay does not call them: the grid is read off the checkpoints and the
-//  controller stays off the tape.
-//
-//  wrms_state takes an accessor because an AD number has to be scalarised down
-//  to its value before it enters the norm.
+//  Spelled with the cppde:: math names, so one statement of each formula
+//  serves every value type. The reverse sweep reads the grid off the
+//  checkpoints instead. wrms_state takes an accessor that scalarises AD values.
 // ----------------------------------------------------------------------------
 
 template<class V, class Get>
@@ -251,8 +247,8 @@ public:
     const size_t n = x.size();
     if (n == 0) return 0.0;
 
-    // The value half. Stage 9 adds a lambda-weighted term beside the
-    // sensitivity one below, under the same max.
+    // The value half. The sensitivity term and the lambda-weighted term below
+    // join it under the same max.
     double max_norm = onestep_detail::wrms_state(
         x, xold, xerr, m_atol, m_rtol,
         [](const value_type& v) { return scalar_value(v); });
@@ -280,9 +276,8 @@ public:
       }
     }
 
-    // The goal-oriented term, stage 9: |lambda(t)' e| / gradtol, this step's
-    // share of the error in the objective. Zero unless a sweep left weights,
-    // and under the same max, so it can only make a step smaller.
+    // The goal-oriented term |lambda(t)' e| / gradtol. Zero unless a sweep
+    // left weights, and under the same max, so it can only make a step smaller.
     const double lam_norm = ::cppde::detail::weighted_error(
         xerr, t_end, [](const value_type& v) { return scalar_value(v); });
     if (lam_norm > max_norm) max_norm = lam_norm;

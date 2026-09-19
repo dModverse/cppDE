@@ -4,10 +4,8 @@
  Uses dgetrf/dgetrs from R's bundled LAPACK for the base case.
  Nested AD types (dual<dual<T,N>,N>) are handled by recursive IFT peeling.
 
- BLAS-3 optimization: IFT derivative propagation uses batched
- dgetrs (nrhs = n_derivs) instead of n_derivs separate solves.
- The matvec phase fuses extraction and subtraction in a single
- pass over W_stored for cache-optimal access.
+ The derivative layer goes out as one batched dgetrs (nrhs = n_derivs), and
+ the IFT matvec reads each W entry once.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -34,9 +32,8 @@ namespace cppde {
 namespace ad_lu {
 
 // ============================================================================
-//  AD type traits / bulk helpers: pulled in from cppde_ad_traits.hpp.
-//  Re-exported here so existing consumers using `ad_lu::is_ad`,
-//  `ad_lu::scalar_value`, etc. compile unchanged.
+//  AD type traits and bulk helpers from cppde_ad_traits.hpp, also reachable
+//  as `ad_lu::is_ad`, `ad_lu::scalar_value` and so on.
 // ============================================================================
 
 using cppde::ad_traits::is_ad;
@@ -102,11 +99,8 @@ public:
                        FCONE);
   }
 
-  // Batched solve: B ← W⁻¹ B  (B is column-major n × nrhs)
-  //
-  // Uses BLAS-3 internally (dtrsm) via dgetrs with nrhs > 1.
-  // This is the key optimization: cache-blocked triangular solves
-  // instead of nrhs separate memory-bound triangular back-subs.
+  // Batched solve: B ← W⁻¹ B  (B is column-major n × nrhs), one dgetrs call
+  // whose triangular solves run as BLAS-3 dtrsm.
   void solve_batch(std::vector<Scalar>& B, int nrhs) const
   {
     if (nrhs <= 0) return;
@@ -185,7 +179,7 @@ public:
       m_W_val.resize(n, n);
     if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
       // dual2nd: synthesise the value-layer dual<S, N> from the inline
-      // gradient (outer.tan_[k].x()), bypassing the redundant val_tan_block.
+      // gradient (outer.tan_[k].x()).
       for (int k = 0; k < nn; ++k)
         m_W_val.data[k] = first_order_view(W.data[k]);
     } else {
@@ -642,7 +636,7 @@ private:
   // Persistent solve buffers: avoid per-call heap allocations.
   mutable std::vector<Inner>  m_b_val;          // n scalars: value part (single solve)
   mutable std::vector<Inner>  m_rhs_all;        // n × n_derivs: derivs (single solve)
-  mutable std::vector<F>      m_col_buf;        // n entries: legacy column buffer
+  mutable std::vector<F>      m_col_buf;        // n entries, unused
   mutable std::vector<Inner>  m_b_val_batch;    // n × nrhs: value part (batched)
   mutable std::vector<Inner>  m_rhs_all_batch;  // n × n_derivs × nrhs (batched)
 };

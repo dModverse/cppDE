@@ -1,6 +1,5 @@
 # lambda from an earlier sweep, checked into the shape the C++ side reads.
-# Anything wrong is an error here rather than a silently dropped weighting: a
-# weight that quietly fails to arrive looks exactly like one that did nothing.
+# Anything malformed is an error rather than a silently dropped weighting.
 .checkErrWeights <- function(w, n_states) {
   if (!is.list(w)) stop("'errWeights' must be a list", call. = FALSE)
   need <- c("time", "lambda")
@@ -74,7 +73,7 @@
   n_phi_rows <- n_states + n_params
 
   ## --- Detect sens1ini shape per call ---
-  ## Legacy [n_states, n_active] leaves the parameter rows at the identity, full
+  ## State-only [n_states, n_active] leaves the parameter rows at the identity, full
   ## Phi' supplies them, partial names the rows it supplies and zero-pads the rest.
   if (!is.null(sens1ini) && !deriv)
     stop("'sens1ini' supplied but model has deriv = FALSE")
@@ -101,21 +100,16 @@
     if (d[2] != n_states)
       stop("'seed' has ", d[2], " state columns, the model has ", n_states)
     storage.mode(seed) <- "double"
-    ## Attributes rather than further positional arguments: they mean nothing
-    ## where a seed is absent, and the .Call signature is frozen into every
-    ## model already compiled.
-    ## Both belong to the native reverse pass. CVODES integrates the adjoint
-    ## as its own ODE under its own controller, so neither the grid nor a
-    ## weight on it exists there; saying so beats dropping them in silence.
+    ## Seed attributes keep the .Call signature fixed. adjointGrid and
+    ## errWeights exist only on the native reverse pass; CVODE refuses them.
     if (isTRUE(adjointGrid)) {
       if (is_cvode)
         stop("'adjointGrid' is not available on the CVODE backend: the sweep ",
              "is CVODES' own backward solve and reports no grid.", call. = FALSE)
       attr(seed, "adjointGrid") <- TRUE
     }
-    ## A cotangent handed down by a node above the ODE moves with theta. Its own
-    ## tangents ride here, [n_out, n_states, n_seed, n_sens], and only forward
-    ## over reverse has slots to put them in.
+    ## The seed's own tangents in theta, [n_out, n_states, n_seed, n_sens],
+    ## accepted only under forward-reverse.
     stg <- attr(seed, "seedTangent")
     if (!is.null(stg)) {
       if (!identical(attr(model, "derivMode"), "forward-reverse"))
@@ -149,9 +143,8 @@
       rn <- rownames(sens1ini)
       is.null(rn) || all(rn %in% variables)
     }
-  ## "is_full" here means "user supplied a Phi' (full or partial)": anything
-  ## that is not legacy. Used to gate runtime `fixed` and to drive
-  ## n_theta_active / sens2ini coupling.
+  ## "is_full" means a full or partial Phi', anything but the state-only shape.
+  ## It gates runtime `fixed` and sets n_theta_active and the sens2ini shape.
   sens1ini_is_full <- is_2d_sens1 && !sens1ini_is_legacy
 
   ## --- Runtime fixed: incompatible with full-shape sens1ini ---
@@ -173,12 +166,12 @@
     all_sens[-( fixed_indices + 1L)] else all_sens
   n_active  <- length(active_sens)
 
-  ## --- Per-call active sens dimension and stack-width check ---
+  ## --- Per-call active sens dimension ---
   ## sens1ini full shape: M = ncol(sens1ini) (theta count, may differ from n_active).
-  ## otherwise: M = n_active (legacy / identity seeding produces the active basis).
+  ## otherwise: M = n_active (state-only or identity seeding uses the active basis).
   n_theta_active <- if (sens1ini_is_full) as.integer(ncol(sens1ini)) else n_active
 
-  ## --- Identity-on-active-params padding for legacy shape ---
+  ## --- Identity-on-active-params padding for the state-only shape ---
   build_param_identity <- function(col_names) {
     pad <- matrix(0, nrow = n_params, ncol = length(col_names),
                   dimnames = list(parameters, col_names))
@@ -191,7 +184,7 @@
 
   ## --- Output sens column names (per call) ---
   ## Full Phi' uses its own colnames, or theta1..thetaM when it carries none;
-  ## legacy and NULL use active_sens, the model-parameter basis.
+  ## state-only and NULL use active_sens, the model-parameter basis.
   sens_col_names <- if (sens1ini_is_full) {
     cn <- colnames(sens1ini)
     if (!is.null(cn)) cn else sprintf("theta%d", seq_len(n_theta_active))
@@ -201,13 +194,13 @@
 
   ## --- Coerce sens1ini to flat [n_phi_rows, n_theta_active] ---
   ## The reorder is skipped when the order already matches, the common case when
-  ## an optimiser reuses one shape. Legacy padding fills a preallocated matrix.
+  ## an optimiser reuses one shape. State-only padding fills a preallocated matrix.
   coerce_sens1ini <- function(x, n_cols, col_names, arg) {
     if (!is.numeric(x)) stop("'", arg, "' must be numeric")
 
     is_2d <- is.matrix(x) || (is.array(x) && length(dim(x)) == 2L)
     if (!is_2d) {
-      ## Vector form: legacy if length == n_states*n_cols, else full.
+      ## Vector form: state-only if length == n_states*n_cols, else full.
       ## (Partial-row form requires names and is therefore matrix-only.)
       if (length(x) == n_states * n_cols && n_phi_rows != n_states) {
         out <- matrix(0, n_phi_rows, n_cols)
@@ -247,7 +240,7 @@
       return(as.double(x))
     }
 
-    ## Legacy shape: [n_states, n_cols], no rownames or all-variable rownames.
+    ## State-only shape: [n_states, n_cols], no rownames or all-variable rownames.
     if (nr == n_states && n_phi_rows != n_states &&
         (is.null(rn) || all(rn %in% variables))) {
       if (!is.null(rn)) {
@@ -299,7 +292,7 @@
 
   if (!is.null(sens2ini)) {
     if (!is.numeric(sens2ini)) stop("'sens2ini' must be numeric")
-    ## Legacy [n_states, M, M] is accepted only alongside a legacy or absent
+    ## State-only [n_states, M, M] is accepted only alongside a state-only or absent
     ## sens1ini, where Phi'' vanishes on the parameter block. Full is the unified
     ## shape; partial names the rows it supplies and the C++ side gets it padded.
     legacy_d2_ok <- !sens1ini_is_full && n_phi_rows != n_states
@@ -339,7 +332,7 @@
         }
         sens2ini <- as.double(sens2ini)
 
-      ## Legacy shape: [n_states, M, M], state-only or no rownames.
+      ## State-only shape: [n_states, M, M], state rownames or none.
       } else if (nr == n_states && legacy_d2_ok &&
                  (is.null(rn) || all(rn %in% variables))) {
         if (!is.null(rn)) {
@@ -370,7 +363,7 @@
       }
 
     } else {
-      ## Vector form (no partial; needs names). Same as before.
+      ## Vector form (no partial; needs names).
       len <- length(sens2ini)
       if (len == n_phi_rows * n_theta_active^2) {
         sens2ini <- as.double(sens2ini)
@@ -390,9 +383,8 @@
     stop("'times' must be a non-empty finite numeric vector")
   times <- as.double(times)
 
-  ## The store rides on `times`: the call that makes one has no seed.
-  ## CVODES keeps its checkpoints inside the solver and hands out no handle on
-  ## them, so the pair of solves is a native-backend arrangement.
+  ## Store flags travel as attributes of `times`, since the call that makes a
+  ## store has no seed. Native backend only: CVODES keeps its checkpoints.
   if (isTRUE(keepStore) || !is.null(store)) {
     what <- if (isTRUE(keepStore)) "keepStore" else "store"
     if (!is_reverse)
@@ -402,22 +394,15 @@
       stop("'", what, "' is not available on the CVODE backend: CVODES holds ",
            "its checkpoints itself. Use cppODE() for a pair of solves that ",
            "share one integration.", call. = FALSE)
-    ## A checkpoint keeps its value inline and its tangents behind a pointer
-    ## into the arena, and the arena is reset when the solve that filled it
-    ## returns. The values would come back exact and the tangents as whatever
-    ## now occupies that memory, which is a wrong Hessian and no error. Until
-    ## the store owns its tangents, second order integrates twice.
+    ## A checkpoint's tangents point into the arena of the solve that took it,
+    ## which is reset on return, so forward-reverse cannot reuse a store.
     if (identical(attr(model, "derivMode"), "forward-reverse"))
       stop("'", what, "' is not available under derivMode = ",
            "\"forward-reverse\": a checkpoint's tangents live in the arena of ",
            "the solve that took them and do not outlive it. Let the second ",
            "solve integrate.", call. = FALSE)
   }
-  ## Whether the step size, the order and the corrector's convergence test see
-  ## the tangents. Off is a cheaper and coarser forward mode: the sensitivity
-  ## error stops being controlled, and the step count stops growing with the
-  ## direction count. Under derivMode = "forward-reverse" it is off already,
-  ## because that mode differentiates the grid a value run takes.
+  ## sensErrCon: whether error control reads the tangents (see ?solveODE).
   if (!is.logical(sensErrCon) || length(sensErrCon) != 1L || is.na(sensErrCon))
     stop("'sensErrCon' must be TRUE or FALSE", call. = FALSE)
   if (!sensErrCon) {
@@ -580,80 +565,23 @@
 #' second-order parameter sensitivities.
 #'
 #' @details
-#' ## Sensitivity with respect to a reparametrization
-#'
-#' By default, the compiled solver computes sensitivities of the state
-#' trajectory \eqn{x(t)} with respect to the full input vector
-#' \eqn{p = (p_{\text{init}}, p_{\text{dyn}}) \in \mathbb{R}^{n_x + n_p}},
-#' i.e. all initial conditions stacked on all dynamic parameters. In
-#' fitting and identifiability workflows the quantity of interest is
-#' often instead the gradient with respect to a smaller set of free
-#' variables \eqn{\theta \in \mathbb{R}^{M}}, where the model inputs are
-#' obtained from a smooth reparametrization
-#'
-#' \deqn{p = \Phi(\theta) \in \mathbb{R}^{n_x + n_p}.}
-#'
-#' Typical examples are log-parametrization
-#' (\eqn{p_i = \exp \theta_i}) to enforce positivity, parameters that
-#' are shared across compartments or experimental conditions, and
-#' components of \eqn{p} that are held constant and therefore drop out
-#' of \eqn{\theta}.
-#'
-#' By the chain rule, the trajectory's first- and second-order
-#' sensitivities with respect to \eqn{\theta} are
-#'
-#' \deqn{\frac{\partial x(t)}{\partial \theta} \;=\;
-#'       \frac{\partial x(t)}{\partial p}\,\Phi'(\theta),}
-#'
-#' \deqn{\frac{\partial^{2} x(t)}{\partial \theta\,\partial \theta^{\top}}
-#'       \;=\;
-#'       \Phi'(\theta)^{\top}\,
-#'       \frac{\partial^{2} x(t)}{\partial p\,\partial p^{\top}}\,
-#'       \Phi'(\theta) \;+\;
-#'       \frac{\partial x(t)}{\partial p}\,\Phi''(\theta),}
-#'
-#' where \eqn{\Phi'(\theta)} is an \eqn{(n_x + n_p) \times M} Jacobian
-#' and \eqn{\Phi''(\theta)} is the corresponding
-#' \eqn{(n_x + n_p) \times M \times M} Hessian tensor (contracted on its
-#' first index in the formula above).
-#'
-#' Rather than first computing \eqn{\partial x(t)/\partial p} along all
-#' \eqn{n_x + n_p} canonical directions and contracting with
-#' \eqn{\Phi'(\theta)} afterwards, the solver applies the chain rule
-#' *inside* the AD pass: each of the \eqn{M} forward-AD directions is
-#' seeded with the corresponding column of \eqn{\Phi'(\theta)}, so the
-#' integrator directly returns
-#' \eqn{\partial x(t)/\partial \theta} (and analogously
-#' \eqn{\partial^{2} x(t)/\partial \theta\,\partial \theta^{\top}} when
-#' \eqn{\Phi''(\theta)} is supplied for the second-order seeds). The
-#' parameter sweep then has cost \eqn{O(M)} rather than
-#' \eqn{O(n_x + n_p)}, which is the main practical benefit when
-#' \eqn{M \ll n_x + n_p}.
-#'
-#' The default identity reparametrization \eqn{\Phi(\theta) = \theta}
-#' corresponds to \eqn{\Phi'(\theta) = I_{(n_x + n_p) \times (n_x + n_p)}}
-#' and \eqn{\Phi''(\theta) = 0}; this is the legacy seeding emitted when
-#' `sens1ini` / `sens2ini` are omitted, restricted to the active
-#' (non-fixed) sensitivity columns.
-#'
 #' ## Sensitivity initial values
 #'
-#' `sens1ini` and `sens2ini` are exactly \eqn{\Phi'(\theta)} and
-#' \eqn{\Phi''(\theta)} from the chain-rule derivation above, evaluated
-#' at the current \eqn{\theta}. Three shapes are accepted, selected per
-#' call from the row count and row names of the supplied matrix:
+#' `sens1ini` and `sens2ini` are the Jacobian \eqn{\Phi'(\theta)} and the
+#' Hessian tensor \eqn{\Phi''(\theta)} of a reparametrisation
+#' \eqn{p = \Phi(\theta)} of the initial states and parameters; the returned
+#' sensitivities are then taken with respect to \eqn{\theta}. Omitting them
+#' seeds the identity on the active (non-fixed) sensitivities. Three shapes
+#' are accepted, selected per call from the row count and row names:
 #'
-#' - **Legacy shape** `[n_states, n_active]`: identity seeding on the
+#' - **State-only shape** `[n_states, n_active]`: identity seeding on the
 #'   parameter block is implied. The active set equals the model's
 #'   sensitivity names minus `fixed`. Detected when `nrow == n_states`
 #'   and row names are absent or are a permutation of `variables`. This
-#'   is the shape emitted by `solveODE()` itself (`res$sens1[t, , ]`) and
-#'   can therefore be used directly for warm-starting subsequent solves.
+#'   is the shape of `res$sens1[t, , ]`, so it can seed a following solve.
 #' - **Full shape** `[n_states + n_params, M]`: \eqn{\Phi'(\theta)}
 #'   directly. State rows seed state ICs; parameter rows seed the dynamic
-#'   parameters. The column count `M` may vary across calls; under
-#'   Tangent storage is heap-allocated, so \eqn{M} is free per call: a wide
-#'   parameter set is answered in blocks of directions, all on one grid.
+#'   parameters. The column count `M` may change from call to call.
 #' - **Partial shape** `[k, M]` with `k < n_states + n_params`: row
 #'   names are required and must be a subset of
 #'   `c(variables, parameters)`. The supplied rows are placed at the
@@ -665,7 +593,7 @@
 #' (those already encode fixedness via row presence / row values).
 #'
 #' Column names, when present, must match the relevant column basis
-#' (the active sensitivity names for the legacy shape, user-chosen theta
+#' (the active sensitivity names for the state-only shape, user-chosen theta
 #' names for the full / partial shapes).
 #'
 #' @param model A compiled ODE model returned by [cppODE()] or [cvode()].
@@ -676,7 +604,7 @@
 #'   `c(attr(model, "variables"), attr(model, "parameters"))`.
 #' @param sens1ini Optional numeric matrix of first-order sensitivity
 #'   initial values, interpreted as the Jacobian \eqn{\Phi'(\theta)}.
-#'   Accepts three shapes (see Details): legacy `[n_states, n_active]`
+#'   Accepts three shapes (see Details): state-only `[n_states, n_active]`
 #'   (auto-extended with identity on parameter rows), full
 #'   `[n_states + n_params, M]`, or partial `[k, M]` with row names
 #'   identifying a subset of `c(variables, parameters)` (missing rows
@@ -686,7 +614,7 @@
 #' @param sens2ini Optional numeric array of second-order sensitivity
 #'   initial values, interpreted as the Hessian tensor
 #'   \eqn{\Phi''(\theta)}. Shapes are analogous to those of `sens1ini`:
-#'   `[n_states, n_active, n_active]` (legacy),
+#'   `[n_states, n_active, n_active]` (state-only),
 #'   `[n_states + n_params, M, M]` (full), or `[k, M, M]` with dim-1
 #'   names identifying a subset of `c(variables, parameters)` (partial,
 #'   zero-padded). Allowed only when `attr(model, "deriv2")` is `TRUE`.
@@ -725,9 +653,7 @@
 #'   return code. One of `"stop"` (default; raise an error with the solver
 #'   message and no partial results), `"warn"` (emit a warning and return
 #'   partial results up to `t_reached`), or `"silent"` (return the partial
-#'   result without any signal). An incomplete integration otherwise
-#'   surfaces far downstream, as a missing-time-point error that blames the
-#'   data rather than the solver.
+#'   result without any signal).
 #' @param traceFile Optional character giving a CSV file path. If the
 #'   model was compiled with `stepTrace = TRUE` and a non-empty path is
 #'   supplied, the per-step trace `data.frame` is written to that path.
@@ -735,18 +661,24 @@
 #'   for models compiled without trace support (`$trace` is `NULL` in
 #'   that case).
 #'
-#' @param seed Reverse-mode seed, for a model compiled with
-#'   `cppODE(..., derivMode = "reverse")` and required by one. A
-#'   `[n_out, n_states]` matrix or an `[n_out, n_states, n_seed]` array, whose
-#'   first dimension is the solve's own output row count: a root event observes
-#'   at times it was not asked for, so that count is not `length(times)` in
-#'   general. What comes back is `w' * dx/dtheta` summed over times and states,
-#'   one column per seed column. Supplying it to a forward model is an error, as
-#'   is leaving it out on a reverse one.
+#' @param seed Reverse-mode seed, required by a model compiled with
+#'   `derivMode = "reverse"` or `"forward-reverse"` ([cppODE()]) or with
+#'   `derivMode = "reverse"` ([cvode()]). A `[n_out, n_states]` matrix or an
+#'   `[n_out, n_states, n_seed]` array, whose first dimension is the solve's
+#'   own output row count: a root event adds output times, so that count is
+#'   not `length(times)` in general. What comes back is `w' * dx/dtheta`
+#'   summed over times and states, one column per seed column. Supplying it
+#'   to a forward model is an error, as is leaving it out on a reverse one.
+#'
+#'   Under `"forward-reverse"` the seed may carry its own tangents in theta
+#'   as the attribute `seedTangent`, an array
+#'   `[n_out, n_states, n_seed, n_sens]` on the seed's first three dimensions.
+#'   Without it `adjoint2` omits the seed's dependence on the parameters.
 #' @param errWeights Optional lambda from an earlier sweep, used as a
-#'   step-size weight. Native backend only. A list with `time` (ascending, length `n`), `lambda`
-#'   (`[n, n_states]`), and optionally `breaks` (indices into `time` the
-#'   interpolant must not span), `gradtol` (default `1e-6`) and `floor`
+#'   step-size weight. Native backend only. A list with `time` (ascending,
+#'   length `n`), `lambda` (`[n, n_states]`), and optionally `breaks`
+#'   (indices into `time` the interpolant must not span), `gradtol`
+#'   (default `1e-6`) and `floor`
 #'   (smallest weight as a fraction of the largest, default `0`). The
 #'   controller then takes the maximum of its own error norm and
 #'   \eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
@@ -796,13 +728,9 @@
 #' one column per seed, being \eqn{\lambda^T e_k}; and `lambda`,
 #' `[n_steps, n_states, n_seed]`, the adjoint state at each step's start. `eta`
 #' estimates the step's share of the error in the objective.
-#'   A seed may carry its own tangents, attached as `seedTangent`, an array
-#'   `[n_out, n_states, n_seed, n_sens]` on the seed's own first three
-#'   dimensions. Without them the second order misses the seed's dependence on
-#'   the parameters. Only `derivMode = "forward-reverse"` has slots for them.
-
-#' With `keepStore = TRUE` it carries `$store`, an external pointer to the
-#' checkpoints, for a later solve to take through `store`.
+#'
+#' With `keepStore = TRUE` a reverse solve also carries `$store`, an external
+#' pointer to the checkpoints, for a later solve to take through `store`.
 #'
 #' @seealso [cppODE()] and [cvode()] for model compilation;
 #'   [diagnostics()] for printing solver statistics.
@@ -830,7 +758,7 @@ solveODE <- function(model, times, parms,
   SYM <- .nativeSym(paste0("solve_", as.character(model)))
   if (is.null(SYM)) stop("Model not loaded. Run compile() first.", call. = FALSE)
 
-  ## The dimnames ride along so the generated code can attach them while the
+  ## The dimnames are passed in so the generated code can attach them while the
   ## arrays are unaliased; setting them here would duplicate every array.
   dn <- list(prep$variables, prep$sens_col_names)
   result <- tryCatch(
@@ -862,8 +790,8 @@ solveODE <- function(model, times, parms,
 #' inside a forked child (`mclapply()`), because the OpenMP thread pool does
 #' not survive `fork()`; and inside an existing OpenMP region, because the
 #' caller that spread the wider axis across threads already owns them.
-#' A model compiled before this entry point existed, or a build without
-#' OpenMP, falls back to [solveODE()] per condition.
+#' A model without a batch entry point, or a build without OpenMP, falls
+#' back to [solveODE()] per condition.
 #'
 #' @param model A model handle from [cppODE()] or [cvode()].
 #' @param conditions A list of per-condition argument lists. Recognized names
@@ -1027,7 +955,7 @@ solveODEBatch <- function(model, conditions,
            warn = warning(paste0(msg, "\n  Returning partial results."),
                           call. = FALSE, immediate. = TRUE))
   }
-  # The C++ side reports what it actually used; fall back to the request when
+  # The C++ side reports the thread count it used; fall back to the request when
   # the batch entry is missing.
   if (is.null(attr(raw, "threads"))) attr(out, "threads") <- as.integer(nt)
   else attr(out, "threads") <- attr(raw, "threads")
@@ -1066,7 +994,7 @@ batchAvailable <- function(model) {
 #' @description
 #' Validates and marshals a set of conditions once, so that repeated solves
 #' (an optimiser evaluating the same model at new parameters) only pay for the
-#' numbers that actually changed. [solveODEBatch()] redoes the full argument
+#' numbers that changed. [solveODEBatch()] redoes the full argument
 #' marshalling on every call, which caps how well the batch scales.
 #'
 #' @inheritParams solveODEBatch
@@ -1116,9 +1044,7 @@ prepareBatch <- function(model, conditions,
 #' @param sens1ini,sens2ini Lists of sensitivity initial values, one per
 #'   condition, or `NULL` to reuse. Shapes must match the prepared ones.
 #' @param seed List of reverse-mode seeds, one per condition, or `NULL` to
-#'   reuse. A new objective seeds a new cotangent at every iteration while its
-#'   shape stays put, which is what makes a prepared handle usable in reverse
-#'   mode. Shapes must match the prepared ones.
+#'   reuse. Shapes must match the prepared ones.
 #' @param errWeights List of weightings for the step-size controller, one per
 #'   condition, or `NULL` to keep the prepared ones. Each is the `errWeights`
 #'   list of [solveODE()], typically lambda from the previous iteration.
@@ -1206,7 +1132,7 @@ solveBatch <- function(handle, parms = NULL, sens1ini = NULL, sens2ini = NULL,
 
 # Thread count for a batch of K conditions. Deliberately not read from
 # OMP_NUM_THREADS: nothing keeps a process-wide variable in step with the
-# BLAS thread count cppDE actually pins, so it is not a trustworthy source.
+# BLAS thread count cppDE pins, so it is not a trustworthy source.
 .batchCores <- function(cores, K) {
   if (!is.null(cores)) {
     cores <- as.integer(cores)

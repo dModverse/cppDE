@@ -412,15 +412,9 @@ _SUN_AXPY_IDX = {"cpp": "cppde::axpy_row_idx(linmap_, {0}, %s, data, _gdst + {1}
 
 def jacobian_statements(model, sparse, strategy, T="double", cvode=False,
                         scoped=False):
-    """Body of a Jacobian callback. With a linear map, J = A + G C is
-    assembled row by row from the map.
-
-    Native (cvode False): jacobian::operator() writing -J into J (dense) or
-    W (CSC, missing diagonals as zeros) and df/dt into dfdt; T is the C++
-    scalar. `scoped` binds the outputs' tangent storage and opens an arena
-    scope for the temporaries. CVODE: jac_fn writing +J into the SUNMatrix J,
-    a zeroed dense one or a CSC one whose pattern is written on every call
-    (`data`, `indexptrs`, `indexvals`).
+    """Body of jacobian::operator(), writing -J into J or W and df/dt into dfdt,
+    or with `cvode` of jac_fn, writing +J into the SUNMatrix. With a linear map
+    J = A + G C; `scoped` binds the output tangents and opens an arena scope.
     """
     if cvode:
         return _cvode_jacobian(model, sparse, strategy)
@@ -1287,7 +1281,8 @@ def rootfunc_code(model, rootfunc, scalar):
 
 def fixed_event_times(model, rows):
     """Double expressions of the fixed-event times over the flat parameter
-    vector `params`, or None (root event, or a time reading a forcing)."""
+    vector `params`, or None (a root event, or a time reading a state, the
+    clock or a forcing)."""
     out = []
     pr = em.Printer(model.g, model.slot("cpp"), style="double")
     for r in rows:

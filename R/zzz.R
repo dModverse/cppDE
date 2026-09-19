@@ -78,10 +78,9 @@ cvodeConfig <- new.env(parent = emptyenv())
   .announceForkGuard()
 }
 
-# Report the guard installed by R_init_cppDE(), so that single-threaded BLAS in a
-# forked worker is not a surprise, and say so where nothing resolved and the
-# deadlock is still reachable. Silent when there is nothing to pin. Reached from
-# .onAttach, not .onLoad: tooling loads a namespace without being asked to.
+# One-line report of the BLAS fork guard, or a warning when no entry point
+# resolved. Silent when there is nothing to pin. Called from .onAttach, not
+# .onLoad, since tooling loads namespaces without attaching them.
 .announceForkGuard <- function() {
   if (isTRUE(getOption("cppDE.quiet"))) return(invisible(NULL))
   g <- tryCatch(forkGuard(), error = function(e) NULL)

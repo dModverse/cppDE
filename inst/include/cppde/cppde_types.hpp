@@ -1,13 +1,11 @@
 /*
- cppDE core type definitions: Eigen-free.
-
- Provides lightweight replacements for Eigen types:
+ cppDE core type definitions:
  vector_t<T>       = std::vector<T>
  dense_matrix<T>   = flat column-major array with (i,j) access
  csc_matrix<T>     = compressed sparse column (Ap, Ai, Ax)
 
- Dense LU uses LAPACK (dgetrf/dgetrs) via R's bundled BLAS/LAPACK.
- Sparse LU uses KLU (bundled SuiteSparse).
+ Dense LU uses LAPACK (dgetrf/dgetrs) via R's BLAS/LAPACK.
+ Sparse LU uses KLU from the system SuiteSparse.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -29,7 +27,7 @@
 namespace cppde {
 
 // ============================================================================
-//  vector_t<T>: dynamic vector (drop-in for Eigen::VectorXd)
+//  vector_t<T>: dynamic vector
 // ============================================================================
 
 template<class T>
@@ -146,10 +144,8 @@ struct csc_matrix
 };
 
 // ============================================================================
-//  Vector arithmetic helpers (replacing Eigen operator overloads)
-//
-//  These are used by the steppers for stage computation.
-//  All operate element-wise on std::vector<T>.
+//  Vector arithmetic helpers for the steppers' stage computation,
+//  element-wise on std::vector<T>.
 // ============================================================================
 
 // v = 0

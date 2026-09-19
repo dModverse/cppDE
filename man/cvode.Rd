@@ -49,13 +49,9 @@ and exported C symbols. A random identifier is used when \code{NULL}.}
 \item{deriv}{Logical. Compute first-order parameter sensitivities.}
 
 \item{derivMode}{Direction the derivatives are taken in. \code{"forward"} (default)
-is the CVODES staggered forward sensitivity solver, driven by \code{deriv}.
-\code{"reverse"} is CVODES adjoint sensitivity analysis: the forward pass
-stores checkpoints, and one backward solve per seed column integrates
-\eqn{\lambda' = -J^T \lambda} with the quadrature
-\eqn{-(\partial f/\partial p)^T \lambda} riding along. It needs
-\code{deriv = FALSE}, and refuses \code{events} and \code{rootfunc}: CVODES integrates
-the adjoint over checkpointed states and cannot be told about a jump.}
+is the CVODES forward sensitivity solver, driven by \code{deriv}. \code{"reverse"}
+is CVODES adjoint sensitivity analysis, one backward solve per seed
+column. It needs \code{deriv = FALSE} and refuses \code{events} and \code{rootfunc}.}
 
 \item{asaCheckpoints}{Accepted forward steps between checkpoints under
 \code{derivMode = "reverse"}. The adjoint interpolates the forward state between
@@ -113,9 +109,6 @@ when SUNDIALS was built with its LAPACK interface, and
 \code{SUNLinSol_Dense} otherwise. This is decided by \code{./configure} at
 install time, not per model; \code{\link[=install_libs]{install_libs()}} enables the LAPACK
 interface whenever R reports a BLAS. Sparse Jacobians use KLU.
-
-It concerns the CVODE backend alone. \code{\link[=cppODE]{cppODE()}} reaches LAPACK
-through R for every dense factorisation regardless.
 }
 \examples{
 \dontrun{

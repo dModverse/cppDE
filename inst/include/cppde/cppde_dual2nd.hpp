@@ -1,37 +1,20 @@
 /*
  cppde::dual2nd<T, N>: second-order forward-mode AD type.
 
- dual2nd publicly inherits from dual<dual<T, N>, N>. Inheritance preserves the
- storage layout and the full accessor surface (.x(), .d(j), .size(), .depend(),
- .diff(), operator[]) so that the generic AD machinery (cppde_ad_lu.hpp,
- cppde_newton.hpp, cppde_integrate_times.hpp, the LU IFT recursion in
- cppde_ad_traits.hpp) continues to work unchanged: a dual2nd is-a nested
- dual.
+ dual2nd publicly inherits from dual<dual<T, N>, N>, so its storage layout and
+ accessor surface (.x(), .d(j), .size(), .depend(), .diff(), operator[]) serve
+ the generic AD machinery and the LU's IFT recursion.
 
- The reason for a distinct type is dispatch. Math primitives in
- cppde_dual2nd_math.hpp are templated on dual2nd<T, N> specifically and
- exploit Hessian symmetry by computing only the lower triangle (j <= i) and
- mirroring to the upper. Function-template argument deduction is strict: the
- dual2nd-specific operators match dual2nd exactly and do NOT match the base
- dual<dual<T, N>, N> via subclass slicing. Conversely, the eager nested-dual
- operators in cppde_dual_math.hpp deduce on dual<dual<T, N>, N> and do NOT
- match dual2nd. The two operator sets are unambiguous.
+ The distinct type is for dispatch. The dual2nd operators (cppde_dual2nd_expr.hpp,
+ cppde_dual2nd_math.hpp) match dual2nd exactly and fill only the lower Hessian
+ triangle (j <= i), mirrored to the upper; the eager nested-dual operators in
+ cppde_dual_math.hpp do not match dual2nd.
 
- Convenience accessors d1_at(i) / dd_at(i, j) translate to the underlying
- nested-dual storage:
-   - d1_at(i) -> outer.tan_[i].x()  (gradient slot, also redundantly stored
-                                     in outer.val_.tan_[i] for LU-IFT
-                                     correctness; primitives mirror writes)
-   - dd_at(i, j) -> outer.tan_[max(i,j)].tan_[min(i,j)]  (canonical lower
-                                     triangle, fed by symmetric computation)
+   d1_at(i)    -> outer.tan_[i].x()                      gradient
+   dd_at(i, j) -> outer.tan_[max(i,j)].tan_[min(i,j)]    canonical lower triangle
 
- Storage layout for now matches dual<dual<T, N>, N> (full N x N inner-tangent
- block, gradient redundantly stored across both outer-val and outer-tan).
- The compute saving comes from math primitives only filling the lower
- triangle and mirroring at the end of each operation. Storage compaction to
- a packed N(N+1)/2 Hessian is a follow-up that requires reworking the LU
- IFT extraction pipeline (the recursive layer-by-layer model assumes .x()
- peels exactly one AD layer; a packed dual2nd peels two).
+ The Hessian is stored as the full N x N inner block. The LU does not read
+ outer.val_.tan_.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -139,9 +122,8 @@ public:
     return base::operator[](i)[j];
   }
 
-    // No-op. The LU reads the gradient from the inline outer.tan_[k].x() slot
-    // through first_order_view, so there is nothing to mirror. Kept for the call
-    // sites that still invoke it.
+    // No-op without callers: the LU reads the gradient from the inline
+    // outer.tan_[k].x() slot through first_order_view.
   void sync_d1_redundant() noexcept {}
 
     // Arm the outer tangent slots so d1_at and dd_at write into allocated
@@ -203,10 +185,9 @@ public:
 };
 
 // ----------------------------------------------------------------------------
-// Synthesise a first-order dual<S, N> from a dual2nd's scalar + inline gradient
-// (outer.tan_[k].x()), bypassing the redundant val_tan_block. Used by the LU
-// dual2nd dispatch to extract the value layer without requiring val_tan to be
-// kept in sync via sync_d1_redundant.
+// Synthesise a first-order dual<S, N> from a dual2nd's scalar and inline
+// gradient (outer.tan_[k].x()). The LU's dual2nd dispatch reads the value layer
+// through it.
 // ----------------------------------------------------------------------------
 template<class S, unsigned N>
 inline cppde::dual<S, N> first_order_view(const cppde::dual2nd<S, N>& v) {

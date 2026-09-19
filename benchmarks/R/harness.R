@@ -243,12 +243,15 @@ new_model_cache <- function(outdir, tag = "") {
 cache_key <- function(...) paste(vapply(list(...), function(x)
   paste(as.character(x), collapse = "\x1f"), ""), collapse = "\x1e")
 
-## `sparse`: NULL auto-detects, TRUE/FALSE pins the linear solver.
+## `sparse`: NULL auto-detects, TRUE/FALSE pins the linear solver. `derivMode`
+## is "forward", "reverse", "forward-forward" or "forward-reverse"; CVODES
+## takes the first two.
 get_model <- function(cache, prob, backend, deriv, deriv2 = FALSE, method = "bdf",
-                      useNDF = TRUE, sparse = NULL, verbose = FALSE) {
+                      useNDF = TRUE, sparse = NULL, verbose = FALSE,
+                      derivMode = if (deriv2) "forward-forward" else "forward") {
   ev <- prob$events
   key <- cache_key(paste(prob$rhs, collapse = ";"), paste(names(prob$rhs), collapse = ";"),
-                   backend, deriv, deriv2, method, useNDF,
+                   backend, deriv, derivMode, method, useNDF,
                    if (is.null(sparse)) "auto" else sparse,
                    paste(sort(prob$fixed), collapse = ";"),
                    if (is.null(ev)) "" else paste(unlist(ev), collapse = ";"))
@@ -267,12 +270,16 @@ get_model <- function(cache, prob, backend, deriv, deriv2 = FALSE, method = "bdf
 
   t0 <- proc.time()[["elapsed"]]
   m <- if (backend == "cvode") {
-    if (deriv2) stop("CVODES has no second-order sensitivities")
-    cvode(prob$rhs, events = ev, deriv = deriv, fixed = fixed, outdir = cache$outdir,
+    if (startsWith(derivMode, "forward-"))
+      stop("CVODES has no second-order sensitivities")
+    cvode(prob$rhs, events = ev, deriv = deriv && derivMode == "forward",
+          derivMode = derivMode, fixed = fixed, outdir = cache$outdir,
           modelname = nm, method = method, sparse = sparse,
           compile = TRUE, verbose = verbose)
   } else {
-    cppODE(prob$rhs, events = ev, deriv = deriv, deriv2 = deriv2, fixed = fixed,
+    cppODE(prob$rhs, events = ev, deriv = deriv,
+           deriv2 = derivMode == "forward-forward",
+           derivMode = if (deriv) derivMode else "forward", fixed = fixed,
            outdir = cache$outdir, sparse = sparse,
            modelname = nm, method = method, useNDF = useNDF,
            compile = TRUE, verbose = verbose)
@@ -338,6 +345,16 @@ sens_error <- function(s, ref) {
   err <- abs(s - ref) / array(rep(scale, each = dim(s)[1L]), dim(s))
   if (!any(is.finite(err))) return(NA_real_)
   max(err[is.finite(err)])
+}
+
+
+## A gradient or Hessian against its reference, relative to the largest entry.
+grad_error <- function(g, ref) {
+  if (is.null(g) || is.null(ref) || !identical(dim(as.matrix(g)), dim(as.matrix(ref))))
+    return(NA_real_)
+  scale <- max(abs(ref), na.rm = TRUE)
+  if (!is.finite(scale) || scale <= 0) scale <- 1
+  max(abs(g - ref), na.rm = TRUE) / scale
 }
 
 
@@ -424,17 +441,26 @@ mark_sparse_sweep <- function(problems, max_density = 0.25, min_states = 8L,
 ## decades below the tightest sweep: at equal settings CVODE would score exactly
 ## zero error against itself and drop out of the work-precision plot.
 
-## `max_sens2` is separate from the first-order cap because second-order forward
-## AD grows with M^2, so a width that is routine for sens1 makes sens2 the run.
+## First order runs forward below `reverse_from` sensitivity parameters and in
+## reverse from there on, cppDE against CVODES adjoints, both seeded with ones
+## on every output: the gradient of the sum of all outputs.
+
+## Second order is cppDE only and runs on models up to `max_states_sens2`
+## states: forward-reverse with up to `max_sens2_fr` directions, and
+## forward-forward, whose cost grows with M^2, only up to `max_states_ff` states
+## and `max_sens2` directions. Both give the Hessian of the same seeded sum;
+## where both run they share the directions.
 
 ## `sweep_configs` are appended for a case mark_sparse_sweep() kept, so the
-## dense/sparse comparison rides in the same run and worker as the head-to-head.
+## dense/sparse comparison runs in the same worker as the head-to-head.
 run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
                         configs = solver_configs(), nrep = 5L,
                         ref_tol = c(atol = 1e-14, rtol = 1e-12),
                         verbose = TRUE, ref_backend = "cvode",
                         max_sens2 = 10L, min_time = 0.05,
-                        sweep_configs = NULL) {
+                        sweep_configs = NULL, reverse_from = 120L,
+                        max_states_sens2 = 30L, max_states_ff = 10L,
+                        max_sens2_fr = 32L) {
   if (isTRUE(prob$sweep) && length(sweep_configs))
     configs <- c(configs, sweep_configs)
   rows <- list()
@@ -447,107 +473,171 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
               else paste0(" [", prob$condition, "]"),
               prob$nstates, prob$npars, prob$nsens, length(prob$times)))
 
-  ## Second order is a cppDE-only capability, CVODES does not provide
-  ## it, so there is nothing to compare against and no reference is
-  ## computed: the sens2 rows report cost only.
-  narrow_for_sens2 <- function(p) {
-    if (length(p$sens) <= max_sens2) return(p)
-    p$sens  <- p$sens[seq_len(max_sens2)]
+  narrow <- function(p, k) {
+    if (length(p$sens) <= k) return(p)
+    p$sens  <- p$sens[seq_len(k)]
     p$fixed <- setdiff(names(p$parms), p$sens)
     p$nsens <- length(p$sens)
     p
   }
+  has_events <- NROW(prob$events) > 0L
+  reverse1   <- prob$nsens >= reverse_from
+  ref_atol   <- min(ref_tol[["atol"]], prob$atol %||% Inf)
 
-  ## -- reference trajectories -------------------------------------------
-  ref <- list()
-  for (mode in setdiff(modes, "sens2")) {
-    deriv <- identical(mode, "sens1")
-    r <- tryCatch({
-      m <- get_model(cache, prob, ref_backend, deriv = deriv, method = "bdf")
-      align_rows(solveODE(m, prob$times, prob$parms,
-                          abstol = min(ref_tol[["atol"]], prob$atol %||% Inf),
-                          reltol = ref_tol[["rtol"]], onFailure = "stop"),
-                 prob$times)
-    }, error = function(e) { say("  reference (", mode, ") failed: ",
-                                 sub("\n.*", "", conditionMessage(e)), "\n"); NULL })
-    ref[[mode]] <- r
+  ## Ones on every state and output row. The row count comes from a value run,
+  ## which includes the extra rows cppDE reports at events.
+  seed_for <- function(backend, method = "bdf", useNDF = TRUE, sparse = NULL) {
+    m0 <- get_model(cache, prob, backend, deriv = FALSE, method = method,
+                    useNDF = useNDF, sparse = sparse)
+    n  <- nrow(solveODE(m0, prob$times, prob$parms, onFailure = "stop")$variable)
+    matrix(1, n, prob$nstates, dimnames = list(NULL, names(prob$rhs)))
+  }
+  ## The integrator carries the lower triangle of each Hessian; it is read and
+  ## mirrored.
+  hessian_of <- function(res, derivMode) {
+    if (derivMode == "forward-forward") {
+      h <- apply(res$sens2, c(3L, 4L), sum)
+      h[upper.tri(h)] <- t(h)[upper.tri(h)]
+      return(h)
+    }
+    d <- dimnames(res$adjoint2)[[2L]]
+    res$adjoint2[d, , 1L]
   }
 
-  for (mode in modes) {
-    deriv2 <- identical(mode, "sens2")
-    deriv  <- deriv2 || identical(mode, "sens1")
-    prob_m <- if (deriv2) narrow_for_sens2(prob) else prob
-    if (deriv && prob_m$nsens == 0L) {
+  ## -- references ----------------------------------------------------------
+  ref <- list()
+  for (mode in intersect(modes, c("nosens", "sens1"))) {
+    ref[[mode]] <- tryCatch({
+      if (mode == "sens1" && reverse1) {
+        b <- if (has_events) "cppde" else ref_backend
+        m <- get_model(cache, prob, b, deriv = TRUE, derivMode = "reverse")
+        solveODE(m, prob$times, prob$parms, abstol = ref_atol,
+                 reltol = ref_tol[["rtol"]], seed = seed_for(b),
+                 onFailure = "stop")$adjoint[prob$sens, 1L]
+      } else {
+        m <- get_model(cache, prob, ref_backend, deriv = mode == "sens1",
+                       method = "bdf")
+        align_rows(solveODE(m, prob$times, prob$parms, abstol = ref_atol,
+                            reltol = ref_tol[["rtol"]], onFailure = "stop"),
+                   prob$times)
+      }
+    }, error = function(e) { say("  reference (", mode, ") failed: ",
+                                 sub("\n.*", "", conditionMessage(e)), "\n"); NULL })
+  }
+
+  ## -- one model over the tolerance sweep ----------------------------------
+  measure <- function(cfg, m, mode, derivMode, nsens, seed, check) {
+    lu <- if (isTRUE(attr(m, "sparse"))) "sparse" else "dense"
+    base <- list(problem = prob$name, condition = prob$condition %||% NA_character_,
+                 source = prob$source, nstates = prob$nstates, npars = prob$npars,
+                 nsens = nsens, nout = length(prob$times),
+                 solver = cfg$label, backend = cfg$backend, lu = lu,
+                 pinned = pin_label(cfg$sparse), mode = mode, deriv = derivMode)
+    for (ti in seq_len(nrow(tolerances))) {
+      rtol <- tolerances$rtol[ti]
+      ## A problem may pin its absolute tolerance; the relative one
+      ## is still swept, which is how the IVP test set treats E5.
+      atol <- prob$atol %||% tolerances$atol[ti]
+      run <- function() solveODE(m, prob$times, prob$parms, abstol = atol,
+                                 reltol = rtol, seed = seed, onFailure = "silent")
+      res <- tryCatch(run(), error = function(e) NULL)
+      ok  <- !is.null(res) && !is.null(res$diagnostics) &&
+             res$diagnostics$return_code == 0L
+      if (!ok) {
+        say(sprintf("  %-11s %-6s rtol=%-7.0e FAILED\n", cfg$label, mode, rtol))
+        do.call(emit, c(base, list(
+          atol = atol, rtol = rtol, ok = FALSE, time_ms = NA_real_,
+          time_min_ms = NA_real_, time_max_ms = NA_real_,
+          solves_per_batch = NA_integer_, batches = NA_integer_,
+          accepted = NA_integer_, rejected = NA_integer_, fevals = NA_integer_,
+          jevals = NA_integer_, setups = NA_integer_,
+          err = NA_real_, err_sens = NA_real_,
+          compile_s = unname(attr(m, "compile_seconds")))))
+        next
+      }
+      tm <- bench_time(run, nrep = nrep, min_time = min_time)
+      e  <- check(res)
+      d  <- res$diagnostics
+      say(sprintf("  %-11s %-6s %-15s rtol=%-7.0e %8.2f ms  steps=%-6s fev=%-7s M=%d err=%.1e errS=%.1e\n",
+                  cfg$label, mode, derivMode, rtol, tm$median * 1000,
+                  d$accepted %||% NA, d$fevals %||% NA, nsens, e[1L], e[2L]))
+      do.call(emit, c(base, list(
+        atol = atol, rtol = rtol, ok = TRUE, time_ms = tm$median * 1000,
+        time_min_ms = tm$min * 1000, time_max_ms = tm$max * 1000,
+        solves_per_batch = tm$inner, batches = tm$nrep,
+        accepted = d$accepted %||% NA_integer_, rejected = d$rejected %||% NA_integer_,
+        fevals = d$fevals %||% NA_integer_, jevals = d$jevals %||% NA_integer_,
+        setups = d$setups %||% NA_integer_,
+        err = e[1L], err_sens = e[2L],
+        compile_s = unname(attr(m, "compile_seconds")))))
+    }
+  }
+
+  model_or_null <- function(cfg, p, mode, ...) tryCatch(
+    get_model(cache, p, cfg$backend, method = cfg$method,
+              useNDF = if (is.na(cfg$useNDF)) TRUE else cfg$useNDF,
+              sparse = cfg$sparse, ...),
+    error = function(e) { say(sprintf("  %-11s %-6s COMPILE FAILED: %s\n", cfg$label,
+                                      mode, sub("\n.*", "", conditionMessage(e)))); NULL })
+
+  ## -- values and first order ---------------------------------------------
+  for (mode in intersect(modes, c("nosens", "sens1"))) {
+    deriv <- mode == "sens1"
+    if (deriv && prob$nsens == 0L) {
       say(sprintf("  [%s skipped: no free parameters]\n", mode)); next
     }
-
+    derivMode <- if (!deriv) "none" else if (reverse1) "reverse" else "forward"
     for (cfg in configs) {
-      if (deriv2 && cfg$backend == "cvode") next   # CVODES cannot do this
-      m <- tryCatch(get_model(cache, prob_m, cfg$backend, deriv = deriv,
-                              deriv2 = deriv2, method = cfg$method,
-                              useNDF = if (is.na(cfg$useNDF)) TRUE else cfg$useNDF,
-                              sparse = cfg$sparse),
-                    error = function(e) { say(sprintf("  %-11s %-6s COMPILE FAILED: %s\n",
-                                              cfg$label, mode,
-                                              sub("\n.*", "", conditionMessage(e)))); NULL })
+      if (derivMode == "reverse" && cfg$backend == "cvode" && has_events) {
+        say(sprintf("  %-11s %-6s skipped: CVODES adjoints refuse events\n",
+                    cfg$label, mode)); next
+      }
+      m <- model_or_null(cfg, prob, mode, deriv = deriv,
+                         derivMode = if (deriv) derivMode else "forward")
       if (is.null(m)) next
-      ## What the model compiled to, not what was requested.
-      lu <- if (isTRUE(attr(m, "sparse"))) "sparse" else "dense"
-      pinned <- pin_label(cfg$sparse)
+      seed <- if (derivMode == "reverse") tryCatch(
+        seed_for(cfg$backend, cfg$method,
+                 if (is.na(cfg$useNDF)) TRUE else cfg$useNDF, cfg$sparse),
+        error = function(e) NULL)
+      if (derivMode == "reverse" && is.null(seed)) next
+      check <- function(res) {
+        al <- align_rows(res, prob$times)
+        if (derivMode == "reverse")
+          return(c(traj_error(al$variable, ref$nosens$variable),
+                   grad_error(res$adjoint[prob$sens, 1L], ref$sens1)))
+        c(traj_error(al$variable, ref[[mode]]$variable),
+          if (deriv) sens_error(al$sens1, ref$sens1$sens1) else NA_real_)
+      }
+      measure(cfg, m, mode, derivMode, if (deriv) prob$nsens else 0L, seed, check)
+    }
+  }
 
-      for (ti in seq_len(nrow(tolerances))) {
-        rtol <- tolerances$rtol[ti]
-        ## A problem may pin its absolute tolerance; the relative one
-        ## is still swept, which is how the IVP test set treats E5.
-        atol <- prob$atol %||% tolerances$atol[ti]
-        run <- function() solveODE(m, prob$times, prob$parms, abstol = atol,
-                                   reltol = rtol, onFailure = "silent")
-        res <- tryCatch(run(), error = function(e) NULL)
-        ok <- !is.null(res) && !is.null(res$diagnostics) &&
-              res$diagnostics$return_code == 0L
-        if (!ok) {
-          say(sprintf("  %-11s %-6s rtol=%-7.0e FAILED\n", cfg$label, mode, rtol))
-          emit(problem = prob$name, condition = prob$condition %||% NA_character_,
-               source = prob$source, nstates = prob$nstates, npars = prob$npars,
-               nsens = if (deriv) prob_m$nsens else 0L, nout = length(prob$times),
-               solver = cfg$label, backend = cfg$backend, lu = lu,
-               pinned = pinned, mode = mode,
-               atol = atol, rtol = rtol, ok = FALSE, time_ms = NA_real_,
-               time_min_ms = NA_real_, time_max_ms = NA_real_,
-               solves_per_batch = NA_integer_, batches = NA_integer_,
-               accepted = NA_integer_, rejected = NA_integer_, fevals = NA_integer_,
-               jevals = NA_integer_, setups = NA_integer_,
-               err = NA_real_, err_sens = NA_real_,
-               compile_s = unname(attr(m, "compile_seconds")))
-          next
-        }
-        tm <- bench_time(run, nrep = nrep, min_time = min_time)
-        ## sens2 has no reference (nothing else computes Hessians here),
-        ## so its rows carry timing and step counts only.
-        al  <- if (deriv2) NULL else align_rows(res, prob$times)
-        e_x <- if (deriv2) NA_real_ else traj_error(al$variable, ref[[mode]]$variable)
-        e_s <- if (deriv2 || !deriv) NA_real_
-               else sens_error(al$sens1, ref[[mode]]$sens1)
-        d <- res$diagnostics
-        say(sprintf("  %-11s %-6s rtol=%-7.0e %8.2f ms  steps=%-6s fev=%-7s%s\n",
-                    cfg$label, mode, rtol, tm$median * 1000,
-                    d$accepted %||% NA, d$fevals %||% NA,
-                    if (deriv2) sprintf("  M=%d", prob_m$nsens)
-                    else sprintf(" err=%.1e%s", e_x,
-                                 if (deriv) sprintf(" errS=%.1e", e_s) else "")))
-        emit(problem = prob$name, condition = prob$condition %||% NA_character_,
-             source = prob$source, nstates = prob$nstates, npars = prob$npars,
-             nsens = if (deriv) prob_m$nsens else 0L, nout = length(prob$times),
-             solver = cfg$label, backend = cfg$backend, lu = lu,
-             pinned = pinned, mode = mode,
-             atol = atol, rtol = rtol, ok = TRUE, time_ms = tm$median * 1000,
-             time_min_ms = tm$min * 1000, time_max_ms = tm$max * 1000,
-             solves_per_batch = tm$inner, batches = tm$nrep,
-             accepted = d$accepted %||% NA_integer_, rejected = d$rejected %||% NA_integer_,
-             fevals = d$fevals %||% NA_integer_, jevals = d$jevals %||% NA_integer_,
-             setups = d$setups %||% NA_integer_,
-             err = e_x, err_sens = e_s,
-             compile_s = unname(attr(m, "compile_seconds")))
+  ## -- second order, cppDE only -------------------------------------------
+  if ("sens2" %in% modes) {
+    ff <- prob$nstates <= max_states_ff
+    p2 <- narrow(prob, if (ff) max_sens2 else max_sens2_fr)
+    if (prob$nstates > max_states_sens2)
+      say(sprintf("  [sens2 skipped: %d states > %d]\n", prob$nstates, max_states_sens2))
+    else if (p2$nsens == 0L)
+      say("  [sens2 skipped: no free parameters]\n")
+    else {
+      cfg0  <- configs[[1L]]
+      modes2 <- c(if (ff) "forward-forward", "forward-reverse")
+      seed2 <- tryCatch(seed_for("cppde", cfg0$method), error = function(e) NULL)
+      href <- tryCatch({
+        m <- get_model(cache, p2, "cppde", deriv = TRUE, derivMode = modes2[1L])
+        hessian_of(solveODE(m, prob$times, prob$parms, abstol = ref_atol,
+                            reltol = ref_tol[["rtol"]], seed = if (!ff) seed2,
+                            onFailure = "stop"), modes2[1L])
+      }, error = function(e) NULL)
+      for (dm in modes2) {
+        cfg <- list(label = if (dm == "forward-forward") "cppDE_ff" else "cppDE_fr",
+                    backend = "cppde", method = cfg0$method, useNDF = cfg0$useNDF)
+        m <- model_or_null(cfg, p2, "sens2", deriv = TRUE, derivMode = dm)
+        if (is.null(m) || (dm == "forward-reverse" && is.null(seed2))) next
+        measure(cfg, m, "sens2", dm, p2$nsens,
+                if (dm == "forward-reverse") seed2,
+                function(res) c(NA_real_, grad_error(hessian_of(res, dm), href)))
       }
     }
   }
@@ -573,6 +663,8 @@ run_all_problems <- function(problems, builddir, tolerances, modes, configs,
                              nrep, cores = 1L, max_sens2 = 10L,
                              max_sens = Inf, max_states = Inf, min_time = NULL,
                              compile_slots = 0L, sweep_configs = NULL,
+                             reverse_from = 120L, max_states_sens2 = 30L,
+                             max_states_ff = 10L, max_sens2_fr = 32L,
                              on_skip = function(name, why) invisible()) {
   ## Longer batches under load, see the note on bench_time().
   if (is.null(min_time)) min_time <- if (cores > 1L) 0.25 else 0.05
@@ -601,7 +693,8 @@ run_all_problems <- function(problems, builddir, tolerances, modes, configs,
     on.exit(release_cache(cache), add = TRUE)
     out <- list()
     for (case in problems[[i]]) {
-      if (length(case$sens) > max_sens) {
+      ## The cap bounds forward AD; a reverse case keeps all its parameters.
+      if (length(case$sens) > max_sens && length(case$sens) < reverse_from) {
         case$sens  <- case$sens[seq_len(max_sens)]
         case$fixed <- setdiff(names(case$parms), case$sens)
         case$nsens <- length(case$sens)
@@ -610,7 +703,9 @@ run_all_problems <- function(problems, builddir, tolerances, modes, configs,
         run_problem(case, cache, tolerances = tolerances, modes = modes,
                     configs = configs, nrep = nrep, max_sens2 = max_sens2,
                     verbose = cores == 1L, min_time = min_time,
-                    sweep_configs = sweep_configs),
+                    sweep_configs = sweep_configs, reverse_from = reverse_from,
+                    max_states_sens2 = max_states_sens2,
+                    max_states_ff = max_states_ff, max_sens2_fr = max_sens2_fr),
         error = function(e) { message("  [error] ", case$name, ": ",
                                       sub("\n.*", "", conditionMessage(e))); NULL })
       if (!is.null(r)) out[[length(out) + 1L]] <- r

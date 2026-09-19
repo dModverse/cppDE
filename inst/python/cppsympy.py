@@ -39,12 +39,8 @@ class _BoolOpsToCalls(ast.NodeTransformer):
 
 
 def normalise_logic(expr_str):
-    """Rewrite `&&`, `||` and `!` into a form SymPy's parser accepts.
-
-    They bind below the comparisons while Python's `&` and `|` bind above, so
-    a textual swap would regroup `a > b && c > d`. Python's own parser settles
-    the grouping and the tree comes back as And / Or / Not calls.
-    """
+    """Rewrite `&&`, `||` and `!` as And / Or / Not calls, grouped by Python's
+    parser; a textual swap to `&` and `|` would bind above the comparisons."""
     if not _LOGIC_RE.search(expr_str):
         return expr_str
     src = _logic_words(expr_str).strip()
@@ -76,12 +72,9 @@ def _logic_words(s):
 
 
 def parse_error(expr_str, exc, label=None):
-    """The exception to raise when parse_expr rejects an expression.
-
-    The message stays short and on one line, and the chained cause is dropped
-    at the raise: reticulate truncates a long message and then indexes it with
-    an offset from the full one, which reaches R as a std::out_of_range.
-    """
+    """The exception to raise when parse_expr rejects an expression: one short
+    line, cause dropped at the raise, since reticulate mis-indexes a long
+    message and R sees a std::out_of_range."""
     what = "expression" if label is None else "expression '{}'".format(label)
     flat = " ".join(str(expr_str).split())
     if len(flat) > _MAX_EXPR_CHARS:

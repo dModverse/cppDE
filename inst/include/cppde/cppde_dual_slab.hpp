@@ -1,17 +1,16 @@
 /*
- Contiguous tangent storage for std::vector<dual<T, 0>>.
+ Contiguous tangent storage for std::vector<dual<T, N>> over a plain scalar T.
 
- Replaces the per-element arena allocations of dual<T, 0>::tan_ with a single
- [n_rows × n_cols] block owned by the multistepper / controller. Each
- dual<T,0>::tan_ then points into one row of the block (set via
- rebind_storage). Subsequent dual = expr materialisations hit the in-place
- reuse branch (size_ matches), so the hot path makes zero arena allocations.
+ One [n_rows × n_cols] block, owned by the stepper or controller, holds the
+ tangents; each element's tan_ points into one row (set via rebind_storage).
+ dual = expr materialisations reuse that row in place, so the hot path makes
+ no arena allocations.
 
  The slab is sized once per solve via prepare_sensitivities(n_sens) and never
  grown afterward, which keeps the embedded tan_ pointers stable.
 
- For non-dynamic-dual T (double, static-N dual<T,N!=0>, …) tangent_slab is
- specialised as an empty stub so multistepper<double, …> instances pay no
+ dual2nd has a two-block specialisation. For any other T (double, nested dual)
+ tangent_slab is an empty stub, so multistepper<double, …> instances pay no
  size or codegen cost for the slab machinery.
 
  Copyright (C) 2026 Simon Beyer
@@ -69,10 +68,10 @@ template<class S, unsigned N>
 struct is_dual2nd<cppde::dual2nd<S, N>> : std::true_type {};
 
 // =============================================================================
-//  tangent_slab<T>: contiguous [n_rows × n_cols] storage for dual<S,0>.
+//  tangent_slab<T>: contiguous [n_rows × n_cols] storage for dual<S, N>.
 //
-//  Primary template handles dual<S,0>; non-dynamic-dual T uses the empty
-//  stub specialisation below.
+//  The primary template handles every T with is_dynamic_dual; any other T uses
+//  the empty stub specialisation below.
 // =============================================================================
 
 template<class T, bool = is_dynamic_dual<T>::value>
@@ -222,7 +221,8 @@ public:
     return static_cast<std::size_t>(n_rows_) * n_cols_;
   }
 
-  // 4-arg prime_external (compatibility): owns the inner hess block.
+  // 4-arg prime_external: outer rows in the caller's block, the Hessian block
+  // owned here. stage_matrix<dual2nd> binds its stages this way.
   void prime_external(std::vector<value_type>& v, outer_inner_t* outer_base,
                       unsigned n_rows, unsigned n_cols) {
     if constexpr (N > 0) n_cols = N;
@@ -237,8 +237,8 @@ public:
   }
 
   // 6-arg prime_external: nordsieck_block<dual2nd> binds a slot's slab onto
-  // two slices (outer, hess) of the unified K-slot blocks. (val_tan_base
-  // is accepted for ABI compatibility but ignored.)
+  // two slices (outer, hess) of the unified K-slot blocks. The third argument
+  // is unused.
   void prime_external(std::vector<value_type>& v,
                       outer_inner_t* outer_base,
                       S* /*val_tan_base*/,
@@ -418,9 +418,8 @@ inline void vec_axpy_with_slab(
   }
 }
 
-// Stage AXPY with a coefficient that may itself be symbolic. A double takes the
-// slab path; the reverse replay, where h is on the tape, has no slab to use and
-// goes element-wise.
+// Stage AXPY. A double coefficient takes the slab path, any other coefficient
+// type goes element-wise.
 template<class T, class A>
 inline void vec_axpy_stage(
     std::vector<T>& y, detail::tangent_slab<T>& y_slab,
@@ -442,8 +441,7 @@ inline void vec_zero_with_slab(
 {
   if constexpr (detail::is_dual2nd<T>::value) {
     // BLAS-3 hybrid: per-element scalar + inline d1 zero + memset on hess
-    // slab block. (val_tan_block dropped; LU reads inline_d1 via
-    // first_order_view.)
+    // slab block.
     using S_inner = typename detail::tangent_slab<T>::inner_type;
     const std::size_t n = y.size();
     if (y_slab.primed()) {
@@ -496,7 +494,6 @@ inline void vec_copy_with_slab(
 {
   if constexpr (detail::is_dual2nd<T>::value) {
     // BLAS-3 hybrid: per-element scalar + inline d1 copy + memcpy on hess.
-    // (sync_d1_redundant dropped: LU reads inline_d1 via first_order_view.)
     using S_inner = typename detail::tangent_slab<T>::inner_type;
     const std::size_t n = y.size();
     if (y_slab.primed() && x_slab.primed()) {
@@ -547,8 +544,7 @@ inline void vec_scale_with_slab(
 {
   if constexpr (detail::is_dual2nd<T>::value) {
     // BLAS-3 hybrid: per-element scalar + inline d1 scale + dscal on hess
-    // block. (sync_d1_redundant dropped: LU reads inline_d1 via
-    // first_order_view.)
+    // block.
     using S_inner = typename detail::tangent_slab<T>::inner_type;
     const std::size_t n = y.size();
     if (y_slab.primed()) {

@@ -11,8 +11,8 @@
  Template parameter is_sparse selects dense vs sparse via
  if constexpr: no SFINAE, no CRTP, no tag dispatch.
 
- AD types (F<double>, F<F<double>>) are handled transparently
- by the underlying dense_lu_solver / sparse_lu_solver.
+ AD types (cppde::dual, cppde::dual2nd) are handled by the underlying
+ dense_lu_solver / sparse_lu_solver.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -36,7 +36,7 @@
 
 namespace cppde {
 
-// Tags (still needed for template parameters in generated code)
+// Tags, used as template parameters in generated code
 struct dense_lu_tag {};
 struct sparse_lu_tag {};
 
@@ -152,8 +152,7 @@ public:
       m_dfdt.m_v = m_dfdt_cache.m_v;
       refactorize_W_gamma_only(n, inv_gamma_dt);
     } else {
-      // Build W = inv_gamma_dt · I − J_cache  directly, no copy back to m_jac.
-      // This eliminates a full 1.28 MB memcpy (n×n doubles) per call.
+      // Build W = inv_gamma_dt · I − J_cache from the cached Jacobian.
       m_dfdt.m_v = m_dfdt_cache.m_v;
       refactorize_W_from_cache_dense(n, inv_gamma_dt);
     }
@@ -376,10 +375,9 @@ private:
         m_W_work.Ap != m_W_sparse.Ap || m_W_work.Ai != m_W_sparse.Ai) {
       m_W_work = m_W_sparse;  // deep-copy
 
-      // Precompute diagonal offsets in CSC.  Codegen pads the pattern with
-      // explicit zeros so every diagonal is present (see codegen_cppODE.py,
-      // "missing_diags"); without that slot there is nowhere to put the
-      // identity term, so refuse rather than scale an off-diagonal entry.
+      // Precompute diagonal offsets in CSC. Codegen pads the pattern with
+      // explicit zeros on the diagonal (csc_layout() in cppde_model.py); a
+      // missing diagonal is refused rather than an off-diagonal entry scaled.
       m_diag_offsets.resize(n);
       for (size_t i = 0; i < n; ++i) {
         const int* begin = m_W_work.Ai.data() + m_W_work.Ap[i];
@@ -448,8 +446,8 @@ private:
 };
 
 // ============================================================================
-//  Tag to bool conversion (for backward compatibility with stepper templates
-//  that use dense_lu_tag / sparse_lu_tag)
+//  Tag to bool conversion, for stepper templates parameterised on
+//  dense_lu_tag / sparse_lu_tag
 // ============================================================================
 
 template<class Tag>

@@ -1,59 +1,20 @@
 /*
- cppDE Multistep Stepper: Nordsieck multistep implementation.
+ cppDE Multistep Stepper: variable-order, variable-step Nordsieck multistepper.
 
- Unified variable-order, variable-step Nordsieck multistep stepper
- covering two method variants selected at compile time via the
- multistep_method enum:
+ The multistep_method enum selects the family at compile time:
 
-   bdf     : pure BDF/NDF, max order 5  (default)
-   adams   : pure Adams-Moulton PECE,  max order 12
+   bdf     : BDF/NDF with a Newton corrector, max order 5   (default)
+   adams   : Adams-Moulton in PECE form,       max order 12
 
- Whether the stiff side uses NDF (Klopfenstein-Shampine) kappa
- coefficients or classical BDF (kappa = 0) is controlled at runtime
- via set_use_ndf_kappa().  The default is NDF (useNDF = true).
+ On the stiff side set_use_ndf_kappa() chooses between the Klopfenstein-Shampine
+ NDF (default; Shampine & Reichelt 1997, "The MATLAB ODE Suite", SIAM J. Sci.
+ Comput. 18(1), 1-22) and classical BDF (kappa = 0). kappa enters through gamma
+ and the error constant, see ndfSet() and ndfSetTq(), and vignette("Methods"),
+ appendix "BDF and NDF coefficients".
 
- The stiff-side default formulas are the Klopfenstein-Shampine
- Numerical Differentiation Formulas (NDF) from Shampine & Reichelt
- 1997, "The MATLAB ODE Suite", SIAM J. Sci. Comput. 18(1), 1-22.
- Setting use_ndf_kappa to false recovers classical BDF.
-
- The NDF-kappa modification replaces the BDF correction
-
- sum_{m=1}^k (1/m) grad^m y - h F = 0
-
- with
-
- sum_{m=1}^k (1/m) grad^m y - h F - kappa * gamma_k * (y - y_pred) = 0
-
- where y_pred is the predictor.  Algebraically this amounts to
- replacing gamma_k by (1 - kappa) * gamma_k in the iteration matrix
- and in the Newton residual, and scaling the leading truncation
- error coefficient from 1/(k+1) to (kappa*gamma_k + 1/(k+1)).
-
- Klopfenstein-Shampine kappa values (Table 1 in SR97):
-
- k=1:  kappa = -0.1850     26% larger step vs BDF, same A-stab
- k=2:  kappa = -1/9        26% larger step vs BDF, same A-stab
- k=3:  kappa = -0.0823     26% larger step, stability angle 80 deg
- k=4:  kappa = -0.0415     12% larger step, stability angle 66 deg
- k=5:  kappa =  0          identical to BDF5 (too little margin)
-
- Architecture:
- - lu_W<Value, is_sparse> member handles all LU operations
- - ndf_newton_solve()        free function: BDF/NDF Newton corrector
-                             (declared in cppde_newton.hpp)
- - adams_pece_solve()        free function: Adams PECE corrector
-                             (defined inline below)
- - adams_set_coefficients()  free function: Adams Nordsieck coefficients
-                             (defined inline below)
- - multistepper              orchestrates the step pipeline
-
- AD handling is fully transparent: lu_W::solve() dispatches to IFT
- internally, WRMS norms in newton include derivative components.
-
- This header is the single source of truth for the multistep family:
- the coefficient routines, the Adams PECE corrector, and the stepper
- class itself all live here.
+ The Newton corrector is ndf_newton_solve() in cppde_newton.hpp; the Adams
+ coefficients and the PECE corrector are defined below. For AD types
+ lu_W::solve() carries the IFT and the WRMS norms include the tangents.
 
  Copyright (C) 2026 Simon Beyer
 
@@ -311,20 +272,19 @@ void adams_set_coefficients(
   //    E : f_new = f(t_n, y_n), kept for the next step
   //
   //  Two f evaluations per accepted step, no Jacobian and no solve. A diverging
-  //  fixed point means |h * lambda * l[1]| > 1, which the `diverged` flag hands
-  //  on as a stiffness signal. Dual types pass through the arithmetic.
+  //  fixed point (|h * lambda * l[1]| > 1) sets `diverged`, a diagnostic the
+  //  step trace reports. Dual types pass through the arithmetic.
   // ============================================================================
 
 struct pece_result {
   bool   converged;     // Did the PECE fixed-point iteration converge?
-  bool   diverged;      // Hard divergence: strong stiffness signal.
+  bool   diverged;      // Hard divergence; diagnostic, reported in the trace.
   double acnrm;         // WRMS norm of the accumulated correction.
   int    n_fevals;      // Number of f-evaluations used (2 for converged step).
   int    n_iters;       // Number of corrector iterations performed.
 
   // Maximum convergence rate over the corrector iterations, rm = del/delp as in
-  // LSODA correction(). The stiffness detector estimates the dominant Lipschitz
-  // constant from it, the Adams path having no Jacobian. Zero below two runs.
+  // LSODA correction(). A diagnostic that no caller reads; zero below two runs.
   double rate_max;
 };
 
@@ -337,8 +297,7 @@ struct pece_result {
   //   acor, y, tempv, ftemp   : correction, result, and caller-owned scratch
   //   crate                   : damped convergence rate, diagnostic only
   //
-  // A result with diverged set means the corrector blew up and the stepper
-  // should switch to NDF; converged and diverged both false is a soft failure
+  // A result that did not converge, diverged or not, is a convergence failure
   // the controller retries with a smaller step.
 template<class DerivFunc, class Value, class TimeType>
 pece_result adams_pece_solve(
@@ -410,8 +369,7 @@ pece_result adams_pece_solve(
   // CVODE cvNlsFunctional:
   //   tempv = rl1 * (h*f(y_prev) - zn[1])   the full new correction
   //   del   = ||tempv - acor||              the increment over the previous one
-  // rl1 is 1/l[1], not l[1]: with l[1] the corrector settles on a different
-  // fixed point and every step then looks like a large local error.
+  // rl1 is 1/l[1], as in cvNlsFunctional.
     { auto _t = prof.timer(prof_cat::newton_overhead);
       // tempv = rl1 * (h*f - zn1_pred) - acor, the increment; acor takes
       // it up and equals the full correction afterwards.
@@ -663,9 +621,8 @@ public:
       if (n_sens == 0) return;
 
       // The nordsieck_block needs all K facade vectors to be the same
-      // length; bail out (defer until a later prepare_sensitivities call)
-      // if any slot is still empty.  This mirrors the per-slot empty()
-      // guard the per-slab loop used to do.
+      // length; defer to a later prepare_sensitivities call while any slot
+      // is still empty.
       bool zn_ready = true;
       const std::size_t n_zn = m_zn[0].m_v.size();
       for (int j = 0; j <= max_order + 1; ++j) {
@@ -790,19 +747,15 @@ public:
 
   // ====================================================================
   //  on_step_accepted: called by the controller after a successful step.
-  //  Currently a no-op (no mode-switching machinery).  Kept as a hook
-  //  in case future per-step bookkeeping is needed.
+  //  A no-op for this stepper.
   // ====================================================================
 
   template<class System, class TimeArg>
   void on_step_accepted(System& /*system*/, TimeArg /*t*/) {}
 
   // ====================================================================
-  //  step_bdf_family: perform one BDF/NDF step
-  //
-  //  This is the original do_step body, unchanged in behaviour, just
-  //  renamed and made a private member.  Delegates Newton iteration
-  //  to ndf_newton_solve().
+  //  step_bdf_family: one BDF/NDF step, Newton iteration delegated to
+  //  ndf_newton_solve().
   // ====================================================================
 
   template<class System, class TimeArg>
@@ -1029,7 +982,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     callSetup = true;
     // CVODE classification: if gamrat is close to 1, drift cannot
     // explain the failure => J itself must be stale. If gamrat is
-    // far from 1, the drift is the likely culprit => keep J, only
+    // far from 1, the drift is the likely cause => keep J, only
     // refactorize W at the current gamma.
     if (std::abs(m_gamrat - 1.0) < 0.2) {
       nls_convfail = convfail_t::fail_bad_j;
@@ -1270,8 +1223,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   }
 
   // Restores the scalars and sizes the history to n states. The slot values are
-  // written through zn_mut(), which is also where a caller registers them as
-  // tape inputs.
+  // written through zn_mut().
   void load_carry(const carry& c, std::size_t n)
   {
     state_type probe(n);
@@ -1291,7 +1243,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   //  replay_outputs: what the corrector's solution makes of the step. acor is
   //  the correction the tail maps back into the history, and the error estimate
   //  is that same vector. A probe stepper drives this with a unit slot to read
-  //  the tail's operators off, which is the only caller left.
+  //  the tail's operators off.
   // ====================================================================
   void replay_outputs(const state_type& y, state_type& x_out, state_type& xerr)
   {
@@ -1423,8 +1375,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   {
     auto _tp = m_prof.timer(prof_cat::error_norm);
     using ndf_detail::scalar_value;
-    // Clamp to the current method's max order: for ++-instantiations
-    // this is 5 in BDF/NDF mode and 12 in Adams mode.
+    // Clamp to the method's max order: 5 for BDF/NDF, 12 for Adams.
     if (m_q >= q_max_current()) return 0.0;
     if (m_saved_tq5 == 0.0) return 0.0;
 
@@ -1728,9 +1679,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     if (dense_resized && m_n_sens != 0)
       prepare_sensitivities(m_n_sens);
 
-    // Value layer: per-element dual = dual copy.  Only the first (q+1)
-    // slots are alive: leave the rest untouched (consistent with the
-    // legacy per-slot loop, which only ran for j ∈ [0, q]).
+    // Value layer: per-element dual = dual copy. Only the first (q+1)
+    // slots are alive; the rest are left untouched.
     for (int j = 0; j <= m_q; ++j) {
       auto& dst = m_zn_dense[j].m_v;
       const auto& src = m_zn[j].m_v;
@@ -1742,8 +1692,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // keep stale tangents, which eval_dense_into never reads.
   //
   // For dual2nd the loop above has already covered the inline value and gradient
-  // slots. The val_tan and hess sub-blocks are flat arrays and can be copied,
-  // but the outer block must not be: that would clobber the binding pointers.
+  // slots. The hess sub-block is a flat array and can be copied, but the outer
+  // block must not be: that would clobber the binding pointers.
     if constexpr (detail::is_dual2nd<value_type>::value) {
       // dual2nd: memcpy hess sub-block (flat doubles). Outer block (with
       // its inline gradient .val_ slots) was already copied per-element
@@ -1826,7 +1776,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   void report_setup_triggers() const {
     // Setup-trigger breakdown: only meaningful for methods that call
-    // lsetup (BDF / NDF / BDF++ / NDF++).  Pure Adams has no Jacobian.
+    // lsetup (BDF / NDF). Adams has no Jacobian.
     if constexpr (can_use_bdf_family) {
       std::fprintf(stderr, "\n=== BDF/NDF setup trigger breakdown (total = %d) ===\n", m_n_setup_total);
       std::fprintf(stderr, "  force_setup (err/conv fail): %d\n", m_n_setup_force);
@@ -2209,7 +2159,7 @@ private:
                           FCONE FCONE FCONE FCONE);
         }
       } else {
-        // Nested-dual / non-double inner: legacy per-slot path.
+        // Nested-dual / non-double inner: per-slot path.
         for (int k = 1; k <= m_q; ++k)
           for (int j = m_q; j >= k; --j)
             vec_axpy_with_slab(m_zn[j - 1].m_v, m_zn_block.slab(j - 1),
