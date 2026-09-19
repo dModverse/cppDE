@@ -26,7 +26,6 @@
        (c) gradient (writes outer.tan_[i].x() = d1 slots; reads source's d1
            at the SAME index, which has not yet been written this iteration)
        (d) mirror upper triangle from lower (intra-Hessian, no cross-leak)
-       (e) sync redundant gradient (outer.val_.tan_[i] <- outer.tan_[i].x())
     Cross-iteration reads in (c) only touch source.d1 slots that have not
     yet been overwritten because we iterate i monotonically and write at
     index i after reading at index i.
@@ -864,7 +863,6 @@ inline auto value_of(const dual2nd_expr::Expr2nd<D>& e) {
   //   2. lower-triangle Hessian, reading d1 and d2, writing the inner slots
   //   3. gradient, whose d1 source at index i is read before it is written
   //   4. mirror the upper triangle from the lower
-  //   5. sync the redundant gradient copy
   // ===========================================================================
 namespace dual2nd_expr {
 
@@ -899,8 +897,6 @@ CPPDE_ET2_INLINE void materialise(dual2nd<T, N>& lhs, const E& e) {
   for (unsigned i = 1; i < m; ++i)
     for (unsigned j = 0; j < i; ++j)
       lhs.dd_raw(j, i) = lhs.dd_raw(i, j);
-  // (sync_d1_redundant DROPPED: LU now reads gradient from inline_d1 via
-  // first_order_view. val_tan_block is no longer maintained in sync.)
 }
 
 } // namespace dual2nd_expr

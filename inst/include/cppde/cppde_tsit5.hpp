@@ -2,8 +2,7 @@
  Tsitouras 5(4) explicit Runge-Kutta stepper.
 
  A 7-stage, 5th-order explicit method with embedded 4th-order error
- estimator and FSAL (First Same As Last) property.  Widely used as
- the default non-stiff solver in DifferentialEquations.jl.
+ estimator and FSAL (First Same As Last) property.
 
  Reference:
  Tsitouras, Ch. (2011). "Runge-Kutta pairs of order 5(4) satisfying
@@ -60,6 +59,9 @@ public:
 
   typedef tsit5<Value, Resizer>              stepper_type;
 
+  // Same method on another scalar type, for the reverse replay.
+  template<class Value2> using rebind_value = tsit5<Value2, Resizer>;
+
   static constexpr order_type stepper_order = 5;
   static constexpr order_type error_order   = 4;
 
@@ -102,10 +104,9 @@ public:
     if constexpr (detail::is_dynamic_dual<value_type>::value) {
       if (n_sens == 0) return;
 
-      // Bind the seven k stages into one contiguous tangent block via
-      // m_K. This lets the FSAL recycle (copy stage 7 -> stage 1
-      // between steps) be a flat std::memcpy on the column-7 slice
-      // instead of a per-element copy + slab pointer swap.
+      // Bind the seven k stages into one contiguous tangent block via m_K,
+      // so the FSAL recycle (stage 7 -> stage 1 between steps) is a copy of
+      // the column-7 slice.
       const std::size_t n_k = m_k1.m_v.size();
       bool ks_ready = (n_k > 0)
                    && (m_k2.m_v.size() == n_k) && (m_k3.m_v.size() == n_k)
@@ -153,25 +154,12 @@ public:
   // --- Stage 1 (FSAL: reuse k7 from the previous accepted step) ---
   //
   // The stage matrix binds m_k1's tangents to column 0 and m_k7's to column 6,
-  // and those bindings hold across steps. Reusing k7 as the next k1 is therefore
-  // a value copy plus a memcpy of the column slice; afterwards m_k1 is f(x, t).
+  // and those bindings hold across steps, so reusing k7 as the next k1 is a
+  // copy of the column slice rather than a rebinding. It goes through the
+  // slab-aware copy: at second order a tangent element carries a pointer of
+  // its own, which a flat memcpy would alias into column 0 instead of copying.
     if (m_fsal_valid && m_k1.m_v.size() == n) {
-      if constexpr (detail::is_dynamic_dual<value_type>::value) {
-        // Per-element value copy preserves the dual's tan_ binding to
-        // physical column 0 (operator=(const dual&) zeros tangents and
-        // copies values, but here we keep the slab-bound form intact :
-        // see dual<T,N>::operator=(const dual&)).
-        for (size_t i = 0; i < n; ++i) m_k1.m_v[i].x() = m_k7.m_v[i].x();
-        using inner = typename value_type::value_type;
-        const std::size_t per = m_K.slot_stride();
-        if (per > 0) {
-          std::memcpy(m_K.tangent_block_data() + 0 * per,
-                      m_K.tangent_block_data() + 6 * per,
-                      per * sizeof(inner));
-        }
-      } else {
-        for (size_t i = 0; i < n; ++i) m_k1.m_v[i] = m_k7.m_v[i];
-      }
+      vec_copy_with_slab(m_k1.m_v, m_K.slab(0), m_k7.m_v, m_K.slab(6));
     } else {
       deriv_func(x, m_k1.m_v, t);
       ++m_n_fevals;
@@ -180,50 +168,48 @@ public:
     // Use TimeArg (not time_type) so AD derivative components propagate
     // through the deriv_func t arguments below.
     const TimeArg h    = dt;
-    // Stage AXPY alphas extracted to scalar: matches rosenbrock4
-    // convention. AD-time propagation in stage assembly is dropped here
-    // (the deriv_func calls below still receive a TimeArg-typed t so AD
-    // tangents propagate where they matter).
-    const double h_s = static_cast<double>(ad_lu::scalar_value(dt));
+    // Stage AXPY alphas. The grid is frozen, so dt carries no tangent in any
+    // direction and these are plain doubles. See ad_traits::step_coef.
+    using coef_type = ad_traits::step_coef_t<TimeArg>;
+    const coef_type hc = ad_traits::step_coef_of(dt);
 
     // --- Stage 2:  xtmp = x + h*a21 * k1 ---
     vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab,
-                       h_s * a21, m_k1.m_v, m_K.slab(0));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a21, m_k1.m_v, m_K.slab(0));
     deriv_func(m_xtmp.m_v, m_k2.m_v, t + c2 * h);
     ++m_n_fevals;
 
     // --- Stage 3:  xtmp = x + h*(a31*k1 + a32*k2) ---
     vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a31, m_k1.m_v, m_K.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a32, m_k2.m_v, m_K.slab(1));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a31, m_k1.m_v, m_K.slab(0));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a32, m_k2.m_v, m_K.slab(1));
     deriv_func(m_xtmp.m_v, m_k3.m_v, t + c3 * h);
     ++m_n_fevals;
 
     // --- Stage 4 ---
     vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a41, m_k1.m_v, m_K.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a42, m_k2.m_v, m_K.slab(1));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a43, m_k3.m_v, m_K.slab(2));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a41, m_k1.m_v, m_K.slab(0));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a42, m_k2.m_v, m_K.slab(1));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a43, m_k3.m_v, m_K.slab(2));
     deriv_func(m_xtmp.m_v, m_k4.m_v, t + c4 * h);
     ++m_n_fevals;
 
     // --- Stage 5 ---
     vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a51, m_k1.m_v, m_K.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a52, m_k2.m_v, m_K.slab(1));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a53, m_k3.m_v, m_K.slab(2));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a54, m_k4.m_v, m_K.slab(3));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a51, m_k1.m_v, m_K.slab(0));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a52, m_k2.m_v, m_K.slab(1));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a53, m_k3.m_v, m_K.slab(2));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a54, m_k4.m_v, m_K.slab(3));
     deriv_func(m_xtmp.m_v, m_k5.m_v, t + c5 * h);
     ++m_n_fevals;
 
     // --- Stage 6 ---
     vec_copy_with_slab(m_xtmp.m_v, m_xtmp_slab, x, m_x_in_unslabbed);
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a61, m_k1.m_v, m_K.slab(0));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a62, m_k2.m_v, m_K.slab(1));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a63, m_k3.m_v, m_K.slab(2));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a64, m_k4.m_v, m_K.slab(3));
-    vec_axpy_with_slab(m_xtmp.m_v, m_xtmp_slab, h_s * a65, m_k5.m_v, m_K.slab(4));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a61, m_k1.m_v, m_K.slab(0));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a62, m_k2.m_v, m_K.slab(1));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a63, m_k3.m_v, m_K.slab(2));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a64, m_k4.m_v, m_K.slab(3));
+    vec_axpy_stage(m_xtmp.m_v, m_xtmp_slab, hc * a65, m_k5.m_v, m_K.slab(4));
     deriv_func(m_xtmp.m_v, m_k6.m_v, t + c6 * h);
     ++m_n_fevals;
 
@@ -232,25 +218,25 @@ public:
   // vec_axpy are used. Each axpy is one scalar-times-dual binop, which the
   // expression path fuses into a single tangent loop.
     vec_copy(xout, x);
-    vec_axpy(xout, h_s * b1, m_k1.m_v);
-    vec_axpy(xout, h_s * b2, m_k2.m_v);
-    vec_axpy(xout, h_s * b3, m_k3.m_v);
-    vec_axpy(xout, h_s * b4, m_k4.m_v);
-    vec_axpy(xout, h_s * b5, m_k5.m_v);
-    vec_axpy(xout, h_s * b6, m_k6.m_v);
+    vec_axpy(xout, hc * b1, m_k1.m_v);
+    vec_axpy(xout, hc * b2, m_k2.m_v);
+    vec_axpy(xout, hc * b3, m_k3.m_v);
+    vec_axpy(xout, hc * b4, m_k4.m_v);
+    vec_axpy(xout, hc * b5, m_k5.m_v);
+    vec_axpy(xout, hc * b6, m_k6.m_v);
 
     deriv_func(xout, m_k7.m_v, t + h);
     ++m_n_fevals;
 
     // --- Error estimate: xerr = h * sum(e_i * k_i)  (e_i = bhat_i - b_i) ---
     vec_zero(xerr);
-    vec_axpy(xerr, h_s * e1, m_k1.m_v);
-    vec_axpy(xerr, h_s * e2, m_k2.m_v);
-    vec_axpy(xerr, h_s * e3, m_k3.m_v);
-    vec_axpy(xerr, h_s * e4, m_k4.m_v);
-    vec_axpy(xerr, h_s * e5, m_k5.m_v);
-    vec_axpy(xerr, h_s * e6, m_k6.m_v);
-    vec_axpy(xerr, h_s * e7, m_k7.m_v);
+    vec_axpy(xerr, hc * e1, m_k1.m_v);
+    vec_axpy(xerr, hc * e2, m_k2.m_v);
+    vec_axpy(xerr, hc * e3, m_k3.m_v);
+    vec_axpy(xerr, hc * e4, m_k4.m_v);
+    vec_axpy(xerr, hc * e5, m_k5.m_v);
+    vec_axpy(xerr, hc * e6, m_k6.m_v);
+    vec_axpy(xerr, hc * e7, m_k7.m_v);
 
     // FSAL: k7 becomes k1 for the next step (if accepted)
     m_fsal_valid = false;  // will be set by prepare_dense_output / accept
@@ -259,20 +245,15 @@ public:
   // ====================================================================
   //  Dense output
   //
-  //  The Tsit5 continuous extension uses the 7 FSAL stages to build
-  //  a 4th-order interpolant.  Coefficients from Tsitouras (2011),
-  //  Section 3.
+  //  A cubic Hermite interpolant over (x_old, x_new, h k1, h k7), see
+  //  dense_weights() below.
   // ====================================================================
 
   void prepare_dense_output()
   {
-  // After an accepted step FSAL is only flagged valid: the recycle of k7 into
-  // the next k1 happens as a memcpy at the start of the next do_step.
-  //
-  //   m_k1 = f(x_old, t_old), m_k7 = f(x_new, t_new)
-  //
-  // calc_state builds the dense coefficients lazily from k1..k7, so the stages
-  // must survive until the next do_step.
+  // After an accepted step FSAL is only flagged valid: k7 is copied into the
+  // next k1 at the start of the next do_step. Until then calc_state reads
+  // m_k1 = f(x_old, t_old) and m_k7 = f(x_new, t_new).
     m_fsal_valid = true;
   }
 
@@ -289,26 +270,38 @@ public:
     const TimeArg h = t_new - t_old;
     const TimeArg s = (t - t_old) / h;   // theta in [0, 1]
 
-    // Hermite cubic interpolation using endpoint values and derivatives.
-
-    const TimeArg s1 = TimeArg(1) - s;
-    const TimeArg s2 = s * s;
-    const TimeArg s1_2 = s1 * s1;
+    TimeArg w[4];
+    dense_weights(s, w);
 
     for (size_t i = 0; i < n; ++i) {
-      // Hermite basis functions:
-      //   H00 = (1 + 2s)(1-s)^2 = 1 - 3s^2 + 2s^3
-      //   H10 = s(1-s)^2         = s - 2s^2 + s^3
-      //   H01 = s^2(3 - 2s)      = 3s^2 - 2s^3
-      //   H11 = s^2(s - 1)       = s^3 - s^2
       value_type f_old = m_k1.m_v[i];   // f(x_old, t_old) = step-start k1
       value_type f_new = m_k7.m_v[i];   // f(x_new, t_new) = step-end k7
 
-      x[i] = x_old[i] * (s1_2 * (TimeArg(1) + TimeArg(2) * s))
-           + x_new[i] * (s2 * (TimeArg(3) - TimeArg(2) * s))
-           + h * f_old * (s * s1_2)
-           + h * f_new * (s2 * (s - TimeArg(1)));
+      x[i] = x_old[i] * w[0]
+           + x_new[i] * w[1]
+           + h * f_old * w[2]
+           + h * f_new * w[3];
     }
+  }
+
+  // ====================================================================
+  //  The continuous extension's four weights at theta, over
+  //  (x_old, x_new, h k1, h k7). Hermite cubic:
+  //    H00 = (1 + 2s)(1-s)^2,  H01 = s^2(3 - 2s)
+  //    H10 = s(1-s)^2,         H11 = s^2(s - 1)
+  //
+  //  One statement of the basis, two readers: calc_state contracts it forward,
+  //  the written adjoint transposes it.
+  // ====================================================================
+  template<class TimeArg>
+  static void dense_weights(const TimeArg& s, TimeArg* w) {
+    const TimeArg s1 = TimeArg(1) - s;
+    const TimeArg s2 = s * s;
+    const TimeArg s1_2 = s1 * s1;
+    w[0] = s1_2 * (TimeArg(1) + TimeArg(2) * s);
+    w[1] = s2 * (TimeArg(3) - TimeArg(2) * s);
+    w[2] = s * s1_2;
+    w[3] = s2 * (s - TimeArg(1));
   }
 
   // ====================================================================
@@ -398,8 +391,8 @@ private:
   detail::tangent_slab<value_type> m_xtmp_slab;
   // Permanently-empty stub for the externally-owned input state x (controller
   // owns it; it is not slab-bound here). vec_*_with_slab sees primed=false
-  // and falls through to the per-element loop. mutable so we can hand out
-  // non-const refs to the helper signature without lying about constness.
+  // and falls through to the per-element loop. Mutable because the helper
+  // signatures take non-const references.
   mutable detail::tangent_slab<value_type> m_x_in_unslabbed;
   unsigned m_n_sens = 0;
 
@@ -408,6 +401,54 @@ private:
 
 public:
   mutable cppde::profiler m_prof;
+
+  // ====================================================================
+  //  The tableau, for a written adjoint.
+  //
+  //  An explicit method's backward recursion is stated in these numbers and
+  //  in nothing else, so it reads them here rather than carrying a copy that
+  //  could drift. Stage 7 is FSAL and carries no weight in the solution, so
+  //  the recursion runs over six.
+  // ====================================================================
+  static constexpr int n_stages_used = 6;
+
+  /// a(i, j) for i > j, both one-based; zero elsewhere.
+  static double tableau_a(int i, int j) {
+    switch (i * 10 + j) {
+      case 21: return a21;
+      case 31: return a31; case 32: return a32;
+      case 41: return a41; case 42: return a42; case 43: return a43;
+      case 51: return a51; case 52: return a52; case 53: return a53;
+      case 54: return a54;
+      case 61: return a61; case 62: return a62; case 63: return a63;
+      case 64: return a64; case 65: return a65;
+      default: return 0.0;
+    }
+  }
+  /// The solution weights, one-based.
+  static double tableau_b(int i) {
+    switch (i) {
+      case 1: return b1; case 2: return b2; case 3: return b3;
+      case 4: return b4; case 5: return b5; case 6: return b6;
+      default: return 0.0;
+    }
+  }
+  /// The nodes, one-based; c1 is zero.
+  static double tableau_c(int i) {
+    switch (i) {
+      case 2: return c2; case 3: return c3; case 4: return c4;
+      case 5: return c5; case 6: return c6;
+      default: return 0.0;
+    }
+  }
+  /// Stage derivative i, one-based, valid after do_step.
+  const state_type& stage_k(int i) const {
+    switch (i) {
+      case 1: return m_k1.m_v; case 2: return m_k2.m_v; case 3: return m_k3.m_v;
+      case 4: return m_k4.m_v; case 5: return m_k5.m_v; case 6: return m_k6.m_v;
+      default: return m_k7.m_v;
+    }
+  }
 };
 
 } // namespace cppde

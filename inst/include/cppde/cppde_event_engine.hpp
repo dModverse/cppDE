@@ -92,6 +92,31 @@ inline void reset_stepper_unified(S& st, State& x, Time t, Time& dt) {
 struct no_dt_estimator {};
 
 // ============================================================================
+// What one intervention between two steps did.
+//
+// Which events fire and when is a control decision, so the reverse mode reads
+// it off this note rather than deciding again; what the jump did to the state
+// is arithmetic and gets replayed. t_before is where the state entering the
+// jump was read, which is the localised root time for a root event and the
+// output time for a fixed one.
+// ============================================================================
+
+template<class State>
+struct event_note {
+  double t          = 0.0;
+  double t_before   = 0.0;
+  bool   root       = false;   // root-triggered, so the saltation batch applies
+  bool   restart    = false;   // the stepper was reinitialised on the far side
+  double dt_restart = 0.0;
+  const State* x_before = nullptr;
+  const State* x_after  = nullptr;
+  const std::vector<TriggeredEvent>* triggered = nullptr;
+  // Root conditions a fixed jump switched on, in the order they were applied on
+  // the event surface. Non-null only where a model carries both kinds.
+  const std::vector<size_t>* switched = nullptr;
+};
+
+// ============================================================================
 // EventEngine
 // ============================================================================
 
@@ -104,6 +129,8 @@ public:
  using value_type = typename State::value_type;
 
  using TerminationFunc = std::function<bool(const State&, const Time&)>;
+ using StepObserver    = std::function<void()>;
+ using EventObserver   = std::function<void(const event_note<State>&)>;
 
  EventEngine(Stepper& st, System& sys,
              const std::vector<FixedEvent<State, value_type>>& fixed,
@@ -113,6 +140,16 @@ public:
      m_dt_estimator(std::move(dt_est)) {}
 
  void set_termination(TerminationFunc f) { m_termination = std::move(f); }
+
+ // Called after every accepted step of the dense loop, where the reverse mode
+ // drops its checkpoint; it reads the stepper itself. The controlled loop is
+ // not hooked, so the reverse mode needs dense output.
+ void set_step_observer(StepObserver f) { m_step_obs = std::move(f); }
+
+ // Called at every jump the dense loop applies, with the state on both sides of
+ // it. Unset, the state is not even copied.
+ void set_event_observer(EventObserver f) { m_event_obs = std::move(f); }
+ bool watching_events() const { return static_cast<bool>(m_event_obs); }
 
  cppde::profiler& get_profiler() const {
    if constexpr (has_controlled_stepper_method<Stepper>::value) {
@@ -199,10 +236,12 @@ private:
    } else if constexpr (has_controlled_stepper_method<Stepper>::value) {
      dt = Time(odeint_utils::cppde_hin<value_type>(
          m_sys.first, x, t, m_t_final,
-         m_st.controlled_stepper().atol(), m_st.controlled_stepper().rtol()));
+         m_st.controlled_stepper().atol(), m_st.controlled_stepper().rtol(),
+         m_st.controlled_stepper().sens_err_con()));
    } else if constexpr (has_tolerances<Stepper>::value) {
      dt = Time(odeint_utils::cppde_hin<value_type>(
-         m_sys.first, x, t, m_t_final, m_st.atol(), m_st.rtol()));
+         m_sys.first, x, t, m_t_final, m_st.atol(), m_st.rtol(),
+         m_st.sens_err_con()));
    }
  }
 
@@ -224,13 +263,23 @@ private:
      std::vector<double>& last_val,
      std::vector<State>& last_state, std::vector<Time>& last_time,
      const std::vector<TriggeredEvent>& triggered,
-     size_t& steps, Checker& checker)
+     size_t& steps, Checker& checker,
+     const State* x_before = nullptr, double t_before = 0.0)
  {
    init_stepper_after_event(x, t_event, dt);
+   if (m_event_obs && x_before) {
+     event_note<State> e;
+     e.t = scalar_value(t_event); e.t_before = t_before;
+     e.root = true; e.restart = true;
+     e.dt_restart = scalar_value(dt);
+     e.x_before = x_before; e.x_after = &x;
+     e.triggered = &triggered;
+     note_event(e);
+   }
    // The restarted step is interpolated at t_start below.
    m_st.set_dense_demand(t_event, true, true);
    m_st.do_step(m_sys);
-   ++steps; checker(); checker.reset();
+   ++steps; note_step(); checker(); checker.reset();
    checker.set_last_order(get_stepper_order(m_st));
 
    t_start = m_st.previous_time();
@@ -274,6 +323,7 @@ private:
  bool apply_fixed_events(State& x, const Time& t,
                          std::vector<size_t>& fired, size_t max_trigger)
  {
+   m_switched.clear();
    if (m_root.empty())
      return apply_fixed_events_at_time(x, t, m_fixed, m_sys);
 
@@ -316,6 +366,7 @@ private:
    };
    apply_fixed_events_at_time(x, t, m_fixed, m_sys, at_surface);
    for (size_t i : order) fired[i]++;
+   m_switched = order;
    return true;
  }
 
@@ -444,9 +495,20 @@ public:
    m_t_final = scalar_value(times.back());
 
    std::vector<size_t> fired(m_root.size(), 0);
-   if (apply_fixed_events(x, *it, fired, max_trigger)) {
-     recalibrate_dt(x, *it, dt);
-     m_st.initialize(x, *it, dt);
+   {
+     State x_pre;
+     if (m_event_obs) x_pre = x;
+     if (apply_fixed_events(x, *it, fired, max_trigger)) {
+       recalibrate_dt(x, *it, dt);
+       m_st.initialize(x, *it, dt);
+       // No restart note: the trajectory's own start is initialised below, and
+       // the reverse mode reads that from the first checkpoint.
+       event_note<State> e;
+       e.t = e.t_before = scalar_value(*it);
+       e.x_before = &x_pre; e.x_after = &x;
+       e.switched = &m_switched;
+       note_event(e);
+     }
    }
    obs(x, *it); ++it;
    if (it == end) return 0;
@@ -456,7 +518,7 @@ public:
 
    m_st.initialize(x, times.front(), dt);
    m_st.set_dense_demand(*it, dense_always, fwd);
-   m_st.do_step(m_sys); ++steps; checker(); checker.reset();
+   m_st.do_step(m_sys); ++steps; note_step(); checker(); checker.reset();
    checker.set_last_order(get_stepper_order(m_st));
 
    Time t_start = m_st.previous_time();
@@ -508,7 +570,7 @@ public:
          obs(x_root, t_root); x = x_root;
          reinit_after_event(x, t_root, dt, t_start, t_end, x_at_start,
                             last_val, last_state, last_time, triggered,
-                            steps, checker);
+                            steps, checker, &x_before, scalar_value(t_root));
          continue;
        }
 
@@ -524,7 +586,7 @@ public:
        }
 
        m_st.set_dense_demand(*it, dense_always, fwd);
-       m_st.do_step(m_sys); ++steps; checker(); checker.reset();
+       m_st.do_step(m_sys); ++steps; note_step(); checker(); checker.reset();
        checker.set_last_order(get_stepper_order(m_st));
        t_start = m_st.previous_time(); t_end = m_st.current_time();
        dt = m_st.current_time_step();
@@ -565,18 +627,29 @@ public:
          x = x_root;
          reinit_after_event(x, t_root, dt, t_start, t_end, x_at_start,
                             last_val, last_state, last_time, triggered,
-                            steps, checker);
+                            steps, checker, &x_before, scalar_value(t_root));
          break;
        }
 
+       State x_pre;
+       if (m_event_obs) x_pre = x;
        bool fef = apply_fixed_events(x, t_eval, fired, max_trigger);
        obs(x, t_eval); ++it;
 
        if (fef) {
          init_stepper_after_event(x, t_eval_s, dt);
+         if (m_event_obs) {
+           event_note<State> e;
+           e.t = e.t_before = scalar_value(t_eval);
+           e.restart = true;
+           e.dt_restart = scalar_value(dt);
+           e.x_before = &x_pre; e.x_after = &x;
+           e.switched = &m_switched;
+           note_event(e);
+         }
          // The restarted step is interpolated at t_start below.
          m_st.set_dense_demand(t_eval_s, true, fwd);
-         m_st.do_step(m_sys); ++steps; checker(); checker.reset();
+         m_st.do_step(m_sys); ++steps; note_step(); checker(); checker.reset();
          checker.set_last_order(get_stepper_order(m_st));
          t_start = m_st.previous_time(); t_end = m_st.current_time();
          dt = m_st.current_time_step();
@@ -653,6 +726,15 @@ private:
  const std::vector<RootEvent<State, Time>>& m_root;
  DtEstimator m_dt_estimator;
  TerminationFunc m_termination;
+ StepObserver m_step_obs;
+ EventObserver m_event_obs;
+ // What the last fixed jump switched on, read by the event note.
+ std::vector<size_t> m_switched;
+
+ void note_step() { if (m_step_obs) m_step_obs(); }
+
+ void note_event(const event_note<State>& e) { if (m_event_obs) m_event_obs(e); }
+
  // Integration endpoint, set at the start of process_{controlled,dense}.
  // Used as the upper-bound hint for cppde_hin when re-estimating the
  // initial step size after an event restart on multistep methods.

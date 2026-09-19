@@ -1,7 +1,7 @@
 /*
  AD-aware sparse LU solver for cppDE: raw CSC + KLU.
 
- Backend: KLU (KLU) or Eigen::SparseLU fallback.
+ Backend: KLU; without it the sparse path does not compile.
  Operates on csc_matrix<T> with raw Ap/Ai/Ax arrays.
 
  Copyright (C) 2026 Simon Beyer
@@ -55,8 +55,7 @@ extract_csc_values(const csc_matrix<AD>& W)
 // ============================================================================
 //  sparse_lu_solver<T>: Base case: T is a non-AD scalar
 //
-//  KLU: klu_lu_solver (preferred)
-//  otherwise: compile error (KLU is now required for sparse)
+//  KLU through klu_lu_solver; a compile error without KLU.
 // ============================================================================
 
 template<class T, class Enable = void>
@@ -90,6 +89,9 @@ public:
 
   void solve(std::vector<Scalar>& b) const
   { m_solver.solve(b); }
+
+  void solve_transposed(std::vector<Scalar>& b) const
+  { m_solver.solve_transposed(b); }
 
   // Batched solve: B ← W⁻¹ B (column-major n × nrhs)
   void solve_batch(std::vector<Scalar>& B, int nrhs) const
@@ -310,6 +312,75 @@ public:
     bulk_inject_results(b, m_b_val, m_rhs_all, n, n_derivs);
   }
 
+  // W^-T b on the same factorisation, the peeling transposed with the matrix.
+  // See dense_lu_solver::solve_transposed in cppde_ad_lu.hpp.
+  void solve_transposed(std::vector<F>& b) const
+  {
+    const int n = m_n;
+
+    // 1. Extract and solve value part (reuse buffer)
+    m_b_val.resize(n);
+    if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
+      for (int i = 0; i < n; ++i)
+        m_b_val[i] = first_order_view(b[i]);
+    } else {
+      for (int i = 0; i < n; ++i)
+        m_b_val[i] = const_cast<F&>(b[i]).x();
+    }
+    m_inner.solve_transposed(m_b_val);
+
+    // 2. Determine derivative directions
+    // Static width is claimed only when b or W is seeded; see
+    // dense_lu_solver::solve() in cppde_ad_lu.hpp.
+    unsigned n_derivs;
+    if constexpr (!is_ad<Inner>::value) {
+      if constexpr (N > 0) {
+        n_derivs = (m_n_derivs_cached > 0 || max_deriv_size(b) > 0) ? N : 0u;
+      } else {
+        n_derivs = std::max(m_n_derivs_cached, max_deriv_size(b));
+      }
+    } else {
+      if constexpr (N > 0) {
+        n_derivs = (max_deriv_size(b) > 0 || max_deriv_size(m_W_stored) > 0)
+                     ? N : 0u;
+      } else {
+        n_derivs = max_deriv_size(b);
+        n_derivs = std::max(n_derivs, max_deriv_size(m_W_stored));
+      }
+    }
+
+    if (n_derivs == 0) {
+      for (int i = 0; i < n; ++i)
+        b[i].x() = m_b_val[i];
+      return;
+    }
+
+    // 3. Bulk-extract ALL derivative RHS into column-major n × n_derivs
+    m_rhs_all.resize(static_cast<size_t>(n) * n_derivs);
+    for (int i = 0; i < n; ++i) {
+      auto& bi = const_cast<F&>(b[i]);
+      unsigned sz = bi.size();
+      for (unsigned j = 0; j < n_derivs; ++j)
+        m_rhs_all[j * n + i] = (j < sz) ? bi.d(j) : Inner(0);
+    }
+
+    // 4. IFT sparse matvec: rhs_all -= dW · b_val
+    ift_sparse_matvec_transposed(n, n_derivs);
+
+    // 5. One transposed solve per direction.
+    {
+      std::vector<Inner> col(static_cast<std::size_t>(n));
+      for (unsigned j = 0; j < n_derivs; ++j) {
+        for (int i = 0; i < n; ++i) col[i] = m_rhs_all[j * n + i];
+        m_inner.solve_transposed(col);
+        for (int i = 0; i < n; ++i) m_rhs_all[j * n + i] = col[i];
+      }
+    }
+
+    // 6. Bulk-inject results
+    bulk_inject_results(b, m_b_val, m_rhs_all, n, n_derivs);
+  }
+
   // Batched solve for nrhs RHS vectors (column-major). Fully BLAS-3 / KLU-batched
   // at the recursion level: amortises buffer extraction and IFT work across the
   // batch and feeds the inner solver one bulk solve_batch call per layer.
@@ -478,6 +549,41 @@ private:
     }
   }
 
+  // The same correction with dW transposed. One CSC pass either way: the
+  // transpose swaps which index reads b_val and which one is written, so the
+  // pattern is walked once and never built a second time.
+  void ift_sparse_matvec_transposed(int n, unsigned n_derivs) const
+  {
+    if constexpr (!is_ad<Inner>::value) {
+      const unsigned nd_W = m_n_derivs_cached;
+      if (nd_W == 0) return;
+      const int* Ap = m_Ap_cached.data();
+      const int* Ai = m_Ai_cached.data();
+      for (int col = 0; col < n; ++col) {
+        for (int p = Ap[col]; p < Ap[col + 1]; ++p) {
+          const int row = Ai[p];
+          const double b_row = m_b_val[row];
+          const double* dw = m_dW_ax.data() + static_cast<size_t>(p) * nd_W;
+          for (unsigned j = 0; j < nd_W && j < n_derivs; ++j)
+            m_rhs_all[j * n + col] -= dw[j] * b_row;
+        }
+      }
+    } else {
+      for (int col = 0; col < n; ++col) {
+        for (int p = m_W_stored.Ap[col]; p < m_W_stored.Ap[col + 1]; ++p) {
+          const int row = m_W_stored.Ai[p];
+          const Inner b_row = m_b_val[row];
+          auto& w_entry = const_cast<F&>(m_W_stored.Ax[p]);
+          unsigned wsz = w_entry.size();
+          for (unsigned j = 0; j < n_derivs; ++j) {
+            Inner dw = (j < wsz) ? w_entry.d(j) : Inner(0);
+            m_rhs_all[j * n + col] -= dw * b_row;
+          }
+        }
+      }
+    }
+  }
+
   void ift_sparse_matvec(int n, unsigned n_derivs) const
   {
     if constexpr (!is_ad<Inner>::value) {
@@ -545,7 +651,7 @@ private:
   // Persistent solve buffers.
   mutable std::vector<Inner> m_b_val;          // n scalars: value part (single)
   mutable std::vector<Inner> m_rhs_all;        // n × n_derivs (single)
-  mutable std::vector<F>     m_col_buf;        // legacy column buffer
+  mutable std::vector<F>     m_col_buf;        // unused
   mutable std::vector<Inner> m_b_val_batch;    // n × nrhs: value part (batched)
   mutable std::vector<Inner> m_rhs_all_batch;  // n × n_derivs × nrhs (batched)
 };

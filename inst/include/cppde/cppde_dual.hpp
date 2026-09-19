@@ -249,6 +249,16 @@ public:
     set_depend();
   }
 
+  // Bind a zeroed tangent buffer now, without claiming a dependence. A callee
+  // that opens its own dual_arena::scope and writes here would otherwise
+  // allocate inside that scope, and the buffer would be reclaimed when it
+  // pops; with one already bound the write reuses it. The slab does this for
+  // the stepper's own buffers; this is the same guarantee for a caller's.
+  void arm() {
+    if (tan_ == nullptr) tan_ = detail::arena_alloc_t<T>(N);
+    for (unsigned i = 0; i < N; ++i) tan_[i] = T();
+  }
+
   // Non-allocating bind onto an externally owned buffer, typically a row of
   // tangent_slab. The dual never frees tan_, so the owner has to outlive it.
   // depend_ goes to true: a slab-bound dual is always active.
@@ -475,6 +485,19 @@ public:
     }
   }
 
+  // As the static-N form, plus: a dual with no width of its own takes the one
+  // the caller declared, if any. Without one it has nothing to bind.
+  void arm() {
+    if (size_ == 0) {
+      const unsigned w = dual_arena::default_tangent_width();
+      if (w == 0) return;
+      size_ = w;
+      tan_  = detail::arena_alloc_t<T>(size_);
+    }
+    if (tan_ == nullptr) tan_ = detail::arena_alloc_t<T>(size_);
+    for (unsigned i = 0; i < size_; ++i) tan_[i] = T();
+  }
+
   // Non-allocating bind onto an externally owned buffer, typically a row of
   // tangent_slab. As in the arena-backed case the dual never frees tan_, so the
   // owner has to keep it alive.
@@ -524,10 +547,8 @@ public:
 template<class T, unsigned N>
 inline auto value_of(const dual<T, N>& d) { return value_of(d.x()); }
 
-// dual2nd<T, N> is now a distinct class (cppde_dual2nd.hpp): a public-
-// inheritance refinement of dual<dual<T, N>, N> with hand-derived symmetric
-// math primitives. The previous typedef alias has been removed; downstream
-// code should #include <cppde/cppde_dual2nd.hpp> when needed.
+// dual2nd<T, N>, a refinement of dual<dual<T, N>, N>, lives in
+// cppde_dual2nd.hpp.
 
 } // namespace cppde
 

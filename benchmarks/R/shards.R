@@ -52,7 +52,7 @@ bench_problems_for_tier <- function(tier, petab_root, conditions = "1",
       petab_problems(idx$yaml[k],
                      conditions = if (all_cond) "all" else NULL,
                      max_conditions = if (all_cond) Inf else as.integer(conditions),
-                     max_sens = max_sens),
+                     max_sens = Inf),
       error = function(e) list()),
       mc.cores = cores)
     for (k in seq_along(built))
@@ -79,13 +79,16 @@ bench_problems_for_tier <- function(tier, petab_root, conditions = "1",
 ## same problem set always splits the same way and two runs of different width
 ## stay comparable shard by shard.
 
-## The cost proxy is states x conditions x sensitivities. A model marked for the
-## sparse sweep carries three times the solver configs and is weighted for it,
-## or the shard holding the sparse models finishes long after the others.
-balance_shards <- function(problems, n) {
-  cost <- vapply(problems, function(cs)
-    cs[[1L]]$nstates * length(cs) * max(1L, cs[[1L]]$nsens) *
-      (if (isTRUE(cs[[1L]]$sweep)) 3 else 1), 0)
+## The cost proxy is states x conditions x forward directions; a reverse case
+## counts as ten. A model marked for the sparse sweep carries three times the
+## solver configs and is weighted for it.
+balance_shards <- function(problems, n, max_sens = 32L, reverse_from = 120L) {
+  cost <- vapply(problems, function(cs) {
+    m <- cs[[1L]]$nsens
+    m <- if (m >= reverse_from) 10L else min(m, max_sens)
+    cs[[1L]]$nstates * length(cs) * max(1L, m) *
+      (if (isTRUE(cs[[1L]]$sweep)) 3 else 1)
+  }, 0)
   ord <- order(-cost, names(problems))
   load <- numeric(n)
   shard_of <- integer(length(problems))

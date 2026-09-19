@@ -37,7 +37,8 @@ inline double weighted_sup_norm(
     const std::vector<double>& v,
     const std::vector<double>& x0,
     double atol,
-    double rtol)
+    double rtol,
+    bool /*sens*/ = true)
 {
   double nrm = 0.0;
   for (std::size_t i = 0; i < v.size(); ++i) {
@@ -54,7 +55,8 @@ inline double weighted_sup_norm(
     const std::vector<AD>& v,
     const std::vector<AD>& x0,
     double atol,
-    double rtol)
+    double rtol,
+    bool sens = true)
 {
   double nrm = 0.0;
   for (std::size_t i = 0; i < v.size(); ++i) {
@@ -65,7 +67,7 @@ inline double weighted_sup_norm(
     double yi_val = std::abs(scalar_value(yi));
     nrm = std::max(nrm, vi_val / (atol + rtol * yi_val));
 
-    unsigned nd = vi.size();
+    unsigned nd = sens ? vi.size() : 0u;
     for (unsigned j = 0; j < nd; ++j) {
       double vd = std::abs(scalar_value(vi.d(j)));
       double yd = std::abs(scalar_value(yi.d(j)));
@@ -85,7 +87,8 @@ inline double weighted_rms_norm(
     const std::vector<double>& v,
     const std::vector<double>& x0,
     double atol,
-    double rtol)
+    double rtol,
+    bool /*sens*/ = true)
 {
   double sum = 0.0;
   for (std::size_t i = 0; i < v.size(); ++i) {
@@ -103,7 +106,8 @@ inline double weighted_rms_norm(
     const std::vector<AD>& v,
     const std::vector<AD>& x0,
     double atol,
-    double rtol)
+    double rtol,
+    bool sens = true)
 {
   double sum = 0.0;
   std::size_t count = 0;
@@ -117,7 +121,7 @@ inline double weighted_rms_norm(
     sum += r * r;
     ++count;
 
-    unsigned nd = vi.size();
+    unsigned nd = sens ? vi.size() : 0u;
     for (unsigned j = 0; j < nd; ++j) {
       double vd = scalar_value(vi.d(j));
       double yd = std::abs(scalar_value(yi.d(j)));
@@ -139,7 +143,8 @@ inline double weighted_rms_norm(
 inline double cvhub_max_ratio(
     const std::vector<double>& f0,
     const std::vector<double>& x0,
-    double hub_factor, double atol, double rtol)
+    double hub_factor, double atol, double rtol,
+    bool /*sens*/ = true)
 {
   double m = 0.0;
   for (std::size_t i = 0; i < x0.size(); ++i) {
@@ -156,7 +161,8 @@ template<class AD,
 inline double cvhub_max_ratio(
     const std::vector<AD>& f0,
     const std::vector<AD>& x0,
-    double hub_factor, double atol, double rtol)
+    double hub_factor, double atol, double rtol,
+    bool sens = true)
 {
   double m = 0.0;
   for (std::size_t i = 0; i < x0.size(); ++i) {
@@ -167,7 +173,7 @@ inline double cvhub_max_ratio(
     double denom = hub_factor * yi + atol + rtol * yi;
     if (denom > 0.0) m = std::max(m, fi / denom);
 
-    unsigned nd = fi_.size();
+    unsigned nd = sens ? fi_.size() : 0u;
     for (unsigned j = 0; j < nd; ++j) {
       double yd = std::abs(scalar_value(yi_.d(j)));
       double fd = std::abs(scalar_value(fi_.d(j)));
@@ -198,7 +204,8 @@ inline double estimate_initial_dt(
     double      t_final,
     double      atol,
     double      rtol,
-    int         order)
+    int         order,
+    bool        sens_err_con = true)
 {
   const std::size_t n = x0.size();
   const double t0_s = scalar_value(t0);
@@ -208,8 +215,8 @@ inline double estimate_initial_dt(
   system(x0, f0, t0);
 
   // --- 2. phase-1 rough h0 for FD trial step (HNW §II.4) ---
-  double d0 = weighted_sup_norm(x0, x0, atol, rtol);
-  double d1 = weighted_sup_norm(f0, x0, atol, rtol);
+  double d0 = weighted_sup_norm(x0, x0, atol, rtol, sens_err_con);
+  double d1 = weighted_sup_norm(f0, x0, atol, rtol, sens_err_con);
 
   double h0;
   if (d0 < 1e-5 || d1 < 1e-5) {
@@ -222,7 +229,7 @@ inline double estimate_initial_dt(
   std::vector<Value> ydd(n);
   compute_ydd(x0, t0, f0, h0, ydd);
 
-  double d2 = weighted_sup_norm(ydd, x0, atol, rtol);
+  double d2 = weighted_sup_norm(ydd, x0, atol, rtol, sens_err_con);
 
   // --- 4. HNW phase-2 h1 formula ---
   //
@@ -317,7 +324,8 @@ inline fd_ydd<System> make_fd_ydd(System sys) { return fd_ydd<System>(sys); }
 //
 //  Used by the multistep methods so that the first step cppDE takes is the one
 //  CVODES would take on the same problem. The refinement and its two bounds are
-//  in vignette("Methods"), "The first step". The WRMS norm sweeps AD components.
+//  in vignette("Methods"), "The first step". The WRMS norm sweeps AD components
+//  unless sens_err_con is off, which makes the first step value-only too.
 // =========================================================================================
 
 template<class Value, class System>
@@ -327,7 +335,8 @@ inline double cppde_hin(
     Value       t0,
     double      t_final,
     double      atol,
-    double      rtol)
+    double      rtol,
+    bool        sens_err_con = true)
 {
   const std::size_t n   = x0.size();
   const double t0_s     = scalar_value(t0);
@@ -356,7 +365,7 @@ inline double cppde_hin(
   std::vector<Value> f0(n);
   system(x0, f0, t0);
 
-  double hub_inv = cvhub_max_ratio(f0, x0, HUB_F, atol, rtol);
+  double hub_inv = cvhub_max_ratio(f0, x0, HUB_F, atol, rtol, sens_err_con);
   double hub     = HUB_F * tdist;
   if (hub * hub_inv > 1.0) hub = 1.0 / hub_inv;
 
@@ -377,7 +386,7 @@ inline double cppde_hin(
     system(y1, f1, Value(t0_s + hgs));
     for (std::size_t i = 0; i < n; ++i) ydd[i] = (f1[i] - f0[i]) / Value(hgs);
 
-    double yddnrm = weighted_rms_norm(ydd, x0, atol, rtol);
+    double yddnrm = weighted_rms_norm(ydd, x0, atol, rtol, sens_err_con);
 
     hnew = (yddnrm * hub * hub > 2.0)
          ? std::sqrt(2.0 / yddnrm)

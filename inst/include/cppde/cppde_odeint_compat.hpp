@@ -1,5 +1,5 @@
 /*
- ODE integration infrastructure for cppDE: Eigen-free.
+ ODE integration infrastructure for cppDE.
 
  Provides:
  - state_wrapper<T> for std::vector and dense_matrix

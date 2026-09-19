@@ -14,6 +14,8 @@ cvode(
   modelname = NULL,
   outdir = tempdir(),
   deriv = FALSE,
+  derivMode = c("forward", "reverse"),
+  asaCheckpoints = 200L,
   sparse = NULL,
   method = c("bdf", "adams"),
   includeTimeZero = TRUE,
@@ -45,6 +47,16 @@ and exported C symbols. A random identifier is used when \code{NULL}.}
 \code{tempdir()}.}
 
 \item{deriv}{Logical. Compute first-order parameter sensitivities.}
+
+\item{derivMode}{Direction the derivatives are taken in. \code{"forward"} (default)
+is the CVODES forward sensitivity solver, driven by \code{deriv}. \code{"reverse"}
+is CVODES adjoint sensitivity analysis, one backward solve per cotangent
+column. It needs \code{deriv = FALSE} and refuses \code{events} and \code{rootfunc}.}
+
+\item{asaCheckpoints}{Accepted forward steps between checkpoints under
+\code{derivMode = "reverse"}. The adjoint interpolates the forward state between
+them, so fewer steps means less interpolation error and more memory.
+Ignored under \code{derivMode = "forward"}.}
 
 \item{sparse}{Logical or \code{NULL}. \code{NULL} auto-selects sparse vs.
 dense LU from the Jacobian sparsity; \code{TRUE} forces sparse, \code{FALSE}
@@ -82,7 +94,9 @@ selection guidance are described in
 }
 \details{
 Available methods are \code{"bdf"} (default) and \code{"adams"}. Sensitivities
-are first-order forward only; \code{deriv2} is not supported. Events,
+are first-order forward only; \code{deriv2} is not supported.
+\code{derivMode = "reverse"} compiles the CVODES adjoint instead, returning
+\verb{$cotangent} the way the native backend's reverse mode does. Events,
 forcings, \code{rootfunc}, and \code{fixed} behave as in \code{\link[=cppODE]{cppODE()}}.
 
 SUNDIALS (>= 6.0) must be available at install time; otherwise
@@ -95,9 +109,29 @@ when SUNDIALS was built with its LAPACK interface, and
 \code{SUNLinSol_Dense} otherwise. This is decided by \code{./configure} at
 install time, not per model; \code{\link[=install_libs]{install_libs()}} enables the LAPACK
 interface whenever R reports a BLAS. Sparse Jacobians use KLU.
+}
+\examples{
+\donttest{
+if (codegenAvailable("cvode")) {
+  ## Needs SUNDIALS at install time, see install_libs(). The models are
+  ## generated first and compiled together, into one shared object in tempdir().
+  eqns <- c(A = "-k1*A", B = "k1*A - k2*B")
 
-It concerns the CVODE backend alone. \code{\link[=cppODE]{cppODE()}} reaches LAPACK
-through R for every dense factorisation regardless.
+  plain <- cvode(eqns, compile = FALSE)
+  sens  <- cvode(eqns, deriv = TRUE, compile = FALSE)
+  adj   <- cvode(eqns, derivMode = "reverse", compile = FALSE)
+  compile(plain, sens, adj, output = "cvode_examples")
+
+  times <- 0:10
+  parms <- c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)
+  solveODE(plain, times, parms)$variable[11, ]
+  solveODE(sens, times, parms)$tangent[11, "B", ] # forward sensitivities
+
+  ## CVODES adjoint: the gradient of sum(B) over the grid
+  onB <- cbind(A = 0, B = rep(1, length(times)))
+  solveODE(adj, times, parms, cotangent = onB)$cotangent
+}
+}
 }
 \references{
 Hindmarsh, A. C., Brown, P. N., Grant, K. E., Lee, S. L., Serban, R.,
@@ -106,6 +140,6 @@ Nonlinear and Differential/Algebraic Equation Solvers.
 \emph{ACM Transactions on Mathematical Software} \strong{31}(3), 363-396.
 }
 \seealso{
-\code{\link[=cppODE]{cppODE()}}, \code{\link[=solveODE]{solveODE()}}, \code{\link[=funCpp]{funCpp()}};
+\code{\link[=cppODE]{cppODE()}}, \code{\link[=solveODE]{solveODE()}}, \code{\link[=cppFUN]{cppFUN()}};
 \code{vignette("Methods", package = "cppDE")}.
 }

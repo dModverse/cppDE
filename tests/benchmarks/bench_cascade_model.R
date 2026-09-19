@@ -139,7 +139,7 @@ cat("\n\n")
 n_phi_rows <- length(attr(m_ndf, "variables")) + length(attr(m_ndf, "parameters"))
 toWide <- function(x) {
   if (.calcSens) {
-    sens <- x$sens1
+    sens <- x$tangent
     if (dim(sens)[3] > n_phi_rows)
       sens <- sens[, , seq_len(n_phi_rows), drop = FALSE]
     sens_names <- if (!is.null(dimnames(sens)$sens))

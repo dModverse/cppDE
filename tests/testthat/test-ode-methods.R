@@ -13,12 +13,110 @@ exact_B <- function(t, A0, k1, k2) A0 * k1 / (k2 - k1) * (exp(-k1 * t) - exp(-k2
 
 methods_all <- c("bdf", "adams", "rb4", "tsit5")
 
+# -- Models --------------------------------------------------------------------
+
+# Every native model the file solves, compiled into one shared object below.
+per_method <- function(ms, prefix, ...)
+  lapply(setNames(nm = ms), function(m)
+    cppODE(..., method = m, modelname = paste0(prefix, m), compile = FALSE))
+
+decay    <- per_method(methods_all, "mth_decay_", eqns_decay)
+decay_fd <- per_method(methods_all, "mth_decay_fd_", eqns_decay, deriv = FALSE)
+decay_d2 <- per_method(c("bdf", "rb4"), "mth_decay_d2_", eqns_decay,
+                       deriv = TRUE, deriv2 = TRUE)
+
+robertson <- cppODE(c(y1 = "-k1*y1 + k3*y2*y3", y2 = "k1*y1 - k2*y2^2 - k3*y2*y3",
+                      y3 = "k2*y2^2"),
+                    deriv2 = TRUE, fixed = c("y1", "y2", "y3"),
+                    modelname = "mth_sens2_sym", compile = FALSE)
+
+evt_dose <- data.frame(var = "A", time = "t_e", value = "dose",
+                       method = "add", root = NA, stringsAsFactors = FALSE)
+dose_time <- cppODE(c(A = "-k1 * A"), events = evt_dose,
+                    modelname = "mth_event_time", compile = FALSE)
+
+evt_refill <- data.frame(var = "x", time = NA, value = "dose",
+                         method = "add", root = "xc - x",
+                         stringsAsFactors = FALSE)
+dose_root <- cppODE(c(x = "-k * x"), events = evt_refill,
+                    modelname = "mth_event_root", compile = FALSE)
+
+# The same doubling of C, once on the root S - 14 and once at a fixed time.
+eqns_ramp  <- c(S = "1", C = "0")
+evt_ramp_r <- data.frame(var = "C", time = NA, value = "C * 2", method = "replace",
+                         root = "S - 14", stringsAsFactors = FALSE)
+evt_ramp_f <- data.frame(var = "C", time = 12, value = "C * 2", method = "replace",
+                         root = NA, stringsAsFactors = FALSE)
+ramp_root  <- cppODE(eqns_ramp, events = evt_ramp_r, modelname = "mth_ramp_root",
+                     deriv = FALSE, compile = FALSE)
+ramp_fixed <- cppODE(eqns_ramp, events = evt_ramp_f, modelname = "mth_ramp_fixed",
+                     deriv = FALSE, compile = FALSE)
+
+evt_ramp_sens <- data.frame(var = "C", time = NA, value = "d", method = "add",
+                            root = "S - c", stringsAsFactors = FALSE)
+ramp_sens <- cppODE(c(S = "a", C = "-b * C"), events = evt_ramp_sens, deriv = TRUE,
+                    deriv2 = TRUE, modelname = "mth_ramp_sens", compile = FALSE)
+
+evt_jump <- data.frame(var = c("S", "S", "C"), time = c(5, 7, NA),
+                       value = c("20", "30", "C * 2"),
+                       method = c("replace", "replace", "replace"),
+                       root = c(NA, NA, "S - 14"), stringsAsFactors = FALSE)
+jump_switch <- cppODE(c(S = "0", C = "0"), events = evt_jump, deriv = FALSE,
+                      modelname = "mth_jump_switches_root", compile = FALSE)
+
+# The same reset, once switched on through a root and once at the jump time.
+eqns_reset <- c(S = "0 * S", C = "-b * C")
+by_root <- data.frame(var = c("S", "C"), time = c("te", NA), value = c("20", "d"),
+                      method = c("replace", "add"), root = c(NA, "S - 14"),
+                      stringsAsFactors = FALSE)
+by_time <- data.frame(var = c("S", "C"), time = c("te", "te"), value = c("20", "d"),
+                      method = c("replace", "add"), root = c(NA, NA),
+                      stringsAsFactors = FALSE)
+reset_root <- cppODE(eqns_reset, events = by_root, deriv = TRUE, deriv2 = TRUE,
+                     modelname = "mth_jump_sens_root", compile = FALSE)
+reset_time <- cppODE(eqns_reset, events = by_time, deriv = TRUE, deriv2 = TRUE,
+                     modelname = "mth_jump_sens_time", compile = FALSE)
+
+evt_walls <- data.frame(var = c("v", "v"), time = c(NA, NA), value = c("-1", "-1"),
+                        method = c("multiply", "multiply"),
+                        root = c("x - L", "x + L"), stringsAsFactors = FALSE)
+walls <- per_method(methods_all, "mth_walls_", c(x = "v", v = "-w^2 * x"),
+                    events = evt_walls, deriv = FALSE)
+
+decay_fixed <- cppODE(eqns_decay, deriv = TRUE, fixed = "k2",
+                      modelname = "mth_fixed", compile = FALSE)
+
+pow10 <- cppODE(c(x = "-k * 10^x"), deriv = TRUE, deriv2 = TRUE,
+                modelname = "mth_pow10", compile = FALSE)
+
+cxx_tokens <- cppODE(c(default = "-std * default + operator",
+                       int     = "std * default - int * 10^0.5"),
+                     modelname = "mth_cxx_tokens_ode", compile = FALSE)
+cxx_ref    <- cppODE(c(a = "-k * a + b0",
+                       b = "k * a - b * 10^0.5"),
+                     modelname = "mth_cxx_tokens_ref", compile = FALSE)
+
+forced <- cppODE(c(A = "-k1 * A * u + k2 * B",
+                   B = "k1 * A * u - k2 * B"),
+                 forcings = "u", modelname = "mth_forcing_in_jac", compile = FALSE)
+
+native <- c(decay, decay_fd, decay_d2, walls,
+            list(robertson, dose_time, dose_root, ramp_root, ramp_fixed, ramp_sens,
+                 jump_switch, reset_root, reset_time, decay_fixed, pow10,
+                 cxx_tokens, cxx_ref, forced))
+do.call(compile, c(unname(native), list(output = "test_ode_methods", cores = 1)))
+
+if (isTRUE(cvodeConfig$available)) {
+  ramp_root_cv <- cvode(eqns_ramp, events = evt_ramp_r, modelname = "mth_ramp_root_cv",
+                        deriv = FALSE, compile = FALSE)
+  compile(ramp_root_cv, output = "test_ode_methods_cvode", cores = 1)
+}
+
 # -- Basic solver output structure --------------------------------------------
 
 test_that("solveODE returns correct structure for all methods", {
   for (m in methods_all) {
-    mod <- cppODE(eqns_decay, method = m, modelname = paste0("struct_", m))
-    res <- solveODE(mod, times, pars)
+    res <- solveODE(decay[[m]], times, pars)
 
     expect_type(res$time, "double")
     expect_true(is.matrix(res$variable))
@@ -32,8 +130,7 @@ test_that("solveODE returns correct structure for all methods", {
 
 test_that("all methods match analytical solution (decay system)", {
   for (m in methods_all) {
-    mod <- cppODE(eqns_decay, method = m, modelname = paste0("accuracy_", m))
-    res <- solveODE(mod, times, pars, abstol = 1e-10, reltol = 1e-10)
+    res <- solveODE(decay[[m]], times, pars, abstol = 1e-10, reltol = 1e-10)
 
     t_out <- res$time
     A_num <- res$variable[, "A"]
@@ -53,15 +150,13 @@ test_that("first-order sensitivities are correct for all methods", {
   eps <- 1e-5
 
   for (m in methods_all) {
-    mod    <- cppODE(eqns_decay, method = m, deriv = TRUE,
-                     modelname = paste0("sens1_", m))
+    mod    <- decay[[m]]
     res    <- solveODE(mod, times, pars, abstol = 1e-10, reltol = 1e-10)
 
     # Check AD sensitivity of A w.r.t. k1 against finite difference
     p_hi      <- pars; p_hi["k1"] <- pars["k1"] + eps
     p_lo      <- pars; p_lo["k1"] <- pars["k1"] - eps
-    mod_noad  <- cppODE(eqns_decay, method = m, deriv = FALSE,
-                        modelname = paste0("sens1_fd_", m))
+    mod_noad  <- decay_fd[[m]]
     res_hi    <- solveODE(mod_noad, times, p_hi, abstol = 1e-12, reltol = 1e-12)
     res_lo    <- solveODE(mod_noad, times, p_lo, abstol = 1e-12, reltol = 1e-12)
 
@@ -70,7 +165,7 @@ test_that("first-order sensitivities are correct for all methods", {
 
     sens_names <- attr(mod, "dimNames")$sens
     k1_idx <- which(sens_names == "k1")
-    ad_dA_dk1 <- res$sens1[, 1, k1_idx]  # state 1 (A), param k1_idx
+    ad_dA_dk1 <- res$tangent[, 1, k1_idx]  # state 1 (A), param k1_idx
 
     expect_equal(ad_dA_dk1, fd_dA_dk1, tolerance = 1e-3,
                  label = paste(m, "dA/dk1"))
@@ -83,25 +178,29 @@ test_that("second-order sensitivities are finite for stiff methods", {
   stiff_methods <- c("bdf", "rb4")
 
   for (m in stiff_methods) {
-    mod <- cppODE(eqns_decay, method = m, deriv = TRUE, deriv2 = TRUE,
-                  modelname = paste0("sens2_", m))
-    res <- solveODE(mod, times, pars, abstol = 1e-10, reltol = 1e-10)
+    res <- solveODE(decay_d2[[m]], times, pars, abstol = 1e-10, reltol = 1e-10)
 
-    expect_true(!is.null(res$sens2), label = paste(m, "sens2 exists"))
-    expect_true(all(is.finite(res$sens2)), label = paste(m, "sens2 finite"))
+    expect_true(!is.null(res$hessian), label = paste(m, "hessian exists"))
+    expect_true(all(is.finite(res$hessian)), label = paste(m, "hessian finite"))
   }
+})
+
+test_that("second-order sensitivities are symmetric over a long stiff run", {
+  mod <- robertson
+  res <- solveODE(mod, c(0, 10^seq(-2, 3, length.out = 30)),
+                  c(y1 = 1, y2 = 0, y3 = 0, k1 = 0.04, k2 = 3e7, k3 = 1e4),
+                  abstol = 1e-12, reltol = 1e-10)
+  s <- res$hessian[31, , , ]
+  expect_equal(unname(s), unname(aperm(s, c(1, 3, 2))), tolerance = 1e-12)
+  expect_lt(max(abs(s)), 1e3)
 })
 
 # -- Time-triggered events -----------------------------------------------------
 
 test_that("time-triggered dose event works", {
-  eqns <- c(A = "-k1 * A")
-  evt  <- data.frame(var = "A", time = "t_e", value = "dose",
-                     method = "add", root = NA, stringsAsFactors = FALSE)
   pars_ev <- c(A = 1, k1 = 0.1, t_e = 25, dose = 0.5)
 
-  mod <- cppODE(eqns, events = evt, modelname = "event_time")
-  res <- solveODE(mod, seq(0, 50, length.out = 200), pars_ev)
+  res <- solveODE(dose_time, seq(0, 50, length.out = 200), pars_ev)
 
   # After event at t=25, A should jump up
   idx_before <- max(which(res$time < 25))
@@ -112,14 +211,9 @@ test_that("time-triggered dose event works", {
 # -- Root-triggered events -----------------------------------------------------
 
 test_that("root-triggered event fires correctly", {
-  eqns <- c(x = "-k * x")
-  evt  <- data.frame(var = "x", time = NA, value = "dose",
-                     method = "add", root = "xc - x",
-                     stringsAsFactors = FALSE)
   pars_root <- c(x = 1, k = 0.1, xc = 0.5, dose = 0.5)
 
-  mod <- cppODE(eqns, events = evt, modelname = "event_root")
-  res <- solveODE(mod, seq(0, 100, length.out = 500), pars_root)
+  res <- solveODE(dose_root, seq(0, 100, length.out = 500), pars_root)
 
   # x decays below xc, then gets dose added -> should see multiple oscillations
   # Check that x goes back up after crossing xc at least once
@@ -132,11 +226,6 @@ test_that("a root landing exactly on an output time still fires", {
   # S' = 1 puts the crossing of S - 14 onto the requested grid, where the sign
   # product of g at the sampled points is zero rather than negative. The same
   # jump written as a fixed event at that time is the reference.
-  eqns  <- c(S = "1", C = "0")
-  evt_r <- data.frame(var = "C", time = NA, value = "C * 2", method = "replace",
-                      root = "S - 14", stringsAsFactors = FALSE)
-  evt_f <- data.frame(var = "C", time = 12, value = "C * 2", method = "replace",
-                      root = NA, stringsAsFactors = FALSE)
   tt    <- seq(0, 20, by = 1)
   pars  <- c(S = 2, C = 4)
 
@@ -145,10 +234,8 @@ test_that("a root landing exactly on an output time still fires", {
   atTimes <- function(res, var)
     res$variable[vapply(tt, function(s) max(which(res$time == s)), 1L), var]
 
-  res <- solveODE(cppODE(eqns, events = evt_r, modelname = "ongrid_root",
-                         deriv = FALSE), tt, pars)
-  ref <- solveODE(cppODE(eqns, events = evt_f, modelname = "ongrid_fixed",
-                         deriv = FALSE), tt, pars)
+  res <- solveODE(ramp_root, tt, pars)
+  ref <- solveODE(ramp_fixed, tt, pars)
 
   expect_equal(atTimes(res, "C"), ifelse(tt < 12, 4, 8))
   expect_equal(atTimes(res, "C"), atTimes(ref, "C"))
@@ -159,16 +246,11 @@ test_that("both backends localise a root at the same time", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
   # The root is off the grid here, so both backends have to place the firing
   # time themselves rather than inherit it from a requested time.
-  eqns  <- c(S = "1", C = "0")
-  evt_r <- data.frame(var = "C", time = NA, value = "C * 2", method = "replace",
-                      root = "S - 14", stringsAsFactors = FALSE)
   tt    <- seq(0, 20, by = 1)
   pars  <- c(S = 2.5, C = 4)
 
-  nat <- solveODE(cppODE(eqns, events = evt_r, modelname = "offgrid_nat",
-                         deriv = FALSE), tt, pars)
-  cvd <- solveODE(cvode(eqns, events = evt_r, modelname = "offgrid_cv",
-                        deriv = FALSE), tt, pars)
+  nat <- solveODE(ramp_root, tt, pars)
+  cvd <- solveODE(ramp_root_cv, tt, pars)
 
   fired <- function(res) res$time[which(diff(res$variable[, "C"]) != 0) + 1L]
   expect_equal(fired(nat), 11.5, tolerance = 1e-6)
@@ -179,12 +261,8 @@ test_that("a root event on the grid carries the firing time into the sensitiviti
   # S' = a fires the event at t* = (c - S0)/a = 12, again exactly on the grid.
   # Every sensitivity of C after the event picks up dt*/dtheta through the
   # saltation term, so a missed or misplaced root shows up here as well.
-  evt <- data.frame(var = "C", time = NA, value = "d", method = "add",
-                    root = "S - c", stringsAsFactors = FALSE)
-  mod <- cppODE(c(S = "a", C = "-b * C"), events = evt, deriv = TRUE,
-                deriv2 = TRUE, modelname = "ongrid_sens")
   pars <- c(S = 2, C = 4, a = 1, b = 0.1, c = 14, d = 3)
-  res  <- solveODE(mod, seq(0, 20, by = 1), pars, abstol = 1e-10, reltol = 1e-10)
+  res  <- solveODE(ramp_sens, seq(0, 20, by = 1), pars, abstol = 1e-10, reltol = 1e-10)
 
   # C(T) = C0 exp(-b T) + d exp(-b (T - t*)) for T > t*
   i  <- max(which(res$time == 16))
@@ -192,25 +270,19 @@ test_that("a root event on the grid carries the firing time into the sensitiviti
   E2 <- exp(-0.1 * (16 - 12))
 
   expect_equal(unname(res$variable[i, "C"]), 4 * E1 + 3 * E2, tolerance = 1e-7)
-  expect_equal(res$sens1[i, "C", "C"], E1,                tolerance = 1e-6)
-  expect_equal(res$sens1[i, "C", "d"], E2,                tolerance = 1e-6)
-  expect_equal(res$sens1[i, "C", "c"], 3 * E2 * 0.1,      tolerance = 1e-6)
-  expect_equal(res$sens1[i, "C", "S"], -3 * E2 * 0.1,     tolerance = 1e-6)
-  expect_equal(res$sens2[i, "C", "d", "c"], E2 * 0.1,     tolerance = 1e-6)
-  expect_equal(res$sens2[i, "C", "c", "d"], E2 * 0.1,     tolerance = 1e-6)
+  expect_equal(res$tangent[i, "C", "C"], E1,                tolerance = 1e-6)
+  expect_equal(res$tangent[i, "C", "d"], E2,                tolerance = 1e-6)
+  expect_equal(res$tangent[i, "C", "c"], 3 * E2 * 0.1,      tolerance = 1e-6)
+  expect_equal(res$tangent[i, "C", "S"], -3 * E2 * 0.1,     tolerance = 1e-6)
+  expect_equal(res$hessian[i, "C", "d", "c"], E2 * 0.1,     tolerance = 1e-6)
+  expect_equal(res$hessian[i, "C", "c", "d"], E2 * 0.1,     tolerance = 1e-6)
 })
 
 test_that("a fixed event switches on a root condition it steps over", {
   # S jumps past the threshold instead of crossing it, so the sign-change search
   # over the continuous solution never sees it. The condition is read on both
   # sides of the jump, fires there, and does not fire again while it stays true.
-  evt <- data.frame(var = c("S", "S", "C"), time = c(5, 7, NA),
-                    value = c("20", "30", "C * 2"),
-                    method = c("replace", "replace", "replace"),
-                    root = c(NA, NA, "S - 14"), stringsAsFactors = FALSE)
-  mod <- cppODE(c(S = "0", C = "0"), events = evt, deriv = FALSE,
-                modelname = "jump_switches_root")
-  res <- solveODE(mod, c(0, 4, 5, 6, 7, 8), c(S = 2, C = 4), maxroot = 2L)
+  res <- solveODE(jump_switch, c(0, 4, 5, 6, 7, 8), c(S = 2, C = 4), maxroot = 2L)
 
   at <- function(s) unname(res$variable[max(which(res$time == s)), "C"])
   expect_equal(at(4), 4)
@@ -222,37 +294,25 @@ test_that("a reset switched on by a jump transports like a fixed one", {
   # The reset rides on the surface of the jump, so it has to carry the
   # sensitivities exactly like the same reset written as a fixed event at that
   # time, the parameter dependence of the event time included.
-  eqns    <- c(S = "0 * S", C = "-b * C")
-  by_root <- data.frame(var = c("S", "C"), time = c("te", NA), value = c("20", "d"),
-                        method = c("replace", "add"), root = c(NA, "S - 14"),
-                        stringsAsFactors = FALSE)
-  by_time <- data.frame(var = c("S", "C"), time = c("te", "te"), value = c("20", "d"),
-                        method = c("replace", "add"), root = c(NA, NA),
-                        stringsAsFactors = FALSE)
   pars <- c(S = 2, C = 4, b = 0.15, d = 3, te = 4)
   tt   <- seq(0, 10, by = 0.5)
-  solved <- function(evt, name)
-    solveODE(cppODE(eqns, events = evt, deriv = TRUE, deriv2 = TRUE,
-                    modelname = name), tt, pars,
-             abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
+  solved <- function(mod)
+    solveODE(mod, tt, pars, abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
 
-  a <- solved(by_root, "jump_sens_root")
-  b <- solved(by_time, "jump_sens_time")
+  a <- solved(reset_root)
+  b <- solved(reset_time)
   expect_identical(a$time, b$time)
   expect_equal(a$variable, b$variable)
-  expect_equal(a$sens1, b$sens1)
-  expect_equal(a$sens2, b$sens2)
+  expect_equal(a$tangent, b$tangent)
+  expect_equal(a$hessian, b$hessian)
   # the saltation term of the event time is what makes this more than an identity
-  expect_gt(abs(a$sens1[max(which(a$time == 8)), "C", "te"]), 0.1)
+  expect_gt(abs(a$tangent[max(which(a$time == 8)), "C", "te"]), 0.1)
 })
 
 test_that("a root event does not fire twice on the crossing it just handled", {
   # Two elastic walls, each a root event that turns the velocity around. The
   # step restarts on the surface of the wall that just fired, where the root is
   # zero up to round-off; reading that residue as a crossing lets the mass out.
-  evt <- data.frame(var = c("v", "v"), time = c(NA, NA), value = c("-1", "-1"),
-                    method = c("multiply", "multiply"),
-                    root = c("x - L", "x + L"), stringsAsFactors = FALSE)
   pars <- c(x = 0.2, v = 1.2, w = 1, L = 0.6)
   tt   <- seq(0, 4.4, by = 0.1)
 
@@ -265,9 +325,7 @@ test_that("a root event does not fire twice on the crossing it just handled", {
   flight <- 2 * asin(pars[["L"]] / amp) / pars[["w"]]
 
   for (m in methods_all) {
-    mod <- cppODE(c(x = "v", v = "-w^2 * x"), events = evt, method = m,
-                  deriv = FALSE, modelname = paste0("walls_", m))
-    res <- solveODE(mod, tt, pars, maxroot = 2L,
+    res <- solveODE(walls[[m]], tt, pars, maxroot = 2L,
                     abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
 
     expect_lte(max(abs(res$variable[, "x"])), pars[["L"]] + 1e-9,
@@ -283,8 +341,7 @@ test_that("a root event does not fire twice on the crossing it just handled", {
 # -- Diagnostics ---------------------------------------------------------------
 
 test_that("diagnostics() returns solver statistics", {
-  mod <- cppODE(eqns_decay, modelname = "diag_test")
-  res <- solveODE(mod, times, pars)
+  res <- solveODE(decay[["bdf"]], times, pars)
   d   <- diagnostics(res)
 
   expect_true(is.list(d))
@@ -296,8 +353,7 @@ test_that("diagnostics() returns solver statistics", {
 # -- Fixed parameters ----------------------------------------------------------
 
 test_that("fixed parameters are excluded from sensitivities", {
-  mod <- cppODE(eqns_decay, deriv = TRUE, fixed = "k2",
-                modelname = "fixed_test")
+  mod <- decay_fixed
   res <- solveODE(mod, times, pars)
 
   sens_names <- attr(mod, "dimNames")$sens
@@ -318,15 +374,13 @@ test_that("a 10^x term compiles and differentiates correctly", {
   # closed form: 10^(-x(t)) = 10^(-x0) + k*ln(10)*t
   u <- 10^(-p10[["x"]]) + p10[["k"]] * ln10 * t10
 
-  mod <- cppODE(c(x = "-k * 10^x"), deriv = TRUE, deriv2 = TRUE, nStack = 2,
-                modelname = "pow10")
-  res <- solveODE(mod, t10, p10, abstol = 1e-12, reltol = 1e-12)
+  res <- solveODE(pow10, t10, p10, abstol = 1e-12, reltol = 1e-12)
 
   expect_equal(as.numeric(res$variable[, "x"]), -log10(u), tolerance = 1e-8)
-  expect_equal(as.numeric(res$sens1[, "x", "x"]),
+  expect_equal(as.numeric(res$tangent[, "x", "x"]),
                10^(-p10[["x"]]) / u, tolerance = 1e-6)
-  expect_equal(as.numeric(res$sens1[, "x", "k"]), -t10 / u, tolerance = 1e-6)
-  expect_equal(as.numeric(res$sens2[, "x", "k", "k"]),
+  expect_equal(as.numeric(res$tangent[, "x", "k"]), -t10 / u, tolerance = 1e-6)
+  expect_equal(as.numeric(res$hessian[, "x", "k", "k"]),
                ln10 * t10^2 / u^2, tolerance = 1e-6)
 })
 
@@ -336,18 +390,11 @@ test_that("a 10^x term compiles and differentiates correctly", {
 test_that("state and parameter names that are C++ tokens compile and solve", {
   tt <- seq(0, 2, 0.5)
 
-  mod <- cppODE(c(default = "-std * default + operator",
-                  int     = "std * default - int * 10^0.5"),
-                modelname = "cxx_tokens_ode")
-  ref <- cppODE(c(a = "-k * a + b0",
-                  b = "k * a - b * 10^0.5"),
-                modelname = "cxx_tokens_ref")
-
-  res <- solveODE(mod, tt, c(default = 1, int = 0, std = 0.7, operator = 0.2))
-  exp <- solveODE(ref, tt, c(a = 1, b = 0, k = 0.7, b0 = 0.2))
+  res <- solveODE(cxx_tokens, tt, c(default = 1, int = 0, std = 0.7, operator = 0.2))
+  exp <- solveODE(cxx_ref, tt, c(a = 1, b = 0, k = 0.7, b0 = 0.2))
 
   expect_equal(unname(res$variable), unname(exp$variable), tolerance = 1e-10)
-  expect_equal(unname(res$sens1), unname(exp$sens1), tolerance = 1e-10)
+  expect_equal(unname(res$tangent), unname(exp$tangent), tolerance = 1e-10)
 })
 
 test_that("a Python keyword as a symbol name is rejected", {
@@ -358,4 +405,35 @@ test_that("a Python keyword as a symbol name is rejected", {
   expect_error(cppODE(c(y = "-k * y"), forcings = "global",
                       modelname = "py_kw_forcing"),
                "'global'")
+})
+
+test_that("a forcing that multiplies a state reaches the Jacobian", {
+  # The Jacobian entries were printed without the forcing list, so a forcing
+  # surviving differentiation came out as a bare identifier and the model did
+  # not compile. Only additive forcings vanish from df/dx, which is why every
+  # example carried one.
+  u <- data.frame(time = c(0, 0.5, 1, 2), value = c(0.4, 1.1, 0.7, 1.5))
+  mod <- forced
+
+  tt  <- seq(0, 2, 0.25)
+  pars <- c(A = 1, B = 0, k1 = 0.8, k2 = 0.3)
+  res  <- solveODE(mod, tt, pars, forcings = list(u = u),
+                   abstol = 1e-10, reltol = 1e-10)
+
+  # Central differences over every parameter, which is what the Jacobian
+  # feeds through the sensitivity equations.
+  fd <- vapply(names(pars), function(nm) {
+    h <- 1e-6 * max(abs(pars[[nm]]), 1)
+    pp <- pm <- pars; pp[nm] <- pp[nm] + h; pm[nm] <- pm[nm] - h
+    a <- solveODE(mod, tt, pp, forcings = list(u = u), abstol = 1e-12, reltol = 1e-12)
+    b <- solveODE(mod, tt, pm, forcings = list(u = u), abstol = 1e-12, reltol = 1e-12)
+    (a$variable - b$variable) / (2 * h)
+  }, matrix(0, length(tt), 2L))
+
+  # Loose because the reference is a difference of two adaptive solves, which
+  # take their own grids and leave O(tol/h) behind. It is four decades tighter
+  # than the error a missing forcing term would produce, which is the point.
+  for (k in seq_along(pars))
+    expect_equal(unname(res$tangent[, , k]), unname(fd[, , k]), tolerance = 1e-3,
+                 info = names(pars)[k])
 })

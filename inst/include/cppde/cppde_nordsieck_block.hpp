@@ -7,11 +7,11 @@
  buffer enables BLAS-3 across the slot axis: ndfPredict / ndfRestore
  collapse to one dtrmm; complete_step's rank-1 update collapses to one
  dger. Per-slot operations (vec_axpy_with_slab, vec_copy_with_slab, …)
- keep working unchanged via the per-slot slab views.
+ go through the per-slot slab views.
 
  Storage layout: column-major over (slot j, n_rows*n_cols flat). Slot j
  occupies indices [j * n_rows * n_cols, (j+1) * n_rows * n_cols). Within
- a slot the layout matches the legacy tangent_slab: row-major over
+ a slot the layout is that of a tangent_slab: row-major over
  (state i, deriv k), so v[i].tan_ -> base_j + i * n_cols + [0, n_cols).
  With BLAS this is column-major from the slot perspective: each slot is
  one column of a [(n_rows*n_cols) × K] matrix with leading dimension
@@ -19,9 +19,9 @@
  matrix to apply (q+1) × (q+1) Pascal / outer-product updates on the
  slot axis.
 
- Empty stub for non-dynamic-dual T (plain double, nested dual<dual>,…)
- so that multistepper<double, …> instances pay no size or codegen cost
- and nested-dual paths fall back to the existing per-element loops.
+ dual2nd has a two-block specialisation. Any other non-slab T (plain double,
+ nested dual) gets an empty stub, so multistepper<double, …> pays no size or
+ codegen cost and nested-dual paths take the per-element loops.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -84,8 +84,7 @@ public:
   }
 
   // Slot j's slab view (a tangent_slab bound to the slice via
-  // prime_external()).  vec_*_with_slab helpers operate on this exactly
-  // like they did on the legacy per-slot owned slabs.
+  // prime_external()), on which the vec_*_with_slab helpers operate.
   tangent_slab<T>&       slab(unsigned j)       noexcept { assert(j < K); return slabs_[j]; }
   const tangent_slab<T>& slab(unsigned j) const noexcept { assert(j < K); return slabs_[j]; }
 
@@ -222,7 +221,7 @@ public:
       if (facades[j] == nullptr) continue;
       slabs_[j].prime_external(*facades[j],
                                outer_block_.data() + j * slot_stride(),
-                               static_cast<S*>(nullptr),  // no val_tan
+                               static_cast<S*>(nullptr),  // unused
                                hess_block_.data()  + j * hess_slot_stride(),
                                n_rows_, n_cols_);
     }

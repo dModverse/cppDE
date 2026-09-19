@@ -1,5 +1,5 @@
 /*
- One-step controller with Gustafsson–Söderlind PI step-size control.
+ One-step controller with Gustafsson-Söderlind PI step-size control.
 
  Generic PI controller for any single-step stepper satisfying the
  do_step(sys, x, t, xout, dt, xerr [, hint]) interface.  Works with
@@ -21,13 +21,13 @@
  - Error order derived from Stepper::error_order
  - SFINAE-based Jacobian hint dispatch
  - Added reset_after_event() for event-driven integration
- - Implemented Gustafsson–Söderlind PI control algorithm
+ - Implemented Gustafsson-Söderlind PI control algorithm
  - Unified double and AD handling in a single class
 
  PI controller based on:
  Gustafsson, K., Lundh, M. & Söderlind, G. (1988).
  "A PI stepsize control for the numerical solution of ordinary differential equations".
- BIT 28, 270–287. https://doi.org/10.1007/BF01934091
+ BIT 28, 270-287. https://doi.org/10.1007/BF01934091
  */
 
 #ifndef CPPDE_ONESTEP_CONTROLLER_HPP
@@ -37,11 +37,13 @@
 #include <algorithm>
 #include <cstdio>
 #include <type_traits>
+#include <vector>
 #include <cppde/cppde_types.hpp>
 #include <cppde/cppde_ad_lu.hpp>   // for ad_lu::is_ad
 #include <cppde/cppde_ad_traits.hpp>
 #include <cppde/cppde_dual_slab.hpp>
 #include <cppde/cppde_profiler.hpp>
+#include <cppde/cppde_err_weights.hpp>
 #include <cppde/cppde_step_trace.hpp>
 
 namespace cppde {
@@ -66,6 +68,55 @@ struct has_jacobian_api : std::false_type {};
 template<class S>
 struct has_jacobian_api<S, std::void_t<decltype(std::declval<const S&>().has_valid_jacobian())>>
 : std::true_type {};
+
+// ----------------------------------------------------------------------------
+//  The error norm and the control law, written on the value type.
+//
+//  Spelled with the cppde:: math names, so one statement of each formula
+//  serves every value type. The reverse sweep reads the grid off the
+//  checkpoints instead. wrms_state takes an accessor that scalarises AD values.
+// ----------------------------------------------------------------------------
+
+template<class V, class Get>
+inline auto wrms_state(const std::vector<V>& x, const std::vector<V>& xold,
+                       const std::vector<V>& xerr,
+                       double atol, double rtol, Get get)
+  -> decltype(get(xerr[0]))
+{
+  using S = decltype(get(xerr[0]));
+  const size_t n = xerr.size();
+  S sumsq = S(0.0);
+  for (size_t i = 0; i < n; ++i) {
+    S scale = atol + rtol * cppde::max(cppde::abs(get(xold[i])),
+                                       cppde::abs(get(x[i])));
+    S r = cppde::abs(get(xerr[i])) / scale;
+    sumsq = sumsq + r * r;
+  }
+  return cppde::sqrt(sumsq / static_cast<double>(n));
+}
+
+// Step-size factor after an accepted step. pi_form is false on the first step
+// and after a rejection, where err_old carries nothing usable; cap_at_one holds
+// the step back after a rejection.
+template<class V>
+inline V accept_factor(const V& err, const V& err_old, bool pi_form, bool cap_at_one,
+                       double order, double alpha, double beta, double safety,
+                       double min_factor, double max_factor)
+{
+  V factor = pi_form
+    ? safety * cppde::pow(err_old / err, beta) * cppde::pow(V(1.0) / err, alpha)
+    : safety * cppde::pow(V(1.0) / err, 1.0 / (order + 1.0));
+  if (cap_at_one) factor = cppde::min(factor, 1.0);
+  return cppde::min(cppde::max(factor, min_factor), max_factor);
+}
+
+// Step-size factor after a rejected attempt. Never grows the step.
+template<class V>
+inline V reject_factor(const V& err, double order, double safety, double min_factor)
+{
+  V factor = safety * cppde::pow(V(1.0) / err, 1.0 / (order + 1.0));
+  return cppde::min(cppde::max(factor, min_factor), 0.9);
+}
 
 } // namespace onestep_detail
 
@@ -185,7 +236,10 @@ public:
   //  derivative loop compiles out.
   // ====================================================================
 
-  double error(const state_type& x, const state_type& xold, const state_type& xerr)
+  // t_end is where the step lands, which is where the lambda weight is read.
+  // Defaulted so a caller that sets no weights need not know about them.
+  double error(const state_type& x, const state_type& xold, const state_type& xerr,
+               double t_end = 0.0)
   {
     auto _tp = m_prof.timer(cppde::prof_cat::error_norm);
     using controller_detail::scalar_value;
@@ -193,25 +247,17 @@ public:
     const size_t n = x.size();
     if (n == 0) return 0.0;
 
-    double state_sumsq = 0.0;
-    unsigned nd = 0;
+    // The value half. The sensitivity term and the lambda-weighted term below
+    // join it under the same max.
+    double max_norm = onestep_detail::wrms_state(
+        x, xold, xerr, m_atol, m_rtol,
+        [](const value_type& v) { return scalar_value(v); });
+
     if constexpr (ad_lu::is_ad<value_type>::value) {
-      nd = const_cast<value_type&>(xerr[0]).size();
-    }
-    std::vector<double> sens_sumsq(nd, 0.0);
-
-    for (size_t i = 0; i < n; ++i) {
-      double x_old_val = scalar_value(xold[i]);
-      double x_new_val = scalar_value(x[i]);
-      double scale = m_atol + m_rtol * std::max(std::abs(x_old_val), std::abs(x_new_val));
-
-      // Value component
-      double err_val = std::abs(scalar_value(xerr[i]));
-      double r = err_val / scale;
-      state_sumsq += r * r;
-
-      // Derivative components (only active for AD types)
-      if constexpr (ad_lu::is_ad<value_type>::value) {
+      const unsigned nd = m_sens_err_con
+        ? const_cast<value_type&>(xerr[0]).size() : 0u;
+      std::vector<double> sens_sumsq(nd, 0.0);
+      for (size_t i = 0; i < n; ++i) {
         auto& xerr_ad = const_cast<value_type&>(xerr[i]);
         auto& xold_ad = const_cast<value_type&>(xold[i]);
         auto& xnew_ad = const_cast<value_type&>(x[i]);
@@ -224,13 +270,17 @@ public:
           sens_sumsq[j] += rd * rd;
         }
       }
+      for (unsigned j = 0; j < nd; ++j) {
+        double sens_norm = std::sqrt(sens_sumsq[j] / n);
+        if (sens_norm > max_norm) max_norm = sens_norm;
+      }
     }
 
-    double max_norm = std::sqrt(state_sumsq / n);
-    for (unsigned j = 0; j < nd; ++j) {
-      double sens_norm = std::sqrt(sens_sumsq[j] / n);
-      if (sens_norm > max_norm) max_norm = sens_norm;
-    }
+    // The goal-oriented term |lambda(t)' e| / gradtol. Zero unless a sweep
+    // left weights, and under the same max, so it can only make a step smaller.
+    const double lam_norm = ::cppde::detail::weighted_error(
+        xerr, t_end, [](const value_type& v) { return scalar_value(v); });
+    if (lam_norm > max_norm) max_norm = lam_norm;
     return max_norm;
   }
 
@@ -271,7 +321,9 @@ public:
     jacobian_hint hint = compute_hint();
 
     m_stepper.do_step(sys, x, t, xout, dt, m_xerr.m_v, hint);
-    double err = error(xout, x, m_xerr.m_v);
+    double err = error(xout, x, m_xerr.m_v,
+                       controller_detail::scalar_value(t) +
+                       controller_detail::scalar_value(dt));
 
     // Prevent division by zero
     err = std::max(err, 1e-15);
@@ -387,6 +439,12 @@ public:
   double rtol() const { return m_rtol; }
   void set_tolerances(double atol, double rtol) { m_atol = atol; m_rtol = rtol; }
 
+  // With the tangents out of the error test the step sequence reads value
+  // arithmetic only, so it is the one a scalar run takes whatever the tangent
+  // count is. The goal-oriented term below is unaffected; it is a double.
+  void set_sens_err_con(bool v) { m_sens_err_con = v; }
+  bool sens_err_con() const { return m_sens_err_con; }
+
   // PI controller parameter accessors
   double alpha() const { return m_alpha; }
   double beta() const { return m_beta; }
@@ -411,20 +469,9 @@ private:
   {
     if (err <= 1.0) {
       // === Step accepted ===
-      double factor;
-
-      if (m_first_step || m_last_rejected) {
-        factor = m_safety * std::pow(1.0 / err, 1.0 / (order + 1.0));
-      } else {
-        factor = m_safety
-        * std::pow(m_err_old / err, m_beta)
-        * std::pow(1.0 / err, m_alpha);
-      }
-
-      if (m_last_rejected) {
-        factor = std::min(factor, 1.0);
-      }
-      factor = std::clamp(factor, m_min_factor, m_max_factor);
+      const double factor = onestep_detail::accept_factor(
+          err, m_err_old, !(m_first_step || m_last_rejected), m_last_rejected,
+          order, m_alpha, m_beta, m_safety, m_min_factor, m_max_factor);
 
       // Update controller state
       m_dt_old = controller_detail::scalar_value(dt);
@@ -450,8 +497,8 @@ private:
     else {
       // === Step rejected ===
       ++m_n_rejected;
-      double factor = m_safety * std::pow(1.0 / err, 1.0 / (order + 1.0));
-      factor = std::clamp(factor, m_min_factor, 0.9);
+      const double factor = onestep_detail::reject_factor(
+          err, order, m_safety, m_min_factor);
 
       m_last_rejected = true;
       dt *= factor;
@@ -500,6 +547,7 @@ private:
   unsigned m_n_sens = 0;
 
   double m_atol, m_rtol;
+  bool m_sens_err_con = true;   // tangents count in the error test
   double m_max_dt;
 
   // PI controller parameters

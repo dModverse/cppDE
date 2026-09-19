@@ -34,6 +34,10 @@ when the package DLL loads, so it is in place either way. Set
 \code{options(cppDE.quiet = TRUE)} beforehand to suppress the line, or attach with
 \code{\link[=suppressPackageStartupMessages]{suppressPackageStartupMessages()}}.
 }
+\examples{
+## The BLAS thread controls resolved in this process
+forkGuard()
+}
 \seealso{
 \code{\link[=batchAvailable]{batchAvailable()}}
 }

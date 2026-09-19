@@ -7,16 +7,13 @@
  The whole tree is materialized once on assignment into the LHS:
    1. lhs.val_ = root.val();                 // single value-pass (cached
                                              //   during ctor of each node)
-   2. (N == 0) lhs.set_depend_size(...);     // one arena alloc, or in-place
-      (N >  0) lhs.depend_ = true;           // (statically-sized; no alloc)
+   2. bind lhs.tan_ if not yet bound         // one arena alloc, or in-place
    3. for (i)  lhs.tan_[i] = root.tan(i);    // one fused chain-rule loop
 
  Coverage:
-   - dual<T, 0> (heap, arena-backed): eliminates the per-binary-op arena
-     bump + the per-element `*this = *this + o` synthesis-temp leak.
-   - dual<T, N> with N > 0 (stack, inline tan_[N]): eliminates per-binary-op
-     352-byte temp duals and replaces N separate eager tangent loops with one
-     fused, compile-time-bounded loop the optimiser unrolls / vectorises.
+   - dual<T, 0>: no arena bump and no temporary dual per binary operation.
+   - dual<T, N> with N > 0: the same, with the constant N as the loop bound,
+     which the optimiser unrolls and vectorises.
    - Nested AD (T = dual<U, M>): SKIPPED. The eager_dual_active gate
      (cppde_dual_math.hpp) keeps eager active when T itself is AD, so the
      outer layer of dual2nd uses the recursive eager path while the inner
@@ -26,12 +23,9 @@
    The pattern `*this = *this + o;` (cppde_dual_math.hpp operator+= path) binds
    `*this + o` to an Expr that holds a const-ref to *this. Two layers protect
    against aliasing during materialisation:
-     (1) DualLeaf snapshots `.x()` and the `tan_` pointer at construction so a
-         later set_depend_size() on the LHS (N==0 case, which allocates a
-         fresh tan_ buffer when transitioning from non-depend to depend)
-         doesn't make the leaf observe freshly-allocated, uninitialised arena
-         memory. For N>0 there is no allocation, but the snapshot is still
-         valid: the inline tan_[N] address is stable for the assignment.
+     (1) DualLeaf snapshots `.x()` and the `tan_` pointer at construction, so
+         binding a fresh tan_ buffer on the LHS during materialisation does
+         not make the leaf read uninitialised arena memory.
      (2) BinExpr/UnaryExpr cache `y_` (and `fp_` for unary) at ctor, so
          val_ = root.val() in the materialiser uses the OLD value of *this.
    Tangent writes still happen at index i AFTER the read of leaf.tan(i) for
@@ -80,7 +74,7 @@ constexpr bool is_dual_expr_v = is_dual_expr<X>::value;
 // Always-inline marker for ET hot methods. Deep BinExpr trees (e.g. TSIT5's
 // 7-term error-estimate axpy) bottom out as 10+ nested template calls per
 // tan(i); without this hint, gcc -O2's inlining budget can back off and emit
-// real call/return on inner nodes, which destroys the fused-loop win.
+// real call/return on inner nodes, which breaks up the fused loop.
 #if defined(__GNUC__) || defined(__clang__)
   #define CPPDE_ET_INLINE __attribute__((always_inline)) inline
 #else
@@ -229,8 +223,8 @@ struct BinExpr : Expr<BinExpr<L, R, Op>> {
 
 // =============================================================================
 // Unary node: caches both result value y_ and derivative coefficient fp_ in
-// ctor. tan(i) is then a single multiply: fp_ * x_.tan(i). This mirrors the
-// eager unary path's structure (cppde_dual_math.hpp:256: "const T fp = ...").
+// ctor. tan(i) is then a single multiply: fp_ * x_.tan(i), as in the eager
+// unary functions of cppde_dual_math.hpp.
 // Op tags implement: static void compute(xv, y_out, fp_out).
 // =============================================================================
 template<class X, class Op>
@@ -294,7 +288,7 @@ CPPDE_DEFINE_ET_UNARY_OP(Asinh, asinh(xv),  T(1) / sqrt(xv * xv + T(1)));
 CPPDE_DEFINE_ET_UNARY_OP(Acosh, acosh(xv),  T(1) / sqrt(xv * xv - T(1)));
 CPPDE_DEFINE_ET_UNARY_OP(Atanh, atanh(xv),  T(1) / (T(1) - xv * xv));
 
-// abs: derivative sign(x); 0 at x=0 (cppde_dual_math.hpp:371).
+// abs: derivative sign(x); 0 at x=0, as the eager abs in cppde_dual_math.hpp.
 struct AbsOp {
   template<class T> static void compute(const T& xv, T& y, T& fp) {
     using std::abs;

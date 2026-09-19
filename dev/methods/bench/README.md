@@ -1,17 +1,19 @@
-# Benchmark run `20260901-182706_full_c1_nosens-sens1`
+# Benchmark run `20260919-203447_full_cluster_c12_nosens-sens1-sens2`
 
-cppDE against SUNDIALS CVODE(S). 852 rows, 4 failed cells.
+cppDE against SUNDIALS CVODE(S). 1083 rows, 6 failed cells.
+
+> Run with 12 workers: **absolute times are inflated** by shared cache and turbo clocking. The ratios below are the quantity to read; treat differences under ~10 % as noise.
 
 ## Result
 
 | mode | solver | time vs CVODE | rhs-evals vs CVODE | cells | problems |
 |---|---|---:|---:|---:|---:|
-| without sensitivities | cppDE_ndf | **1.20×** | 0.95× | 123 | 41 |
-| with 1st-order sensitivities | cppDE_ndf | **1.84×** | 0.08× | 121 | 41 |
+| without sensitivities | cppDE_ndf | **1.15×** | 0.94× | 129 | 43 |
+| with 1st-order sensitivities | cppDE_ndf | **1.36×** | 0.10× | 124 | 42 |
 
 ## Dense vs sparse LU
 
-15 model(s) run a second and third time with the linear solver pinned, next to the auto-detected head-to-head.
+17 model(s) run a second and third time with the linear solver pinned, next to the auto-detected head-to-head.
 Gain > 1 means the sparse path was faster; `chose` is what
 auto-detection picked, so a gain > 1 next to `dense` is a
 mis-detection.
@@ -19,82 +21,146 @@ mis-detection.
 | problem | states | backend | mode | chose | gain |
 |---|---:|---|---|---|---:|
 | Elowitz_Nature2000 | 8 | cppde | without sensitivities | sparse | **1.13×** |
-| Elowitz_Nature2000 | 8 | cppde | with 1st-order sensitivities | sparse | **1.26×** |
-| Elowitz_Nature2000 | 8 | cvode | without sensitivities | sparse | **0.94×** |
-| Elowitz_Nature2000 | 8 | cvode | with 1st-order sensitivities | sparse | **1.01×** |
-| Oliveira_NatCommun2021 | 10 | cppde | without sensitivities | sparse | **1.06×** |
-| Oliveira_NatCommun2021 | 10 | cppde | with 1st-order sensitivities | sparse | **1.24×** |
-| Oliveira_NatCommun2021 | 10 | cvode | without sensitivities | sparse | **1.09×** |
-| Oliveira_NatCommun2021 | 10 | cvode | with 1st-order sensitivities | sparse | **1.01×** |
-| Raia_CancerResearch2011 | 14 | cppde | without sensitivities | sparse | **1.18×** |
-| Raia_CancerResearch2011 | 14 | cppde | with 1st-order sensitivities | sparse | **1.10×** |
-| Raia_CancerResearch2011 | 14 | cvode | without sensitivities | sparse | **1.11×** |
-| Raia_CancerResearch2011 | 14 | cvode | with 1st-order sensitivities | sparse | **1.17×** |
-| Pollution | 20 | cppde | without sensitivities | sparse | **1.24×** |
-| Pollution | 20 | cppde | with 1st-order sensitivities | sparse | **1.09×** |
-| Pollution | 20 | cvode | without sensitivities | sparse | **1.32×** |
-| Pollution | 20 | cvode | with 1st-order sensitivities | sparse | **1.01×** |
-| Raimundez_PCB2020 | 22 | cppde | without sensitivities | sparse | **1.27×** |
-| Raimundez_PCB2020 | 22 | cppde | with 1st-order sensitivities | sparse | **1.08×** |
-| Raimundez_PCB2020 | 22 | cvode | without sensitivities | sparse | **1.14×** |
-| Raimundez_PCB2020 | 22 | cvode | with 1st-order sensitivities | sparse | **1.03×** |
-| Bachmann_MSB2011 | 25 | cppde | without sensitivities | sparse | **1.45×** |
-| Bachmann_MSB2011 | 25 | cppde | with 1st-order sensitivities | sparse | **1.22×** |
-| Bachmann_MSB2011 | 25 | cvode | without sensitivities | sparse | **1.61×** |
-| Bachmann_MSB2011 | 25 | cvode | with 1st-order sensitivities | sparse | **1.03×** |
+| Elowitz_Nature2000 | 8 | cppde | with 1st-order sensitivities | sparse | **1.08×** |
+| Elowitz_Nature2000 | 8 | cvode | without sensitivities | sparse | **1.06×** |
+| Elowitz_Nature2000 | 8 | cvode | with 1st-order sensitivities | sparse | **1.08×** |
+| Oliveira_NatCommun2021 | 10 | cppde | without sensitivities | sparse | **1.17×** |
+| Oliveira_NatCommun2021 | 10 | cppde | with 1st-order sensitivities | sparse | **1.18×** |
+| Oliveira_NatCommun2021 | 10 | cvode | without sensitivities | sparse | **1.11×** |
+| Oliveira_NatCommun2021 | 10 | cvode | with 1st-order sensitivities | sparse | **1.13×** |
+| Raia_CancerResearch2011 | 14 | cppde | without sensitivities | sparse | **1.24×** |
+| Raia_CancerResearch2011 | 14 | cppde | with 1st-order sensitivities | sparse | **1.15×** |
+| Raia_CancerResearch2011 | 14 | cvode | without sensitivities | sparse | **1.21×** |
+| Raia_CancerResearch2011 | 14 | cvode | with 1st-order sensitivities | sparse | **1.22×** |
+| Pollution | 20 | cppde | without sensitivities | sparse | **1.38×** |
+| Pollution | 20 | cppde | with 1st-order sensitivities | sparse | **1.12×** |
+| Pollution | 20 | cvode | without sensitivities | sparse | **1.35×** |
+| Pollution | 20 | cvode | with 1st-order sensitivities | sparse | **1.22×** |
+| Raimundez_PCB2020 | 22 | cppde | without sensitivities | sparse | **1.38×** |
+| Raimundez_PCB2020 | 22 | cppde | with 1st-order sensitivities | sparse | **1.21×** |
+| Raimundez_PCB2020 | 22 | cvode | without sensitivities | sparse | **1.42×** |
+| Raimundez_PCB2020 | 22 | cvode | with 1st-order sensitivities | sparse | **1.23×** |
+| Bachmann_MSB2011 | 25 | cppde | without sensitivities | sparse | **1.56×** |
+| Bachmann_MSB2011 | 25 | cppde | with 1st-order sensitivities | sparse | **1.28×** |
+| Bachmann_MSB2011 | 25 | cvode | without sensitivities | sparse | **1.51×** |
+| Bachmann_MSB2011 | 25 | cvode | with 1st-order sensitivities | sparse | **1.31×** |
 | Isensee_JCB2018 | 25 | cppde | without sensitivities | sparse | **1.33×** |
-| Isensee_JCB2018 | 25 | cppde | with 1st-order sensitivities | sparse | **1.27×** |
-| Isensee_JCB2018 | 25 | cvode | without sensitivities | sparse | **1.42×** |
-| Isensee_JCB2018 | 25 | cvode | with 1st-order sensitivities | sparse | **1.06×** |
-| Lucarelli_CellSystems2018 | 33 | cppde | without sensitivities | sparse | **1.49×** |
-| Lucarelli_CellSystems2018 | 33 | cppde | with 1st-order sensitivities | sparse | **1.15×** |
-| Lucarelli_CellSystems2018 | 33 | cvode | without sensitivities | sparse | **1.60×** |
-| Lucarelli_CellSystems2018 | 33 | cvode | with 1st-order sensitivities | sparse | **1.05×** |
-| Laske_PLOSComputBiol2019 | 34 | cppde | without sensitivities | sparse | **1.54×** |
-| Laske_PLOSComputBiol2019 | 34 | cppde | with 1st-order sensitivities | sparse | **1.41×** |
-| Laske_PLOSComputBiol2019 | 34 | cvode | without sensitivities | sparse | **1.68×** |
-| Laske_PLOSComputBiol2019 | 34 | cvode | with 1st-order sensitivities | sparse | **1.11×** |
-| Alkan_SciSignal2018 | 36 | cppde | without sensitivities | sparse | **1.29×** |
-| Alkan_SciSignal2018 | 36 | cppde | with 1st-order sensitivities | sparse | **1.27×** |
-| Alkan_SciSignal2018 | 36 | cvode | without sensitivities | sparse | **1.22×** |
-| Alkan_SciSignal2018 | 36 | cvode | with 1st-order sensitivities | sparse | **1.00×** |
-| Brusselator1D_N24 | 48 | cppde | without sensitivities | sparse | **1.57×** |
-| Brusselator1D_N24 | 48 | cppde | with 1st-order sensitivities | sparse | **1.84×** |
-| Brusselator1D_N24 | 48 | cvode | without sensitivities | sparse | **1.68×** |
-| Brusselator1D_N24 | 48 | cvode | with 1st-order sensitivities | sparse | **1.23×** |
-| FitzHughNagumo_N24 | 48 | cppde | without sensitivities | sparse | **1.89×** |
-| FitzHughNagumo_N24 | 48 | cppde | with 1st-order sensitivities | sparse | **1.63×** |
-| FitzHughNagumo_N24 | 48 | cvode | without sensitivities | sparse | **1.95×** |
-| FitzHughNagumo_N24 | 48 | cvode | with 1st-order sensitivities | sparse | **1.21×** |
-| Giordano_Nature2020 | 51 | cppde | without sensitivities | sparse | **2.15×** |
-| Giordano_Nature2020 | 51 | cppde | with 1st-order sensitivities | sparse | **1.84×** |
-| Giordano_Nature2020 | 51 | cvode | without sensitivities | sparse | **2.50×** |
-| Giordano_Nature2020 | 51 | cvode | with 1st-order sensitivities | sparse | **1.19×** |
-| Brusselator1D_N64 | 128 | cppde | without sensitivities | sparse | **2.44×** |
-| Brusselator1D_N64 | 128 | cppde | with 1st-order sensitivities | sparse | **2.41×** |
-| Brusselator1D_N64 | 128 | cvode | without sensitivities | sparse | **3.23×** |
-| Brusselator1D_N64 | 128 | cvode | with 1st-order sensitivities | sparse | **1.73×** |
-| FitzHughNagumo_N64 | 128 | cppde | without sensitivities | sparse | **3.66×** |
-| FitzHughNagumo_N64 | 128 | cppde | with 1st-order sensitivities | sparse | **2.54×** |
-| FitzHughNagumo_N64 | 128 | cvode | without sensitivities | sparse | **3.80×** |
-| FitzHughNagumo_N64 | 128 | cvode | with 1st-order sensitivities | sparse | **1.68×** |
+| Isensee_JCB2018 | 25 | cppde | with 1st-order sensitivities | sparse | **1.28×** |
+| Isensee_JCB2018 | 25 | cvode | without sensitivities | sparse | **1.37×** |
+| Isensee_JCB2018 | 25 | cvode | with 1st-order sensitivities | sparse | **1.18×** |
+| Lucarelli_CellSystems2018 | 33 | cppde | without sensitivities | sparse | **1.68×** |
+| Lucarelli_CellSystems2018 | 33 | cppde | with 1st-order sensitivities | sparse | **1.31×** |
+| Lucarelli_CellSystems2018 | 33 | cvode | without sensitivities | sparse | **1.76×** |
+| Lucarelli_CellSystems2018 | 33 | cvode | with 1st-order sensitivities | sparse | **1.37×** |
+| Laske_PLOSComputBiol2019 | 34 | cppde | without sensitivities | sparse | **1.74×** |
+| Laske_PLOSComputBiol2019 | 34 | cppde | with 1st-order sensitivities | sparse | **1.33×** |
+| Laske_PLOSComputBiol2019 | 34 | cvode | without sensitivities | sparse | **1.98×** |
+| Laske_PLOSComputBiol2019 | 34 | cvode | with 1st-order sensitivities | sparse | **1.42×** |
+| Alkan_SciSignal2018 | 36 | cppde | without sensitivities | sparse | **1.45×** |
+| Alkan_SciSignal2018 | 36 | cppde | with 1st-order sensitivities | sparse | **1.36×** |
+| Alkan_SciSignal2018 | 36 | cvode | without sensitivities | sparse | **1.33×** |
+| Alkan_SciSignal2018 | 36 | cvode | with 1st-order sensitivities | sparse | **1.26×** |
+| Brusselator1D_N24 | 48 | cppde | without sensitivities | sparse | **1.78×** |
+| Brusselator1D_N24 | 48 | cppde | with 1st-order sensitivities | sparse | **1.70×** |
+| Brusselator1D_N24 | 48 | cvode | without sensitivities | sparse | **1.83×** |
+| Brusselator1D_N24 | 48 | cvode | with 1st-order sensitivities | sparse | **1.48×** |
+| FitzHughNagumo_N24 | 48 | cppde | without sensitivities | sparse | **1.82×** |
+| FitzHughNagumo_N24 | 48 | cppde | with 1st-order sensitivities | sparse | **1.74×** |
+| FitzHughNagumo_N24 | 48 | cvode | without sensitivities | sparse | **1.86×** |
+| FitzHughNagumo_N24 | 48 | cvode | with 1st-order sensitivities | sparse | **1.32×** |
+| Giordano_Nature2020 | 51 | cppde | without sensitivities | sparse | **2.50×** |
+| Giordano_Nature2020 | 51 | cppde | with 1st-order sensitivities | sparse | **2.06×** |
+| Giordano_Nature2020 | 51 | cvode | without sensitivities | sparse | **2.73×** |
+| Giordano_Nature2020 | 51 | cvode | with 1st-order sensitivities | sparse | **1.62×** |
+| Lang_PLOSComputBiol2024 | 124 | cppde | without sensitivities | sparse | **2.54×** |
+| Lang_PLOSComputBiol2024 | 124 | cppde | with 1st-order sensitivities | sparse | **3.91×** |
+| Lang_PLOSComputBiol2024 | 124 | cvode | without sensitivities | sparse | **2.69×** |
+| Lang_PLOSComputBiol2024 | 124 | cvode | with 1st-order sensitivities | sparse | **2.24×** |
+| Brusselator1D_N64 | 128 | cppde | without sensitivities | sparse | **3.35×** |
+| Brusselator1D_N64 | 128 | cppde | with 1st-order sensitivities | sparse | **3.28×** |
+| Brusselator1D_N64 | 128 | cvode | without sensitivities | sparse | **3.59×** |
+| Brusselator1D_N64 | 128 | cvode | with 1st-order sensitivities | sparse | **2.34×** |
+| FitzHughNagumo_N64 | 128 | cppde | without sensitivities | sparse | **3.29×** |
+| FitzHughNagumo_N64 | 128 | cppde | with 1st-order sensitivities | sparse | **3.36×** |
+| FitzHughNagumo_N64 | 128 | cvode | without sensitivities | sparse | **3.18×** |
+| FitzHughNagumo_N64 | 128 | cvode | with 1st-order sensitivities | sparse | **1.73×** |
+| Chen_MSB2009 | 504 | cppde | without sensitivities | sparse | **3.16×** |
+| Chen_MSB2009 | 504 | cppde | with 1st-order sensitivities | sparse | **3.46×** |
+| Chen_MSB2009 | 504 | cvode | without sensitivities | sparse | **3.47×** |
+
+**Second order**: the Hessian of the summed outputs, cppDE only;
+CVODES has no second-order sensitivities, so this is a cost, not a comparison:
+
+| problem | mode | M | plain [ms] | Hessian [ms] | factor |
+|---|---|---:|---:|---:|---:|
+| Armistead_CellDeathDis2024 | forward-forward | 10 | 0.21 | 6.9 | 32× |
+| Armistead_CellDeathDis2024 | forward-reverse | 10 | 0.21 | 1.9 | 9× |
+| Bachmann_MSB2011 | forward-reverse | 27 | 0.50 | 31.2 | 63× |
+| Beer_MolBioSystems2014 | forward-forward | 6 | 0.29 | 6.2 | 21× |
+| Beer_MolBioSystems2014 | forward-reverse | 6 | 0.29 | 2.2 | 7× |
+| Bertozzi_PNAS2020 | forward-forward | 3 | 0.15 | 0.3 | 2× |
+| Bertozzi_PNAS2020 | forward-reverse | 3 | 0.15 | 0.3 | 2× |
+| Blasi_CellSystems2016 | forward-reverse | 8 | 0.32 | 4.6 | 14× |
+| Boehm_JProteomeRes2014 | forward-forward | 6 | 0.34 | 13.2 | 38× |
+| Boehm_JProteomeRes2014 | forward-reverse | 6 | 0.34 | 4.0 | 12× |
+| Borghans_BiophysChem1997 | forward-forward | 10 | 1.26 | 360.0 | 286× |
+| Borghans_BiophysChem1997 | forward-reverse | 10 | 1.26 | 26.5 | 21× |
+| Brannmark_JBC2010 | forward-forward | 10 | 0.39 | 59.6 | 152× |
+| Brannmark_JBC2010 | forward-reverse | 10 | 0.39 | 9.9 | 25× |
+| Bruno_JExpBot2016 | forward-forward | 7 | 0.17 | 2.3 | 14× |
+| Bruno_JExpBot2016 | forward-reverse | 7 | 0.17 | 0.6 | 4× |
+| Crauste_CellSystems2017 | forward-forward | 10 | 0.36 | 72.3 | 198× |
+| Crauste_CellSystems2017 | forward-reverse | 10 | 0.36 | 5.7 | 16× |
+| E5 | forward-forward | 3 | 1.06 | 17.8 | 17× |
+| E5 | forward-reverse | 3 | 1.06 | 18.4 | 17× |
+| Elowitz_Nature2000 | forward-forward | 10 | 0.78 | 200.0 | 256× |
+| Elowitz_Nature2000 | forward-reverse | 10 | 0.78 | 16.8 | 21× |
+| Fiedler_BMCSystBiol2016 | forward-forward | 10 | 0.25 | 34.9 | 138× |
+| Fiedler_BMCSystBiol2016 | forward-reverse | 10 | 0.25 | 3.1 | 12× |
+| Fujita_SciSignal2010 | forward-forward | 10 | 0.28 | 40.8 | 145× |
+| Fujita_SciSignal2010 | forward-reverse | 10 | 0.28 | 3.7 | 13× |
+| HIRES | forward-forward | 2 | 0.42 | 5.3 | 13× |
+| HIRES | forward-reverse | 2 | 0.42 | 8.4 | 20× |
+| Isensee_JCB2018 | forward-reverse | 32 | 0.29 | 10.0 | 35× |
+| Liu_IFACPapersOnLine2025 | forward-forward | 7 | 0.17 | 4.5 | 26× |
+| Liu_IFACPapersOnLine2025 | forward-reverse | 7 | 0.17 | 0.8 | 5× |
+| Okuonghae_ChaosSolitonsFractals2020 | forward-forward | 10 | 0.20 | 19.9 | 100× |
+| Okuonghae_ChaosSolitonsFractals2020 | forward-reverse | 10 | 0.20 | 1.8 | 9× |
+| Oliveira_NatCommun2021 | forward-forward | 10 | 0.28 | 8.4 | 30× |
+| Oliveira_NatCommun2021 | forward-reverse | 10 | 0.28 | 2.9 | 10× |
+| OREGO | forward-forward | 3 | 1.15 | 26.6 | 23× |
+| OREGO | forward-reverse | 3 | 1.15 | 36.0 | 31× |
+| Perelson_Science1996 | forward-forward | 2 | 0.21 | 1.3 | 6× |
+| Perelson_Science1996 | forward-reverse | 2 | 0.21 | 1.2 | 6× |
+| Pollution | forward-reverse | 25 | 0.40 | 16.9 | 42× |
+| Rahman_MBS2016 | forward-forward | 9 | 0.23 | 34.4 | 148× |
+| Rahman_MBS2016 | forward-reverse | 9 | 0.23 | 2.5 | 11× |
+| Raia_CancerResearch2011 | forward-reverse | 18 | 0.51 | 37.5 | 73× |
+| Raimundez_PCB2020 | forward-reverse | 32 | 0.39 | 28.0 | 71× |
+| Robertson | forward-forward | 3 | 0.46 | 5.9 | 13× |
+| Robertson | forward-reverse | 3 | 0.46 | 5.3 | 12× |
+| Schwen_PONE2014 | forward-reverse | 13 | 0.34 | 6.6 | 19× |
+| Sneyd_PNAS2002 | forward-forward | 10 | 0.26 | 68.5 | 265× |
+| Sneyd_PNAS2002 | forward-reverse | 10 | 0.26 | 8.0 | 31× |
+| VanDerPol_mu1000 | forward-forward | 1 | 0.99 | 7.4 | 8× |
+| VanDerPol_mu1000 | forward-reverse | 1 | 0.99 | 13.4 | 14× |
+| Weber_BMC2015 | forward-forward | 10 | 0.45 | 98.7 | 220× |
+| Weber_BMC2015 | forward-reverse | 10 | 0.45 | 10.3 | 23× |
+| Zhao_QuantBiol2020 | forward-forward | 10 | 0.22 | 18.7 | 87× |
+| Zhao_QuantBiol2020 | forward-reverse | 10 | 0.22 | 1.7 | 8× |
+| Zheng_PNAS2012 | forward-reverse | 32 | 0.34 | 13.0 | 38× |
 
 ## Configuration
 
 | | |
 |---|---|
 | tier | full |
-| modes | nosens,sens1 |
-| cores | 1 (serial) |
-| tolerances | atol 1e-06 / rtol 1e-04; atol 1e-09 / rtol 1e-07; atol 1e-12 / rtol 1e-10 |
+| modes | nosens,sens1,sens2 |
+| cores | 12 (parallel) |
 | repetitions | 5 |
-| elapsed | 2661.7 s |
-| date | 2026-09-01 19:11:35 |
-| R / cppDE | 4.6.1 / 0.9.2 |
-| CPU | Intel(R) Core(TM) Ultra 9 185H |
-| KLU | TRUE |
+| date | 2026-09-19 20:34:47 |
 
-Full options: `tier=full suite=all models= skip=Lang_PLOSComputBiol2024 conditions=1 modes=nosens,sens1 max-sens2=10 tol=default nrep=5 min-time= cores=1 compile-slots=1 max-compile-gb=8 max-worker-gb= shard= max-states=400 max-sens=32 min-points=25 outdir=/home/simon/Documents/Projects/dModverse/cppDE/benchmarks/results petab-root=/home/simon/Documents/Projects/dModverse/cppDE/benchmarks/cache/petab/Benchmark-Models builddir= extra-solvers=FALSE sparse-sweep=TRUE max-density=0.25 min-sweep-states=8 include-excluded=FALSE plots=TRUE quick=FALSE help=FALSE`
+Full options: `jobname=cppde_bench_0919 machine=helix partition=cpu-single cores=64 bench-cores=12 mem-per-core=2 walltime=08:00:00 shards=8 tier=full modes=nosens,sens1,sens2 conditions=1 max-states=520 max-sens=32 max-sens2=10 max-sens2-fr=32 max-states-sens2=30 max-states-ff=10 reverse-from=120 models= tol=default nrep=5 min-time=0.25 sparse-sweep=TRUE max-density=0.25 min-sweep-states=8 compile-slots=4 max-compile-gb=8 max-worker-gb= outdir=/home/simon/Documents/Projects/dModverse/cppDE/benchmarks/results petab-root=/home/simon/Documents/Projects/dModverse/cppDE/benchmarks/cache/petab/Benchmark-Models ssh-passwd= libs=~/R/lib-reverseAD dry-run=FALSE submit=FALSE collect=TRUE help=FALSE`
 
 ## Problems
 
@@ -126,48 +192,27 @@ Full options: `tier=full suite=all models= skip=Lang_PLOSComputBiol2024 conditio
 | Oliveira_NatCommun2021 | petab | 10 | 24 | 10 | 1 | 60 |
 | Schwen_PONE2014 | petab | 11 | 15 | 13 | 1 | 32 |
 | Raia_CancerResearch2011 | petab | 14 | 21 | 18 | 1 | 26 |
-| Zheng_PNAS2012 | petab | 15 | 47 | 45 | 1 | 27 |
+| Zheng_PNAS2012 | petab | 15 | 47 | 32 | 1 | 27 |
 | Blasi_CellSystems2016 | petab | 16 | 10 | 8 | 1 | 25 |
 | Pollution | classic | 20 | 25 | 25 | 1 | 200 |
-| Raimundez_PCB2020 | petab | 22 | 79 | 57 | 1 | 28 |
+| Raimundez_PCB2020 | petab | 22 | 79 | 32 | 1 | 28 |
 | Bachmann_MSB2011 | petab | 25 | 39 | 27 | 1 | 29 |
 | Isensee_JCB2018 | petab | 25 | 59 | 32 | 1 | 27 |
-| Lucarelli_CellSystems2018 | petab | 33 | 107 | 64 | 1 | 30 |
+| Lucarelli_CellSystems2018 | petab | 33 | 107 | 32 | 1 | 30 |
 | Laske_PLOSComputBiol2019 | petab | 34 | 69 | 6 | 1 | 33 |
-| Alkan_SciSignal2018 | petab | 36 | 53 | 34 | 1 | 28 |
+| Alkan_SciSignal2018 | petab | 36 | 53 | 32 | 1 | 28 |
 | Brusselator1D_N24 | classic | 48 | 3 | 3 | 1 | 100 |
 | FitzHughNagumo_N24 | classic | 48 | 5 | 5 | 1 | 100 |
-| Giordano_Nature2020 | petab | 51 | 59 | 43 | 1 | 46 |
+| Giordano_Nature2020 | petab | 51 | 59 | 32 | 1 | 46 |
 | SalazarCavazos_MBoC2020 | petab | 75 | 27 | 6 | 1 | 27 |
+| Lang_PLOSComputBiol2024 | petab | 124 | 218 | 164 | 1 | 600 |
 | Brusselator1D_N64 | classic | 128 | 3 | 3 | 1 | 100 |
 | FitzHughNagumo_N64 | classic | 128 | 5 | 5 | 1 | 100 |
-
-## Trait coverage
-
-A tier is only a usable regression basis while every trait still has
-a representative.
-
-| trait | problems |
-|---|---:|
-| stiff-extreme | 2 |
-| stiff-moderate | 8 |
-| oscillatory | 2 |
-| relaxation | 3 |
-| sparse | 6 |
-| large | 3 |
-| events | 4 |
-| many-sens | 11 |
-| few-sens | 11 |
-| rational | 14 |
-| transcendental | 4 |
-| log-horizon | 2 |
-| systems-biology | 32 |
+| Chen_MSB2009 | petab | 504 | 189 | 152 | 1 | 32 |
 
 ## Skipped
 
-- `Chen_MSB2009`: ~500 species > --max-states 400
-- `Froehlich_CellSystems2018`: ~1396 species > --max-states 400
-- `Smith_BMCSystBiol2013`: piecewise switches on a state variable -- EXCLUDED
+_none_
 
 ## Figures
 

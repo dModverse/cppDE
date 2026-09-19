@@ -1,12 +1,10 @@
 /*
  Centralized AD type traits for cppDE.
 
- Consolidates is_ad / inner_type / scalar_type / scalar_value plus the bulk
+ is_ad / is_dual2nd / inner_type / scalar_type / scalar_value plus the bulk
  value/derivative extraction helpers (extract_values, extract_derivs,
- max_deriv_size, bulk_extract_derivs, bulk_inject_results) into a single
- header. Specialized for cppde::dual<T,N>; second-order via
- cppde::dual2nd<T,N> = dual<dual<T,N>,N> falls out of the recursive
- specialisations: no separate trait entries.
+ max_deriv_size, bulk_extract_derivs, bulk_inject_results). Specialised for
+ cppde::dual<T,N> and cppde::dual2nd<T,N>.
 
  The bulk helpers are written generically over any AD type that exposes the
  accessor surface: `.x()`, `.d(j)`, `.size()`, `.depend()`,
@@ -41,10 +39,9 @@ template<class T>           struct is_ad : std::false_type {};
 template<class T, unsigned N>     struct is_ad<cppde::dual<T, N>>    : std::true_type {};
 template<class T, unsigned N>     struct is_ad<cppde::dual2nd<T, N>> : std::true_type {};
 
-// is_dual2nd<T>: matches only cppde::dual2nd<S, N>, not its base class.
-// Used by the LU/slab/multistepper paths to dispatch to the dual2nd-aware
-// extraction routines (which read gradient from outer.tan_[k].x() rather
-// than from base.val_.tan_, so val_tan_block is not required).
+// is_dual2nd<T>: matches only cppde::dual2nd<S, N>, not its base class. The
+// LU, slab and multistepper paths dispatch on it to extraction routines that
+// read the gradient from outer.tan_[k].x().
 template<class T>           struct is_dual2nd : std::false_type {};
 template<class T, unsigned N>     struct is_dual2nd<cppde::dual2nd<T, N>> : std::true_type {};
 
@@ -86,6 +83,86 @@ template<class T, unsigned N>
 inline double scalar_value(const cppde::dual2nd<T, N>& v) {
   return scalar_value(v.x());
 }
+
+// ============================================================================
+//  store_as<T>(v): the value in the type a store keeps it in
+//
+//  A reverse trajectory checkpoints states in its own scalar type. In plain
+//  double that is the value alone; over the same type the run integrates in it
+//  is the whole number, tangents included, which is what forward over reverse
+//  needs.
+// ============================================================================
+
+// ============================================================================
+//  arm_tangents(v): bind v's tangent storage before a callee's arena scope
+//
+//  A generated model body opens a dual_arena::scope of its own, so a tangent
+//  it allocates for one of the caller's numbers dies when that scope pops. The
+//  stepper avoids this by holding its buffers in a tangent slab; a caller that
+//  hands the model a buffer of its own arms it instead. Nothing to do for a
+//  plain scalar.
+// ============================================================================
+
+template<class T>
+inline void arm_tangents(T&) {}
+
+template<class S, unsigned N>
+inline void arm_tangents(cppde::dual<S, N>& v) { v.arm(); }
+
+// ============================================================================
+//  arm_outputs(a, b, x, p): binds the tangent storage of a and b, as wide as x
+//  and p carry. An entry that already has storage is left unchanged.
+// ============================================================================
+
+template<class T>
+inline unsigned tangent_count(const T&) { return 0; }
+
+template<class S>
+inline unsigned tangent_count(const cppde::dual<S, 0>& v) { return v.size(); }
+
+template<class T>
+inline void arm_width(T&, unsigned) {}
+
+template<class S>
+inline void arm_width(cppde::dual<S, 0>& v, unsigned w) {
+  if (v.size() != 0 || w == 0) return;
+  v.set_depend_size(w);
+  for (unsigned i = 0; i < w; ++i) v[i] = S();
+}
+
+template<class S, unsigned N>
+inline void arm_width(cppde::dual<S, N>& v, unsigned) {
+  if (!v.depend()) v.arm();
+}
+
+template<class T>
+inline void arm_outputs(std::vector<T>& a, std::vector<T>& b,
+                        const std::vector<T>& x, const std::vector<T>& p) {
+  unsigned w = 0;
+  for (const T& v : x) { const unsigned c = tangent_count(v); if (c > w) w = c; }
+  for (const T& v : p) { const unsigned c = tangent_count(v); if (c > w) w = c; }
+  for (T& v : a) arm_width(v, w);
+  for (T& v : b) arm_width(v, w);
+}
+
+template<class T, class V>
+inline T store_as(const V& v) {
+  if constexpr (std::is_same<T, V>::value) return v;
+  else return static_cast<T>(scalar_value(v));
+}
+
+// ============================================================================
+//  step_coef<TimeArg>: the type the steppers combine their stages in.
+//
+//  The step size is a constant of the map being differentiated, the grid being
+//  frozen, so it carries no tangent and the stage weights are plain doubles
+//  whatever the state is integrated in.
+// ============================================================================
+
+template<class TimeArg> using step_coef_t = double;
+
+template<class TimeArg>
+inline double step_coef_of(const TimeArg& dt) { return scalar_value(dt); }
 
 // ============================================================================
 //  Bulk extraction / injection helpers (generic over any AD type with the
@@ -169,6 +246,21 @@ inline unsigned max_deriv_size(const dense_matrix<AD>& M)
   unsigned mx = 0;
   for (std::size_t k = 0; k < M.data.size(); ++k) {
     unsigned sz = const_cast<AD&>(M.data[k]).size();
+    if (sz > mx) mx = sz;
+  }
+  return mx;
+}
+
+// Max number of active derivative directions in a csc_matrix. The sparse
+// solver's dual specialisation reads the entries' derivatives contiguously and
+// never asks; the nested-dual one keeps the matrix and does.
+template<class AD,
+         std::enable_if_t<is_ad<AD>::value, int> = 0>
+inline unsigned max_deriv_size(const csc_matrix<AD>& M)
+{
+  unsigned mx = 0;
+  for (std::size_t k = 0; k < M.Ax.size(); ++k) {
+    unsigned sz = const_cast<AD&>(M.Ax[k]).size();
     if (sz > mx) mx = sz;
   }
   return mx;

@@ -11,8 +11,8 @@
  Template parameter is_sparse selects dense vs sparse via
  if constexpr: no SFINAE, no CRTP, no tag dispatch.
 
- AD types (F<double>, F<F<double>>) are handled transparently
- by the underlying dense_lu_solver / sparse_lu_solver.
+ AD types (cppde::dual, cppde::dual2nd) are handled by the underlying
+ dense_lu_solver / sparse_lu_solver.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -21,6 +21,7 @@
 #define CPPDE_LU_HPP
 
 #include <cstddef>
+#include <cstring>
 #include <type_traits>
 #include <algorithm>
 #include <cmath>
@@ -35,7 +36,7 @@
 
 namespace cppde {
 
-// Tags (still needed for template parameters in generated code)
+// Tags, used as template parameters in generated code
 struct dense_lu_tag {};
 struct sparse_lu_tag {};
 
@@ -48,6 +49,7 @@ namespace ad_lu {
 struct detail_null_sparse_lu {
   template<class W> void factorize(const W&) {}
   template<class B> void solve(B&) const {}
+  template<class B> void solve_transposed(B&) const {}
   void solve_scalar(std::vector<double>&) const {}
   void reset_pattern() {}
 };
@@ -108,11 +110,21 @@ public:
 
   void factorize_W(size_t n, value_type inv_gamma_dt)
   {
-    if constexpr (is_sparse) {
-      factorize_W_sparse(n, inv_gamma_dt);
-    } else {
-      factorize_W_dense(n, inv_gamma_dt);
-    }
+    build_W(n, inv_gamma_dt);
+    factorize_built_W();
+  }
+
+  // The two halves apart, for a caller that times them apart. The dense path
+  // swaps its matrix into the solver and has nothing left to hand over, so its
+  // factorisation happens in the first half and the second is empty.
+  void build_W(size_t n, value_type inv_gamma_dt)
+  {
+    if constexpr (is_sparse) assemble_W_sparse(n, inv_gamma_dt);
+    else                     factorize_W_dense(n, inv_gamma_dt);
+  }
+  void factorize_built_W()
+  {
+    if constexpr (is_sparse) m_sparse_lu.factorize(m_W_work);
   }
 
   // ====================================================================
@@ -140,8 +152,7 @@ public:
       m_dfdt.m_v = m_dfdt_cache.m_v;
       refactorize_W_gamma_only(n, inv_gamma_dt);
     } else {
-      // Build W = inv_gamma_dt · I − J_cache  directly, no copy back to m_jac.
-      // This eliminates a full 1.28 MB memcpy (n×n doubles) per call.
+      // Build W = inv_gamma_dt · I − J_cache from the cached Jacobian.
       m_dfdt.m_v = m_dfdt_cache.m_v;
       refactorize_W_from_cache_dense(n, inv_gamma_dt);
     }
@@ -192,6 +203,21 @@ public:
       m_sparse_lu.solve_scalar(b);
     } else {
       m_dense_lu.solve_scalar(b);
+    }
+  }
+
+  // ====================================================================
+  //  solve_transposed: W^-T b, the reverse mode's half of the same
+  //  factorisation. Value type only, the derivative side of an implicit
+  //  equation being the caller's own sweep.
+  // ====================================================================
+
+  void solve_transposed(state_type& b)
+  {
+    if constexpr (is_sparse) {
+      m_sparse_lu.solve_transposed(b);
+    } else {
+      m_dense_lu.solve_transposed(b);
     }
   }
 
@@ -338,7 +364,7 @@ private:
   //  Sparse factorize_W implementation (allocation-free after first call)
   // ====================================================================
 
-  void factorize_W_sparse(size_t n, value_type inv_gamma_dt)
+  void assemble_W_sparse(size_t n, value_type inv_gamma_dt)
   {
     const int nnz = m_W_sparse.nnz;
 
@@ -349,10 +375,9 @@ private:
         m_W_work.Ap != m_W_sparse.Ap || m_W_work.Ai != m_W_sparse.Ai) {
       m_W_work = m_W_sparse;  // deep-copy
 
-      // Precompute diagonal offsets in CSC.  Codegen pads the pattern with
-      // explicit zeros so every diagonal is present (see codegen_cppODE.py,
-      // "missing_diags"); without that slot there is nowhere to put the
-      // identity term, so refuse rather than scale an off-diagonal entry.
+      // Precompute diagonal offsets in CSC. Codegen pads the pattern with
+      // explicit zeros on the diagonal (csc_layout() in cppde_model.py); a
+      // missing diagonal is refused rather than an off-diagonal entry scaled.
       m_diag_offsets.resize(n);
       for (size_t i = 0; i < n; ++i) {
         const int* begin = m_W_work.Ai.data() + m_W_work.Ap[i];
@@ -367,13 +392,12 @@ private:
       }
     }
 
-    // Hot path: copy pre-negated Jacobian + diagonal add
+    // Hot path: copy pre-negated Jacobian + diagonal add. A contiguous copy of
+    // a few hundred doubles, so memcpy rather than a BLAS call whose dispatch
+    // costs more than the copy.
     if constexpr (!ad_lu::is_ad<value_type>::value) {
-      int nnz_i = nnz;
-      int inc = 1;
-      F77_CALL(dcopy)(&nnz_i,
-               const_cast<double*>(m_W_sparse.Ax.data()), &inc,
-               m_W_work.Ax.data(), &inc);
+      std::memcpy(m_W_work.Ax.data(), m_W_sparse.Ax.data(),
+                  static_cast<std::size_t>(nnz) * sizeof(double));
     } else {
       for (int k = 0; k < nnz; ++k)
         m_W_work.Ax[k] = m_W_sparse.Ax[k];
@@ -383,7 +407,6 @@ private:
       m_W_work.Ax[m_diag_offsets[i]] += inv_gamma_dt;
 
     m_last_inv_gamma_dt = inv_gamma_dt;
-    m_sparse_lu.factorize(m_W_work);
   }
 
   // ====================================================================
@@ -423,8 +446,8 @@ private:
 };
 
 // ============================================================================
-//  Tag to bool conversion (for backward compatibility with stepper templates
-//  that use dense_lu_tag / sparse_lu_tag)
+//  Tag to bool conversion, for stepper templates parameterised on
+//  dense_lu_tag / sparse_lu_tag
 // ============================================================================
 
 template<class Tag>

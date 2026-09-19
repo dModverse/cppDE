@@ -15,12 +15,12 @@ cppODE(
   outdir = tempdir(),
   deriv = TRUE,
   deriv2 = FALSE,
-  nStack = Inf,
   includeTimeZero = TRUE,
   useDenseOutput = TRUE,
   sparse = NULL,
   method = c("bdf", "adams", "rb4", "tsit5"),
   useNDF = TRUE,
+  derivMode = c("forward", "reverse", "forward-forward", "forward-reverse"),
   profile = FALSE,
   stepTrace = FALSE,
   verbose = FALSE
@@ -54,13 +54,6 @@ and exported C symbols. A random identifier is used when \code{NULL}.}
 \item{deriv2}{Logical. Compute second-order parameter sensitivities;
 implies \code{deriv = TRUE}.}
 
-\item{nStack}{Compile-time AD slab width. \code{Inf} (default) selects
-heap-allocated AD; the per-call sensitivity dimension is taken at
-run time from \code{ncol(sens1ini)} in \code{\link[=solveODE]{solveODE()}}. A positive integer
-\code{K} fixes the width to \code{K} at compile time. \code{NULL} selects
-\code{length(c(variables, parameters)) - length(fixed)}. \code{deriv2 = TRUE}
-requires a finite width and silently demotes \code{Inf} to \code{NULL}.}
-
 \item{includeTimeZero}{Logical. Ensure that \code{0} is part of the
 integration times.}
 
@@ -80,6 +73,19 @@ forces dense. Sparse LU requires KLU at install time.}
 \item{useNDF}{Logical. Use Klopfenstein-Shampine NDF coefficients in
 the BDF corrector. Applies to \code{method = "bdf"}; ignored otherwise.}
 
+\item{derivMode}{Direction the derivatives are taken in.
+\itemize{
+\item \code{"forward"} (default): forward sensitivities as built by \code{deriv},
+returned as \verb{$tangent}.
+\item \code{"reverse"}: no forward sensitivities; the model takes a \code{cotangent} in
+\code{\link[=solveODE]{solveODE()}} and returns \verb{$cotangent}, one row per state and parameter.
+\item \code{"forward-forward"}: the same as \code{deriv2 = TRUE}, returning \verb{$hessian}.
+\item \code{"forward-reverse"}: returns \verb{$tangent}, \verb{$cotangent} and \verb{$curvature},
+the derivatives of \verb{$cotangent} along each tangent direction.
+}
+
+The reverse modes force \code{useDenseOutput = TRUE}.}
+
 \item{profile}{Logical. Compile with profiling counters.}
 
 \item{stepTrace}{Logical. Compile to record per-step diagnostics,
@@ -90,9 +96,9 @@ returned as \verb{$trace} from \code{\link[=solveODE]{solveODE()}}.}
 \value{
 The compiled model name (character) carrying the attributes
 required by \code{\link[=solveODE]{solveODE()}}: \code{equations}, \code{srcfile}, \code{variables},
-\code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed}, \code{jacobian}
-(with components \code{f.x} and \code{f.time}), \code{deriv}, \code{deriv2}, \code{nStack},
-\code{sparse}, \code{method}, \code{useNDF}, \code{dimNames}, \code{compileArgs}, \code{backend}.
+\code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed}, \code{deriv},
+\code{deriv2}, \code{derivMode}, \code{sparse}, \code{method}, \code{useNDF}, \code{dimNames},
+\code{compileArgs}, and \code{linkArgs} when OpenMP is available.
 }
 \description{
 Generates C++ source code for an ODE system \eqn{\dot{x} = f(x, p)},
@@ -111,41 +117,65 @@ variable), \code{value} (expression to apply), \code{method} (\code{"replace"},
 expressions stops at the first zero crossing.
 }
 \examples{
-\dontrun{
-# cppODE() makes use of the Python module 'sympy'
-# Define ODE system
-eqns <- c(
-  A = "-k1*A^2 * time",
-  B = "k1*A^2 * time - k2*B"
-)
+\donttest{
+if (codegenAvailable()) {
+  ## Six variants of one decay chain A -> B. Each is generated first and all
+  ## are compiled together afterwards, into one shared object in tempdir().
+  eqns <- c(A = "-k1*A", B = "k1*A - k2*B")
 
-# Define an event
-events <- data.frame(
-  var   = "A",
-  time  = "t_e",
-  value = 1,
-  method= "add",
-  root  = NA,
-  stringsAsFactors = FALSE
-)
+  ## First-order sensitivities, the default
+  fwd <- cppODE(eqns, compile = FALSE)
 
-# Generate and compile solver
-f <- cppODE(eqns, events = events, deriv2 = TRUE)
+  ## A dose of A at the parameter time t_e
+  events <- data.frame(var = "A", time = "t_e", value = 1, method = "add")
+  dosed  <- cppODE(eqns, events = events, compile = FALSE)
 
+  ## A constant inflow k0, integrated until the steady state
+  steady <- cppODE(c(A = "k0 - k1*A", B = "k1*A - k2*B"),
+                   rootfunc = "equilibrate", compile = FALSE)
 
-# Example run
-params <- c(A = 1, B = 0, k1 = 0.1, k2 = 0.2, t_e = 3)
-times  <- seq(0, 10, length.out = 300)
-res <- solveODE(f, times, params)
+  ## A time-dependent input u, given as data when solving
+  forced <- cppODE(c(A = "u - k1*A", B = "k1*A - k2*B"), forcings = "u",
+                   compile = FALSE)
 
-head(res$time)             # time vector
-head(res$variable)         # variables [n_t, n_x]
-head(res$sens1[, "B", ])   # Sensitivities of B(t) w.r.t. parameters
-res$sens2[10, "A", , ]     # second order sensitivities of A(time[10])
+  ## Second-order sensitivities
+  fwd2 <- cppODE(eqns, deriv2 = TRUE, compile = FALSE)
+
+  ## Reverse mode: the states in plain double, the derivatives from one
+  ## backward sweep whose cost does not grow with the number of parameters
+  rev <- cppODE(eqns, derivMode = "reverse", compile = FALSE)
+
+  compile(fwd, dosed, steady, forced, fwd2, rev, output = "cppODE_examples")
+
+  times <- seq(0, 10, by = 0.5)
+  parms <- c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)
+
+  out <- solveODE(fwd, times, parms)
+  head(out$variable)
+  out$tangent[21, "B", ]                # dB(10) / d(A, B, k1, k2)
+
+  out <- solveODE(dosed, times, c(parms, t_e = 4))
+  out$variable[times \%in\% c(3.5, 4, 4.5), ]
+
+  out <- solveODE(steady, times = c(0, 1000), c(parms, k0 = 1))
+  tail(out$time, 1)                     # stopped before t = 1000
+  tail(out$variable, 1)                 # the steady state
+
+  u   <- list(u = data.frame(time = times, value = 1 + sin(times)))
+  out <- solveODE(forced, times, parms, forcings = u)
+  out$variable[21, ]
+
+  out <- solveODE(fwd2, times, parms)
+  out$hessian[21, "B", , ]              # Hessian of B(10)
+
+  ## The gradient of sum(B) over the grid: a cotangent of ones on B
+  onB <- cbind(A = 0, B = rep(1, length(times)))
+  solveODE(rev, times, parms, cotangent = onB)$cotangent
+}
 }
 }
 \seealso{
 \code{\link[=solveODE]{solveODE()}} for integration; \code{\link[=cvode]{cvode()}} for the
-SUNDIALS-backed alternative; \code{\link[=funCpp]{funCpp()}} for algebraic functions;
+SUNDIALS-backed alternative; \code{\link[=cppFUN]{cppFUN()}} for algebraic functions;
 \code{vignette("Methods", package = "cppDE")} for behaviour.
 }

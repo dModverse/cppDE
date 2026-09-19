@@ -1,4 +1,4 @@
-%\VignetteIndexEntry{cppDE: Methods}
+%\VignetteIndexEntry{cppDE: Code generation, integration and sensitivity propagation}
 %\VignetteKeyword{ODE}
 %\VignetteKeyword{sensitivity}
 %\VignetteKeyword{PDF}

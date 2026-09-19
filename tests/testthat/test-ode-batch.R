@@ -22,56 +22,108 @@ expect_batch_identical <- function(bat, ser, what = c("time", "variable")) {
                        info = paste0("condition ", i, ", element ", el))
 }
 
+evt_time <- data.frame(var = "A", time = "t_e", value = "dose", method = "add",
+                       root = NA, stringsAsFactors = FALSE)
+evt_root <- data.frame(var = "A", time = NA, root = "A - 0.5", value = "0.9",
+                       method = "multiply", stringsAsFactors = FALSE)
+n_sparse  <- 10L
+nm_sparse <- paste0("S", seq_len(n_sparse))
+eqs_sparse <- setNames(c("-r * S1", paste0("r * S", seq_len(n_sparse - 1L), " - r * S",
+                                           seq_len(n_sparse - 1L) + 1L)), nm_sparse)
+eqs_sparse[n_sparse] <- paste0("r * S", n_sparse - 1L)
+
+# Every native model the file needs, compiled into one shared object. The
+# step-trace model keeps its own build: -DCPPDE_STEP_TRACE would reach every model.
+m_sens  <- cppODE(decay, modelname = "batch_sens", deriv = TRUE, compile = FALSE)
+m_plain <- cppODE(decay, modelname = "batch_nosens", deriv = FALSE, compile = FALSE)
+m_d2    <- cppODE(decay, modelname = "batch_d2", deriv = TRUE, deriv2 = TRUE,
+                  compile = FALSE)
+m_forc  <- cppODE(c(A = "u - k * A"), forcings = "u",
+                  modelname = "batch_forcings", deriv = TRUE, compile = FALSE)
+m_evt   <- cppODE(c(A = "-k1 * A"), events = evt_time, modelname = "batch_events",
+                  deriv = TRUE, compile = FALSE)
+m_root  <- cppODE(c(A = "-k1 * A"), events = evt_root, modelname = "batch_evt_root",
+                  deriv = TRUE, compile = FALSE)
+mn_grid <- cppODE(c(A = "-k1 * A"), events = evt_time, modelname = "grid_native",
+                  deriv = FALSE, compile = FALSE)
+mn_root <- cppODE(c(A = "-k1 * A"), events = evt_root, modelname = "rootpair_n",
+                  deriv = FALSE, compile = FALSE)
+mn_tz   <- cppODE(c(A = "-k1 * A"), modelname = "tz_native", deriv = FALSE,
+                  compile = FALSE)
+native  <- list(m_sens, m_plain, m_d2, m_forc, m_evt, m_root, mn_grid, mn_root, mn_tz)
+if (isTRUE(cvodeConfig$klu_available)) {
+  m_sparse <- cppODE(eqs_sparse, modelname = "batch_sparse", deriv = TRUE,
+                     sparse = TRUE, compile = FALSE)
+  native <- c(native, list(m_sparse))
+}
+do.call(compile, c(native, list(output = "test_ode_batch", cores = 1)))
+
+if (isTRUE(cvodeConfig$available)) {
+  mc_sens     <- cvode(decay, modelname = "batch_cv", deriv = TRUE, compile = FALSE)
+  mc_grid     <- cvode(c(A = "-k1 * A"), events = evt_time, modelname = "grid_cvode",
+                       deriv = FALSE, compile = FALSE)
+  mc_prealloc <- cvode(c(A = "-k1 * A", B = "k1 * A - k2 * B"),
+                       modelname = "cv_prealloc", deriv = TRUE, compile = FALSE)
+  mc_root     <- cvode(c(A = "-k1 * A"), events = evt_root, modelname = "rootpair_c",
+                       deriv = FALSE, compile = FALSE)
+  mc_tz       <- cvode(c(A = "-k1 * A"), modelname = "tz_cv", deriv = FALSE,
+                       compile = FALSE)
+  mc_tz0      <- cvode(c(A = "-k1 * A"), modelname = "tz_cv0", deriv = FALSE,
+                       includeTimeZero = FALSE, compile = FALSE)
+  compile(mc_sens, mc_grid, mc_prealloc, mc_root, mc_tz, mc_tz0,
+          output = "test_ode_batch_cvode", cores = 1)
+}
+
 # -- Bit-identical against the serial path ------------------------------------
 
 test_that("solveODEBatch matches solveODE exactly, with sensitivities", {
-  m <- cppODE(decay, modelname = "batch_sens", deriv = TRUE)
+  m <- m_sens
   ser <- serial_ref(m)
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
 
   expect_named(bat, names(conds))
-  expect_batch_identical(bat, ser, c("time", "variable", "sens1"))
+  expect_batch_identical(bat, ser, c("time", "variable", "tangent"))
 })
 
 test_that("solveODEBatch matches solveODE exactly without sensitivities", {
-  m <- cppODE(decay, modelname = "batch_nosens", deriv = FALSE)
+  m <- m_plain
   ser <- serial_ref(m)
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
   expect_batch_identical(bat, ser)
 })
 
 test_that("second-order sensitivities survive the batch path", {
-  m <- cppODE(decay, modelname = "batch_d2", deriv = TRUE, deriv2 = TRUE, nStack = 3L)
+  m <- m_d2
   ser <- serial_ref(m)
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
-  expect_batch_identical(bat, ser, c("time", "variable", "sens1", "sens2"))
+  expect_batch_identical(bat, ser, c("time", "variable", "tangent", "hessian"))
 })
 
 # The arena is thread-local and pops when solve_impl returns, so heap AD is
 # the case where a result that was not flattened in time would show up.
-test_that("heap AD (nStack = Inf) batches correctly", {
-  m <- cppODE(decay, modelname = "batch_heap", deriv = TRUE, nStack = Inf)
+test_that("heap AD batches correctly", {
+  m <- m_sens
   ser <- serial_ref(m)
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
-  expect_batch_identical(bat, ser, c("time", "variable", "sens1"))
+  expect_batch_identical(bat, ser, c("time", "variable", "tangent"))
 })
 
 # -- Thread count must not change the answer ----------------------------------
 
 test_that("results are invariant in the number of threads", {
-  m <- cppODE(decay, modelname = "batch_threads_a", deriv = TRUE)
+  m <- m_sens
   one  <- solveODEBatch(m, conds, times = tt, cores = 1)
   many <- solveODEBatch(m, conds, times = tt, cores = 4)
   for (i in seq_along(conds)) {
     expect_identical(one[[i]]$variable, many[[i]]$variable)
-    expect_identical(one[[i]]$sens1,    many[[i]]$sens1)
+    expect_identical(one[[i]]$tangent,  many[[i]]$tangent)
   }
 })
 
 # -- One failing condition must not take the others down ----------------------
 
 test_that("a failing condition is isolated and reported", {
-  m <- cppODE(decay, modelname = "batch_fail", deriv = FALSE)
+  m <- m_plain
   cs <- list(ok1 = list(parms = c(A = 1, B = 0, k = 0.5)),
              bad = list(parms = c(A = 1, B = 0, k = 0.5)),
              ok2 = list(parms = c(A = 1, B = 0, k = 1.5)))
@@ -102,7 +154,7 @@ test_that("a failing condition is isolated and reported", {
 # -- Per-condition overrides and argument handling ----------------------------
 
 test_that("per-condition arguments override the batch-wide ones", {
-  m <- cppODE(decay, modelname = "batch_over", deriv = FALSE)
+  m <- m_plain
   cs <- list(short = list(parms = c(A = 1, B = 0, k = 0.5), times = seq(0, 1, 0.5)),
              long  = list(parms = c(A = 1, B = 0, k = 0.5)))
   bat <- solveODEBatch(m, cs, times = tt, cores = 2)
@@ -112,7 +164,7 @@ test_that("per-condition arguments override the batch-wide ones", {
 })
 
 test_that("solveODEBatch rejects malformed input", {
-  m <- cppODE(decay, modelname = "batch_input", deriv = FALSE)
+  m <- m_plain
   expect_error(solveODEBatch(m, list(), times = tt), "non-empty")
   expect_error(solveODEBatch(m, list(list(nope = 1)), times = tt), "unknown per-condition")
   expect_error(solveODEBatch(m, list(list(parms = c(A = 1, B = 0, k = 1)))),
@@ -126,19 +178,17 @@ test_that("solveODEBatch rejects malformed input", {
 
 test_that("the CVODE backend batches like the native one", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
-  m <- cvode(decay, modelname = "batch_cv", deriv = TRUE)
+  m <- mc_sens
   ser <- serial_ref(m)
   bat <- solveODEBatch(m, conds, times = tt, cores = 2)
-  expect_batch_identical(bat, ser, c("time", "variable", "sens1"))
+  expect_batch_identical(bat, ser, c("time", "variable", "tangent"))
 })
 
 test_that("the sparse KLU path batches correctly", {
   skip_if_not(isTRUE(cvodeConfig$klu_available), "KLU not available")
-  n <- 10L
-  nm <- paste0("S", seq_len(n))
-  eqs <- setNames(c("-r * S1", paste0("r * S", seq_len(n - 1L), " - r * S", seq_len(n - 1L) + 1L)), nm)
-  eqs[n] <- paste0("r * S", n - 1L)
-  m <- cppODE(eqs, modelname = "batch_sparse", deriv = TRUE, sparse = TRUE)
+  n  <- n_sparse
+  nm <- nm_sparse
+  m  <- m_sparse
   expect_true(isTRUE(attr(m, "sparse")))
 
   p0 <- setNames(c(1, rep(0, n - 1L)), nm)
@@ -148,7 +198,7 @@ test_that("the sparse KLU path batches correctly", {
   bat <- solveODEBatch(m, cs, times = tt, cores = 2)
   for (i in seq_along(ser)) {
     expect_identical(bat[[i]]$variable, ser[[i]]$variable)
-    expect_identical(bat[[i]]$sens1,    ser[[i]]$sens1)
+    expect_identical(bat[[i]]$tangent,  ser[[i]]$tangent)
   }
 })
 
@@ -156,20 +206,20 @@ test_that("the sparse KLU path batches correctly", {
 ## ---- prepared batch handles ----------------------------------------------
 
 test_that("solveBatch on a prepared handle equals solveODEBatch", {
-  m <- cppODE(decay, modelname = "batch_prep_a", deriv = TRUE)
+  m <- m_sens
   h <- prepareBatch(m, conds, times = tt)
   a <- solveBatch(h, cores = 2L)
   b <- solveODEBatch(m, conds, times = tt, cores = 2L)
   expect_named(a, names(conds))
   for (i in seq_along(conds)) {
     expect_identical(a[[i]]$variable, b[[i]]$variable)
-    expect_identical(a[[i]]$sens1,    b[[i]]$sens1)
+    expect_identical(a[[i]]$tangent,  b[[i]]$tangent)
   }
 })
 
 
 test_that("solveBatch re-solves with new parameters", {
-  m  <- cppODE(decay, modelname = "batch_prep2", deriv = TRUE)
+  m  <- m_sens
   h  <- prepareBatch(m, conds, times = tt)
   np <- lapply(conds, function(c) { p <- c$parms; p["k"] <- p["k"] * 1.5; p })
   a  <- solveBatch(h, parms = np, cores = 2L)
@@ -185,7 +235,7 @@ test_that("solveBatch re-solves with new parameters", {
 
 
 test_that("solveBatch rejects input it cannot reuse", {
-  m <- cppODE(decay, modelname = "batch_prep", deriv = TRUE)
+  m <- m_sens
   h <- prepareBatch(m, conds, times = tt)
   expect_error(solveBatch(h, parms = conds[[1]]$parms), "list with one element")
   expect_error(solveBatch(h, parms = lapply(conds, function(c) unname(c$parms))),
@@ -195,7 +245,7 @@ test_that("solveBatch rejects input it cannot reuse", {
 
 
 test_that("batchAvailable reports why a batch would be serial", {
-  m <- cppODE(decay, modelname = "batch_avail", deriv = TRUE)
+  m <- m_sens
   a <- batchAvailable(m)
   expect_type(a, "list")
   expect_named(a, c("symbol", "openmp", "modelOpenmp", "parallel"))
@@ -205,7 +255,7 @@ test_that("batchAvailable reports why a batch would be serial", {
 
 
 test_that("solveODEBatch reports the thread count it used", {
-  m <- cppODE(decay, modelname = "batch_threads", deriv = TRUE)
+  m <- m_sens
   skip_if_not(isTRUE(batchAvailable(m)$parallel),
               "batch falls back to a serial loop")
   out <- solveODEBatch(m, conds, times = tt, cores = 2L)
@@ -215,47 +265,46 @@ test_that("solveODEBatch reports the thread count it used", {
 
 ## ---- per-condition inputs -------------------------------------------------
 
-test_that("conditions may carry their own sens1ini labels", {
+test_that("conditions may carry their own tangent labels", {
   # dMod's normal case: each condition depends on a different outer parameter
   # set, so the batch cannot hand one shared dimnames pair to the C++ side.
-  m <- cppODE(decay, modelname = "batch_hetsens", deriv = TRUE)
+  m <- m_sens
   mk <- function(k, lab) {
     s <- matrix(0, 3, 2, dimnames = list(c("A", "B", "k"), c("shared", lab)))
     s["A", 1] <- 1; s["k", 2] <- 1
-    list(parms = c(A = 1, B = 0, k = k), sens1ini = s)
+    list(parms = c(A = 1, B = 0, k = k), tangent = s)
   }
   cs <- list(a = mk(0.3, "pa"), b = mk(0.7, "pb"), c = mk(1.4, "pc"))
   bat <- solveODEBatch(m, cs, times = tt, cores = 2L)
 
   for (i in seq_along(cs)) {
     ser <- solveODE(m, times = tt, parms = cs[[i]]$parms,
-                    sens1ini = cs[[i]]$sens1ini)
+                    tangent = cs[[i]]$tangent)
     expect_identical(bat[[i]]$variable, ser$variable)
-    expect_identical(bat[[i]]$sens1, ser$sens1)
-    expect_identical(dimnames(bat[[i]]$sens1)[[3]], colnames(cs[[i]]$sens1ini))
+    expect_identical(bat[[i]]$tangent, ser$tangent)
+    expect_identical(dimnames(bat[[i]]$tangent)[[3]], colnames(cs[[i]]$tangent))
   }
 })
 
 
 test_that("conditions may fix different parameters", {
-  m <- cppODE(decay, modelname = "batch_hetfixed", deriv = TRUE)
+  m <- m_sens
   cs <- list(free  = list(parms = c(A = 1, B = 0, k = 0.5)),
              fixk  = list(parms = c(A = 1, B = 0, k = 0.5), fixed = "k"),
              fixA  = list(parms = c(A = 1, B = 0, k = 0.5), fixed = "A"))
   bat <- solveODEBatch(m, cs, times = tt, cores = 2L)
 
-  widths <- vapply(bat, function(b) dim(b$sens1)[3], 0L)
+  widths <- vapply(bat, function(b) dim(b$tangent)[3], 0L)
   expect_true(widths[["free"]] > widths[["fixk"]])
   for (i in seq_along(cs)) {
     ser <- solveODE(m, times = tt, parms = cs[[i]]$parms, fixed = cs[[i]]$fixed)
-    expect_identical(bat[[i]]$sens1, ser$sens1)
+    expect_identical(bat[[i]]$tangent, ser$tangent)
   }
 })
 
 
 test_that("conditions may carry their own forcings", {
-  m <- cppODE(c(A = "u - k * A"), forcings = "u",
-              modelname = "batch_forcings", deriv = TRUE)
+  m <- m_forc
   mkf <- function(a) list(u = data.frame(time = c(0, 1, 2, 3),
                                          value = a * c(0, 1, 1, 0)))
   cs <- list(lo = list(parms = c(A = 0, k = 0.5), forcings = mkf(0.5)),
@@ -272,7 +321,7 @@ test_that("conditions may carry their own forcings", {
 
 
 test_that("conditions may carry their own solver options", {
-  m <- cppODE(decay, modelname = "batch_hetopts", deriv = FALSE)
+  m <- m_plain
   cs <- list(loose = list(parms = c(A = 1, B = 0, k = 0.5), abstol = 1e-3,
                           reltol = 1e-3),
              tight = list(parms = c(A = 1, B = 0, k = 0.5), abstol = 1e-10,
@@ -287,7 +336,7 @@ test_that("conditions may carry their own solver options", {
 
 
 test_that("one failing condition does not take the others down", {
-  m <- cppODE(decay, modelname = "batch_partialfail", deriv = FALSE)
+  m <- m_plain
   cs <- list(ok1  = list(parms = c(A = 1, B = 0, k = 0.5)),
              bad  = list(parms = c(A = 1, B = 0, k = 0.5), maxsteps = 2L),
              ok2  = list(parms = c(A = 1, B = 0, k = 1.2)))
@@ -303,10 +352,7 @@ test_that("one failing condition does not take the others down", {
 
 
 test_that("a batch with events matches the serial path", {
-  eqns <- c(A = "-k1 * A")
-  evt  <- data.frame(var = "A", time = "t_e", value = "dose", method = "add",
-                     root = NA, stringsAsFactors = FALSE)
-  m <- cppODE(eqns, events = evt, modelname = "batch_events", deriv = TRUE)
+  m <- m_evt
   te <- seq(0, 50, length.out = 60)
   cs <- lapply(c(0.2, 0.6), function(d)
     list(parms = c(A = 1, k1 = 0.1, t_e = 25, dose = d)))
@@ -314,7 +360,7 @@ test_that("a batch with events matches the serial path", {
   for (i in seq_along(cs)) {
     ser <- solveODE(m, times = te, parms = cs[[i]]$parms)
     expect_identical(bat[[i]]$variable, ser$variable)
-    expect_identical(bat[[i]]$sens1, ser$sens1)
+    expect_identical(bat[[i]]$tangent, ser$tangent)
   }
 })
 
@@ -323,10 +369,7 @@ test_that("a time event takes the preallocated path when it is on the grid", {
   # A time event on a requested output time leaves n_out alone, so the batch can
   # size its results up front. Off the grid the extra row makes that prediction
   # wrong and the sink declines; both paths have to match the serial solve.
-  eqns <- c(A = "-k1 * A")
-  evt  <- data.frame(var = "A", time = "t_e", value = "dose", method = "add",
-                     root = NA, stringsAsFactors = FALSE)
-  m <- cppODE(eqns, events = evt, modelname = "batch_evt_grid", deriv = TRUE)
+  m <- m_evt
   off <- seq(0, 50, length.out = 60)          # 25 is not a grid point
   on  <- sort(unique(c(off, 25)))
   cs  <- lapply(c(0.2, 5), function(d)
@@ -341,7 +384,7 @@ test_that("a time event takes the preallocated path when it is on the grid", {
       ser <- solveODE(m, times = tt, parms = cs[[i]]$parms)
       expect_identical(bat[[i]]$time,     ser$time)
       expect_identical(bat[[i]]$variable, ser$variable)
-      expect_identical(bat[[i]]$sens1,    ser$sens1)
+      expect_identical(bat[[i]]$tangent,  ser$tangent)
     }
   }
 
@@ -354,7 +397,7 @@ test_that("a time event takes the preallocated path when it is on the grid", {
     ser <- solveODE(m, times = off, parms = cs2[[i]]$parms)
     expect_identical(b2[[i]]$time,     ser$time)
     expect_identical(b2[[i]]$variable, ser$variable)
-    expect_identical(b2[[i]]$sens1,    ser$sens1)
+    expect_identical(b2[[i]]$tangent,  ser$tangent)
     expect_length(b2[[i]]$time, length(off) + 1L)
   }
 })
@@ -363,10 +406,7 @@ test_that("a time event takes the preallocated path when it is on the grid", {
 test_that("a root event keeps the dynamic path and still matches the serial solve", {
   # A root event's firing time is not known before the solve, so the batch must
   # decline to size the output up front rather than guess.
-  evt <- data.frame(var = "A", time = NA, root = "A - 0.5", value = "0.9",
-                    method = "multiply", stringsAsFactors = FALSE)
-  m <- cppODE(c(A = "-k1 * A"), events = evt, modelname = "batch_evt_root",
-              deriv = TRUE)
+  m <- m_root
   tt <- seq(0, 50, length.out = 60)
   cs <- lapply(c(0.08, 0.12), function(k) list(parms = c(A = 1, k1 = k)))
   bat <- solveODEBatch(m, cs, times = tt, cores = 2L)
@@ -374,14 +414,14 @@ test_that("a root event keeps the dynamic path and still matches the serial solv
     ser <- solveODE(m, times = tt, parms = cs[[i]]$parms)
     expect_identical(bat[[i]]$time,     ser$time)
     expect_identical(bat[[i]]$variable, ser$variable)
-    expect_identical(bat[[i]]$sens1,    ser$sens1)
+    expect_identical(bat[[i]]$tangent,  ser$tangent)
   }
   expect_gt(length(bat[[1]]$time), length(tt))   # the root inserted rows
 })
 
 
 test_that("the reported thread count is the one actually used", {
-  m <- cppODE(decay, modelname = "batch_nt", deriv = FALSE)
+  m <- m_plain
   expect_identical(attr(solveODEBatch(m, conds, times = tt, cores = 1L),
                         "threads"), 1L)
   # capped by the number of conditions, never above it
@@ -395,12 +435,9 @@ test_that("both backends put an event time into the output", {
   # An event fires whether or not its time was requested, and that time becomes
   # an output row carrying the post-event state. Both backends have to agree on
   # the grid, or the same model returns different rows per `backend`.
-  eqns <- c(A = "-k1 * A")
-  evt  <- data.frame(var = "A", time = "t_e", value = "dose", method = "add",
-                     root = NA, stringsAsFactors = FALSE)
-  mn <- cppODE(eqns, events = evt, modelname = "grid_native", deriv = FALSE)
-  mc <- cvode(eqns, events = evt, modelname = "grid_cvode",  deriv = FALSE)
-  p  <- c(A = 1, k1 = 0.1, t_e = 25, dose = 5)
+  mn <- mn_grid
+  mc <- mc_grid
+  p <- c(A = 1, k1 = 0.1, t_e = 25, dose = 5)
   off <- seq(0, 50, length.out = 60)          # 25 is not a grid point
   on  <- sort(unique(c(off, 25)))
 
@@ -428,18 +465,17 @@ test_that("both backends put an event time into the output", {
 
 test_that("the CVODE batch preallocates when the grid is fixed", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
-  eqns <- c(A = "-k1 * A", B = "k1 * A - k2 * B")
-  m  <- cvode(eqns, modelname = "cv_prealloc", deriv = TRUE)
+  m  <- mc_prealloc
   tt <- seq(0.5, 50, length.out = 60)
   si <- diag(4); dimnames(si) <- list(NULL, c("A", "B", "k1", "k2"))
   cs <- lapply(c(0.08, 0.12, 0.2), function(k)
-    list(parms = c(A = 1, B = 0, k1 = k, k2 = 0.05), sens1ini = si))
+    list(parms = c(A = 1, B = 0, k1 = k, k2 = 0.05), tangent = si))
   bat <- solveODEBatch(m, cs, times = tt, cores = 3L)
   for (i in seq_along(cs)) {
-    ser <- solveODE(m, times = tt, parms = cs[[i]]$parms, sens1ini = si)
+    ser <- solveODE(m, times = tt, parms = cs[[i]]$parms, tangent = si)
     expect_identical(bat[[i]]$time,     ser$time)
     expect_identical(bat[[i]]$variable, ser$variable)
-    expect_identical(bat[[i]]$sens1,    ser$sens1)
+    expect_identical(bat[[i]]$tangent,  ser$tangent)
   }
   expect_identical(dimnames(bat[[1]]$variable)[[2]], c("A", "B"))
 })
@@ -449,10 +485,8 @@ test_that("a root event puts its before/after pair into the output", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
   # The crossing is not a requested time, so both the state just before the
   # event and the state just after it become rows. Both backends have to do it.
-  evt <- data.frame(var = "A", time = NA, root = "A - 0.5", value = "0.9",
-                    method = "multiply", stringsAsFactors = FALSE)
-  mn <- cppODE(c(A = "-k1 * A"), events = evt, modelname = "rootpair_n", deriv = FALSE)
-  mc <- cvode(c(A = "-k1 * A"),  events = evt, modelname = "rootpair_c", deriv = FALSE)
+  mn <- mn_root
+  mc <- mc_root
   tt <- seq(0, 50, length.out = 60)
   p  <- c(A = 1, k1 = 0.1)
   rn <- solveODE(mn, times = tt, parms = p)
@@ -473,10 +507,9 @@ test_that("a root event puts its before/after pair into the output", {
 
 test_that("cvode(includeTimeZero) matches the native grid", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
-  mn <- cppODE(c(A = "-k1 * A"), modelname = "tz_native", deriv = FALSE)
-  mc <- cvode(c(A = "-k1 * A"),  modelname = "tz_cv",     deriv = FALSE)
-  m0 <- cvode(c(A = "-k1 * A"),  modelname = "tz_cv0",    deriv = FALSE,
-              includeTimeZero = FALSE)
+  mn <- mn_tz
+  mc <- mc_tz
+  m0 <- mc_tz0
   tt <- c(1, 2, 5, 10)
   p  <- c(A = 1, k1 = 0.1)
   expect_equal(solveODE(mn, times = tt, parms = p)$time, c(0, tt))

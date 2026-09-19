@@ -32,7 +32,7 @@ namespace cppde {
 //  multistepper_dense_output<ControlledStepper>
 //
 //  ControlledStepper = multistepper_controller<multistepper<M, V, J, R>>
-//  with value type V in { double, F<double>, F<F<double>> } and method
+//  with value type V in { double, dual, dual2nd } and method
 //  M in { bdf, adams }.
 // ============================================================================
 

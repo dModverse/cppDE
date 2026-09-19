@@ -32,31 +32,31 @@ res <- solveODE(model, times = seq(0, 1e3, len = 1e3L), parms = pars,
 
 
 # Access sensitivities res1 + res2 (independent only)
-if (!is.null(res$sens1)) {
+if (!is.null(res$tangent)) {
 
   n_out    <- length(res$time)
   n_states <- ncol(res$variable)
-  n_sens   <- dim(res$sens1)[3]
+  n_sens   <- dim(res$tangent)[3]
 
   dims <- attr(model, "dimNames")
 
-  ## ---------- sens1 ----------
-  # sens1 is [n_out, n_states, n_sens] -> flatten to [n_out, n_states*n_sens]
-  sens1_matrix <- matrix(res$sens1,
-                         nrow = n_out,
-                         ncol = n_states * n_sens)
+  ## ---------- tangent ----------
+  # tangent is [n_out, n_states, n_sens] -> flatten to [n_out, n_states*n_sens]
+  tangent_matrix <- matrix(res$tangent,
+                           nrow = n_out,
+                           ncol = n_states * n_sens)
 
-  sens1_colnames <-
+  tangent_colnames <-
     as.vector(outer(paste0("d", dims$variable),
                     paste0("d", dims$sens),
                     paste, sep = "/"))
-  colnames(sens1_matrix) <- sens1_colnames
+  colnames(tangent_matrix) <- tangent_colnames
 
 
-  ## ---------- sens2 (independent only) ----------
-  sens2_matrix <- NULL
+  ## ---------- hessian (independent only) ----------
+  hessian_matrix <- NULL
 
-  if (!is.null(res$sens2)) {
+  if (!is.null(res$hessian)) {
 
     # independent (i <= j)
     ind_ij <- which(
@@ -65,11 +65,11 @@ if (!is.null(res$sens1)) {
     )
     n_ind <- nrow(ind_ij)
 
-    sens2_matrix <- matrix(NA_real_,
-                           nrow = n_out,
-                           ncol = n_states * n_ind)
+    hessian_matrix <- matrix(NA_real_,
+                             nrow = n_out,
+                             ncol = n_states * n_ind)
 
-    sens2_colnames <- character(n_states * n_ind)
+    hessian_colnames <- character(n_states * n_ind)
     col_idx <- 1
 
     for (s in seq_len(n_states)) {
@@ -78,10 +78,10 @@ if (!is.null(res$sens1)) {
         i <- ind_ij[k, 1]
         j <- ind_ij[k, 2]
 
-        # sens2 is [n_out, n_states, n_sens, n_sens] -> take time-series for (s, i, j)
-        sens2_matrix[, col_idx] <- res$sens2[, s, i, j]
+        # hessian is [n_out, n_states, n_sens, n_sens] -> take time-series for (s, i, j)
+        hessian_matrix[, col_idx] <- res$hessian[, s, i, j]
 
-        sens2_colnames[col_idx] <-
+        hessian_colnames[col_idx] <-
           paste0("d^2", dims$variable[s],
                  "/d", dims$sens[i],
                  "d", dims$sens[j])
@@ -90,7 +90,7 @@ if (!is.null(res$sens1)) {
       }
     }
 
-    colnames(sens2_matrix) <- sens2_colnames
+    colnames(hessian_matrix) <- hessian_colnames
   }
 
 
@@ -98,8 +98,8 @@ if (!is.null(res$sens1)) {
   out_full <- cbind(
     time = res$time,
     res$variable,
-    sens1_matrix,
-    sens2_matrix
+    tangent_matrix,
+    hessian_matrix
   )
 
   head(out_full)
@@ -108,7 +108,7 @@ if (!is.null(res$sens1)) {
 
 lastidx <- length(res$time)
 yini <- res$variable[nrow(res$variable), ]
-sensini <- res$sens1[length(res$time), , ]
+sensini <- res$tangent[length(res$time), , ]
 
 pars[names(yini)] <- yini
 
@@ -119,35 +119,35 @@ pars["k1"] = 0.11
 pars["k2"] = 0.55
 
 res2 <- solveODE(model, times = seq(0, 1e3, len = 1e3L), parms = pars,
-                 sens1ini = sensini, roottol = 1e-06)
+                 tangent = sensini, roottol = 1e-06)
 
 
 # Access sensitivities res1 + res2 (independent only)
-if (!is.null(res2$sens1)) {
+if (!is.null(res2$tangent)) {
 
   n_out    <- length(res2$time)
   n_states <- ncol(res2$variable)
-  n_sens   <- dim(res2$sens1)[3]
+  n_sens   <- dim(res2$tangent)[3]
 
   dims <- attr(model, "dimNames")
 
-  ## ---------- sens1 ----------
-  # sens1 is [n_out, n_states, n_sens] -> flatten to [n_out, n_states*n_sens]
-  sens1_matrix <- matrix(res2$sens1,
-                         nrow = n_out,
-                         ncol = n_states * n_sens)
+  ## ---------- tangent ----------
+  # tangent is [n_out, n_states, n_sens] -> flatten to [n_out, n_states*n_sens]
+  tangent_matrix <- matrix(res2$tangent,
+                           nrow = n_out,
+                           ncol = n_states * n_sens)
 
-  sens1_colnames <-
+  tangent_colnames <-
     as.vector(outer(paste0("d", dims$variable),
                     paste0("d", dims$sens),
                     paste, sep = "/"))
-  colnames(sens1_matrix) <- sens1_colnames
+  colnames(tangent_matrix) <- tangent_colnames
 
 
-  ## ---------- sens2 (independent only) ----------
-  sens2_matrix <- NULL
+  ## ---------- hessian (independent only) ----------
+  hessian_matrix <- NULL
 
-  if (!is.null(res2$sens2)) {
+  if (!is.null(res2$hessian)) {
 
     # independent (i <= j)
     ind_ij <- which(
@@ -156,11 +156,11 @@ if (!is.null(res2$sens1)) {
     )
     n_ind <- nrow(ind_ij)
 
-    sens2_matrix <- matrix(NA_real_,
-                           nrow = n_out,
-                           ncol = n_states * n_ind)
+    hessian_matrix <- matrix(NA_real_,
+                             nrow = n_out,
+                             ncol = n_states * n_ind)
 
-    sens2_colnames <- character(n_states * n_ind)
+    hessian_colnames <- character(n_states * n_ind)
     col_idx <- 1
 
     for (s in seq_len(n_states)) {
@@ -169,9 +169,9 @@ if (!is.null(res2$sens1)) {
         i <- ind_ij[k, 1]
         j <- ind_ij[k, 2]
 
-        sens2_matrix[, col_idx] <- res2$sens2[, s, i, j]
+        hessian_matrix[, col_idx] <- res2$hessian[, s, i, j]
 
-        sens2_colnames[col_idx] <-
+        hessian_colnames[col_idx] <-
           paste0("d^2", dims$variable[s],
                  "/d", dims$sens[i],
                  "d", dims$sens[j])
@@ -180,7 +180,7 @@ if (!is.null(res2$sens1)) {
       }
     }
 
-    colnames(sens2_matrix) <- sens2_colnames
+    colnames(hessian_matrix) <- hessian_colnames
   }
 
 
@@ -188,8 +188,8 @@ if (!is.null(res2$sens1)) {
   out_full2 <- cbind(
     time = res2$time,
     res2$variable,
-    sens1_matrix,
-    sens2_matrix
+    tangent_matrix,
+    hessian_matrix
   )
 
   head(out_full2)

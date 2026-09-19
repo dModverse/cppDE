@@ -10,7 +10,7 @@ clearNativeSymbols()
 \code{NULL}, invisibly.
 }
 \description{
-\link{funCpp} instances and \link{solveODE} remember the DLL that exports each
+\link{cppFUN} instances and \link{solveODE} remember the DLL that exports each
 generated entry point, so that a call does not have to search every loaded
 shared object. Recompiling a model into a differently named shared object
 makes that pairing stale. Call this to drop it; \link{compile} does it for you.
@@ -18,4 +18,9 @@ makes that pairing stale. Call this to drop it; \link{compile} does it for you.
 \details{
 Addresses are never cached, so this is not needed after loading or unloading
 a shared object.
+}
+\examples{
+## Forget the cached entry points, as after unloading a model's shared object
+## by hand; compile() does this itself.
+clearNativeSymbols()
 }

@@ -21,6 +21,14 @@ OpenMP region.
 the conditions it depends on, so a caller can warn instead of silently
 losing its threads.
 }
+\examples{
+\donttest{
+if (codegenAvailable()) {
+  f <- cppODE(c(x = "-k*x"), deriv = FALSE)
+  batchAvailable(f)
+}
+}
+}
 \seealso{
 \code{\link[=solveODEBatch]{solveODEBatch()}}
 }

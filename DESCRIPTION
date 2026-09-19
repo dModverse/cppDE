@@ -1,6 +1,6 @@
 Package: cppDE
-Title: Automated 'C++' Code Generation for ODE Integration with Sensitivity Analysis
-Version: 0.9.5
+Title: 'C++' Code Generation for ODEs with Sensitivity Propagation
+Version: 0.10.0
 Authors@R: c(
     person("Simon", "Beyer", , "simon.beyer@fdm.uni-freiburg.de", role = c("aut", "cre")),
     person("Lawrence Livermore National Security", role = "cph",
@@ -13,17 +13,27 @@ Authors@R: c(
            comment = "Boost.Odeint Rosenbrock4 co-copyright holder; see inst/COPYRIGHTS"),
     person("Christoph", "Koke", role = "cph",
            comment = "Boost.Odeint Rosenbrock4 co-copyright holder; see inst/COPYRIGHTS"))
-Description: Generates, compiles, and runs 'C++' solvers for systems of ordinary
-    differential equations. Includes a variable-order BDF integrator with
-    LAPACK/KLU linear algebra and a Rosenbrock4 method derived from
-    'Boost.Numeric.Odeint'. First- and second-order parameter sensitivities are
-    computed automatically via forward-mode automatic differentiation using
-    in-tree dual numbers. Supports time-based and root-triggered events,
-    symbolic Jacobian generation, and sparse matrix factorization for large
-    systems.
+Description: Generates, compiles and runs 'C++' code for models given as
+    ordinary differential equations (ODEs) or as algebraic equations. The
+    code generator builds an expression graph of the model and derives
+    Jacobians and derivative contractions from it by automatic
+    differentiation (Griewank and Walther, 2008,
+    <doi:10.1137/1.9780898717761>). The integrators are BDF/NDF and
+    Adams-Moulton multistep methods, a Rosenbrock method derived from
+    'Boost.Numeric.Odeint' and the Tsitouras 5(4) Runge-Kutta pair, with
+    dense or sparse ('KLU') linear algebra; an optional backend compiles
+    against 'SUNDIALS' CVODE/CVODES (Hindmarsh et al., 2005,
+    <doi:10.1145/1089014.1089020>). Sensitivities are propagated forward
+    on dual numbers, to first and second order, and backward by a discrete
+    adjoint, which yields gradients at a cost independent of the number of
+    parameters and, forward over reverse, Hessian-vector products. Events
+    triggered by time or state, forcings, and batches of conditions solved
+    in parallel are supported.
 Language: en-GB
 License: MIT + file LICENSE
-SystemRequirements: C++17; Python (>= 3.8) with SymPy. Two further
+URL: https://github.com/dModverse/cppDE
+BugReports: https://github.com/dModverse/cppDE/issues
+SystemRequirements: C++17; Python (>= 3.9) with SymPy. Two further
     features are gated on external libraries that ./configure detects at
     install time: the cvode() backend and the sparse Jacobian path.
     Neither is required to install or use the package, and neither is
@@ -34,7 +44,7 @@ SystemRequirements: C++17; Python (>= 3.8) with SymPy. Two further
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 Depends:
-    R (>= 4.0)
+    R (>= 4.3.0)
 Imports:
     parallel,
     reticulate,
@@ -50,6 +60,6 @@ Suggests:
     tidyr,
     dplyr
 VignetteBuilder: R.rsp
-Config/roxygen2/version: 8.0.0
+Config/roxygen2/version: 8.1.0
 Config/testthat/edition: 3
 Config/testthat/parallel: true

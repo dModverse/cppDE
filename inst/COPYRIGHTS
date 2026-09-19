@@ -159,3 +159,32 @@ against unmodified system installations of SUNDIALS (BSD-3-Clause)
 and SuiteSparse-KLU (LGPL-2.1+).  No source from these libraries is
 vendored in this package; their licenses govern the libraries
 themselves at the user's installation site.
+
+
+--------------------------------------------------------------------
+5. Measurement data in inst/extdata
+--------------------------------------------------------------------
+
+inst/extdata/zhang2025_precession.csv holds the measured traces of
+Fig. 3(b), and inst/extdata/zhang2025_frequencies.csv the precession
+frequencies of Fig. 3(c), in
+
+  Z. Zhang, Y. Shiota, S. Karube, Y. Watanabe, T. Ono, H. Hirori,
+  "Ultrafast modulation of the anomalous Hall conductivity by coherent
+  magnetization precession in Co-Pt thin films",
+  Phys. Rev. Applied 24, 044079 (2025), doi:10.1103/4p39-gyrd,
+
+taken from the data record
+
+  Z. Zhang, Raw data of "Ultrafast modulation of the anomalous Hall
+  conductivity by coherent magnetization precession in Co-Pt thin
+  films", Zenodo (2025), doi:10.5281/zenodo.17333041,
+
+which is licensed under Creative Commons Attribution 4.0 International
+(CC BY 4.0, https://creativecommons.org/licenses/by/4.0/).
+
+Changes: the measured columns of sheet Fig3b in Fig3.xlsx were
+converted to one long table (field in kOe, pump-probe delay in ps,
+normalised signal); the fit curves of that sheet were dropped and the
+values rounded to six significant digits. The measured frequencies of
+sheet Fig3c were converted from THz to GHz; its fit curve was dropped.

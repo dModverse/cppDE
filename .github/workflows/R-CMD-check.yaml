@@ -42,7 +42,7 @@ jobs:
         if: steps.pandoc.outcome == 'failure'
         uses: r-lib/actions/setup-pandoc@v2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 

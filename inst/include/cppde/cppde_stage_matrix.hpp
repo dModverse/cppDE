@@ -12,7 +12,7 @@
  n_rows*n_cols flat), so the unified buffer is effectively a
  (n_rows*n_cols) × S matrix with leading dimension n_rows*n_cols and
  column j = stage j. Per-slot views (slab(j)) keep the row-major
- (state, deriv) layout the legacy tangent_slab uses.
+ (state, deriv) layout of a tangent_slab.
 
  Empty stub for non-dynamic-dual T so non-AD steppers pay no size or
  codegen cost.
