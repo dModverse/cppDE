@@ -51,7 +51,12 @@ OPT <- list(
   conditions   = "1",
   `max-states` = "400",
   `max-sens`   = "32",
-  `max-sens2`  = "10",
+  `max-sens2`  = "10",           # forward-forward directions
+  `max-sens2-fr` = "32",          # forward-reverse directions
+  `max-states-sens2` = "30",      # second order only up to this many states
+  `max-states-ff` = "10",         # forward-forward only up to this many states
+  `reverse-from` = "120",         # first order in reverse from this many parameters
+  models       = "",              # comma-separated name fragments; "" runs the tier
   tol          = "default",
   nrep         = "5",
   `min-time`   = "0.25",
@@ -67,6 +72,9 @@ OPT <- list(
   outdir       = file.path(ROOT, "benchmarks", "results"),
   `petab-root` = file.path(ROOT, "benchmarks", "cache", "petab", "Benchmark-Models"),
   `ssh-passwd` = "",
+  ## Library paths put in front on the nodes, comma separated, for a development
+  ## installation next to the default one; "" uses the default library.
+  libs         = "",
   `dry-run`    = "FALSE",
   submit       = "FALSE",
   collect      = "FALSE",
@@ -211,6 +219,10 @@ cat(sprintf("building problems for tier '%s' ...\n", OPT$tier))
 problems <- bench_problems_for_tier(OPT$tier, OPT$`petab-root`,
                                     conditions = OPT$conditions,
                                     max_states = max_states, max_sens = max_sens)
+if (nzchar(OPT$models)) {
+  pick <- strsplit(OPT$models, ",")[[1L]]
+  problems <- problems[vapply(names(problems), function(n) any(startsWith(n, pick)), NA)]
+}
 if (!length(problems)) stop("no problems selected")
 
 ## Marks which models additionally get the pinned dense/sparse cells; the
@@ -221,7 +233,8 @@ if (isTRUE(as.logical(OPT$`sparse-sweep`)))
                                 max_density = as.numeric(OPT$`max-density`),
                                 min_states  = as.integer(OPT$`min-sweep-states`))
 
-sh <- balance_shards(problems, n_shards)
+rev_from <- as.integer(OPT$`reverse-from`)
+sh <- balance_shards(problems, n_shards, max_sens = max_sens, reverse_from = rev_from)
 shards <- sh$shards
 
 cov <- tier_coverage(problems, OPT$tier)
@@ -264,6 +277,9 @@ sweep_cfgs <- if (isTRUE(as.logical(OPT$`sparse-sweep`))) sparse_sweep_configs()
 nrep     <- as.integer(OPT$nrep)
 min_time <- as.numeric(OPT$`min-time`)
 maxs2    <- as.integer(OPT$`max-sens2`)
+maxs2fr  <- as.integer(OPT$`max-sens2-fr`)
+maxst2   <- as.integer(OPT$`max-states-sens2`)
+maxstff  <- as.integer(OPT$`max-states-ff`)
 
 cat(sprintf("\nsubmitting '%s' to %s\n  partition %s, %d cores allocated, %d workers, walltime %s\n",
             OPT$jobname, OPT$machine, OPT$partition, cores, bench_cores, OPT$walltime))
@@ -294,7 +310,9 @@ job <- dMod2::distributedComputing(
                             configs = cfgs, sweep_configs = sweep_cfgs,
                             nrep = nrep, cores = bench_cores,
                             max_sens2 = maxs2, min_time = min_time,
-                            compile_slots = compile_slots)
+                            compile_slots = compile_slots, max_sens = max_sens,
+                            reverse_from = rev_from, max_states_sens2 = maxst2,
+                            max_states_ff = maxstff, max_sens2_fr = maxs2fr)
     ## Stamp the hardware: absolute times are only comparable across rows
     ## that ran on the same node.
     if (!is.null(out) && nrow(out)) {
@@ -315,7 +333,8 @@ job <- dMod2::distributedComputing(
   machine      = OPT$machine,
   ssh_passwd   = if (nzchar(OPT$`ssh-passwd`)) OPT$`ssh-passwd` else NULL,
   var_values   = list(seq_len(n_shards)),
-  recover      = FALSE)
+  recover      = FALSE,
+  libs         = if (nzchar(OPT$libs)) strsplit(OPT$libs, ",")[[1L]] else NULL)
 
 dir.create(JOBDIR, showWarnings = FALSE, recursive = TRUE)
 saveRDS(OPT[setdiff(names(OPT), c("dry-run", "submit", "collect", "help"))],

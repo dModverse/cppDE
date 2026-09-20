@@ -9,8 +9,8 @@ solveODEBatch(
   conditions,
   times = NULL,
   parms = NULL,
-  sens1ini = NULL,
-  sens2ini = NULL,
+  tangent = NULL,
+  hessian = NULL,
   fixed = NULL,
   forcings = NULL,
   abstol = 1e-06,
@@ -22,17 +22,25 @@ solveODEBatch(
   maxroot = 1L,
   cores = NULL,
   traceFile = NULL,
-  onFailure = c("stop", "warn", "silent")
+  onFailure = c("stop", "warn", "silent"),
+  cotangent = NULL,
+  curvature = NULL,
+  adjointGrid = FALSE,
+  errWeights = NULL,
+  keepStore = FALSE,
+  store = NULL,
+  sensErrCon = TRUE
 )
 }
 \arguments{
 \item{model}{A model handle from \code{\link[=cppODE]{cppODE()}} or \code{\link[=cvode]{cvode()}}.}
 
 \item{conditions}{A list of per-condition argument lists. Recognized names
-are \code{times}, \code{parms}, \code{sens1ini}, \code{sens2ini}, \code{fixed}, \code{forcings} and the
-solver options \code{abstol}, \code{reltol}, \code{maxattemps}, \code{maxsteps}, \code{hini},
-\code{roottol}, \code{maxroot}; anything given here overrides the batch-wide value
-of the same name.}
+are \code{times}, \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent}, \code{curvature},
+\code{fixed}, \code{forcings}, the solver options \code{abstol}, \code{reltol}, \code{maxattemps},
+\code{maxsteps}, \code{hini}, \code{roottol}, \code{maxroot}, and \code{adjointGrid}, \code{errWeights},
+\code{keepStore}, \code{store}, \code{sensErrCon}; anything given here overrides the
+batch-wide value of the same name.}
 
 \item{times}{Numeric vector of time points at which to return the
 solution. Must be non-empty and contain only finite values.}
@@ -41,32 +49,31 @@ solution. Must be non-empty and contain only finite values.}
 Names must include all of
 \code{c(attr(model, "variables"), attr(model, "parameters"))}.}
 
-\item{sens1ini}{Optional numeric matrix of first-order sensitivity
-initial values, interpreted as the Jacobian \eqn{\Phi'(\theta)}.
-Accepts three shapes (see Details): legacy \verb{[n_states, n_active]}
+\item{tangent}{Optional numeric matrix, the tangent of the inputs: the
+Jacobian \eqn{\Phi'(\theta)} of the initial states and parameters.
+Accepts three shapes (see Details): state-only \verb{[n_states, n_active]}
 (auto-extended with identity on parameter rows), full
 \verb{[n_states + n_params, M]}, or partial \verb{[k, M]} with row names
 identifying a subset of \code{c(variables, parameters)} (missing rows
 are zero-padded, i.e. implicitly fixed). Column names label the
-resulting sensitivity output columns. Default \code{NULL} uses identity
+directions of the returned derivatives. Default \code{NULL} uses identity
 seeding on the active sensitivity basis.}
 
-\item{sens2ini}{Optional numeric array of second-order sensitivity
-initial values, interpreted as the Hessian tensor
-\eqn{\Phi''(\theta)}. Shapes are analogous to those of \code{sens1ini}:
-\verb{[n_states, n_active, n_active]} (legacy),
+\item{hessian}{Optional numeric array, the Hessian tensor
+\eqn{\Phi''(\theta)} of the inputs. Shapes are analogous to those of
+\code{tangent}:
+\verb{[n_states, n_active, n_active]} (state-only),
 \verb{[n_states + n_params, M, M]} (full), or \verb{[k, M, M]} with dim-1
 names identifying a subset of \code{c(variables, parameters)} (partial,
 zero-padded). Allowed only when \code{attr(model, "deriv2")} is \code{TRUE}.
-Default \code{NULL} uses zero seeding (correct when \eqn{\Phi} is
-linear-affine).}
+Default \code{NULL} means the inputs are affine in \eqn{\theta}.}
 
 \item{fixed}{Optional character vector of sensitivity-parameter names
 to treat as fixed at run time. The integrator then runs with a
 smaller AD state. Names must be a subset of
 \code{attr(model, "dimNames")$sens}. Unlike compile-time \code{fixed} in
 \code{\link[=cppODE]{cppODE()}}, the run-time \code{fixed} set can be changed between calls
-without recompilation. Incompatible with full / partial \code{sens1ini}
+without recompilation. Incompatible with full / partial \code{tangent}
 (those encode fixedness through row values or row presence).
 Default \code{NULL} (all parameters active).}
 
@@ -93,7 +100,9 @@ reject several steps in a row when the controller first adapts.}
 estimation.}
 
 \item{roottol}{Tolerance for root finding in root-triggered events.
-Default \code{1e-6}.}
+Default \code{1e-6}. An event \code{value} that depends on \code{time} evaluates the
+firing time directly, so its derivatives inherit this tolerance rather
+than \code{reltol}.}
 
 \item{maxroot}{Maximum number of triggers per root event. Default \code{1}.}
 
@@ -112,6 +121,58 @@ thread.}
 completes, naming the ones that failed. Unlike \code{\link[=solveODE]{solveODE()}}, \code{"stop"}
 does not discard the results that did succeed until every condition has
 been run.}
+
+\item{cotangent}{The cotangent of the outputs, required by a model compiled
+with \code{derivMode = "reverse"} or \code{"forward-reverse"} (\code{\link[=cppODE]{cppODE()}}) or with
+\code{derivMode = "reverse"} (\code{\link[=cvode]{cvode()}}). A \verb{[n_out, n_states]} matrix or an
+\verb{[n_out, n_states, n_seed]} array, whose first dimension is the solve's
+own output row count: a root event adds output times, so that count is
+not \code{length(times)} in general. What comes back is \verb{w' * dx/dtheta}
+summed over times and states, one column per cotangent column. Supplying
+it to a forward model is an error, as is leaving it out on a reverse one.}
+
+\item{curvature}{Optional, \code{"forward-reverse"} only: the derivative of
+\code{cotangent} along the tangent, \verb{[n_out, n_states, n_seed, n_sens]} on the
+cotangent's first three dimensions. For a cotangent that is the gradient
+of a functional of the outputs, this is that functional's Hessian applied
+to the output tangent. \code{NULL} treats the cotangent as constant in
+\eqn{\theta}.}
+
+\item{adjointGrid}{Whether the sweep also reports the grid it ran on, as
+\verb{$adjointGrid}. \code{FALSE} by default; requires a \code{cotangent} and the native
+backend. Costs one
+\verb{[n_steps, n_states, n_seed]} array, so it is a diagnostic.}
+
+\item{errWeights}{Optional lambda from an earlier sweep, used as a
+step-size weight. Native backend only. A list with \code{time} (ascending,
+length \code{n}), \code{lambda} (\verb{[n, n_states]}), and optionally \code{breaks}
+(indices into \code{time} the interpolant must not span), \code{gradtol}
+(default \code{1e-6}) and \code{floor}
+(smallest weight as a fraction of the largest, default \code{0}). The
+controller then takes the maximum of its own error norm and
+\eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
+finer than \code{abstol} and \code{reltol} ask, never coarser. Requires a
+\code{cotangent}.}
+
+\item{keepStore}{Whether a reverse solve returns its checkpoints as
+\verb{$store}, for a later solve to reuse through \code{store}. The \code{cotangent} may then
+be omitted, which runs the model for its values alone. Native backend
+only: CVODES holds its checkpoints itself.}
+
+\item{store}{The \verb{$store} of an earlier solve of the same model at the same
+\code{times} and \code{parms}. The solve integrates nothing and goes straight to the
+sweep. A store from a different point is an error, not a silent reuse. It
+may be reused any number of times and is freed with its last reference.}
+
+\item{sensErrCon}{Whether the step size, the order and the corrector's
+convergence test see the sensitivities. \code{TRUE}, the default, takes the
+maximum over the state and each direction, so the worst-resolved direction
+sets the step. \code{FALSE} leaves every control decision to value arithmetic:
+the step sequence is then the one a value-only run takes, whatever the
+direction count, and the sensitivities come back on a coarser grid than
+\code{abstol} and \code{reltol} would give them. Cheaper and less accurate, and the
+convention SUNDIALS ships (\code{CVodeSetSensErrCon}). Needs a model with
+sensitivities; under \code{derivMode = "forward-reverse"} it is off already.}
 }
 \value{
 A list of \code{\link[=solveODE]{solveODE()}} results, one per condition, carrying the
@@ -129,15 +190,28 @@ serialization of each result back through a pipe; with sensitivities that
 return trip is usually the dominant cost. Conditions are scheduled
 dynamically, so unequal solve times even out.
 
-Results are identical to the serial path, not merely close: each condition
-runs the same steps on its own thread-local state.
+Results are bit-identical to the serial path: each condition runs the same
+steps on its own thread-local state.
 
-Two situations silently fall back to a serial loop, both deliberately:
+Two situations fall back to a serial loop:
 inside a forked child (\code{mclapply()}), because the OpenMP thread pool does
 not survive \code{fork()}; and inside an existing OpenMP region, because the
 caller that spread the wider axis across threads already owns them.
-A model compiled before this entry point existed, or a build without
-OpenMP, falls back to \code{\link[=solveODE]{solveODE()}} per condition.
+A model without a batch entry point, or a build without OpenMP, falls
+back to \code{\link[=solveODE]{solveODE()}} per condition.
+}
+\examples{
+\donttest{
+if (codegenAvailable()) {
+  ## One model, several conditions, solved on threads in one call. A condition's
+  ## list overrides the batch-wide arguments.
+  f <- cppODE(c(x = "-k*x"), deriv = FALSE)
+  conditions <- list(slow = list(parms = c(x = 1, k = 0.1)),
+                     fast = list(parms = c(x = 1, k = 1)))
+  res <- solveODEBatch(f, conditions, times = 0:5)
+  sapply(res, function(r) r$variable[, "x"])
+}
+}
 }
 \seealso{
 \code{\link[=solveODE]{solveODE()}}

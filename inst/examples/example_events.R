@@ -67,14 +67,14 @@ res_root  <- solveODE(model_root, seq(0, 10, length.out = 300), pars_root, maxro
 
 cat("\nRoot event, sensitivity of x to v is piecewise but continuous\n")
 cat("through each event (saltation-matrix correction applied):\n")
-print(summary(res_root$sens1[, "x", "v"]))
+print(summary(res_root$tangent[, "x", "v"]))
 
 ## -----------------------------------------------------------------
 ## 3. Layout of the sensitivity arrays
 ## -----------------------------------------------------------------
 
 ##   res$variable : [n_times, n_states]
-##   res$sens1    : [n_times, n_states, n_sens]
-##   res$sens2    : [n_times, n_states, n_sens, n_sens]
-cat("\nsens1 dims:", paste(dim(res_time$sens1), collapse = " x "), "\n")
-cat("sens2 dims:", paste(dim(res_time$sens2), collapse = " x "), "\n")
+##   res$tangent  : [n_times, n_states, n_sens]
+##   res$hessian  : [n_times, n_states, n_sens, n_sens]
+cat("\ntangent dims:", paste(dim(res_time$tangent), collapse = " x "), "\n")
+cat("hessian dims:", paste(dim(res_time$hessian), collapse = " x "), "\n")

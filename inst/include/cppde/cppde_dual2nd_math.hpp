@@ -1,9 +1,8 @@
 /*
  Non-arithmetic free functions and comparisons for cppde::dual2nd<T, N>.
 
- Arithmetic / transcendental operators have moved to cppde_dual2nd_expr.hpp
- where they build expression-template trees materialised on assignment.
- This header keeps:
+ Arithmetic and transcendental operators live in cppde_dual2nd_expr.hpp as
+ expression templates. This header holds:
    - min, max, clamp (selection operations: return one of the operands by
      value, no tangent propagation; ETs cannot easily express these because
      the result type is data-dependent on a runtime comparison).

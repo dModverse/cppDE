@@ -2,7 +2,11 @@
 # Need help debugging build failures? Start at https://github.com/r-lib/actions#where-to-find-help
 on:
   push:
+    branches: [main, master]
   pull_request:
+  # No tags and no devel branches: a tag push would double the run of the
+  # commit it points at. Dispatch one when a branch is ready to be judged.
+  workflow_dispatch:
 
 name: R-CMD-check.yaml
 
@@ -42,7 +46,7 @@ jobs:
         if: steps.pandoc.outcome == 'failure'
         uses: r-lib/actions/setup-pandoc@v2
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -56,7 +60,9 @@ jobs:
         with:
           r-version: ${{ matrix.config.r }}
           http-user-agent: ${{ matrix.config.http-user-agent }}
-          use-public-rspm: true
+          # "true" would skip macOS arm64, where CRAN now serves some
+          # binaries zstd compressed and pak cannot unpack them.
+          use-public-rspm: always
 
       - uses: r-lib/actions/setup-r-dependencies@v2
         with:

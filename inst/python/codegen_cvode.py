@@ -1,41 +1,22 @@
-"""
-CVODE / CVODES C++ code generator for cppDE
-=============================================
+"""CVODE / CVODES backend of cppDE.
 
-Generates a self-contained C++ source file that compiles against SUNDIALS
-(CVODE / CVODES) and exposes an `extern "C" SEXP solve_<name>(...)` entry
-point with the same 14-SEXP signature as cppDE's generated models, so that
-`solveODE()` can call it unchanged.
+`generate_cvode_cpp` writes a C++ source that compiles against SUNDIALS and
+exposes `solve_<name>` with the SEXP signature of the native models, so that
+`solveODE()` calls it unchanged. Supported: BDF and Adams, dense or KLU
+Jacobian, forward sensitivities (CVODES) and their adjoint (ASA), PCHIP
+forcings, a terminating rootfunc and time- and root-triggered events.
+Second-order sensitivities are not supported.
 
-Scope of the generator:
-
-  * method : "bdf" or "adams"          (CVODE's two multistep families)
-  * dense or sparse (KLU) linear solver with analytic Jacobian
-  * forward sensitivities (CVODES) with ANALYTIC sens RHS:
-        dS_iS/dt = J(x,p) * S_iS + df/dp_k
-    where k is the global parameter index corresponding to compile-time
-    sensitivity slot iS.  For IC-typed sens slots the df/dp_k term is zero.
-  * PCHIP forcings (time-dependent data inputs).  Forcings do not
-    contribute to sensitivities (df/dforcing = 0 w.r.t. params).
-  * rootfunc termination via CVodeRootInit
-  * time- and root-triggered events via CVodeReInit
-
-Out of scope (errored out by the R wrapper):
-  * second-order sensitivities (CVODES forward mode is first-order only)
-
-Author: Simon Beyer
+All derivatives come from the expression graph (cppde_graph); a sensitivity
+right-hand side is one Jacobian-vector product.
 """
 
 import os
-import sympy as sp
+import time
 
-from codegen_cppODE import (_safe_sympify, _to_cpp, decide_sparse,
-                           analyze_klu_settings)
+import cppde_model
+from codegen_cppODE import analyze_klu_settings, decide_sparse
 
-
-# ---------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------
 
 def _as_list(x):
     if x is None:
@@ -45,9 +26,17 @@ def _as_list(x):
     return list(x)
 
 
-# ---------------------------------------------------------------------
-# Main generator
-# ---------------------------------------------------------------------
+def _valid(val):
+    """False for missing event entries: None, NaN, R's NA (a bool through
+    reticulate) and the placeholder strings."""
+    if val is None or isinstance(val, bool):
+        return False
+    if isinstance(val, float) and val != val:
+        return False
+    if isinstance(val, str) and val.strip().lower() in {"", "na", "nan", "none"}:
+        return False
+    return True
+
 
 def generate_cvode_cpp(
     rhs_dict,
@@ -55,6 +44,8 @@ def generate_cvode_cpp(
     modelname,
     outdir,
     deriv=False,
+    reverse=False,
+    asa_checkpoints=200,
     fixed_states=None,
     fixed_params=None,
     sparse=None,
@@ -66,107 +57,63 @@ def generate_cvode_cpp(
     include_time_zero=True,
     version="unknown",
 ):
+    """Write `<outdir>/<modelname>.cpp` for the CVODE backend.
+
+    Returns:
+        dict with srcfile, variables, parameters, forcings, sens_names,
+        jac_nnz_rows, jac_nnz_cols, use_sparse, use_lapack, compile_defs and
+        codegen_stats.
+    """
+    t_start = time.perf_counter()
     fixed_states = _as_list(fixed_states)
     fixed_params = _as_list(fixed_params)
     params_list = _as_list(params_list)
     forcings_list = _as_list(forcings_list)
 
-    states_list = list(rhs_dict.keys())
-    odes_list = list(rhs_dict.values())
-    n_states = len(states_list)
+    model = cppde_model.model_for(rhs_dict, params_list, forcings_list)
+    states_list = model.states
+    n_states = model.n
     n_params = len(params_list)
     n_global = n_states + n_params
     n_forcings = len(forcings_list)
+    g = model.g
 
-    # --- parse symbolic ---
-    states_syms = {n: sp.Symbol(n, real=True) for n in states_list}
-    params_syms = {n: sp.Symbol(n, real=True) for n in params_list}
-    forcing_syms = {n: sp.Symbol(n, real=True) for n in forcings_list}
-    t_sym = sp.Symbol("time", real=True)
-    local_syms = dict(states_syms)
-    local_syms.update(params_syms)
-    local_syms.update(forcing_syms)
-    local_syms["time"] = t_sym
-
-    rhs_exprs = [_safe_sympify(e, local_syms) for e in odes_list]
-
-    # --- symbolic Jacobian df/dx ---
-    sym_states = [states_syms[n] for n in states_list]
-    jac_mat = [[sp.Integer(0)] * n_states for _ in range(n_states)]
-    for i, e in enumerate(rhs_exprs):
-        free = e.free_symbols
-        for j, s in enumerate(sym_states):
-            if s in free:
-                jac_mat[i][j] = sp.diff(e, s)
-
-    time_derivs = [sp.diff(e, t_sym) for e in rhs_exprs]
-
-    jac_nnz = []
-    for i in range(n_states):
-        for j in range(n_states):
-            e = jac_mat[i][j]
-            if e != 0:
-                jac_nnz.append((i, j, e))
-
-    # --- sparsity decision ---
-    # Shared with the cppDE backend; thresholds at decide_sparse().
-    # CVODE always builds the Jacobian above.
-    use_sparse = decide_sparse(sparse, n_states, len(jac_nnz))
-
-    # KLU pre-ordering and BTF, from the same analysis the cppDE backend uses.
-    # SUNLinSol_KLUGetCommon exposes the klu_common that SUNDIALS built with
-    # klu_defaults(); both fields are read at the first klu_analyze.
-    klu_settings = (analyze_klu_settings(n_states, [r for r, _, _ in jac_nnz],
-                                         [c for _, c, _ in jac_nnz])
-                    if use_sparse else None)
-
-    # --- dense linear solver ---
-
-    # SUNLinSol_LapackDense routes the factorisation through R's own BLAS and
-    # LAPACK, SUNLinSol_Dense is SUNDIALS' unblocked one; which applies follows
-    # from how SUNDIALS was built. Sparse Jacobians use KLU instead.
-    use_lapack = (not use_sparse) and bool(lapack)
-
-    # --- sens layout ---
-    sens_ic_names = [s for s in states_list if s not in fixed_states]
-    sens_pr_names = [p for p in params_list if p not in fixed_params]
-    sens_names = sens_ic_names + sens_pr_names
-    n_sens_compile = len(sens_names)
-
-    # --- Sensitivity layout ---
-
-    # sens1ini is read at solve() time as the full Phi'(theta), [n_states +
-    # n_params, M], with M the per-call active theta count. Compile-time `fixed`
-    # drops the slot from the layout, runtime `fixed` becomes zero rows.
-
-    # df/dp_k only for non-fixed parameters
-    df_dp_by_pk = {}
-    for nm in sens_pr_names:
-        pk = params_list.index(nm)
-        sym = params_syms[nm]
-        col = []
-        for i, e in enumerate(rhs_exprs):
-            if sym in e.free_symbols:
-                d = sp.diff(e, sym)
-                if d != 0:
-                    col.append((i, d))
-        df_dp_by_pk[pk] = col
-
-    # --- method ---
     if method not in ("bdf", "adams"):
         raise ValueError(f"method must be 'bdf' or 'adams', got {method!r}")
     cv_method = "CV_BDF" if method == "bdf" else "CV_ADAMS"
 
-    # --- rootfunc parsing ---
+    pattern = model.pattern()
+    jac_rows = [i for i, row in enumerate(pattern) for _ in row]
+    jac_cols = [j for row in pattern for j in row]
+    use_sparse = decide_sparse(sparse, n_states, len(jac_rows))
+    klu_settings = (analyze_klu_settings(n_states, jac_rows, jac_cols)
+                    if use_sparse else None)
+    use_lapack = (not use_sparse) and bool(lapack)
+    strategy = model.jacobian_strategy()
 
-    # None means no root handling, "equilibrate" a post-step threshold check, and a
-    # list of expressions CVodeRootInit with CV_ROOT_RETURN.
+    sens_ic_names = [s for s in states_list if s not in fixed_states]
+    sens_pr_names = [p for p in params_list if p not in fixed_params]
+    sens_names = sens_ic_names + sens_pr_names
+    sens_params = {params_list.index(p) for p in sens_pr_names}
+
+    def lines(stmts, indent="    "):
+        return "\n".join(cppde_model.cvode_lines(model, stmts, indent))
+
+    ode_body = lines(cppde_model.cvode_rhs_statements(model))
+    jac_stmts = cppde_model.jacobian_statements(model, use_sparse, strategy, cvode=True)
+    jac_body = lines(jac_stmts)
+    sens_body = lines(cppde_model.cvode_sens_statements(
+        model, sens_params)) if deriv else ""
+    nnz_total = len(jac_rows)
+
+    # --- rootfunc ---
     rootfunc_mode = "none"
-    rootfunc_exprs_cpp = []
+    rootfunc_nodes = []
     if rootfunc is not None:
         if isinstance(rootfunc, str):
             if rootfunc.strip().lower() == "equilibrate":
                 rootfunc_mode = "equilibrate"
+                rootfunc_list = []
             else:
                 rootfunc_list = [rootfunc]
                 rootfunc_mode = "user"
@@ -176,61 +123,28 @@ def generate_cvode_cpp(
         else:
             raise ValueError(
                 f"rootfunc must be 'equilibrate' or a character vector, got {type(rootfunc)}")
+        for expr_str in rootfunc_list:
+            s = str(expr_str).strip()
+            if s:
+                rootfunc_nodes.append(model.parse(s))
 
-        if rootfunc_mode == "user":
-            for expr_str in rootfunc_list:
-                s = str(expr_str).strip()
-                if not s:
-                    continue
-                e = _safe_sympify(s, local_syms)
-                rootfunc_exprs_cpp.append(
-                    _to_cpp(e, states_list, params_list, n_states,
-                            "double", forcings_list))
-
-    # --- Events (time- and root-triggered) ---
-
-    # Every event carries the post-event value g of the affected state, with the
-    # method already folded in, plus its partials in x, p and t. A time event adds
-    # the event time and its dt/dp, a root event the condition and its partials.
+    # --- events ---
+    # Each event carries the post-event value g of its state, the method
+    # folded in, with its partials in x, p and t; a time event adds the time
+    # and its dt/dp, a root event the condition r and its partials.
+    ev = cppde_model.CvodeEvent(model)
     time_events = []
     root_events = []
     if events is not None:
-        if hasattr(events, "to_dict"):
-            ev_dict = events.to_dict("list")
-        else:
-            ev_dict = events
-        list_lens = [len(v) for v in ev_dict.values()
-                     if isinstance(v, (list, tuple))]
+        ev_dict = events.to_dict("list") if hasattr(events, "to_dict") else events
+        list_lens = [len(v) for v in ev_dict.values() if isinstance(v, (list, tuple))]
         n_ev = max(list_lens) if list_lens else 1
 
         def _get(key, i):
-            if key not in ev_dict:
-                return None
-            v = ev_dict[key]
+            v = ev_dict.get(key)
             if isinstance(v, (list, tuple)):
                 return v[i] if i < len(v) else None
             return v
-
-        def _valid(val):
-            if val is None:
-                return False
-            # R's NA_logical crosses the reticulate bridge as a Python bool;
-            # treat any bool here as "missing" since a literal True/False
-            # in an event table would never be meaningful as time/value/root.
-            if isinstance(val, bool):
-                return False
-            # pandas NaN / R NA-carrying floats come through as NaN
-            try:
-                if isinstance(val, float) and val != val:
-                    return False
-            except Exception:
-                pass
-            # NA_character_ in a character column reaches us as the string
-            # "NA"; normalise the same set of placeholders codegen_cppODE uses.
-            if isinstance(val, str):
-                if val.strip().lower() in {"", "na", "nan", "none"}:
-                    return False
-            return True
 
         for i in range(n_ev):
             var_raw = _get("var", i)
@@ -240,210 +154,98 @@ def generate_cvode_cpp(
             if var_name not in states_list:
                 raise ValueError(f"Event {i}: unknown state variable '{var_name}'")
             var_idx = states_list.index(var_name)
-
             time_raw = _get("time", i)
             root_raw = _get("root", i)
             if not _valid(time_raw) and not _valid(root_raw):
                 raise ValueError(f"Event {i}: either 'time' or 'root' is required")
             if _valid(time_raw) and _valid(root_raw):
                 raise ValueError(f"Event {i}: specify exactly one of 'time' or 'root'")
-
             value_raw = _get("value", i)
             if not _valid(value_raw):
                 raise ValueError(f"Event {i}: 'value' is required")
-
             method_raw = _get("method", i)
-            method = str(method_raw).lower() if _valid(method_raw) else "replace"
-            if method not in ("replace", "add", "multiply"):
+            ev_method = str(method_raw).lower() if _valid(method_raw) else "replace"
+            if ev_method not in ("replace", "add", "multiply"):
                 raise ValueError(
-                    f"Event {i}: method must be replace/add/multiply, got {method!r}")
+                    f"Event {i}: method must be replace/add/multiply, got {ev_method!r}")
 
-            # Value is an expression of (x, t, p, forcings) shared by time and
-            # root events; we derive g(x, t, p) = new x[var_idx] from it.
-            value_sym = _safe_sympify(str(value_raw), local_syms)
-            state_sym = states_syms[var_name]
-            if method == "replace":
-                g_sym = value_sym
-            elif method == "add":
-                g_sym = state_sym + value_sym
-            else:  # multiply
-                g_sym = state_sym * value_sym
-
-            g_cpp = _to_cpp(g_sym, states_list, params_list, n_states,
-                            "double", forcings_list)
-            dg_dx_cpp = [
-                _to_cpp(sp.diff(g_sym, states_syms[s]),
-                        states_list, params_list, n_states,
-                        "double", forcings_list)
-                for s in states_list
-            ]
-            dg_dp_cpp = [
-                _to_cpp(sp.diff(g_sym, params_syms[p]),
-                        states_list, params_list, n_states,
-                        "double", forcings_list)
-                for p in params_list
-            ]
-            dg_dt_cpp = _to_cpp(sp.diff(g_sym, t_sym),
-                                states_list, params_list, n_states,
-                                "double", forcings_list)
-
+            h = model.parse(str(value_raw))
+            x_var = g.state(var_idx)
+            gn = {"replace": h, "add": g.add(x_var, h),
+                  "multiply": g.mul(x_var, h)}[ev_method]
+            item = {
+                "var_idx": var_idx,
+                "g": lines(ev.value(gn), " " * 6),
+                "dg_dx": [(j, lines(b, " " * 10)) for j, b in ev.cases_x(gn)],
+                "dg_dp": [(k, lines(b, " " * 10)) for k, b in ev.cases_p(gn)],
+                "dg_dt": lines(ev.partial_t(gn), " " * 6),
+            }
             if _valid(time_raw):
-                # --- Time-triggered ---
-                # t_e may be an expression of params; ∂t_e/∂p_k drives the
-                # saltation for parameterised event times.
-                t_event_sym = _safe_sympify(str(time_raw), local_syms)
-                t_expr_cpp = _to_cpp(t_event_sym, states_list, params_list,
-                                     n_states, "double", forcings_list)
-                dt_dp_cpp = [
-                    _to_cpp(sp.diff(t_event_sym, params_syms[p]),
-                            states_list, params_list, n_states,
-                            "double", forcings_list)
-                    for p in params_list
-                ]
-                time_events.append({
-                    "t_expr_cpp": t_expr_cpp,
-                    "var_idx": var_idx,
-                    "g_cpp": g_cpp,
-                    "dg_dx_cpp": dg_dx_cpp,
-                    "dg_dp_cpp": dg_dp_cpp,
-                    "dg_dt_cpp": dg_dt_cpp,
-                    "dt_dp_cpp": dt_dp_cpp,
-                })
-            else:
-                # --- Root-triggered ---
+                tn = model.parse(str(time_raw))
+                item["t"] = lines(ev.value(tn), " " * 6)
+                item["dt_dp"] = [(k, lines(b, " " * 10)) for k, b in ev.cases_p(tn)]
+                time_events.append(item)
+                continue
+            rn = model.parse(str(root_raw))
+            direction_raw = _get("direction", i)
+            try:
+                direction = int(direction_raw) if _valid(direction_raw) else 0
+            except (ValueError, TypeError):
+                direction = 0
+            if direction not in (-1, 0, 1):
+                raise ValueError(
+                    f"Event {i}: direction must be -1, 0, or 1, got {direction}")
+            terminal = str(_get("terminal", i)).lower() == "true"
+            item.update({
+                "r": rn,
+                "dr_dx": [(j, lines(b, " " * 10)) for j, b in ev.cases_x(rn)],
+                "dr_dp": [(k, lines(b, " " * 10)) for k, b in ev.cases_p(rn)],
+                "dr_dt": lines(ev.partial_t(rn), " " * 6),
+                "direction": direction,
+                "terminal": terminal,
+            })
+            root_events.append(item)
 
-                # The event fires when r(x, t, p) crosses zero. Saltation uses the IFT:
-                # dt_root/dp_k = -(dr/dp_k + sum_i dr/dx_i S_i[k]) / rdot.
-                r_sym = _safe_sympify(str(root_raw), local_syms)
-                r_cpp = _to_cpp(r_sym, states_list, params_list, n_states,
-                                "double", forcings_list)
-                dr_dx_cpp = [
-                    _to_cpp(sp.diff(r_sym, states_syms[s]),
-                            states_list, params_list, n_states,
-                            "double", forcings_list)
-                    for s in states_list
-                ]
-                dr_dp_cpp = [
-                    _to_cpp(sp.diff(r_sym, params_syms[p]),
-                            states_list, params_list, n_states,
-                            "double", forcings_list)
-                    for p in params_list
-                ]
-                dr_dt_cpp = _to_cpp(sp.diff(r_sym, t_sym),
-                                    states_list, params_list, n_states,
-                                    "double", forcings_list)
+    # root_fn: user roots, then event roots; an exhausted event root reads +1.
+    root_stores = [(("vec", "gout", k), n, "=") for k, n in enumerate(rootfunc_nodes)]
+    n_user = len(rootfunc_nodes)
+    for j, e in enumerate(root_events):
+        root_stores.append((("call", {
+            "cpp": "gout[{0}] = (ud->root_fired[{1}] >= ud->maxroot) ? 1.0 : (%s);",
+            "py": "gout[{0}] = 1.0 if ud.root_fired[{1}] >= ud.maxroot else (%s)"},
+            (n_user + j, j)), e["r"], "="))
+    root_body = ""
+    if root_stores:
+        root_body = lines(cppde_model.stores_prelude(model, root_stores, "double")
+                          + [cppde_model.block(g, root_stores, "_r")], "  ")
 
-                direction_raw = _get("direction", i)
-                try:
-                    direction = int(direction_raw) if _valid(direction_raw) else 0
-                except (ValueError, TypeError):
-                    direction = 0
-                if direction not in (-1, 0, 1):
-                    raise ValueError(
-                        f"Event {i}: direction must be -1, 0, or 1, got {direction}")
+    # --- adjoint ---
+    # Events and root functions are refused under reverse.
+    if reverse and (events or rootfunc is not None):
+        raise ValueError(
+            "derivMode = 'reverse' on the CVODE backend does not support events "
+            "or a rootfunc: CVODES integrates the adjoint over checkpointed "
+            "states and cannot be told about a jump. Use the native backend, "
+            "which replays the jump.")
+    adj_rhs_body = adj_quad_body = ""
+    if reverse:
+        xb, qb = cppde_model.cvode_adjoint_statements(model)
+        adj_rhs_body, adj_quad_body = lines(xb), lines(qb)
 
-                # Terminal is a bool column: accept Python bool directly
-                # (don't funnel through `_valid`, which rejects bools since
-                # they stand in for R NA_logical in the time/root columns).
-                terminal_raw = _get("terminal", i)
-                if isinstance(terminal_raw, bool):
-                    terminal = terminal_raw
-                elif terminal_raw is None:
-                    terminal = False
-                else:
-                    try:
-                        terminal = bool(terminal_raw)
-                    except Exception:
-                        terminal = False
+    compile_defs = ["-DCVODE_KLU"] if use_sparse else []
+    data_code = "\n".join(model.linmap.cpp()) if model.linmap is not None else ""
 
-                root_events.append({
-                    "var_idx": var_idx,
-                    "g_cpp": g_cpp,
-                    "dg_dx_cpp": dg_dx_cpp,
-                    "dg_dp_cpp": dg_dp_cpp,
-                    "dg_dt_cpp": dg_dt_cpp,
-                    "r_cpp": r_cpp,
-                    "dr_dx_cpp": dr_dx_cpp,
-                    "dr_dp_cpp": dr_dp_cpp,
-                    "dr_dt_cpp": dr_dt_cpp,
-                    "direction": direction,
-                    "terminal": terminal,
-                })
-
-    # --- CSC ordering for sparse ---
-    csc_entries = sorted(jac_nnz, key=lambda rce: (rce[1], rce[0]))
-    colptr = [0] * (n_states + 1)
-    for _, c, _ in csc_entries:
-        colptr[c + 1] += 1
-    for k in range(1, len(colptr)):
-        colptr[k] += colptr[k - 1]
-    rowval = [r for (r, _, _) in csc_entries]
-    nnz_total = len(csc_entries)
-
-    # --- cpp expression helper (uses cppDE's _to_cpp: x[i], params[j],
-    #     (*F[k])(t) for forcings) ---
-    def cpp_of(expr):
-        return _to_cpp(expr, states_list, params_list, n_states, "double",
-                       forcings_list)
-
-    # ---------------------------------------------------------------
-    # Body snippets
-    # ---------------------------------------------------------------
-
-    ode_body = "\n".join(f"    ydot_arr[{i}] = {cpp_of(e)};"
-                         for i, e in enumerate(rhs_exprs))
-
-    jac_body_dense = "\n".join(f"    SM_ELEMENT_D(J, {i}, {j}) = {cpp_of(e)};"
-                               for (i, j, e) in jac_nnz)
-    if not jac_body_dense:
-        jac_body_dense = "    // zero Jacobian"
-
-    # Sparse: always write the pattern (cheap) + data.
-    sp_lines = []
-    sp_lines.append("    sunindextype* indexptrs = SUNSparseMatrix_IndexPointers(J);")
-    sp_lines.append("    sunindextype* indexvals = SUNSparseMatrix_IndexValues(J);")
-    sp_lines.append("    sunrealtype*  data      = SUNSparseMatrix_Data(J);")
-    colptr_str = ", ".join(str(v) for v in colptr)
-    rowval_str = ", ".join(str(v) for v in rowval) if rowval else "0"
-    sp_lines.append(f"    static const sunindextype _colptr[{len(colptr)}] = {{{colptr_str}}};")
-    sp_lines.append(f"    static const sunindextype _rowval[{max(1, len(rowval))}] = {{{rowval_str}}};")
-    sp_lines.append(f"    for (int k = 0; k <= {n_states}; ++k) indexptrs[k] = _colptr[k];")
-    sp_lines.append(f"    for (int k = 0; k < {len(rowval)}; ++k) indexvals[k] = _rowval[k];")
-    for ax_k, (r, c, e) in enumerate(csc_entries):
-        sp_lines.append(f"    data[{ax_k}] = {cpp_of(e)};")
-    jac_body_sparse = "\n".join(sp_lines)
-
-    # Sens: J*yS
-    jyS_lines = [f"    ySdot_arr[{i}] = 0.0;" for i in range(n_states)]
-    for i, j, e in jac_nnz:
-        jyS_lines.append(f"    ySdot_arr[{i}] += ({cpp_of(e)}) * yS_arr[{j}];")
-    jac_times_yS_body = "\n".join(jyS_lines)
-
-    # --- Compile-time preprocessor defs (only codegen-owned) ---
-
-    # Linker flags come from the R wrapper's configure-time detection, not from
-    # codegen, so the package stays portable across distros and Homebrew.
-    compile_defs = []
-    if use_sparse:
-        compile_defs.append("-DCVODE_KLU")
-
-    # Emit df/dp contributions indexed by (state_row, param_index, expr): used
-    # under reparam to accumulate (df/dp) * M[NEQ + pk, iS] for each iS.
-    df_dp_entries = []  # list of (state_i, param_pk, sympy_expr)
-    for pk in sorted(df_dp_by_pk.keys()):
-        for (i, d_expr) in df_dp_by_pk[pk]:
-            df_dp_entries.append((i, pk, d_expr))
-
-    # --- Assemble source ---
     src = _render_source(
         modelname=modelname, version=version,
         n_states=n_states, n_global=n_global,
         ode_body=ode_body,
-        jac_body_dense=jac_body_dense,
-        jac_body_sparse=jac_body_sparse,
+        jac_body=jac_body,
         nnz_total=nnz_total,
-        jac_times_yS_body=jac_times_yS_body,
-        df_dp_entries=df_dp_entries,
+        sens_body=sens_body,
+        reverse=reverse,
+        adj_rhs_body=adj_rhs_body,
+        adj_quad_body=adj_quad_body,
+        asa_checkpoints=int(asa_checkpoints),
         cv_method=cv_method,
         deriv=deriv,
         use_sparse=use_sparse,
@@ -451,7 +253,8 @@ def generate_cvode_cpp(
         klu_settings=klu_settings,
         n_forcings=n_forcings,
         rootfunc_mode=rootfunc_mode,
-        rootfunc_exprs_cpp=rootfunc_exprs_cpp,
+        n_user_rootfunc=n_user,
+        root_body=root_body,
         time_events=time_events,
         root_events=root_events,
         n_params=n_params,
@@ -459,6 +262,7 @@ def generate_cvode_cpp(
         params_list=params_list,
         forcings_list=forcings_list,
         include_time_zero=include_time_zero,
+        data_code=data_code,
     )
 
     srcfile = os.path.join(outdir, f"{modelname}.cpp")
@@ -473,13 +277,14 @@ def generate_cvode_cpp(
         "parameters": params_list,
         "forcings": forcings_list,
         "sens_names": sens_names,
-        "jac_nnz_rows": [r for (r, _, _) in jac_nnz],
-        "jac_nnz_cols": [c for (_, c, _) in jac_nnz],
-        "jac_nnz_exprs": [str(e) for (_, _, e) in jac_nnz],
-        "time_derivs": [str(td) if td != 0 else "0" for td in time_derivs],
+        "jac_nnz_rows": jac_rows,
+        "jac_nnz_cols": jac_cols,
         "use_sparse": use_sparse,
-        "use_lapack": use_lapack,
         "compile_defs": compile_defs,
+        "use_lapack": use_lapack,
+        "codegen_stats": {"strategy": strategy, "lin_rows": model.nlin,
+                          "graph_nodes": len(g),
+                          "seconds": time.perf_counter() - t_start},
     }
 
 
@@ -487,30 +292,47 @@ def generate_cvode_cpp(
 # C++ source template
 # =====================================================================
 
+def _switch_lambda(cases, var):
+    """Lambda (x, t, var) -> double over index cases [(index, body)]."""
+    out = ["[params, &F](const double* x, double t, int %s) -> double {" % var,
+           "      (void)x; (void)t;"]
+    if cases:
+        out.append("      switch (%s) {" % var)
+        for idx, body in cases:
+            out += ["        case %d: {" % idx, body, "        }"]
+        out += ["        default: return 0.0;", "      }"]
+    else:
+        out.append("      (void)%s; return 0.0;" % var)
+    out.append("    }")
+    return "\n".join(out)
+
+
 def _render_source(
     modelname, version,
     n_states, n_global,
-    ode_body, jac_body_dense, jac_body_sparse, nnz_total,
-    jac_times_yS_body,
+    ode_body, jac_body, nnz_total,
+    sens_body,
     cv_method, deriv, use_sparse,
+    reverse=False, adj_rhs_body="", adj_quad_body="", asa_checkpoints=200,
     use_lapack=False,
     klu_settings=None,
     n_forcings=0,
     rootfunc_mode="none",
-    rootfunc_exprs_cpp=None,
+    n_user_rootfunc=0,
+    root_body="",
     time_events=None,
     root_events=None,
     n_params=0,
-    df_dp_entries=None,
     states_list=None,
     params_list=None,
     forcings_list=None,
     include_time_zero=True,
+    data_code="",
 ):
     deriv_flag = "true" if deriv else "false"
+    linmap_include = "#include <cppde/cppde_linmap.hpp>\n" if data_code else ""
+    data_block = "\n" + data_code + "\n" if data_code else ""
     has_forcings = n_forcings > 0
-    if rootfunc_exprs_cpp is None:
-        rootfunc_exprs_cpp = []
     if time_events is None:
         time_events = []
     if root_events is None:
@@ -519,12 +341,9 @@ def _render_source(
     has_root_events = len(root_events) > 0
     has_events      = has_time_events or has_root_events
 
-    # PchipForcing storage lives in UserData so the SUNDIALS callbacks and the event
-    # lambdas can read it. `F` is always present, empty without forcings, so the
-    # lambdas capture it uniformly. Forcings reach df/dx but never df/dp.
-    need_pchip = has_forcings  # include the PCHIP header
-    # Event lambdas always capture F even when no forcings, so UserData
-    # must have F available.  With events-only we still include pchip.
+    # UserData holds the PchipForcing storage and F whenever forcings or event
+    # lambdas read it; the event lambdas capture F even without forcings.
+    need_pchip = has_forcings
     if has_events and not has_forcings:
         need_pchip = True
 
@@ -540,9 +359,8 @@ def _render_source(
         forcing_ud_members = ""
         forcing_local = ""
 
-    # Root-event fire counters live in UserData so the C-style root_fn
-    # callback can see them (they're modified from the main loop).  Kept
-    # small so unused models pay nothing extra.
+    # Root-event fire counters live in UserData, where root_fn reads them and
+    # the main loop increments them.
     events_ud_members = (
         "  std::vector<int> root_fired;           // per event-root fire count\n"
         "  int              maxroot = 1;          // cap from solveODE(maxroot=)\n"
@@ -586,24 +404,13 @@ def _render_source(
     # root_fn writes the user rootfunc into gout[0..n_user-1] and the event roots
     # after it. On CV_ROOT_RETURN a user root terminates, an event root applies its
     # state change and saltation, then reinits and continues unless terminal.
-    n_user_rootfunc = len(rootfunc_exprs_cpp) if rootfunc_mode == "user" else 0
     n_event_roots   = len(root_events)
     n_total_roots   = n_user_rootfunc + n_event_roots
     has_user_root   = rootfunc_mode == "user"
     need_cvode_root = (n_total_roots > 0)
 
     if need_cvode_root:
-        root_gout_lines = []
-        for i, expr_cpp in enumerate(rootfunc_exprs_cpp if has_user_root else []):
-            root_gout_lines.append(f"  gout[{i}] = {expr_cpp};")
-        # An exhausted event root emits a constant +1, so CVode's rootfinder sees no
-        # further sign change. The root history is reset at the CVodeReInit that
-        # follows, so the jump from -eps to +1 registers no phantom crossing.
-        for j, e in enumerate(root_events):
-            root_gout_lines.append(
-                f"  gout[{n_user_rootfunc + j}] = "
-                f"(ud->root_fired[{j}] >= ud->maxroot) ? 1.0 : ({e['r_cpp']});")
-        root_gout_body = "\n".join(root_gout_lines) if root_gout_lines else "  (void)gout;"
+        root_gout_body = root_body or "  (void)gout;"
         rootfunc_decl = ("static int root_fn(sunrealtype t, N_Vector y, "
                          "sunrealtype* gout, void* ud_vp);")
         rootfunc_impl = f"""
@@ -672,53 +479,23 @@ static std::vector<TimeEvent> build_time_events(const double* params,
 """
         ev_body = []
         for i, e in enumerate(time_events):
-            t_cpp = e["t_expr_cpp"]
-            v_idx = e["var_idx"]
-            g_cpp = e["g_cpp"]
-            dg_dt_cpp = e["dg_dt_cpp"]
-            dx_cases = "\n".join(
-                f"        case {j}: return {dx};"
-                for j, dx in enumerate(e["dg_dx_cpp"])
-            )
-            dp_cases = "\n".join(
-                f"        case {k}: return {dp};"
-                for k, dp in enumerate(e["dg_dp_cpp"])
-            )
-            dt_dp_cases = "\n".join(
-                f"        case {k}: return {dtp};"
-                for k, dtp in enumerate(e["dt_dp_cpp"])
-            )
-            # Inside lambdas, `x` is already a parameter, `t` is a parameter,
-            # `params` and `F` are captures.  _to_cpp emitted `x[i]`,
-            # `params[...]`, `(*F[...])(t)`, `t`: all resolve here.
             ev_body.append(f"""  {{
     TimeEvent e;
-    e.time    = {t_cpp};
-    e.var_idx = {v_idx};
+    e.time    = [&]() -> double {{
+{e['t']}
+    }}();
+    e.var_idx = {e['var_idx']};
     e.g_fn    = [params, &F](const double* x, double t) -> double {{
-      return {g_cpp};
+      (void)x; (void)t;
+{e['g']}
     }};
-    e.dg_dx_fn = [params, &F](const double* x, double t, int i) -> double {{
-      switch (i) {{
-{dx_cases}
-        default: return 0.0;
-      }}
-    }};
-    e.dg_dp_fn = [params, &F](const double* x, double t, int k) -> double {{
-      switch (k) {{
-{dp_cases}
-        default: return 0.0;
-      }}
-    }};
+    e.dg_dx_fn = {_switch_lambda(e['dg_dx'], 'i')};
+    e.dg_dp_fn = {_switch_lambda(e['dg_dp'], 'k')};
     e.dg_dt_fn = [params, &F](const double* x, double t) -> double {{
-      return {dg_dt_cpp};
+      (void)x; (void)t;
+{e['dg_dt']}
     }};
-    e.dt_dp_fn = [params, &F](const double* x, double t, int k) -> double {{
-      switch (k) {{
-{dt_dp_cases}
-        default: return 0.0;
-      }}
-    }};
+    e.dt_dp_fn = {_switch_lambda(e['dt_dp'], 'k')};
     ev.push_back(std::move(e));
   }}""")
         event_struct += "\n".join(ev_body) + """
@@ -752,65 +529,27 @@ static std::vector<RootEvent> build_root_events(const double* params,
 """
         re_body = []
         for i, e in enumerate(root_events):
-            v_idx = e["var_idx"]
-            g_cpp = e["g_cpp"]
-            dg_dt_cpp = e["dg_dt_cpp"]
-            dr_dt_cpp = e["dr_dt_cpp"]
-            direction = e["direction"]
             terminal = "true" if e["terminal"] else "false"
-            dgx_cases = "\n".join(
-                f"        case {j}: return {dx};"
-                for j, dx in enumerate(e["dg_dx_cpp"])
-            )
-            dgp_cases = "\n".join(
-                f"        case {k}: return {dp};"
-                for k, dp in enumerate(e["dg_dp_cpp"])
-            )
-            drx_cases = "\n".join(
-                f"        case {j}: return {dx};"
-                for j, dx in enumerate(e["dr_dx_cpp"])
-            )
-            drp_cases = "\n".join(
-                f"        case {k}: return {dp};"
-                for k, dp in enumerate(e["dr_dp_cpp"])
-            )
             re_body.append(f"""  {{
     RootEvent e;
-    e.var_idx   = {v_idx};
-    e.direction = {direction};
+    e.var_idx   = {e['var_idx']};
+    e.direction = {e['direction']};
     e.terminal  = {terminal};
     e.g_fn    = [params, &F](const double* x, double t) -> double {{
-      return {g_cpp};
+      (void)x; (void)t;
+{e['g']}
     }};
-    e.dg_dx_fn = [params, &F](const double* x, double t, int i) -> double {{
-      switch (i) {{
-{dgx_cases}
-        default: return 0.0;
-      }}
-    }};
-    e.dg_dp_fn = [params, &F](const double* x, double t, int k) -> double {{
-      switch (k) {{
-{dgp_cases}
-        default: return 0.0;
-      }}
-    }};
+    e.dg_dx_fn = {_switch_lambda(e['dg_dx'], 'i')};
+    e.dg_dp_fn = {_switch_lambda(e['dg_dp'], 'k')};
     e.dg_dt_fn = [params, &F](const double* x, double t) -> double {{
-      return {dg_dt_cpp};
+      (void)x; (void)t;
+{e['dg_dt']}
     }};
-    e.dr_dx_fn = [params, &F](const double* x, double t, int i) -> double {{
-      switch (i) {{
-{drx_cases}
-        default: return 0.0;
-      }}
-    }};
-    e.dr_dp_fn = [params, &F](const double* x, double t, int k) -> double {{
-      switch (k) {{
-{drp_cases}
-        default: return 0.0;
-      }}
-    }};
+    e.dr_dx_fn = {_switch_lambda(e['dr_dx'], 'i')};
+    e.dr_dp_fn = {_switch_lambda(e['dr_dp'], 'k')};
     e.dr_dt_fn = [params, &F](const double* x, double t) -> double {{
-      return {dr_dt_cpp};
+      (void)x; (void)t;
+{e['dr_dt']}
     }};
     ev.push_back(std::move(e));
   }}""")
@@ -820,8 +559,6 @@ static std::vector<RootEvent> build_root_events(const double* params,
 """
 
     # ---- Conditional sens code snippets ----
-    # Defined here (rather than alongside the linear-solver setup lower
-    # down) because the event and main-loop blocks below reference them.
     if deriv:
         phi_rows = n_states + n_params
         sens_init_block = f"""  if (Ns_active > 0) {{
@@ -835,7 +572,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
     const int expected_len = phi_rows_rt * Ns_active;
     if (args.n_sens1 != expected_len) {{
       char _m[160];
-      snprintf(_m, sizeof(_m), "sens1ini length %d != expected %d (phi_rows * Ns_active)",
+      snprintf(_m, sizeof(_m), "tangent length %d != expected %d (phi_rows * Ns_active)",
                args.n_sens1, expected_len);
       cleanup();
       return res.fail(cppde::RC_ILL_INPUT, _m);
@@ -1157,7 +894,6 @@ static std::vector<RootEvent> build_root_events(const double* params,
     # root event, -1 for an error, with return_code carrying the raw CVODE flag.
     # On 1 and 2 the caller pushes the final output row.
     if has_events:
-        time_check = "has_time_events = true; (void)has_time_events;"  # placeholder
         if deriv:
             sens_get_lambda = """      {
         int flag_gs = CVodeGetSens(cvode_mem, &tret, yS);
@@ -1266,14 +1002,16 @@ static std::vector<RootEvent> build_root_events(const double* params,
     else:
         do_cvode_step_lambda = ""
 
-    # --- Zero-copy sink: the batch entry can size the results before the solve
-    # when nothing dynamic adds points. A time event adds a row unless its time is
-    # already requested, and those times are per-condition; roots stay dynamic.
-    cv_fixed_grid = (len(root_events) == 0 and rootfunc_mode == "none")
+    # --- Zero-copy sink: the batch entry sizes the results before the solve when
+    # the grid is fixed (no root event, no rootfunc, no ASA adjoint). Time-event
+    # rows are counted per condition through <model>_fixed_event_times.
+    cv_fixed_grid = (len(root_events) == 0 and rootfunc_mode == "none"
+                     and not reverse)
     n_cv_ev = len(time_events) if cv_fixed_grid else 0
     if cv_fixed_grid:
         _lines = "".join(
-            f"  out[{i}] = {e['t_expr_cpp']};\n" for i, e in enumerate(time_events))
+            f"  out[{i}] = [&]() -> double {{\n{e['t']}\n  }}();\n"
+            for i, e in enumerate(time_events))
         cv_event_times_fn = (
             f"static void {modelname}_fixed_event_times(const double* params,\n"
             f"                                          double* out) {{\n"
@@ -1312,6 +1050,16 @@ static std::vector<RootEvent> build_root_events(const double* params,
         cv_finish_block = ""
 
     # --- Main integration loop body ---
+    # Under ASA the forward pass runs CVodeF, which stores the checkpoints;
+    # ncheck_ is not read.
+    if reverse:
+        cv_fwd_call = ("    int ncheck_ = 0;\n"
+                       "    int flag = CVodeF(cvode_mem, times[k], y, &tret, "
+                       "CV_NORMAL, &ncheck_);")
+    else:
+        cv_fwd_call = ("    int flag = CVode(cvode_mem, times[k], y, &tret, "
+                       "CV_NORMAL);")
+
     if has_events:
         if has_time_events:
             time_interleave_block = f"""    // Time-event interleave: integrate to each event time, apply, reinit.
@@ -1364,10 +1112,8 @@ static std::vector<RootEvent> build_root_events(const double* params,
 
         main_loop_body = f"""  bool stop = false;
 #ifdef CVODE_STEP_TRACE
-  // ---- Output-point trace mode (events active) ----
-  // The event interleave needs CV_NORMAL, so one row is emitted per output
-  // point plus one per applied event.  `nst` is cumulative; `h` and `q` are
-  // the last accepted step and order at that point.
+  // Trace with events: CV_NORMAL, one row per output point and per applied
+  // event; `nst` is cumulative, `h` and `q` are the last accepted step and order.
   N_Vector _ele_buf = N_VClone(y);
   N_Vector _ewt_buf = N_VClone(y);
 #endif
@@ -1408,11 +1154,8 @@ static std::vector<RootEvent> build_root_events(const double* params,
         main_loop_body = f"""
 #ifdef CVODE_STEP_TRACE
   {{
-    // ---- CV_ONE_STEP trace mode: one CSV row per accepted internal step,
-    //      user-time outputs via dense interpolation (CVodeGetDky /
-    //      CVodeGetSensDky).  Events and rootfunc are not supported in
-    //      this path: the simple `else`-branch here is entered only
-    //      when neither is active in the model.
+    // Trace without events: CV_ONE_STEP, one row per accepted step, outputs
+    // interpolated by CVodeGetDky / CVodeGetSensDky; no rootfunc check.
     N_Vector _ele_buf    = N_VClone(y);
     N_Vector _ewt_buf    = N_VClone(y);
     N_Vector _y_interp   = N_VClone(y);
@@ -1483,7 +1226,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
 #else
   for (int k = 1; k < n_times; ++k) {{
     sunrealtype tret;
-    int flag = CVode(cvode_mem, times[k], y, &tret, CV_NORMAL);
+{cv_fwd_call}
     if (flag < 0) {{
       return_code = flag;
       char buf[160];
@@ -1510,6 +1253,203 @@ static std::vector<RootEvent> build_root_events(const double* params,
 #endif
 """
 
+    # --- ASA: checkpoint allocation before the forward pass, sweep after it ---
+    # Per seed column, lambda' = -J'lambda and q' = -(df/dp)'lambda run from T
+    # to t0, and lambda jumps by the seed row W_o at each output time.
+    if reverse:
+        asa_init_block = """
+  // --- adjoint sensitivity analysis: checkpoint allocation ---
+  // CV_POLYNOMIAL interpolation of the forward state between checkpoints.
+  if (args.seed == nullptr) {
+    cleanup();
+    return res.fail(cppde::RC_ILL_INPUT,
+                    "a model compiled with derivMode = reverse needs a cotangent");
+  }
+  if (CVodeAdjInit(cvode_mem, ASA_CHECKPOINTS, CV_POLYNOMIAL) < 0) {
+    cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeAdjInit failed");
+  }
+"""
+        asa_sweep_block = """
+  // --- the backward sweep ---
+  // The result is indexed like sens1ini: state rows from lambda(t0), then
+  // parameter rows from the quadrature.
+  if (return_code == 0) {
+    const int n_seed = args.n_seed_cols;
+    const int n_out_b = (int)out_t.size();
+    if (args.n_seed_rows != n_out_b) {
+      char m[192];
+      std::snprintf(m, sizeof(m),
+                    "cotangent has %d rows but the run produced %d output rows",
+                    args.n_seed_rows, n_out_b);
+      cleanup(); return res.fail(cppde::RC_ILL_INPUT, m);
+    }
+    if (args.n_seed_states != NEQ) {
+      cleanup(); return res.fail(cppde::RC_ILL_INPUT,
+                                 "cotangent has the wrong state count");
+    }
+
+    const int n_phi_rows = NEQ + NPAR_ADJ;
+    res.n_adj_rows = n_phi_rows;
+    res.n_adj_cols = n_seed;
+    res.adjoint.assign((size_t)n_phi_rows * n_seed, 0.0);
+
+    int indexB = -1;
+    N_Vector yB = N_VNew_Serial(NEQ, ctx);
+    N_Vector qB = N_VNew_Serial(NPAR_ADJ > 0 ? NPAR_ADJ : 1, ctx);
+    SUNMatrix       AB  = nullptr;
+    SUNLinearSolver LSB = nullptr;
+    auto cleanupB = [&]() {
+      if (LSB) { SUNLinSolFree(LSB); LSB = nullptr; }
+      if (AB)  { SUNMatDestroy(AB);  AB = nullptr; }
+      if (ud.Jscratch) { SUNMatDestroy(ud.Jscratch); ud.Jscratch = nullptr; }
+      if (qB)  { N_VDestroy(qB); qB = nullptr; }
+      if (yB)  { N_VDestroy(yB); yB = nullptr; }
+    };
+    if (!yB || !qB) {
+      cleanupB(); cleanup();
+      return res.fail(cppde::RC_NO_MALLOC, "N_VNew_Serial (adjoint) failed");
+    }
+
+    for (int c = 0; c < n_seed && return_code == 0; ++c) {
+      // lambda at T is the seed row for the final observation; every earlier
+      // row is added when the sweep reaches its time.
+      {
+        double* lam = N_VGetArrayPointer(yB);
+        for (int i = 0; i < NEQ; ++i)
+          lam[i] = args.seed[(n_out_b - 1) + (size_t)n_out_b * i +
+                             (size_t)n_out_b * NEQ * c];
+      }
+      { double* q = N_VGetArrayPointer(qB);
+        for (int k = 0; k < NPAR_ADJ; ++k) q[k] = 0.0; }
+
+      if (indexB < 0) {
+        if (CVodeCreateB(cvode_mem, CV_BDF, &indexB) < 0 ||
+            CVodeInitB(cvode_mem, indexB, adj_rhs_fn, out_t.back(), yB) < 0 ||
+            CVodeSStolerancesB(cvode_mem, indexB, reltol, abstol) < 0 ||
+            CVodeSetUserDataB(cvode_mem, indexB, &ud) < 0) {
+          return_code = cppde::RC_LINIT_FAIL;
+          solver_msg = "adjoint initialisation failed";
+          break;
+        }
+        // The backward problem gets the caller's maxsteps, not the CVODES
+        // default of 500.
+        CVodeSetMaxNumStepsB(cvode_mem, indexB, maxsteps);
+@LSB_SETUP@        ud.Jscratch = SUNMatClone(A);
+        if (!AB || !LSB || !ud.Jscratch ||
+            CVodeSetLinearSolverB(cvode_mem, indexB, LSB, AB) < 0 ||
+            CVodeSetJacFnB(cvode_mem, indexB, jacB_fn) < 0) {
+          return_code = cppde::RC_LINIT_FAIL;
+          solver_msg = "adjoint linear solver failed";
+          break;
+        }
+        if (NPAR_ADJ > 0) {
+          if (CVodeQuadInitB(cvode_mem, indexB, adj_quad_fn, qB) < 0 ||
+              CVodeQuadSStolerancesB(cvode_mem, indexB, reltol, abstol) < 0) {
+            return_code = cppde::RC_LINIT_FAIL;
+            solver_msg = "adjoint quadrature failed";
+            break;
+          }
+          // The quadrature stays out of the error test, the SUNDIALS default:
+          // gradient entries of very different scale would stall the step.
+          CVodeSetQuadErrConB(cvode_mem, indexB, SUNFALSE);
+        }
+      } else {
+        // Later columns re-initialise the one backward problem: CVodeB advances
+        // every backward problem that exists.
+        if (CVodeReInitB(cvode_mem, indexB, out_t.back(), yB) < 0) {
+          return_code = cppde::RC_UNRECOGNIZED_ERR;
+          solver_msg = "CVodeReInitB failed between seed columns"; break;
+        }
+        if (NPAR_ADJ > 0 && CVodeQuadReInitB(cvode_mem, indexB, qB) < 0) {
+          return_code = cppde::RC_UNRECOGNIZED_ERR;
+          solver_msg = "CVodeQuadReInitB failed between seed columns"; break;
+        }
+      }
+
+      // Backwards over the output grid, adding each seed row on arrival. The
+      // last row is already in lambda; the first is added after the sweep, at
+      // t0, where there is nothing left to integrate.
+      for (int k = n_out_b - 2; k >= 0 && return_code == 0; --k) {
+        int fb = CVodeB(cvode_mem, out_t[k], CV_NORMAL);
+        if (fb < 0) {
+          return_code = fb; solver_msg = "CVodeB failed"; break;
+        }
+        sunrealtype tB;
+        if (CVodeGetB(cvode_mem, indexB, &tB, yB) < 0) {
+          return_code = cppde::RC_UNRECOGNIZED_ERR;
+          solver_msg = "CVodeGetB failed"; break;
+        }
+        double* lam = N_VGetArrayPointer(yB);
+        bool jumped = false;
+        for (int i = 0; i < NEQ; ++i) {
+          const double w = args.seed[k + (size_t)n_out_b * i +
+                                     (size_t)n_out_b * NEQ * c];
+          if (w != 0.0) { lam[i] += w; jumped = true; }
+        }
+        // A seeded jump is a new initial condition, so CVODES is re-initialised
+        // there, and only there: a re-init restarts the method at order one.
+        if (jumped && k > 0) {
+          // Reading the quadrature out and re-initialising it with that value
+          // restarts its history and keeps what it has integrated.
+          if (NPAR_ADJ > 0) {
+            sunrealtype tq_;
+            if (CVodeGetQuadB(cvode_mem, indexB, &tq_, qB) < 0) {
+              return_code = cppde::RC_UNRECOGNIZED_ERR;
+              solver_msg = "CVodeGetQuadB failed at a seeded jump"; break;
+            }
+          }
+          if (CVodeReInitB(cvode_mem, indexB, out_t[k], yB) < 0) {
+            return_code = cppde::RC_UNRECOGNIZED_ERR;
+            solver_msg = "CVodeReInitB failed"; break;
+          }
+          if (NPAR_ADJ > 0 && CVodeQuadReInitB(cvode_mem, indexB, qB) < 0) {
+            return_code = cppde::RC_UNRECOGNIZED_ERR;
+            solver_msg = "CVodeQuadReInitB failed"; break;
+          }
+        }
+      }
+      if (return_code != 0) break;
+
+      if (NPAR_ADJ > 0) {
+        sunrealtype tq;
+        if (CVodeGetQuadB(cvode_mem, indexB, &tq, qB) < 0) {
+          return_code = cppde::RC_UNRECOGNIZED_ERR;
+          solver_msg = "CVodeGetQuadB failed"; break;
+        }
+      }
+
+      {
+        const double* lam = N_VGetArrayPointer(yB);
+        const double* q   = N_VGetArrayPointer(qB);
+        for (int i = 0; i < NEQ; ++i)
+          res.adjoint[i + (size_t)n_phi_rows * c] = lam[i];
+        // CVODES integrates the quadrature from T down to t0 with xi(T) = 0, so
+        // xi(t0) = -int_{t0}^{T} fQB dt; fQB carries the adjoint's minus sign,
+        // and the two cancel to int lambda' (df/dp) dt.
+        for (int k = 0; k < NPAR_ADJ; ++k)
+          res.adjoint[(NEQ + k) + (size_t)n_phi_rows * c] = q[k];
+      }
+
+    }
+    cleanupB();
+  }
+"""
+    else:
+        asa_init_block = ""
+        asa_sweep_block = ""
+
+    # A seed reaches the adjoint under reverse and means nothing otherwise, so
+    # each direction refuses the other rather than ignoring the argument.
+    if reverse:
+        seed_guard = (
+            '  if (a.seed == nullptr)\n'
+            '    Rf_error("a model compiled with derivMode = reverse needs a cotangent");')
+    else:
+        seed_guard = (
+            '  if (a.seed != nullptr)\n'
+            '    Rf_error("this cvode model was compiled with derivMode = forward; '
+            'recompile with derivMode = reverse");')
+
     # Linear-solver setup
     if use_sparse:
         ls_includes = (
@@ -1531,7 +1471,7 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
   const double* x = N_VGetArrayPointer(y);
   (void)x; (void)params;
 {forcing_local}
-{jac_body_sparse}
+{jac_body}
   return 0;
   }} catch (...) {{
     return -1;   // unrecoverable
@@ -1570,7 +1510,7 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
   (void)x; (void)params;
 {forcing_local}
   SUNMatZero(J);
-{jac_body_dense}
+{jac_body}
   return 0;
   }} catch (...) {{
     return -1;   // unrecoverable
@@ -1586,28 +1526,75 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
   if (CVodeSetJacFn(cvode_mem, jac_fn) < 0) {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeSetJacFn failed"); }}
 """
 
+    # The backward problem lambda' = -J' lambda gets the forward solver kind and
+    # its Jacobian -J', formed from jac_fn into a scratch matrix of the forward
+    # pattern.
+    asa_ud_members = ""
+    jacB_decl = jacB_impl = lsB_setup = ""
+    if reverse:
+        asa_ud_members = ("  SUNMatrix Jscratch = nullptr;              // J for jacB_fn\n"
+                          "  std::vector<sunindextype> jacB_next;       // CSC transpose cursor\n")
+        jacB_decl = ("static int jacB_fn(sunrealtype t, N_Vector y, N_Vector yB, "
+                     "N_Vector fyB, SUNMatrix JB, void* ud_vp, N_Vector, N_Vector, "
+                     "N_Vector);")
+        if use_sparse:
+            jacB_fill = """  // -J' in CSC is J in CSR: count per row, then scatter.
+  const sunindextype* Jp = SUNSparseMatrix_IndexPointers(J);
+  const sunindextype* Ji = SUNSparseMatrix_IndexValues(J);
+  const sunrealtype*  Jx = SUNSparseMatrix_Data(J);
+  sunindextype* Bp = SUNSparseMatrix_IndexPointers(JB);
+  sunindextype* Bi = SUNSparseMatrix_IndexValues(JB);
+  sunrealtype*  Bx = SUNSparseMatrix_Data(JB);
+  for (sunindextype c = 0; c <= NEQ; ++c) Bp[c] = 0;
+  for (sunindextype k = 0; k < Jp[NEQ]; ++k) ++Bp[Ji[k] + 1];
+  for (sunindextype c = 0; c < NEQ; ++c) Bp[c + 1] += Bp[c];
+  ud->jacB_next.assign(Bp, Bp + NEQ);
+  for (sunindextype j = 0; j < NEQ; ++j)
+    for (sunindextype k = Jp[j]; k < Jp[j + 1]; ++k) {
+      const sunindextype pos = ud->jacB_next[Ji[k]]++;
+      Bi[pos] = j;
+      Bx[pos] = -Jx[k];
+    }"""
+            lsB_setup = f"""        AB  = SUNSparseMatrix(NEQ, NEQ, {nnz_total}, CSC_MAT, ctx);
+        LSB = AB ? SUNLinSol_KLU(yB, AB, ctx) : nullptr;
+        if (LSB) {{
+          sun_klu_common* klu_cB = SUNLinSol_KLUGetCommon(LSB);
+          if (klu_cB) {{ klu_cB->btf = {klu_btf}; klu_cB->ordering = {klu_ord}; }}
+        }}
+"""
+        else:
+            jacB_fill = """  for (sunindextype j = 0; j < NEQ; ++j)
+    for (sunindextype i = 0; i < NEQ; ++i)
+      SM_ELEMENT_D(JB, i, j) = -SM_ELEMENT_D(J, j, i);"""
+            lsB_setup = f"""        AB  = SUNDenseMatrix(NEQ, NEQ, ctx);
+        LSB = AB ? {ls_ctor}(yB, AB, ctx) : nullptr;
+"""
+        jacB_impl = f"""
+// ---- Backward Jacobian: d(lambda')/d(lambda) = -J(x,p)' ----
+static int jacB_fn(sunrealtype t, N_Vector y, N_Vector yB, N_Vector fyB,
+                   SUNMatrix JB, void* ud_vp,
+                   N_Vector tmp1B, N_Vector tmp2B, N_Vector tmp3B) {{
+  (void)yB; (void)fyB; (void)tmp1B; (void)tmp2B; (void)tmp3B;
+  try {{
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  SUNMatrix J = ud->Jscratch;
+  if (jac_fn(t, y, nullptr, J, ud_vp, nullptr, nullptr, nullptr) != 0) return -1;
+{jacB_fill}
+  return 0;
+  }} catch (...) {{
+    return -1;
+  }}
+}}
+"""
+    asa_sweep_block = asa_sweep_block.replace("@LSB_SETUP@", lsB_setup)
+
     sens_decl = ""
     sens_impl = ""
     if deriv:
         sens_decl = ("static int sens_rhs1_fn(int Ns, sunrealtype t, N_Vector y, "
                      "N_Vector ydot, int iS, N_Vector yS, N_Vector ySdot, "
                      "void* ud_vp, N_Vector tmp1, N_Vector tmp2);")
-        # Emit chain-rule accumulation: ySdot += sum_pk (df/dp_pk)(x,p) * M[NEQ+pk, iS]
-        # Grouped by pk so we read M[NEQ+pk, iS] once per pk.
-        by_pk = {}
-        for (i_row, pk, d_expr) in (df_dp_entries or []):
-            by_pk.setdefault(pk, []).append((i_row, d_expr))
         phi_rows = n_states + n_params
-        reparam_part2_lines = [f"  const int phi_rows = {phi_rows};"]
-        for pk in sorted(by_pk.keys()):
-            reparam_part2_lines.append(f"  {{  // pk = {pk}")
-            reparam_part2_lines.append(
-                f"    const double M_pk = ud->Phi_prime[{n_states + pk} + phi_rows * iS];")
-            for (i_row, d_expr) in by_pk[pk]:
-                reparam_part2_lines.append(
-                    f"    ySdot_arr[{i_row}] += ({_to_cpp(d_expr, states_list, params_list, n_states, 'double', forcings_list)}) * M_pk;")
-            reparam_part2_lines.append("  }")
-        reparam_part2_body = "\n".join(reparam_part2_lines)
         sens_impl = f"""
 static int sens_rhs1_fn(int Ns, sunrealtype t,
                         N_Vector y, N_Vector ydot,
@@ -1623,21 +1610,71 @@ static int sens_rhs1_fn(int Ns, sunrealtype t,
   const double* x = N_VGetArrayPointer(y);
   const double* yS_arr  = N_VGetArrayPointer(yS);
   double*       ySdot_arr = N_VGetArrayPointer(ySdot);
-  (void)x; (void)params;
+  // parameter rows of column iS of Phi'(theta)
+  const double* _Mp = ud->Phi_prime.data() + NEQ + {phi_rows} * iS;
+  (void)x; (void)params; (void)_Mp;
 {forcing_local}
-
-  // --- Part 1: ySdot = J(x,p) * yS ---
-{jac_times_yS_body}
-
-  // --- Part 2: ySdot += (df/dp_d) * M_param[:, iS] ---
-  // where M_param is the parameter block of Phi'(theta).
-{reparam_part2_body}
+  // ySdot = J(x,p) yS + (df/dp) _Mp
+{sens_body}
   return 0;
   }} catch (...) {{
     return -1;   // unrecoverable
   }}
 }}
 """
+
+    # --- Adjoint entry points, emitted only under reverse ---
+    if reverse:
+        adj_decl = (
+            "static int adj_rhs_fn(sunrealtype t, N_Vector y, N_Vector yB,\n"
+            "                      N_Vector yBdot, void* ud_vp);\n"
+            "static int adj_quad_fn(sunrealtype t, N_Vector y, N_Vector yB,\n"
+            "                       N_Vector qBdot, void* ud_vp);")
+        adj_impl = f"""
+// ---- Adjoint right-hand side: lambda' = -J(x,p)' lambda ----
+// y is the forward state as CVODES interpolates it from the checkpoints.
+static int adj_rhs_fn(sunrealtype t, N_Vector y, N_Vector yB,
+                      N_Vector yBdot, void* ud_vp) {{
+  (void)t;
+  try {{
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  const double* params = ud->params.data();
+  const double* x      = N_VGetArrayPointer(y);
+  const double* lam    = N_VGetArrayPointer(yB);
+  double*       lamdot = N_VGetArrayPointer(yBdot);
+  (void)x; (void)params;
+{forcing_local}
+{adj_rhs_body}
+  return 0;
+  }} catch (...) {{
+    return -1;
+  }}
+}}
+
+// ---- Adjoint quadrature: q' = -(df/dp)' lambda ----
+// Integrated backwards from T to t0, so what it accumulates is the parameter
+// half of the gradient. The state half needs no quadrature: it is lambda(t0).
+static int adj_quad_fn(sunrealtype t, N_Vector y, N_Vector yB,
+                       N_Vector qBdot, void* ud_vp) {{
+  (void)t;
+  try {{
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  const double* params = ud->params.data();
+  const double* x    = N_VGetArrayPointer(y);
+  const double* lam  = N_VGetArrayPointer(yB);
+  double*       qdot = N_VGetArrayPointer(qBdot);
+  (void)x; (void)params;
+{forcing_local}
+{adj_quad_body}
+  return 0;
+  }} catch (...) {{
+    return -1;
+  }}
+}}
+"""
+    else:
+        adj_decl = ""
+        adj_impl = ""
 
     return f"""/** Code auto-generated by cppDE {version} (CVODE backend) **/
 
@@ -1659,22 +1696,29 @@ static int sens_rhs1_fn(int Ns, sunrealtype t,
 {ls_includes}#include <sundials/sundials_types.h>
 #include <sundials/sundials_context.h>
 #include <cppde/cppde_scalar_ops.hpp>
-#include <cppde/cppde_step_trace.hpp>
+{linmap_include}#include <cppde/cppde_step_trace.hpp>
 #include <cppde/cppde_r_batch.hpp>
 {forcing_include}{event_block_includes}
 
 namespace {{
-
+{data_block}
 constexpr int NEQ    = {n_states};
 constexpr int NPARMS = {n_global};           // n_states + n_params (flat layout)
+// Rows the adjoint quadrature carries: the dynamic parameters. The state half
+// of the answer is lambda(t0) and needs no quadrature.
+constexpr int NPAR_ADJ = NPARMS - NEQ;
+// Accepted forward steps between checkpoints (Nd of CVodeAdjInit).
+constexpr int ASA_CHECKPOINTS = {asa_checkpoints};
 
 struct UserData {{
   std::vector<double> params;               // length NPARMS
-{reparam_ud_members}{forcing_ud_members}{events_ud_members}}};
+{reparam_ud_members}{forcing_ud_members}{events_ud_members}{asa_ud_members}}};
 
 static int rhs_fn(sunrealtype t, N_Vector y, N_Vector ydot, void* ud_vp);
 {jac_decl}
 {sens_decl}
+{adj_decl}
+{jacB_decl}
 {rootfunc_decl}
 
 // ---- RHS ----
@@ -1697,17 +1741,14 @@ static int rhs_fn(sunrealtype t, N_Vector y, N_Vector ydot, void* ud_vp) {{
 }}
 {jac_impl}
 {sens_impl}
+{adj_impl}
+{jacB_impl}
 {rootfunc_impl}
 {event_struct}
 
 // ---- Step trace (CVODE_STEP_TRACE) ----
-// When compiled with -DCVODE_STEP_TRACE, the generated main loop drives the
-// integrator in CV_ONE_STEP mode and appends one row per accepted internal
-// step into the cppDE trace buffer (see cppde_step_trace.hpp).  After
-// integration the entry point marshals the buffer into the `trace` element
-// of the returned R list; `solveODE()` then decides whether to attach it
-// as a data.frame or write a CSV.  Fields not exposed by the CVODES public
-// API (`tq[2]`, pre-scale `dsm`, Nordsieck `gamma`) are pushed as NaN.
+// Appends trace rows to the buffer of cppde_step_trace.hpp, which reaches R as
+// the `trace` element; fields the CVODES API does not expose are NaN.
 #ifdef CVODE_STEP_TRACE
 static void cvode_emit_trace_row(void* cvode_mem,
                                  N_Vector ele_buf, N_Vector ewt_buf,
@@ -1726,28 +1767,9 @@ static void cvode_emit_trace_row(void* cvode_mem,
   CVodeGetLastOrder(cvode_mem, &last_order);
   CVodeGetLastStep(cvode_mem, &last_h);
 
-  // Reconstruct dsm from ele + ewt.  IMPORTANT: `CVodeGetEstLocalErrors`
-  // returns `ele = acor · tq[2]`: already the *scaled* local-error
-  // estimate, not the raw corrector-predictor difference.  Therefore
-  // `WRMS(ele · ewt)` yields the controller's state-side `dsm` directly,
-  // not a raw `acnrm`.  The CVODES public API exposes neither `acor` nor
-  // `tq[2]` separately, so only `dsm_state` can be reconstructed; `acnrm`
-  // is emitted as NaN in this trace.
-  //
-  // STATE-ONLY: This trace shows the STATE contribution only.  The full
-  // dsm CVODES uses internally for step control includes per-sensitivity
-  // contributions via `cvSensUpdateNorm` (CV_STAGGERED) when sensErrCon
-  // is on: but `CVodeGetSensEstLocalErrors` does not exist in SUNDIALS
-  // 6.4.x's public API, and `cv_acorS`/`cv_tq[2]` are not exposed via
-  // any post-step Get function.  Reading them would require including
-  // <cvodes/cvodes_impl.h>, which is not shipped with libsundials-dev.
-  //
-  // For apples-to-apples comparison against cppDE: compute
-  //   cppDE_state_dsm = trace$acnrm_state * trace$tq2
-  // and compare against this trace's `dsm` column.  cppDE's `dsm`
-  // column is the full sens-aware controller value (max over state and
-  // each sensitivity vector); CVODE's effective full dsm is unobservable
-  // via the public API.
+  // dsm = WRMS(ele * ewt) over the states: CVodeGetEstLocalErrors returns the
+  // scaled estimate acor * tq[2]. The public API exposes neither acor, tq[2]
+  // nor the sensitivity part of the error test, so those fields are NaN.
   (void)eleS_buf; (void)ewtS_buf; (void)ns_active;
   double sumsq = 0.0;
   long   N_eff = 0;
@@ -1794,7 +1816,7 @@ static void cvode_emit_trace_row(void* cvode_mem,
 }} // anonymous namespace
 
 // =====================================================================
-// R entry point: matches cppDE's 14-SEXP signature
+// R entry points, with the signature of the native solve_<model>
 // =====================================================================
 
 // Pure C++ solve: no R API, no escaping exceptions.
@@ -1805,7 +1827,7 @@ try {{
   cppde::ndf_detail::trace_scope _cppde_trace_scope(res.trace);
 
   if (args.sens2ini != nullptr)
-    return res.fail(cppde::RC_ILL_INPUT, "sens2ini not supported by CVODES backend");
+    return res.fail(cppde::RC_ILL_INPUT, "hessian not supported by CVODES backend");
 
   constexpr bool deriv = {deriv_flag};
 
@@ -1826,15 +1848,12 @@ try {{
   }}
 
 {forcing_init_block}
-  // R always supplies a full-shape sens1ini = [NEQ + n_params, M] when
-  // deriv = TRUE: legacy [n_states, n_active] input is auto-extended with
-  // identity-on-non-fixed-params, runtime `fixed` is translated into zero
-  // rows of Phi'. Ns_active = M is read from ncol(sens1ini); M = 0 is a
-  // valid fast path (skips sensitivity integration via the gate below).
+  // With deriv, R supplies sens1ini as [NEQ + n_params, M], zero rows for fixed
+  // entries; Ns_active = M, and M = 0 skips the sensitivity integration.
   int Ns_active_tmp = 0;
   if (deriv) {{
     if (args.sens1ini == nullptr)
-      return res.fail(cppde::RC_ILL_INPUT, "sens1ini is required when deriv = TRUE");
+      return res.fail(cppde::RC_ILL_INPUT, "tangent is required when deriv = TRUE");
     Ns_active_tmp = args.n_sens1_cols;
   }}
   const int Ns_active = Ns_active_tmp;
@@ -1899,6 +1918,7 @@ try {{
 {rootfunc_init_block}
   // --- sensitivities ---
 {sens_init_block}
+{asa_init_block}
 
   // --- write t0 row ---
   out_t.push_back(t0);
@@ -1948,6 +1968,7 @@ try {{
 
 {event_builder_block}{event_apply_lambda}{do_cvode_step_lambda}{event_pre_t0_block}{main_loop_body}
 
+{asa_sweep_block}
   // --- diagnostics ---
   long n_steps = 0, n_fe = 0, n_je = 0, n_etf = 0, n_setups = 0;
   int  last_order = 0;
@@ -2009,12 +2030,15 @@ extern "C" SEXP solve_{modelname}(
     SEXP timesSEXP, SEXP paramsSEXP, SEXP sens1iniSEXP, SEXP sens2iniSEXP,
     SEXP fixedSEXP, SEXP abstolSEXP, SEXP reltolSEXP, SEXP maxprogressSEXP,
     SEXP maxstepsSEXP, SEXP hiniSEXP, SEXP root_tolSEXP, SEXP maxrootSEXP,
-    SEXP forcingTimesSEXP, SEXP forcingValuesSEXP, SEXP dimnamesSEXP)
+    SEXP forcingTimesSEXP, SEXP forcingValuesSEXP, SEXP seedSEXP,
+    SEXP dimnamesSEXP)
 {{
   cppde::rbatch::solve_args a = cppde::rbatch::read_solve_args(
       timesSEXP, paramsSEXP, sens1iniSEXP, sens2iniSEXP, fixedSEXP,
       abstolSEXP, reltolSEXP, maxprogressSEXP, maxstepsSEXP, hiniSEXP,
-      root_tolSEXP, maxrootSEXP, forcingTimesSEXP, forcingValuesSEXP);
+      root_tolSEXP, maxrootSEXP, forcingTimesSEXP, forcingValuesSEXP, seedSEXP);
+  // Nothing is protected yet, so the longjmp is safe here.
+{seed_guard}
   return cppde::rbatch::solve_one(a, NEQ, {deriv_flag}, false, &solve_impl, dimnamesSEXP);
 }}
 

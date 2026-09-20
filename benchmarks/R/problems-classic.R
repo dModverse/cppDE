@@ -199,3 +199,51 @@ build_fhn_chain <- function(N = 64L, eps = 0.02) {
                 traits = c("sparse", "relaxation", "stiff-moderate"),
                 notes = sprintf("%d coupled neurons, eps = %g", N, eps))
 }
+## Landau-Lifshitz-Gilbert macrospins on a helix with dense dipolar coupling:
+## 3 ns states plus a drive phase.
+build_llg_dipole <- function(ns = 160L) {
+  ns <- as.integer(ns)
+  k <- 0:(ns - 1L)
+  pos <- cbind(cos(2 * pi * k / ns), sin(2 * pi * k / ns), 0.35 * k / ns)
+  nm <- function(a, s) sprintf("m%s%d", c("x", "y", "z")[a], s - 1L)
+  tens <- function(s, t) {
+    if (s == t) return(diag(-0.2, 3))
+    r <- pos[t, ] - pos[s, ]
+    d <- sqrt(sum(r^2))
+    u <- r / d
+    (3 * outer(u, u) - diag(3)) * 0.01 / d^3
+  }
+  ext <- c("Hx0 + h1*cos(phi)", "Hy0", "Hz0")
+  rhs <- character(0)
+  for (s in seq_len(ns)) {
+    H <- character(3)
+    for (a in 1:3) {
+      terms <- character(0)
+      for (t in seq_len(ns)) {
+        D <- tens(s, t)
+        for (b in 1:3) if (D[a, b] != 0)
+          terms <- c(terms, sprintf("%s*%s", format(D[a, b], digits = 17), nm(b, t)))
+      }
+      H[a] <- sprintf("(%s + Ms*(%s))", ext[a], paste(terms, collapse = " + "))
+    }
+    mx <- nm(1, s); my <- nm(2, s); mz <- nm(3, s)
+    rhs[mx] <- sprintf("-gp*(%s*(-alpha*(%s^2 + %s^2)) + %s*(alpha*%s*%s - %s) + %s*(%s + alpha*%s*%s))",
+                       H[1], my, mz, H[2], mx, my, mz, H[3], my, mx, mz)
+    rhs[my] <- sprintf("-gp*(%s*(%s + alpha*%s*%s) + %s*(-alpha*(%s^2 + %s^2)) + %s*(alpha*%s*%s - %s))",
+                       H[1], mz, mx, my, H[2], mx, mz, H[3], my, mz, mx)
+    rhs[mz] <- sprintf("-gp*(%s*(alpha*%s*%s - %s) + %s*(%s + alpha*%s*%s) + %s*(-alpha*(%s^2 + %s^2)))",
+                       H[1], mx, mz, my, H[2], mx, my, mz, H[3], mx, my)
+  }
+  rhs["phi"] <- "omega"
+  th <- 0.3 + 0.1 * k
+  ph <- 0.2 * k
+  init <- stats::setNames(c(rbind(sin(th) * cos(ph), sin(th) * sin(ph), cos(th))),
+                          names(rhs)[seq_len(3L * ns)])
+  parms <- c(init, phi = 0, gp = 1, alpha = 0.1, Ms = 1, Hx0 = 0.3, Hy0 = 0.1,
+             Hz0 = 1, h1 = 0.2, omega = 2)
+  bench_problem(sprintf("llg%d", ns), sprintf("LLGDipole_N%d", 3L * ns + 1L),
+                rhs, parms, seq(0, 3, length.out = 31),
+                sens = c("gp", "alpha", "Ms", "Hz0", "h1"),
+                traits = c("large", "oscillatory"),
+                notes = sprintf("%d macrospins, dense dipolar coupling", ns))
+}

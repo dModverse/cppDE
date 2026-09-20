@@ -14,3 +14,4 @@
 ^benchmarks$
 ^cran-comments\.md$
 ^src/Makevars$
+^examples$

@@ -95,43 +95,56 @@ test_that("an explicit method stays dense however sparse the system looks", {
 # --------------------------------------------------------------------------
 # Sparse + first-order sensitivities
 
+# Chain of 8 states: Jacobian is bidiagonal, so auto-detection picks sparse.
+sens_n   <- 8L
+sens_nms <- paste0("x", seq_len(sens_n))
+sens_rhs <- setNames(c("-k1*x1",
+                       paste0("k", seq_len(sens_n - 1L), "*x",
+                              seq_len(sens_n - 1L), " - k", seq(2L, sens_n),
+                              "*x", seq(2L, sens_n))[seq_len(sens_n - 1L)]),
+                     sens_nms)
+sens_rhs[[sens_n]] <- paste0("k", sens_n - 1L, "*x", sens_n - 1L)
+
+# Models of the solve tests below, built once and linked into one shared object.
+solve_mod <- list(
+  sparse = cppODE(sens_rhs, modelname = "sens_sparse", deriv = TRUE,
+                  sparse = TRUE, compile = FALSE, outdir = tempdir(),
+                  verbose = FALSE),
+  dense = cppODE(sens_rhs, modelname = "sens_dense", deriv = TRUE,
+                 sparse = FALSE, compile = FALSE, outdir = tempdir(),
+                 verbose = FALSE),
+  onfailure = cppODE(c(A = "-k*A"), modelname = "sparse_onfailure",
+                     deriv = FALSE, compile = FALSE, outdir = tempdir(),
+                     verbose = FALSE)
+)
+do.call(compile, c(unname(solve_mod),
+                   list(output = "test_sparse_autodetect", cores = 1)))
+
 # BLAS stays single-threaded through a solve: a threaded MKL brings libiomp5
 # alongside libgomp and corrupts the AD tangent blocks. The pin holds
 # independently of the dense LU, which a sparse model never reaches.
 
 test_that("sparse Jacobian and dense Jacobian agree on first-order sensitivities", {
-  # Chain of 8 states: Jacobian is bidiagonal, so auto-detection picks sparse.
-  n   <- 8L
-  nms <- paste0("x", seq_len(n))
-  rhs <- setNames(c("-k1*x1",
-                    paste0("k", seq_len(n - 1L), "*x", seq_len(n - 1L), " - k",
-                           seq(2L, n), "*x", seq(2L, n))[seq_len(n - 1L)]),
-                  nms)
-  rhs[[n]] <- paste0("k", n - 1L, "*x", n - 1L)
-
-  parms <- c(setNames(c(10, rep(0, n - 1L)), nms),
-             setNames(seq(0.7, by = 0.3, length.out = n - 1L),
-                      paste0("k", seq_len(n - 1L))))
+  parms <- c(setNames(c(10, rep(0, sens_n - 1L)), sens_nms),
+             setNames(seq(0.7, by = 0.3, length.out = sens_n - 1L),
+                      paste0("k", seq_len(sens_n - 1L))))
   tt <- c(0, 0.5, 1, 2, 4, 8)
 
-  sp <- cppODE(rhs, modelname = "sens_sparse", deriv = TRUE, sparse = TRUE,
-               outdir = tempdir(), verbose = FALSE)
+  sp <- solve_mod$sparse
   # Sparse first, before anything has run a dense LU in this session.
   out_sp <- solveODE(sp, tt, parms)
 
-  dn <- cppODE(rhs, modelname = "sens_dense", deriv = TRUE, sparse = FALSE,
-               outdir = tempdir(), verbose = FALSE)
+  dn <- solve_mod$dense
   out_dn <- solveODE(dn, tt, parms)
 
   expect_identical(out_sp$time, tt)
   expect_identical(out_sp$diagnostics$return_code, 0L)
   expect_equal(out_sp$variable, out_dn$variable, tolerance = 1e-6)
-  expect_equal(out_sp$sens1, out_dn$sens1, tolerance = 1e-6)
+  expect_equal(out_sp$tangent, out_dn$tangent, tolerance = 1e-6)
 })
 
 test_that("an incomplete integration is an error, not partial results", {
-  m <- cppODE(c(A = "-k*A"), modelname = "sparse_onfailure", deriv = FALSE,
-              outdir = tempdir(), verbose = FALSE)
+  m <- solve_mod$onfailure
   tt <- c(0, 1, 2)
   p  <- c(A = 1, k = 1)
 

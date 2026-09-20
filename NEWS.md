@@ -1,90 +1,100 @@
+# cppDE 0.10.0
+
+* **Reverse mode.** `cppODE(..., derivMode = "reverse")` computes the gradient
+  of a seeded functional by a discrete adjoint, at a cost that does not grow
+  with the number of parameters. `"forward-reverse"` adds its curvature, the
+  Hessian applied to the tangent, and `"forward-forward"` the full Hessian. All
+  four methods, events, roots, forcings, the sparse solver and the batch entries
+  are covered. `cvode(..., derivMode = "reverse")` wraps the CVODES adjoint
+  behind the same interface. `keepStore`/`store` reuse a forward pass,
+  `errWeights` weights the step size by the adjoint and `adjointGrid` returns
+  the backward grid.
+* **Derivative names.** Arguments and results are called `tangent`, `hessian`,
+  `cotangent` and `curvature`, replacing `sens1ini`/`sens1`, `sens2ini`/`sens2`,
+  `seed`/`adjoint` and `seedTangent`/`adjoint2`. `cppFUN()` takes `tangentX`,
+  `tangentP`, `hessianX` and `hessianP`, `evaluate()` returns `y`, `tangent` and
+  `hessian`, and `vjp()` covers both orders. `funCpp()` is now `cppFUN()`; no
+  old name is kept as an alias.
+* **Code generation on an expression graph.** The code generator builds a
+  hash-consed expression graph of the model and differentiates it by automatic
+  differentiation; SymPy is left for unusual syntax. Generation grows linearly
+  with the model, long linear sums become tables and regular structure becomes
+  loops, so models with thousands of states generate and compile in about a
+  minute. `derivMode = "symbolic"` and `derivSymb()` are gone, and a `cppFUN()`
+  object runs compiled code only.
+* `solveODE(..., sensErrCon = FALSE)` lets forward sensitivities ride the grid
+  of a value run. Tangent storage is allocated on the heap, without a
+  compile-time limit (`nStack` is gone).
+* **Bug fixes.** Second derivatives through fixed and root events, including
+  resets and roots that read the clock, agree with forward over forward to
+  1e-10. The upper half of `$hessian` no longer drifts on long stiff runs.
+  Unnamed models no longer repeat their names under `set.seed()`. The CVODES
+  adjoint converges on models with many parameters and returns its result
+  through the batch. A forcing that multiplies a state compiles, `cvode()`
+  reads a `terminal` column given as text, and the `rb4` initial step and
+  time-only sparse Jacobian entries are right.
+* `codegenAvailable()` reports whether a model can be generated and compiled
+  without installing anything; the examples run only then.
+* Python 3.9 or newer and R 4.3 or newer are required. The methods vignette
+  covers the reverse mode and benchmarks against CVODES, and every export has
+  an example.
+
 # cppDE 0.9.5
 
 * **Bug fix.** OpenMP is detected on Windows. `configure.win` read
-  `SHLIB_OPENMP_CXXFLAGS` from `R_HOME/etc/Makeconf`, which does not exist
-  there -- R keeps that file under the architecture subdirectory. Detection
-  therefore reported "no SHLIB_OPENMP_CXXFLAGS in Makeconf" on every Windows
-  install, `solveODEBatch()` ran serially and generated models were built
-  without `-fopenmp`. Both configure scripts now look under `etc/$R_ARCH`
-  first, and the Windows summary line reports OpenMP alongside CVODE and KLU.
+  `SHLIB_OPENMP_CXXFLAGS` from `R_HOME/etc/Makeconf`, which on Windows lives
+  under the architecture subdirectory, so every install ran serially and built
+  models without `-fopenmp`.
 
 # cppDE 0.9.4
 
-* A threaded BLAS no longer deadlocks a forked worker. Its worker threads do not
-  survive `fork()`, and the first call in the child large enough to thread hangs
-  on a lock they held. BLAS is now pinned to one thread for the width of every
-  `fork()` and the previous count is restored in the parent.
-* `forkGuard()` reports which BLAS cppDE steers, its thread count and whether the
-  handler is installed. Attaching the package says the same in one line, which
-  `options(cppDE.quiet = TRUE)` suppresses. The guard is installed when the DLL
-  loads, so it is in place whether or not the package is attached.
+* A threaded BLAS no longer deadlocks a forked worker. BLAS is pinned to one
+  thread for the width of every `fork()` and restored in the parent.
+* `forkGuard()` reports which BLAS cppDE steers, its thread count and whether
+  the handler is installed. The guard is installed when the DLL loads.
 * The BLAS thread-count probe covers FlexiBLAS and BLIS alongside MKL and
   OpenBLAS.
-* The Windows branch of that probe searched the process image, which never
-  exports these entry points, so the guard against two live OpenMP runtimes did
-  nothing there.
-* The package has a `src/`, holding the fork guard's entry point and nothing
-  else. `./configure` writes `src/Makevars` after probing whether `dlsym()`
-  needs `-ldl`.
+* The Windows branch of that probe searched the process image, which exports
+  none of these, so the two-runtime guard did nothing there.
+* The package has a `src/`, holding the fork guard's entry point.
 
 # cppDE 0.9.3
 
-* A `piecewise` translates. Comparisons are defined on the AD nodes of both
-  orders and a piecewise is emitted as `cppde::select(cond, a, b)`. Both
-  branches are evaluated, so each has to be safe to evaluate.
-* `&&`, `||` and `!` are accepted in equations. Python's own parser does the
-  grouping, so `a > b && c > d` keeps its meaning without parentheses.
-* An expression that does not parse names itself and gives a reason on one
-  line. The old message was truncated by reticulate and then indexed out of
-  range.
+* A `piecewise` translates, as `cppde::select(cond, a, b)`. Both branches are
+  evaluated, so each has to be safe to evaluate.
+* `&&`, `||` and `!` are accepted in equations, grouped by Python's parser.
+* An expression that does not parse names itself and gives a reason.
 * A model symbol can no longer collide with an identifier the generator emits.
-  Symbols are substituted for their slot while the expression is printed, not
-  in the finished source, where a parameter named `std` rewrote `std::pow`
-  into `p[18]::pow`.
+  A parameter named `std` used to rewrite `std::pow` into `p[18]::pow`.
 * A symbol named after a C++ keyword compiles, `default` and `int` included.
-* A symbol named after a Python keyword is rejected and named in the message,
-  in `funCpp()` as well as in `cppODE()` and `cvode()`. It used to be renamed,
-  which left the caller holding the old name. SymPy parses through Python's
-  parser, where such a name is a syntax error.
-* The `double` locals of a root event's `G_tt` lambda are named by position,
-  not after the model's own symbols.
+* A symbol named after a Python keyword is rejected and named, rather than
+  silently renamed. SymPy parses through Python's parser.
+* The `double` locals of a root event's `G_tt` lambda are named by position.
 * `cppde::value_of(x)` is the value accessor across arithmetic types, both dual
   orders and their expression templates.
 
 # cppDE 0.9.2
 
 * A root event whose crossing falls exactly on an evaluated time now fires.
-  Detection and bisection both tested the sign product strictly, so an exact
-  zero counted as no crossing and the event was lost or localised past the root.
-* A root event no longer fires again on the crossing it just handled. The
-  restart sits on the event surface, where the round-off residue of the root
-  function carried a sign that read as a second crossing.
-* A fixed event that makes a root condition true now fires it. The conditions
-  are read on both sides of the jump and the resets ride on its surface, so
-  they transport the sensitivities like a fixed event at that time. Terminal
-  conditions are excluded.
+  Detection and bisection both tested the sign product strictly.
+* A root event no longer fires again on the crossing it just handled.
+* A fixed event that makes a root condition true now fires it, with the resets
+  riding on the jump's surface. Terminal conditions are excluded.
 * The step size is re-estimated after every event, not only for the multistep
   methods.
-* `funCpp()` substitutes all symbols in one pass. A parameter carrying the name
-  of a generated array, `p` for instance, rewrote the slots already emitted for
-  the others, so the result depended on the order the parameters were listed in.
+* `funCpp()` substitutes all symbols in one pass. A parameter named after a
+  generated array rewrote the slots already emitted.
 * `compile()` no longer repeats the OpenMP and KLU flags that the constructors
   already recorded on the model.
-* `inst/examples/example_saltation.R` checks the sensitivity transport against a
-  SymPy solution of the same model, to first and second order, over five models
-  covering both event kinds, repeated firings, an explicitly time-dependent
-  right-hand side and an oscillator between two elastic walls.
-* Generated entry points are dispatched by name and shared object instead of by
-  a cached address. `dyn.unload()` nulls an address in place and nothing
-  resolves it again, so a reload left every caller that had already resolved a
-  symbol pointing at nothing. Loading and unloading are now without
-  consequence, and a model whose library is gone names the entry point and the
-  library it is missing instead of dying on a null address.
-* Scoping the lookup to one shared object also stops two models that export the
-  same entry point name from reaching into each other.
-* `clearNativeSymbols()` drops the remembered name pairings, which only a
-  recompile into a differently named shared object can make stale. It is no
-  longer needed after loading or unloading.
+* `inst/examples/example_saltation.R` checks the sensitivity transport against
+  a SymPy solution to first and second order, over five models.
+* Generated entry points are dispatched by name and shared object rather than
+  by a cached address, so loading and unloading are without consequence. A
+  model whose library is gone names what it is missing.
+* Scoping the lookup to one shared object also stops two models sharing an
+  entry point name from reaching into each other.
+* `clearNativeSymbols()` drops the remembered name pairings. It is no longer
+  needed after loading or unloading.
 
 # cppDE 0.9.1
 

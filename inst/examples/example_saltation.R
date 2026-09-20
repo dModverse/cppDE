@@ -124,12 +124,12 @@ comparison <- function(expr, at, res, var) {
   for (a in seq_len(np))
     panels[[length(panels) + 1L]] <-
       panel(1L, lab1(var, at$names[a]), series(expr, at, at$syms[a]),
-            res$sens1[i, var, at$names[a]])
+            res$tangent[i, var, at$names[a]])
   for (a in seq_len(np)) for (b in a:np)
     panels[[length(panels) + 1L]] <-
       panel(2L, lab2(var, at$names[a], at$names[b]),
             series(expr, at, at$syms[c(a, b)]),
-            res$sens2[i, var, at$names[a], at$names[b]])
+            res$hessian[i, var, at$names[a], at$names[b]])
 
   labels <- vapply(panels, `[[`, "", "quantity")
   data.frame(
@@ -151,22 +151,70 @@ report <- function(df, title) {
   }
 }
 
-comparisonPlot <- function(df, orders, title)
-  ggplot(df[df$order %in% orders, ], aes(x = time)) +
+## One sweep answers one scalar functional, however many parameters there are.
+## Seeding a single output row makes that functional the state at that row, so
+## the answer is the quantity the forward panels already carry. Only requested
+## times are seeded: a row a root inserts moves with theta.
+
+## Verification, not advice. A trajectory has one output per row and state, so
+## forward fills these panels more cheaply; reverse pays where a scalar sits at
+## the end, which is an objective and not a simulation.
+reverseSeries <- function(expr, at, res, model, pars, var, states,
+                          opts = list(), every = 50L) {
+  keep <- seq(1L, length(at$times), by = every)
+  i    <- rowsAt(res, at$times)[keep]
+  W    <- array(0, c(nrow(res$variable), length(states), length(keep)))
+  for (r in seq_along(keep)) W[i[r], match(var, states), r] <- 1
+  rev <- do.call(solveODE, c(list(model, at$times, pars, cotangent = W), opts))
+
+  np  <- length(at$syms)
+  out <- list()
+  add <- function(order, quantity, symbolic, numeric)
+    out[[length(out) + 1L]] <<- data.frame(
+      order = order, quantity = quantity, time = at$times[keep],
+      symbolic = symbolic, reverse = as.numeric(numeric))
+
+  for (a in seq_len(np))
+    add(1L, lab1(var, at$names[a]),
+        series(expr, at, at$syms[a])[keep], rev$cotangent[at$names[a], ])
+  for (a in seq_len(np)) for (b in a:np)
+    add(2L, lab2(var, at$names[a], at$names[b]),
+        series(expr, at, at$syms[c(a, b)])[keep],
+        rev$curvature[at$names[a], at$names[b], ])
+
+  df <- do.call(rbind, out)
+  for (o in 1:2) {
+    d <- df[df$order == o, ]
+    cat(sprintf("  %-13s max |reverse - symbolic| = %.2e\n",
+                c("reverse 1st", "reverse 2nd")[o],
+                max(abs(d$reverse - d$symbolic))))
+  }
+  df
+}
+
+## `rev` draws forward over reverse on top, one point per seeded row.
+comparisonPlot <- function(df, orders, title, rev = NULL) {
+  p <- ggplot(df[df$order %in% orders, ], aes(x = time)) +
     ## A quantity that vanishes identically leaves the solver a cancellation
     ## residue of a few ulp, and a free y scale would blow that up into a
     ## picture of its own round-off. No panel is drawn tighter than this.
     expand_limits(y = c(-1e-10, 1e-10)) +
     geom_line(aes(y = symbolic, colour = "symbolic", linetype = "symbolic"),
               linewidth = 1) +
-    geom_line(aes(y = numeric, colour = "solveODE", linetype = "solveODE"),
-              linewidth = 1) +
-    facet_wrap(~quantity, scales = "free_y") +
-    scale_colour_manual(values = c(symbolic = "#2166ac", solveODE = "#d6604d")) +
-    scale_linetype_manual(values = c(symbolic = "solid", solveODE = "dotdash")) +
+    geom_line(aes(y = numeric, colour = "forward", linetype = "forward"),
+              linewidth = 1)
+  if (!is.null(rev))
+    p <- p + geom_point(data = rev[rev$order %in% orders, ],
+                        aes(y = reverse, colour = "reverse"),
+                        shape = 21, size = 1.6, stroke = 0.7, fill = NA)
+  p + facet_wrap(~quantity, scales = "free_y") +
+    scale_colour_manual(values = c(symbolic = "#2166ac", forward = "#d6604d",
+                                   reverse = "#1a9850")) +
+    scale_linetype_manual(values = c(symbolic = "solid", forward = "dotdash")) +
     labs(title = title, x = "time", y = NULL, colour = NULL, linetype = NULL) +
     theme_bw(base_size = 9) +
     theme(legend.position = "top")
+}
 
 ## =================================================================
 ## 1. Root event on a coupled pair
@@ -203,10 +251,18 @@ C_of_t    <- composed(list(C_before, C_after), list(fire_pair))
 
 cmp_pair <- comparison(C_of_t, point_pair, res_pair, "C")
 report(cmp_pair, "1. root event on a coupled pair")
+model_pair_r <- cppODE(c(S = "a", C = "-b * C"), events = events_pair,
+                       derivMode = "forward-reverse", modelname = "saltation_pair_r")
+rev_pair <- reverseSeries(C_of_t, point_pair, res_pair, model_pair_r, pars_pair,
+                          "C", c("S", "C"),
+                          opts = list(abstol = 1e-12, reltol = 1e-12,
+                                      roottol = 1e-12))
 
-plot_pair_1 <- comparisonPlot(cmp_pair, 0:1, "C and its gradient across a root event")
+plot_pair_1 <- comparisonPlot(cmp_pair, 0:1, "C and its gradient across a root event",
+                              rev_pair)
 plot_pair_1
-plot_pair_2 <- comparisonPlot(cmp_pair, 2L, "Second derivatives of C across a root event")
+plot_pair_2 <- comparisonPlot(cmp_pair, 2L, "Second derivatives of C across a root event",
+                              rev_pair)
 plot_pair_2
 
 ## =================================================================
@@ -236,10 +292,16 @@ x_dose   <- composed(list(x_before, x_after), list(te))
 
 cmp_dose <- comparison(x_dose, point_dose, res_dose, "x")
 report(cmp_dose, "2. time-triggered event")
+model_dose_r <- cppODE(c(x = "-k * x"), events = events_dose,
+                       derivMode = "forward-reverse", modelname = "saltation_dose_r")
+rev_dose <- reverseSeries(x_dose, point_dose, res_dose, model_dose_r, pars_dose,
+                          "x", "x", opts = list(abstol = 1e-12, reltol = 1e-12))
 
-plot_dose_1 <- comparisonPlot(cmp_dose, 0:1, "x and its gradient across a timed dose")
+plot_dose_1 <- comparisonPlot(cmp_dose, 0:1, "x and its gradient across a timed dose",
+                              rev_dose)
 plot_dose_1
-plot_dose_2 <- comparisonPlot(cmp_dose, 2L, "Second derivatives of x across a timed dose")
+plot_dose_2 <- comparisonPlot(cmp_dose, 2L, "Second derivatives of x across a timed dose",
+                              rev_dose)
 plot_dose_2
 
 ## =================================================================
@@ -252,6 +314,9 @@ events_pulse <- data.frame(var = "x", time = NA, value = "v", method = "add",
                            root = "x - xc", stringsAsFactors = FALSE)
 model_pulse  <- cppODE(c(x = "-k * x"), events = events_pulse, deriv = TRUE,
                        deriv2 = TRUE, modelname = "saltation_pulse")
+model_pulse_r <- cppODE(c(x = "-k * x"), events = events_pulse,
+                        derivMode = "forward-reverse",
+                        modelname = "saltation_pulse_r")
 
 pars_pulse  <- c(x = 1, k = 0.3, v = 1, xc = 0.4)
 times_pulse <- seq(0, 12, len = 1000)
@@ -274,10 +339,16 @@ x_pulse <- composed(branches_pulse, fires_pulse)
 
 cmp_pulse <- comparison(x_pulse, point_pulse, res_pulse, "x")
 report(cmp_pulse, "3. a root event that fires three times")
+rev_pulse <- reverseSeries(x_pulse, point_pulse, res_pulse, model_pulse_r,
+                           pars_pulse, "x", "x",
+                           opts = list(maxroot = 3L, abstol = 1e-12,
+                                       reltol = 1e-12, roottol = 1e-12))
 
-plot_pulse_1 <- comparisonPlot(cmp_pulse, 0:1, "x and its gradient over three firings")
+plot_pulse_1 <- comparisonPlot(cmp_pulse, 0:1, "x and its gradient over three firings",
+                               rev_pulse)
 plot_pulse_1
-plot_pulse_2 <- comparisonPlot(cmp_pulse, 2L, "Second derivatives of x over three firings")
+plot_pulse_2 <- comparisonPlot(cmp_pulse, 2L, "Second derivatives of x over three firings",
+                               rev_pulse)
 plot_pulse_2
 
 ## =================================================================
@@ -290,6 +361,9 @@ events_drift <- data.frame(var = "x", time = NA, value = "v", method = "add",
                            root = "x - xc", stringsAsFactors = FALSE)
 model_drift  <- cppODE(c(x = "-k * time * x"), events = events_drift,
                        deriv = TRUE, deriv2 = TRUE, modelname = "saltation_drift")
+model_drift_r <- cppODE(c(x = "-k * time * x"), events = events_drift,
+                        derivMode = "forward-reverse",
+                        modelname = "saltation_drift_r")
 
 pars_drift  <- c(x = 1, k = 0.2, v = 0.5, xc = 0.3)
 times_drift <- seq(0, 6, len = 1000)
@@ -305,10 +379,16 @@ x_drift      <- composed(list(drift_before, drift_after), list(fire_drift))
 
 cmp_drift <- comparison(x_drift, point_drift, res_drift, "x")
 report(cmp_drift, "4. explicit time dependence in the right-hand side")
+rev_drift <- reverseSeries(x_drift, point_drift, res_drift, model_drift_r,
+                           pars_drift, "x", "x",
+                           opts = list(abstol = 1e-12, reltol = 1e-12,
+                                       roottol = 1e-12))
 
-plot_drift_1 <- comparisonPlot(cmp_drift, 0:1, "x and its gradient, time-dependent decay")
+plot_drift_1 <- comparisonPlot(cmp_drift, 0:1, "x and its gradient, time-dependent decay",
+                               rev_drift)
 plot_drift_1
-plot_drift_2 <- comparisonPlot(cmp_drift, 2L, "Second derivatives of x, time-dependent decay")
+plot_drift_2 <- comparisonPlot(cmp_drift, 2L, "Second derivatives of x, time-dependent decay",
+                               rev_drift)
 plot_drift_2
 
 ## =================================================================
@@ -327,6 +407,9 @@ events_wall <- data.frame(var = c("v", "v"), time = c(NA, NA),
                           root = c("x - L", "x + L"), stringsAsFactors = FALSE)
 model_wall  <- cppODE(c(x = "v", v = "-w^2 * x"), events = events_wall,
                       deriv = TRUE, deriv2 = TRUE, modelname = "saltation_wall")
+model_wall_r <- cppODE(c(x = "v", v = "-w^2 * x"), events = events_wall,
+                       derivMode = "forward-reverse",
+                       modelname = "saltation_wall_r")
 
 pars_wall  <- c(x = 0.2, v = 1.2, w = 1, L = 0.8)
 times_wall <- seq(0, 11, len = 1000)
@@ -377,15 +460,113 @@ v_wall <- sp$diff(x_wall, tSym)
 cmp_wall_x <- comparison(x_wall, point_wall, res_wall, "x")
 cmp_wall_v <- comparison(v_wall, point_wall, res_wall, "v")
 report(cmp_wall_x, "5. oscillator between elastic walls, position")
+rev_wall_x <- reverseSeries(x_wall, point_wall, res_wall, model_wall_r,
+                            pars_wall, "x", c("x", "v"),
+                            opts = list(maxroot = 4L, abstol = 1e-12,
+                                        reltol = 1e-12, roottol = 1e-12))
 report(cmp_wall_v, "5. oscillator between elastic walls, velocity")
+rev_wall_v <- reverseSeries(v_wall, point_wall, res_wall, model_wall_r,
+                            pars_wall, "v", c("x", "v"),
+                            opts = list(maxroot = 4L, abstol = 1e-12,
+                                        reltol = 1e-12, roottol = 1e-12))
 
-plot_wall_1 <- comparisonPlot(cmp_wall_x, 0:1, "Position and its gradient over 8 bounces")
+plot_wall_1 <- comparisonPlot(cmp_wall_x, 0:1, "Position and its gradient over 8 bounces",
+                              rev_wall_x)
 plot_wall_1
-plot_wall_2 <- comparisonPlot(cmp_wall_x, 2L, "Second derivatives of the position")
+plot_wall_2 <- comparisonPlot(cmp_wall_x, 2L, "Second derivatives of the position",
+                              rev_wall_x)
 plot_wall_2
-plot_wall_3 <- comparisonPlot(cmp_wall_v, 0:1, "Velocity and its gradient over 8 bounces")
+plot_wall_3 <- comparisonPlot(cmp_wall_v, 0:1, "Velocity and its gradient over 8 bounces",
+                              rev_wall_v)
 plot_wall_3
-plot_wall_4 <- comparisonPlot(cmp_wall_v, 2L, "Second derivatives of the velocity")
+plot_wall_4 <- comparisonPlot(cmp_wall_v, 2L, "Second derivatives of the velocity",
+                              rev_wall_v)
 plot_wall_4
+
+## =================================================================
+## 6. A jump whose time and height are expressions
+## =================================================================
+
+## Nothing here is a bare parameter: the firing time is a nonlinear function of
+## one, and the height reads the clock and the state it lands on. Each slot
+## leaves different terms of the transport at zero, so only generality reaches
+## them.
+events_expr <- data.frame(var = "x", time = "0.5*te + 0.4*te*te",
+                          value = "v * time + q * x", method = "add",
+                          root = NA, stringsAsFactors = FALSE)
+model_expr  <- cppODE(c(x = "-k * x"), events = events_expr, deriv = TRUE,
+                      deriv2 = TRUE, modelname = "saltation_expr")
+model_expr_r <- cppODE(c(x = "-k * x"), events = events_expr,
+                       derivMode = "forward-reverse", modelname = "saltation_expr_r")
+
+pars_expr  <- c(x = 1, k = 0.3, v = 0.5, q = 0.4, te = 1.6)
+times_expr <- seq(0, 10, len = 1000)
+res_expr   <- solveODE(model_expr, times_expr, pars_expr,
+                       abstol = 1e-12, reltol = 1e-12)
+
+vv <- sym("v"); qq <- sym("q"); tev <- sym("te")
+point_expr <- point(list(x0, k, vv, qq, tev),
+                    pars_expr[c("x", "k", "v", "q", "te")], times_expr)
+fire_expr  <- sp$Rational(1L, 2L) * tev + sp$Rational(2L, 5L) * pow(tev, 2)
+expr_before <- segment(xfun, -k * xfun(tSym), sp$Integer(0L), x0)
+at_fire     <- expr_before$subs(tSym, fire_expr)
+expr_after  <- segment(xfun, -k * xfun(tSym), fire_expr,
+                       at_fire + vv * fire_expr + qq * at_fire)
+x_expr      <- composed(list(expr_before, expr_after), list(fire_expr))
+
+cmp_expr <- comparison(x_expr, point_expr, res_expr, "x")
+report(cmp_expr, "6. a jump whose time and height are expressions")
+rev_expr <- reverseSeries(x_expr, point_expr, res_expr, model_expr_r, pars_expr,
+                          "x", "x", opts = list(abstol = 1e-12, reltol = 1e-12))
+
+plot_expr_1 <- comparisonPlot(cmp_expr, 0:1, "x and its gradient, expression-valued jump",
+                              rev_expr)
+plot_expr_1
+plot_expr_2 <- comparisonPlot(cmp_expr, 2L, "Second derivatives, expression-valued jump",
+                              rev_expr)
+plot_expr_2
+
+## =================================================================
+## 7. A root nonlinear in the state and explicit in time
+## =================================================================
+
+## ds/dx carries grad g_dot, which is grad g_t + (hess g) f + J' grad g. A root
+## linear in the state and blind to the clock leaves the first two at zero, so
+## this is the case that tests them. Quadratic in t, so the crossing stays
+## closed form.
+events_quad <- data.frame(var = "x", time = NA, value = "v * time",
+                          method = "add", root = "x*x - xc - b*time",
+                          stringsAsFactors = FALSE)
+model_quad  <- cppODE(c(x = "r"), events = events_quad, deriv = TRUE,
+                      deriv2 = TRUE, modelname = "saltation_quad")
+model_quad_r <- cppODE(c(x = "r"), events = events_quad,
+                       derivMode = "forward-reverse", modelname = "saltation_quad_r")
+
+pars_quad  <- c(x = 0.5, r = 0.8, v = 0.3, xc = 1.2, b = 0.25)
+times_quad <- seq(0, 4, len = 1000)
+res_quad   <- solveODE(model_quad, times_quad, pars_quad,
+                       abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
+
+rr <- sym("r"); bb <- sym("b")
+point_quad <- point(list(x0, rr, vv, xc, bb),
+                    pars_quad[c("x", "r", "v", "xc", "b")], times_quad)
+quad_before <- segment(xfun, rr, sp$Integer(0L), x0)
+fire_quad   <- crossing(pow(quad_before, 2) - xc - bb * tSym, point_quad)
+quad_after  <- segment(xfun, rr, fire_quad,
+                       quad_before$subs(tSym, fire_quad) + vv * fire_quad)
+x_quad      <- composed(list(quad_before, quad_after), list(fire_quad))
+
+cmp_quad <- comparison(x_quad, point_quad, res_quad, "x")
+report(cmp_quad, "7. a root nonlinear in the state and explicit in time")
+rev_quad <- reverseSeries(x_quad, point_quad, res_quad, model_quad_r, pars_quad,
+                          "x", "x", opts = list(abstol = 1e-12, reltol = 1e-12,
+                                                roottol = 1e-12))
+
+plot_quad_1 <- comparisonPlot(cmp_quad, 0:1, "x and its gradient, nonlinear root",
+                              rev_quad)
+plot_quad_1
+plot_quad_2 <- comparisonPlot(cmp_quad, 2L, "Second derivatives, nonlinear root",
+                              rev_quad)
+plot_quad_2
 
 if (!interactive()) dev.off()

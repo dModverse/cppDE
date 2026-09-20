@@ -4,10 +4,8 @@
  Uses dgetrf/dgetrs from R's bundled LAPACK for the base case.
  Nested AD types (dual<dual<T,N>,N>) are handled by recursive IFT peeling.
 
- BLAS-3 optimization: IFT derivative propagation uses batched
- dgetrs (nrhs = n_derivs) instead of n_derivs separate solves.
- The matvec phase fuses extraction and subtraction in a single
- pass over W_stored for cache-optimal access.
+ The derivative layer goes out as one batched dgetrs (nrhs = n_derivs), and
+ the IFT matvec reads each W entry once.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -34,9 +32,8 @@ namespace cppde {
 namespace ad_lu {
 
 // ============================================================================
-//  AD type traits / bulk helpers: pulled in from cppde_ad_traits.hpp.
-//  Re-exported here so existing consumers using `ad_lu::is_ad`,
-//  `ad_lu::scalar_value`, etc. compile unchanged.
+//  AD type traits and bulk helpers from cppde_ad_traits.hpp, also reachable
+//  as `ad_lu::is_ad`, `ad_lu::scalar_value` and so on.
 // ============================================================================
 
 using cppde::ad_traits::is_ad;
@@ -102,11 +99,8 @@ public:
                        FCONE);
   }
 
-  // Batched solve: B ← W⁻¹ B  (B is column-major n × nrhs)
-  //
-  // Uses BLAS-3 internally (dtrsm) via dgetrs with nrhs > 1.
-  // This is the key optimization: cache-blocked triangular solves
-  // instead of nrhs separate memory-bound triangular back-subs.
+  // Batched solve: B ← W⁻¹ B  (B is column-major n × nrhs), one dgetrs call
+  // whose triangular solves run as BLAS-3 dtrsm.
   void solve_batch(std::vector<Scalar>& B, int nrhs) const
   {
     if (nrhs <= 0) return;
@@ -125,6 +119,20 @@ public:
     std::vector<Scalar> x = b;
     solve(x);
     return x;
+  }
+
+  // Solve in-place against the transpose: b <- W^-T b. The reverse mode's
+  // implicit-function step, where the same factorisation serves both directions.
+  void solve_transposed(std::vector<Scalar>& b) const
+  {
+    char trans = 'T';
+    int nrhs = 1;
+    int info = 0;
+    F77_CALL(dgetrs)(&trans, &m_n, &nrhs,
+             const_cast<double*>(m_lu_data.data()), &m_n,
+             const_cast<int*>(m_ipiv.data()),
+             b.data(), &m_n, &info
+                       FCONE);
   }
 
   // Scalar-only solve (identity for base case: same as solve)
@@ -171,7 +179,7 @@ public:
       m_W_val.resize(n, n);
     if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
       // dual2nd: synthesise the value-layer dual<S, N> from the inline
-      // gradient (outer.tan_[k].x()), bypassing the redundant val_tan_block.
+      // gradient (outer.tan_[k].x()).
       for (int k = 0; k < nn; ++k)
         m_W_val.data[k] = first_order_view(W.data[k]);
     } else {
@@ -287,6 +295,79 @@ public:
 
     // 5. Batched solve: solve ALL n_derivs RHS in one call
     m_inner.solve_batch(m_rhs_all, static_cast<int>(n_derivs));
+
+    // 6. Bulk-inject: write values and derivatives in one pass
+    bulk_inject_results(b, m_b_val, m_rhs_all, n, n_derivs);
+  }
+
+  // W^-T b on the same factorisation. The peeling transposes with the matrix:
+  // the value layer solves W_val^T x = b_val, and each derivative layer solves
+  // W_val^T x' = b' - (dW)^T x_val. Used once per step by the written adjoint,
+  // so the derivative layers go one at a time rather than batched.
+  void solve_transposed(std::vector<F>& b) const
+  {
+    const int n = m_n;
+
+    // 1. Extract and solve value part (reuse buffer)
+    m_b_val.resize(n);
+    if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
+      for (int i = 0; i < n; ++i)
+        m_b_val[i] = first_order_view(b[i]);
+    } else {
+      for (int i = 0; i < n; ++i)
+        m_b_val[i] = const_cast<F&>(b[i]).x();
+    }
+    m_inner.solve_transposed(m_b_val);
+
+    // 2. Determine derivative directions. A static width N is claimed only when
+    // some input is seeded: injecting results activates tangents on b, and the
+    // active directions must match the error-weight vector of this state.
+    unsigned n_derivs;
+    if constexpr (!is_ad<Inner>::value) {
+      // Inner = double: n_derivs was determined at factorize time.
+      // For RHS-only derivatives (W has none), check b too.
+      if constexpr (N > 0) {
+        n_derivs = (m_n_derivs_cached > 0 || max_deriv_size(b) > 0) ? N : 0u;
+      } else {
+        n_derivs = std::max(m_n_derivs_cached, max_deriv_size(b));
+      }
+    } else {
+      // Inner = dual<...>: need to scan both b and W_stored
+      if constexpr (N > 0) {
+        n_derivs = (max_deriv_size(b) > 0 || max_deriv_size(m_W_stored) > 0)
+                     ? N : 0u;
+      } else {
+        n_derivs = max_deriv_size(b);
+        n_derivs = std::max(n_derivs, max_deriv_size(m_W_stored));
+      }
+    }
+    if (n_derivs == 0) {
+      for (int i = 0; i < n; ++i)
+        b[i].x() = m_b_val[i];
+      return;
+    }
+
+    // 3. Bulk-extract ALL derivative RHS into column-major n × n_derivs
+    m_rhs_all.resize(static_cast<size_t>(n) * n_derivs);
+    for (int i = 0; i < n; ++i) {
+      auto& bi = const_cast<F&>(b[i]);
+      unsigned sz = bi.size();
+      for (unsigned j = 0; j < n_derivs; ++j)
+        m_rhs_all[j * n + i] = (j < sz) ? bi.d(j) : Inner(0);
+    }
+
+    // 4. IFT matvec: rhs_all -= dW · b_val
+    ift_matvec_transposed(n, n_derivs);
+
+    // 5. One transposed solve per direction.
+    {
+      std::vector<Inner> col(static_cast<std::size_t>(n));
+      for (unsigned j = 0; j < n_derivs; ++j) {
+        for (int i = 0; i < n; ++i) col[i] = m_rhs_all[j * n + i];
+        m_inner.solve_transposed(col);
+        for (int i = 0; i < n; ++i) m_rhs_all[j * n + i] = col[i];
+      }
+    }
 
     // 6. Bulk-inject: write values and derivatives in one pass
     bulk_inject_results(b, m_b_val, m_rhs_all, n, n_derivs);
@@ -419,6 +500,39 @@ private:
     //  element-wise pass over m_W_stored.
     // ================================================================
 
+  // The same correction with dW transposed, for a transposed solve. Stated
+  // apart rather than behind a flag: the stacked dW block transposes inside
+  // each direction's own square, which is a different BLAS call and not a
+  // different argument to the same one.
+  void ift_matvec_transposed(int n, unsigned n_derivs) const
+  {
+    if constexpr (!is_ad<Inner>::value) {
+      const unsigned nd_W = m_n_derivs_cached;
+      if (nd_W == 0) return;
+      const int ld = n * static_cast<int>(nd_W);
+      double alpha = -1.0, beta = 1.0;
+      int inc = 1, nn = n;
+      char trans = 'T';
+      for (unsigned k = 0; k < nd_W && k < n_derivs; ++k)
+        F77_CALL(dgemv)(&trans, &nn, &nn, &alpha,
+                 const_cast<double*>(m_dW_block.data()) + (std::size_t)k * n, &ld,
+                 const_cast<double*>(m_b_val.data()), &inc,
+                 &beta, m_rhs_all.data() + (std::size_t)k * n, &inc  FCONE);
+    } else {
+      for (int col = 0; col < n; ++col) {
+        const Inner b_col = m_b_val[col];
+        for (int row = 0; row < n; ++row) {
+          auto& w_entry = const_cast<F&>(m_W_stored(col, row));
+          unsigned wsz = w_entry.size();
+          for (unsigned j = 0; j < n_derivs; ++j) {
+            Inner dw = (j < wsz) ? w_entry.d(j) : Inner(0);
+            m_rhs_all[j * n + row] -= dw * b_col;
+          }
+        }
+      }
+    }
+  }
+
   void ift_matvec(int n, unsigned n_derivs) const
   {
     if constexpr (!is_ad<Inner>::value) {
@@ -522,7 +636,7 @@ private:
   // Persistent solve buffers: avoid per-call heap allocations.
   mutable std::vector<Inner>  m_b_val;          // n scalars: value part (single solve)
   mutable std::vector<Inner>  m_rhs_all;        // n × n_derivs: derivs (single solve)
-  mutable std::vector<F>      m_col_buf;        // n entries: legacy column buffer
+  mutable std::vector<F>      m_col_buf;        // n entries, unused
   mutable std::vector<Inner>  m_b_val_batch;    // n × nrhs: value part (batched)
   mutable std::vector<Inner>  m_rhs_all_batch;  // n × n_derivs × nrhs (batched)
 };

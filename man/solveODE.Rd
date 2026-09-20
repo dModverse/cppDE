@@ -8,8 +8,8 @@ solveODE(
   model,
   times,
   parms,
-  sens1ini = NULL,
-  sens2ini = NULL,
+  tangent = NULL,
+  hessian = NULL,
   fixed = NULL,
   forcings = NULL,
   abstol = 1e-06,
@@ -20,7 +20,14 @@ solveODE(
   roottol = 1e-06,
   maxroot = 1L,
   onFailure = c("stop", "warn", "silent"),
-  traceFile = NULL
+  traceFile = NULL,
+  cotangent = NULL,
+  curvature = NULL,
+  adjointGrid = FALSE,
+  errWeights = NULL,
+  keepStore = FALSE,
+  store = NULL,
+  sensErrCon = TRUE
 )
 }
 \arguments{
@@ -33,32 +40,31 @@ solution. Must be non-empty and contain only finite values.}
 Names must include all of
 \code{c(attr(model, "variables"), attr(model, "parameters"))}.}
 
-\item{sens1ini}{Optional numeric matrix of first-order sensitivity
-initial values, interpreted as the Jacobian \eqn{\Phi'(\theta)}.
-Accepts three shapes (see Details): legacy \verb{[n_states, n_active]}
+\item{tangent}{Optional numeric matrix, the tangent of the inputs: the
+Jacobian \eqn{\Phi'(\theta)} of the initial states and parameters.
+Accepts three shapes (see Details): state-only \verb{[n_states, n_active]}
 (auto-extended with identity on parameter rows), full
 \verb{[n_states + n_params, M]}, or partial \verb{[k, M]} with row names
 identifying a subset of \code{c(variables, parameters)} (missing rows
 are zero-padded, i.e. implicitly fixed). Column names label the
-resulting sensitivity output columns. Default \code{NULL} uses identity
+directions of the returned derivatives. Default \code{NULL} uses identity
 seeding on the active sensitivity basis.}
 
-\item{sens2ini}{Optional numeric array of second-order sensitivity
-initial values, interpreted as the Hessian tensor
-\eqn{\Phi''(\theta)}. Shapes are analogous to those of \code{sens1ini}:
-\verb{[n_states, n_active, n_active]} (legacy),
+\item{hessian}{Optional numeric array, the Hessian tensor
+\eqn{\Phi''(\theta)} of the inputs. Shapes are analogous to those of
+\code{tangent}:
+\verb{[n_states, n_active, n_active]} (state-only),
 \verb{[n_states + n_params, M, M]} (full), or \verb{[k, M, M]} with dim-1
 names identifying a subset of \code{c(variables, parameters)} (partial,
 zero-padded). Allowed only when \code{attr(model, "deriv2")} is \code{TRUE}.
-Default \code{NULL} uses zero seeding (correct when \eqn{\Phi} is
-linear-affine).}
+Default \code{NULL} means the inputs are affine in \eqn{\theta}.}
 
 \item{fixed}{Optional character vector of sensitivity-parameter names
 to treat as fixed at run time. The integrator then runs with a
 smaller AD state. Names must be a subset of
 \code{attr(model, "dimNames")$sens}. Unlike compile-time \code{fixed} in
 \code{\link[=cppODE]{cppODE()}}, the run-time \code{fixed} set can be changed between calls
-without recompilation. Incompatible with full / partial \code{sens1ini}
+without recompilation. Incompatible with full / partial \code{tangent}
 (those encode fixedness through row values or row presence).
 Default \code{NULL} (all parameters active).}
 
@@ -85,7 +91,9 @@ reject several steps in a row when the controller first adapts.}
 estimation.}
 
 \item{roottol}{Tolerance for root finding in root-triggered events.
-Default \code{1e-6}.}
+Default \code{1e-6}. An event \code{value} that depends on \code{time} evaluates the
+firing time directly, so its derivatives inherit this tolerance rather
+than \code{reltol}.}
 
 \item{maxroot}{Maximum number of triggers per root event. Default \code{1}.}
 
@@ -93,9 +101,7 @@ Default \code{1e-6}.}
 return code. One of \code{"stop"} (default; raise an error with the solver
 message and no partial results), \code{"warn"} (emit a warning and return
 partial results up to \code{t_reached}), or \code{"silent"} (return the partial
-result without any signal). An incomplete integration otherwise
-surfaces far downstream, as a missing-time-point error that blames the
-data rather than the solver.}
+result without any signal).}
 
 \item{traceFile}{Optional character giving a CSV file path. If the
 model was compiled with \code{stepTrace = TRUE} and a non-empty path is
@@ -103,100 +109,122 @@ supplied, the per-step trace \code{data.frame} is written to that path.
 The trace is also attached to the returned list as \verb{$trace}. Ignored
 for models compiled without trace support (\verb{$trace} is \code{NULL} in
 that case).}
+
+\item{cotangent}{The cotangent of the outputs, required by a model compiled
+with \code{derivMode = "reverse"} or \code{"forward-reverse"} (\code{\link[=cppODE]{cppODE()}}) or with
+\code{derivMode = "reverse"} (\code{\link[=cvode]{cvode()}}). A \verb{[n_out, n_states]} matrix or an
+\verb{[n_out, n_states, n_seed]} array, whose first dimension is the solve's
+own output row count: a root event adds output times, so that count is
+not \code{length(times)} in general. What comes back is \verb{w' * dx/dtheta}
+summed over times and states, one column per cotangent column. Supplying
+it to a forward model is an error, as is leaving it out on a reverse one.}
+
+\item{curvature}{Optional, \code{"forward-reverse"} only: the derivative of
+\code{cotangent} along the tangent, \verb{[n_out, n_states, n_seed, n_sens]} on the
+cotangent's first three dimensions. For a cotangent that is the gradient
+of a functional of the outputs, this is that functional's Hessian applied
+to the output tangent. \code{NULL} treats the cotangent as constant in
+\eqn{\theta}.}
+
+\item{adjointGrid}{Whether the sweep also reports the grid it ran on, as
+\verb{$adjointGrid}. \code{FALSE} by default; requires a \code{cotangent} and the native
+backend. Costs one
+\verb{[n_steps, n_states, n_seed]} array, so it is a diagnostic.}
+
+\item{errWeights}{Optional lambda from an earlier sweep, used as a
+step-size weight. Native backend only. A list with \code{time} (ascending,
+length \code{n}), \code{lambda} (\verb{[n, n_states]}), and optionally \code{breaks}
+(indices into \code{time} the interpolant must not span), \code{gradtol}
+(default \code{1e-6}) and \code{floor}
+(smallest weight as a fraction of the largest, default \code{0}). The
+controller then takes the maximum of its own error norm and
+\eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
+finer than \code{abstol} and \code{reltol} ask, never coarser. Requires a
+\code{cotangent}.}
+
+\item{keepStore}{Whether a reverse solve returns its checkpoints as
+\verb{$store}, for a later solve to reuse through \code{store}. The \code{cotangent} may then
+be omitted, which runs the model for its values alone. Native backend
+only: CVODES holds its checkpoints itself.}
+
+\item{store}{The \verb{$store} of an earlier solve of the same model at the same
+\code{times} and \code{parms}. The solve integrates nothing and goes straight to the
+sweep. A store from a different point is an error, not a silent reuse. It
+may be reused any number of times and is freed with its last reference.}
+
+\item{sensErrCon}{Whether the step size, the order and the corrector's
+convergence test see the sensitivities. \code{TRUE}, the default, takes the
+maximum over the state and each direction, so the worst-resolved direction
+sets the step. \code{FALSE} leaves every control decision to value arithmetic:
+the step sequence is then the one a value-only run takes, whatever the
+direction count, and the sensitivities come back on a coarser grid than
+\code{abstol} and \code{reltol} would give them. Cheaper and less accurate, and the
+convention SUNDIALS ships (\code{CVodeSetSensErrCon}). Needs a model with
+sensitivities; under \code{derivMode = "forward-reverse"} it is off already.}
 }
 \value{
 A named list with components \code{time}, \code{variable}, \code{diagnostics}, and,
-when \code{attr(model, "deriv")} is \code{TRUE}, \code{sens1}, plus \code{sens2} when
-\code{attr(model, "deriv2")} is \code{TRUE}. Output arrays are time-first:
-\code{variable} is \verb{[n_t, n_x]}, \code{sens1} is \verb{[n_t, n_x, n_s]}, and
-\code{sens2} is \verb{[n_t, n_x, n_s, n_s]}. The dimension names of \code{sens1}
-and \code{sens2} reflect the active (non-fixed) sensitivity parameters.
+when \code{attr(model, "deriv")} is \code{TRUE}, \code{tangent}, plus \code{hessian} when
+\code{attr(model, "deriv2")} is \code{TRUE}. A model compiled with
+\code{derivMode = "reverse"} carries neither, and returns \code{cotangent} instead:
+\verb{[n_states + n_params, n_seed]}, the cotangent of the inputs, indexed exactly
+as the argument \code{tangent}. One compiled with \code{derivMode = "forward-reverse"}
+carries \code{tangent} and \code{cotangent} and adds \code{curvature},
+\verb{[n_states + n_params, n_s, n_seed]}: the derivatives of each \code{cotangent}
+entry along the tangent, which under the identity tangent are the columns of
+the Hessian of the seeded functional. Output arrays are time-first:
+\code{variable} is \verb{[n_t, n_x]}, \code{tangent} is \verb{[n_t, n_x, n_s]}, and
+\code{hessian} is \verb{[n_t, n_x, n_s, n_s]}. The dimension names of \code{tangent}
+and \code{hessian} reflect the active (non-fixed) sensitivity parameters.
 The \code{diagnostics} element is a list of solver statistics (see
 \code{\link[=diagnostics]{diagnostics()}}). When the model was compiled with \code{stepTrace = TRUE},
 an additional \verb{$trace} \code{data.frame} with per-step diagnostics is
 attached.
+
+With \code{adjointGrid = TRUE} a reverse solve also carries \verb{$adjointGrid}, a
+list of \code{time} and \code{h}, the start and length of each accepted step; \code{eta},
+one column per cotangent column, being \eqn{\lambda^T e_k}; and \code{lambda},
+\verb{[n_steps, n_states, n_seed]}, the adjoint state at each step's start. \code{eta}
+estimates the step's share of the error in the objective.
+
+With \code{keepStore = TRUE} a reverse solve also carries \verb{$store}, an external
+pointer to the checkpoints, for a later solve to take through \code{store}.
 }
 \description{
 Numerically integrates a compiled ODE model created by \code{\link[=cppODE]{cppODE()}} (or
 \code{\link[=cvode]{cvode()}}) over a specified time span. Returns the state trajectory and,
-when the model was compiled with sensitivities, first- and (optionally)
-second-order parameter sensitivities.
+when the model was compiled with derivatives, their tangent and Hessian
+(forward) or the cotangent and curvature of a seeded functional (reverse).
 }
 \details{
-\subsection{Sensitivity with respect to a reparametrization}{
+\subsection{Derivative arguments and results}{
 
-By default, the compiled solver computes sensitivities of the state
-trajectory \eqn{x(t)} with respect to the full input vector
-\eqn{p = (p_{\text{init}}, p_{\text{dyn}}) \in \mathbb{R}^{n_x + n_p}},
-i.e. all initial conditions stacked on all dynamic parameters. In
-fitting and identifiability workflows the quantity of interest is
-often instead the gradient with respect to a smaller set of free
-variables \eqn{\theta \in \mathbb{R}^{M}}, where the model inputs are
-obtained from a smooth reparametrization
-
-\deqn{p = \Phi(\theta) \in \mathbb{R}^{n_x + n_p}.}
-
-Typical examples are log-parametrization
-(\eqn{p_i = \exp \theta_i}) to enforce positivity, parameters that
-are shared across compartments or experimental conditions, and
-components of \eqn{p} that are held constant and therefore drop out
-of \eqn{\theta}.
-
-By the chain rule, the trajectory's first- and second-order
-sensitivities with respect to \eqn{\theta} are
-
-\deqn{\frac{\partial x(t)}{\partial \theta} \;=\;
-      \frac{\partial x(t)}{\partial p}\,\Phi'(\theta),}
-
-\deqn{\frac{\partial^{2} x(t)}{\partial \theta\,\partial \theta^{\top}}
-      \;=\;
-      \Phi'(\theta)^{\top}\,
-      \frac{\partial^{2} x(t)}{\partial p\,\partial p^{\top}}\,
-      \Phi'(\theta) \;+\;
-      \frac{\partial x(t)}{\partial p}\,\Phi''(\theta),}
-
-where \eqn{\Phi'(\theta)} is an \eqn{(n_x + n_p) \times M} Jacobian
-and \eqn{\Phi''(\theta)} is the corresponding
-\eqn{(n_x + n_p) \times M \times M} Hessian tensor (contracted on its
-first index in the formula above).
-
-Rather than first computing \eqn{\partial x(t)/\partial p} along all
-\eqn{n_x + n_p} canonical directions and contracting with
-\eqn{\Phi'(\theta)} afterwards, the solver applies the chain rule
-\emph{inside} the AD pass: each of the \eqn{M} forward-AD directions is
-seeded with the corresponding column of \eqn{\Phi'(\theta)}, so the
-integrator directly returns
-\eqn{\partial x(t)/\partial \theta} (and analogously
-\eqn{\partial^{2} x(t)/\partial \theta\,\partial \theta^{\top}} when
-\eqn{\Phi''(\theta)} is supplied for the second-order seeds). The
-parameter sweep then has cost \eqn{O(M)} rather than
-\eqn{O(n_x + n_p)}, which is the main practical benefit when
-\eqn{M \ll n_x + n_p}.
-
-The default identity reparametrization \eqn{\Phi(\theta) = \theta}
-corresponds to \eqn{\Phi'(\theta) = I_{(n_x + n_p) \times (n_x + n_p)}}
-and \eqn{\Phi''(\theta) = 0}; this is the legacy seeding emitted when
-\code{sens1ini} / \code{sens2ini} are omitted, restricted to the active
-(non-fixed) sensitivity columns.
+A derivative argument and its result carry the same name. \code{tangent} and
+\code{hessian} are the first and second derivative in \eqn{\theta} of the
+inputs going in, and of the states coming out. \code{cotangent} is the gradient
+of a functional with respect to the outputs going in, and with respect to
+the inputs coming out. \code{curvature} is the derivative of the cotangent
+along the tangent: that functional's Hessian applied to the tangent, on the
+outputs going in and on the inputs coming out.
 }
 
-\subsection{Sensitivity initial values}{
+\subsection{Tangent and Hessian of the inputs}{
 
-\code{sens1ini} and \code{sens2ini} are exactly \eqn{\Phi'(\theta)} and
-\eqn{\Phi''(\theta)} from the chain-rule derivation above, evaluated
-at the current \eqn{\theta}. Three shapes are accepted, selected per
-call from the row count and row names of the supplied matrix:
+\code{tangent} and \code{hessian} are the Jacobian \eqn{\Phi'(\theta)} and the
+Hessian tensor \eqn{\Phi''(\theta)} of a reparametrisation
+\eqn{p = \Phi(\theta)} of the initial states and parameters; the returned
+derivatives are then taken with respect to \eqn{\theta}. Omitting them
+seeds the identity on the active (non-fixed) sensitivities. Three shapes
+are accepted, selected per call from the row count and row names:
 \itemize{
-\item \strong{Legacy shape} \verb{[n_states, n_active]}: identity seeding on the
+\item \strong{State-only shape} \verb{[n_states, n_active]}: identity seeding on the
 parameter block is implied. The active set equals the model's
 sensitivity names minus \code{fixed}. Detected when \code{nrow == n_states}
 and row names are absent or are a permutation of \code{variables}. This
-is the shape emitted by \code{solveODE()} itself (\code{res$sens1[t, , ]}) and
-can therefore be used directly for warm-starting subsequent solves.
+is the shape of \code{res$tangent[t, , ]}, so it can seed a following solve.
 \item \strong{Full shape} \verb{[n_states + n_params, M]}: \eqn{\Phi'(\theta)}
 directly. State rows seed state ICs; parameter rows seed the dynamic
-parameters. The column count \code{M} may vary across calls; under
-stack-mode AD it must satisfy \eqn{M \le \mathtt{nStack}}.
+parameters. The column count \code{M} may change from call to call.
 \item \strong{Partial shape} \verb{[k, M]} with \code{k < n_states + n_params}: row
 names are required and must be a subset of
 \code{c(variables, parameters)}. The supplied rows are placed at the
@@ -209,8 +237,43 @@ Run-time \code{fixed} is incompatible with the full and partial shapes
 (those already encode fixedness via row presence / row values).
 
 Column names, when present, must match the relevant column basis
-(the active sensitivity names for the legacy shape, user-chosen theta
+(the active sensitivity names for the state-only shape, user-chosen theta
 names for the full / partial shapes).
+}
+}
+\examples{
+\donttest{
+if (codegenAvailable()) {
+  ## A forward and a reverse build of one model, compiled together into one
+  ## shared object in tempdir().
+  eqns <- c(A = "-k1*A", B = "k1*A - k2*B")
+  fwd  <- cppODE(eqns, compile = FALSE)
+  rev  <- cppODE(eqns, derivMode = "reverse", compile = FALSE)
+  compile(fwd, rev, output = "solveODE_examples")
+
+  times <- 0:10
+  parms <- c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)
+
+  ## Values and sensitivities at tighter tolerances than the default 1e-6
+  out <- solveODE(fwd, times, parms, abstol = 1e-10, reltol = 1e-10)
+  out$variable[11, ]
+  out$tangent[11, , ]                   # [state, parameter] at t = 10
+
+  ## Only two directions: the tangent seeds the rate constants, one column each
+  S <- matrix(0, 2, 2, dimnames = list(c("k1", "k2"), c("k1", "k2")))
+  diag(S) <- 1
+  solveODE(fwd, times, parms, tangent = S)$tangent[11, , ]
+
+  ## Reverse mode: a cotangent weights the states at every time, and $cotangent is
+  ## the gradient of sum(cotangent * x) in the initial values and parameters.
+  ## keepStore keeps the forward pass, so each further cotangent costs one
+  ## backward sweep.
+  first <- solveODE(rev, times, parms, keepStore = TRUE)
+  onB   <- cbind(A = 0, B = rep(1, length(times)))
+  onA   <- cbind(A = rep(1, length(times)), B = 0)
+  solveODE(rev, times, parms, cotangent = onB, store = first$store)$cotangent
+  solveODE(rev, times, parms, cotangent = onA, store = first$store)$cotangent
+}
 }
 }
 \seealso{

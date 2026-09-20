@@ -24,6 +24,7 @@
 #define CPPDE_DUAL_ARENA_HPP
 
 #include <cstddef>
+#include <limits>
 #include <cstdint>
 #include <cstdlib>
 #include <new>
@@ -71,7 +72,15 @@ public:
   T* alloc_trivial(std::size_t n) {
     static_assert(std::is_trivially_destructible_v<T>,
                   "alloc_trivial requires trivially-destructible T");
-    return static_cast<T*>(bump(alignof(T), n * sizeof(T)));
+    T* p = static_cast<T*>(bump(alignof(T), n * sizeof(T)));
+#ifdef CPPDE_POISON_ARENA
+    // Debug aid: a tangent read before its write shows up as NaN instead of as
+    // whatever the previous solve left at that address.
+    if constexpr (std::is_floating_point_v<T>)
+      for (std::size_t i = 0; i < n; ++i)
+        p[i] = std::numeric_limits<T>::quiet_NaN();
+#endif
+    return p;
   }
 
   // General alloc: default-constructs n elements of T and (if non-trivial)
@@ -123,6 +132,26 @@ public:
       a_.active_ = saved_active_;
       a_.slabs_[saved_active_].top = saved_top_;
     }
+  };
+
+  // How wide a heap dual arms itself when it has no width of its own. Without
+  // one, arm() allocates nothing and every tangent read returns the
+  // out-of-bounds zero, which a backward sweep cannot survive: it zero-arms its
+  // buffers before writing to them. A scope rather than a global, so the
+  // forward mode opens none and leaves a tangent-less temporary alone.
+  static unsigned& default_tangent_width() noexcept {
+    thread_local unsigned w = 0u;
+    return w;
+  }
+
+  class width_scope {
+    unsigned saved_;
+  public:
+    explicit width_scope(unsigned n) noexcept
+      : saved_(default_tangent_width()) { default_tangent_width() = n; }
+    width_scope(const width_scope&)            = delete;
+    width_scope& operator=(const width_scope&) = delete;
+    ~width_scope() noexcept { default_tangent_width() = saved_; }
   };
 
   // Pointer, not `thread_local dual_arena`: a non-trivial TLS destructor

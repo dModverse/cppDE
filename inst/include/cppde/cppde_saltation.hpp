@@ -31,6 +31,43 @@ namespace detail {
 // See vignette("Methods"), section "Root-triggered events".
 // ============================================================================
 
+/// The coefficient of the second-order IFT correction, dt* -> dt* + c2 dt*^2,
+/// c2 = -g_ddot / (2 g_dot). Its own function because the backward sweep needs
+/// the same coefficient: ds/ds_lin is 1 + 2 c2 s_lin, one in value and a
+/// tangent in the second order.
+template<class state_type, class time_type, class System>
+inline double root_ift_curvature(
+    const state_type& x_before,
+    const time_type& t_event,
+    System& sys,
+    const state_type& f_before,
+    const RootEvent<state_type, time_type>& evt,
+    double g_dot_s)
+{
+  using value_type = typename state_type::value_type;
+  const size_t n = x_before.size();
+
+  if (evt.g_dot_dot)
+    return -0.5 * evt.g_dot_dot(x_before, t_event) / g_dot_s;
+
+  // No analytical g_ddot: difference g_dot along the flow.
+  constexpr double eps = 1e-8;
+  state_type x_fwd(n);
+  for (size_t i = 0; i < n; ++i)
+    x_fwd[i] = x_before[i] + f_before[i] * value_type(eps);
+
+  state_type f_fwd(n);
+  sys.first(x_fwd, f_fwd, t_event + time_type(eps));
+
+  state_type grad_g_fwd(n);
+  evt.dg_dx(x_fwd, t_event + time_type(eps), grad_g_fwd);
+  value_type g_dot_fwd = evt.dg_dt(x_fwd, t_event + time_type(eps));
+  for (size_t i = 0; i < n; ++i)
+    g_dot_fwd += grad_g_fwd[i] * f_fwd[i];
+
+  return -0.5 * ((scalar_value(g_dot_fwd) - g_dot_s) / eps) / g_dot_s;
+}
+
 // --- Helper: compute dt* for a root event (IFT + 2nd-order correction) ---
 template<class state_type, class time_type, class System>
 inline typename state_type::value_type compute_dt_star(
@@ -60,34 +97,9 @@ inline typename state_type::value_type compute_dt_star(
   g_val = g_val - value_type(scalar_value(g_val));
   value_type dt_star = -g_val / g_dot;
 
-  // Second-order IFT correction
-  {
-    double G_tt;
-    if (evt.g_dot_dot) {
-      G_tt = evt.g_dot_dot(x_before, t_event);
-    } else {
-      constexpr double eps = 1e-8;
-      state_type x_fwd(n);
-      for (size_t i = 0; i < n; ++i)
-        x_fwd[i] = x_before[i] + f_before[i] * value_type(eps);
-
-      state_type f_fwd(n);
-      sys.first(x_fwd, f_fwd, t_event + time_type(eps));
-
-      state_type grad_g_fwd(n);
-      evt.dg_dx(x_fwd, t_event + time_type(eps), grad_g_fwd);
-      value_type g_dot_fwd = evt.dg_dt(x_fwd, t_event + time_type(eps));
-      for (size_t i = 0; i < n; ++i)
-        g_dot_fwd += grad_g_fwd[i] * f_fwd[i];
-
-      G_tt = (scalar_value(g_dot_fwd) - g_dot_s) / eps;
-    }
-
-    double corr_coeff = -0.5 * G_tt / g_dot_s;
-    dt_star = dt_star + value_type(corr_coeff) * dt_star * dt_star;
-  }
-
-  return dt_star;
+  const double c2 =
+      root_ift_curvature(x_before, t_event, sys, f_before, evt, g_dot_s);
+  return dt_star + value_type(c2) * dt_star * dt_star;
 }
 
 // --- Batch saltation: one Heun roundtrip, N event actions in the middle ---
@@ -169,7 +181,9 @@ inline void saltation_root_analytical_batch(
     if (evt.terminal) continue;
     const int k = evt.state_index;
     if (k >= 0) {
-      value_type h = evt.value_func(x_star, t_event);
+      // The reset happens on the surface, so a value that reads the clock
+      // reads t*. Same scalar time either way, different AD components.
+      value_type h = evt.value_func(x_star, t_star);
       switch (evt.method) {
       case EventMethod::Replace:  x_after[k] = h; break;
       case EventMethod::Add:      x_after[k] = x_star[k] + h; break;
@@ -209,16 +223,19 @@ struct no_extra_reset {
   void operator()(state_type&, const time_type&) const {}
 };
 
+/// Steps 1 and 2 alone: from the grid time onto the event surface, which is
+/// where the forward run evaluates f_after. The state after the whole sandwich
+/// has the same value and different tangents.
 template<class state_type, class System, class AtSurface = no_extra_reset>
-inline void saltation_fixed_analytical(
-    state_type& x,
+inline void saltation_fixed_to_surface(
+    state_type& x_surf,
     const state_type& x_before,
     System& sys,
     const FixedEvent<state_type, typename state_type::value_type>& evt,
     const AtSurface& at_surface = AtSurface())
 {
   using value_type = typename state_type::value_type;
-  const size_t n = x.size();
+  const size_t n = x_surf.size();
   if (n == 0) return;
 
   value_type dt_corr = evt.time - value_type(scalar_value(evt.time));
@@ -257,12 +274,29 @@ inline void saltation_fixed_analytical(
   // Resets that the jump switches on belong on the same surface, so the whole
   // discontinuity is carried across by one forward and one backward shift.
   at_surface(x_after, evt.time);
+  for (size_t i = 0; i < n; ++i) x_surf[i] = x_after[i];
+}
 
-  // --- 3. Backward Heun shift to grid time ---
-  //     x_after lives at evt.time.  g1 at departure (evt.time),
+/// Step 3 alone: from the event surface back to the grid time.
+template<class state_type, class System>
+inline void saltation_shift_back(
+    state_type& x,
+    const state_type& x_after,
+    System& sys,
+    const typename state_type::value_type& t_event)
+{
+  using value_type = typename state_type::value_type;
+  const size_t n = x.size();
+  if (n == 0) return;
+
+  value_type dt_corr = t_event - value_type(scalar_value(t_event));
+  value_type half(0.5);
+  value_type t_grid = value_type(scalar_value(t_event));
+
+  //     x_after lives at t_event.  g1 at departure (t_event),
   //     g2 at arrival (t_grid).
   state_type g1(n);
-  sys.first(x_after, g1, evt.time);
+  sys.first(x_after, g1, t_event);
 
   state_type x_back(n);
   for (size_t i = 0; i < n; ++i)
@@ -273,6 +307,22 @@ inline void saltation_fixed_analytical(
 
   for (size_t i = 0; i < n; ++i)
     x[i] = x_after[i] - half * (g1[i] + g2[i]) * dt_corr;
+}
+
+/// The whole sandwich: onto the surface, then back to the grid.
+template<class state_type, class System, class AtSurface = no_extra_reset>
+inline void saltation_fixed_analytical(
+    state_type& x,
+    const state_type& x_before,
+    System& sys,
+    const FixedEvent<state_type, typename state_type::value_type>& evt,
+    const AtSurface& at_surface = AtSurface())
+{
+  const size_t n = x.size();
+  if (n == 0) return;
+  state_type x_surf(n);
+  saltation_fixed_to_surface(x_surf, x_before, sys, evt, at_surface);
+  saltation_shift_back(x, x_surf, sys, evt.time);
 }
 
 // ============================================================================

@@ -1,59 +1,20 @@
 /*
- cppDE Multistep Stepper: Nordsieck multistep implementation.
+ cppDE Multistep Stepper: variable-order, variable-step Nordsieck multistepper.
 
- Unified variable-order, variable-step Nordsieck multistep stepper
- covering two method variants selected at compile time via the
- multistep_method enum:
+ The multistep_method enum selects the family at compile time:
 
-   bdf     : pure BDF/NDF, max order 5  (default)
-   adams   : pure Adams-Moulton PECE,  max order 12
+   bdf     : BDF/NDF with a Newton corrector, max order 5   (default)
+   adams   : Adams-Moulton in PECE form,       max order 12
 
- Whether the stiff side uses NDF (Klopfenstein-Shampine) kappa
- coefficients or classical BDF (kappa = 0) is controlled at runtime
- via set_use_ndf_kappa().  The default is NDF (useNDF = true).
+ On the stiff side set_use_ndf_kappa() chooses between the Klopfenstein-Shampine
+ NDF (default; Shampine & Reichelt 1997, "The MATLAB ODE Suite", SIAM J. Sci.
+ Comput. 18(1), 1-22) and classical BDF (kappa = 0). kappa enters through gamma
+ and the error constant, see ndfSet() and ndfSetTq(), and vignette("Methods"),
+ appendix "BDF and NDF coefficients".
 
- The stiff-side default formulas are the Klopfenstein-Shampine
- Numerical Differentiation Formulas (NDF) from Shampine & Reichelt
- 1997, "The MATLAB ODE Suite", SIAM J. Sci. Comput. 18(1), 1-22.
- Setting use_ndf_kappa to false recovers classical BDF.
-
- The NDF-kappa modification replaces the BDF correction
-
- sum_{m=1}^k (1/m) grad^m y - h F = 0
-
- with
-
- sum_{m=1}^k (1/m) grad^m y - h F - kappa * gamma_k * (y - y_pred) = 0
-
- where y_pred is the predictor.  Algebraically this amounts to
- replacing gamma_k by (1 - kappa) * gamma_k in the iteration matrix
- and in the Newton residual, and scaling the leading truncation
- error coefficient from 1/(k+1) to (kappa*gamma_k + 1/(k+1)).
-
- Klopfenstein-Shampine kappa values (Table 1 in SR97):
-
- k=1:  kappa = -0.1850     26% larger step vs BDF, same A-stab
- k=2:  kappa = -1/9        26% larger step vs BDF, same A-stab
- k=3:  kappa = -0.0823     26% larger step, stability angle 80 deg
- k=4:  kappa = -0.0415     12% larger step, stability angle 66 deg
- k=5:  kappa =  0          identical to BDF5 (too little margin)
-
- Architecture:
- - lu_W<Value, is_sparse> member handles all LU operations
- - ndf_newton_solve()        free function: BDF/NDF Newton corrector
-                             (declared in cppde_newton.hpp)
- - adams_pece_solve()        free function: Adams PECE corrector
-                             (defined inline below)
- - adams_set_coefficients()  free function: Adams Nordsieck coefficients
-                             (defined inline below)
- - multistepper              orchestrates the step pipeline
-
- AD handling is fully transparent: lu_W::solve() dispatches to IFT
- internally, WRMS norms in newton include derivative components.
-
- This header is the single source of truth for the multistep family:
- the coefficient routines, the Adams PECE corrector, and the stepper
- class itself all live here.
+ The Newton corrector is ndf_newton_solve() in cppde_newton.hpp; the Adams
+ coefficients and the PECE corrector are defined below. For AD types
+ lu_W::solve() carries the IFT and the WRMS norms include the tangents.
 
  Copyright (C) 2026 Simon Beyer
 
@@ -76,6 +37,7 @@
 #include <algorithm>
 #include <type_traits>
 #include <cassert>
+#include <functional>
 #include <vector>
 
 #include <cppde/cppde_tls.hpp>
@@ -310,20 +272,19 @@ void adams_set_coefficients(
   //    E : f_new = f(t_n, y_n), kept for the next step
   //
   //  Two f evaluations per accepted step, no Jacobian and no solve. A diverging
-  //  fixed point means |h * lambda * l[1]| > 1, which the `diverged` flag hands
-  //  on as a stiffness signal. Dual types pass through the arithmetic.
+  //  fixed point (|h * lambda * l[1]| > 1) sets `diverged`, a diagnostic the
+  //  step trace reports. Dual types pass through the arithmetic.
   // ============================================================================
 
 struct pece_result {
   bool   converged;     // Did the PECE fixed-point iteration converge?
-  bool   diverged;      // Hard divergence: strong stiffness signal.
+  bool   diverged;      // Hard divergence; diagnostic, reported in the trace.
   double acnrm;         // WRMS norm of the accumulated correction.
   int    n_fevals;      // Number of f-evaluations used (2 for converged step).
   int    n_iters;       // Number of corrector iterations performed.
 
   // Maximum convergence rate over the corrector iterations, rm = del/delp as in
-  // LSODA correction(). The stiffness detector estimates the dominant Lipschitz
-  // constant from it, the Adams path having no Jacobian. Zero below two runs.
+  // LSODA correction(). A diagnostic that no caller reads; zero below two runs.
   double rate_max;
 };
 
@@ -336,8 +297,7 @@ struct pece_result {
   //   acor, y, tempv, ftemp   : correction, result, and caller-owned scratch
   //   crate                   : damped convergence rate, diagnostic only
   //
-  // A result with diverged set means the corrector blew up and the stepper
-  // should switch to NDF; converged and diverged both false is a soft failure
+  // A result that did not converge, diverged or not, is a convergence failure
   // the controller retries with a smaller step.
 template<class DerivFunc, class Value, class TimeType>
 pece_result adams_pece_solve(
@@ -363,7 +323,8 @@ pece_result adams_pece_solve(
     std::vector<Value>& ftemp,
     const detail::tangent_slab<Value>& ftemp_slab,
     double& crate,
-    cppde::profiler& prof)
+    cppde::profiler& prof,
+    bool sens_err_con = true)
 {
   using newton_detail::wrms_norm;
   using cppde::ad_traits::scalar_value;
@@ -408,8 +369,7 @@ pece_result adams_pece_solve(
   // CVODE cvNlsFunctional:
   //   tempv = rl1 * (h*f(y_prev) - zn[1])   the full new correction
   //   del   = ||tempv - acor||              the increment over the previous one
-  // rl1 is 1/l[1], not l[1]: with l[1] the corrector settles on a different
-  // fixed point and every step then looks like a large local error.
+  // rl1 is 1/l[1], as in cvNlsFunctional.
     { auto _t = prof.timer(prof_cat::newton_overhead);
       // tempv = rl1 * (h*f - zn1_pred) - acor, the increment; acor takes
       // it up and equals the full correction afterwards.
@@ -429,7 +389,7 @@ pece_result adams_pece_solve(
     }
 
     { auto _t = prof.timer(prof_cat::error_norm);
-      del = wrms_norm(tempv, y, n, atol, rtol); }
+      del = wrms_norm(tempv, y, n, atol, rtol, sens_err_con); }
 
     // y = zn[0]_pred + acor; both take the same increment.
     { auto _t = prof.timer(prof_cat::newton_overhead);
@@ -455,7 +415,7 @@ pece_result adams_pece_solve(
       // Converged: compute acnrm AD-aware, same convention as Newton.
       double acnrm;
       { auto _t = prof.timer(prof_cat::error_norm);
-        acnrm = wrms_norm(acor, zn0, n, atol, rtol); }
+        acnrm = wrms_norm(acor, zn0, n, atol, rtol, sens_err_con); }
 
       // Final E: re-evaluate at corrected y so next step has fresh data.
       { auto _t = prof.timer(prof_cat::f_eval);
@@ -522,6 +482,43 @@ constexpr int method_max_order(multistep_method m) {
 //  multistepper<Method, Value, JacobianPattern, Resizer>
 // ============================================================================
 
+// ============================================================================
+//  The carry across a step boundary, apart from the Nordsieck slots: the order,
+//  the step-size history and the counters that decide how the coefficients are
+//  built. Values only and free of the scalar type, so the backward walk reads
+//  it as the forward run left it.
+// ============================================================================
+
+template<int MaxOrder>
+struct multistep_carry {
+  int    q = 1, L = 2, qwait = 2, nst = 0, nscon = 0;
+  double h = 0.0, hscale = 0.0, eta = 1.0;
+  std::array<double, MaxOrder + 1> tau{};
+};
+
+// ============================================================================
+//  What the controller does to the Nordsieck history outside do_step: the
+//  rescale, the order change, the correction it saves for an order increase,
+//  and the order-1 restart.
+//
+//  Between two accepted steps that is the previous step's tail plus every
+//  attempt this one threw away, and a thrown-away attempt is not free: it
+//  rescales the history the next attempt reads. All of it is control decision,
+//  so the backward walk repeats the record instead of deriving it again.
+// ============================================================================
+
+enum class history_op : unsigned char {
+  rescale,      // value is eta
+  order,        // value is the new order
+  save_acor,    // zn[qmax] <- acor, which an order increase reads
+  hscale,       // value is the new step scale
+  reload_zn1,   // zn[1] <- h * f(zn[0], tn), the order-1 restart
+  complete      // the accepted step's own Nordsieck update, as a cut mark
+};
+
+struct history_entry { history_op op; double value; };
+using history_log = std::vector<history_entry>;
+
 template<
   multistep_method Method = multistep_method::bdf,
   class Value = double,
@@ -553,6 +550,10 @@ public:
 
   typedef cppde::stepper_tag              stepper_category;
   typedef multistepper<Method, Value, JacobianPattern, Resizer> stepper_type;
+
+  // Same method on another scalar type.
+  template<class Value2> using rebind_value =
+    multistepper<Method, Value2, JacobianPattern, Resizer>;
 
   static constexpr bool is_sparse = is_sparse_tag<JacobianPattern>::value;
 
@@ -620,9 +621,8 @@ public:
       if (n_sens == 0) return;
 
       // The nordsieck_block needs all K facade vectors to be the same
-      // length; bail out (defer until a later prepare_sensitivities call)
-      // if any slot is still empty.  This mirrors the per-slot empty()
-      // guard the per-slab loop used to do.
+      // length; defer to a later prepare_sensitivities call while any slot
+      // is still empty.
       bool zn_ready = true;
       const std::size_t n_zn = m_zn[0].m_v.size();
       for (int j = 0; j <= max_order + 1; ++j) {
@@ -683,6 +683,12 @@ public:
   // ====================================================================
 
   void set_use_ndf_kappa(bool v) { m_use_ndf_kappa = v; }
+
+  // With the tangents out of the error test, the corrector test and the order
+  // choice, every control decision reads value arithmetic only, so the step
+  // sequence is the one a scalar run takes whatever the tangent count is.
+  void set_sens_err_con(bool v) { m_sens_err_con = v; }
+  bool sens_err_con() const { return m_sens_err_con; }
   bool use_ndf_kappa() const { return m_use_ndf_kappa; }
 
   // ====================================================================
@@ -741,19 +747,15 @@ public:
 
   // ====================================================================
   //  on_step_accepted: called by the controller after a successful step.
-  //  Currently a no-op (no mode-switching machinery).  Kept as a hook
-  //  in case future per-step bookkeeping is needed.
+  //  A no-op for this stepper.
   // ====================================================================
 
   template<class System, class TimeArg>
   void on_step_accepted(System& /*system*/, TimeArg /*t*/) {}
 
   // ====================================================================
-  //  step_bdf_family: perform one BDF/NDF step
-  //
-  //  This is the original do_step body, unchanged in behaviour, just
-  //  renamed and made a private member.  Delegates Newton iteration
-  //  to ndf_newton_solve().
+  //  step_bdf_family: one BDF/NDF step, Newton iteration delegated to
+  //  ndf_newton_solve().
   // ====================================================================
 
   template<class System, class TimeArg>
@@ -794,7 +796,7 @@ public:
       if (m_nst > 0) {
         if (std::abs(dt_s - m_hscale) > 1e-14 * std::max(1.0, std::abs(m_hscale))) {
           m_eta = dt_s / m_hscale;
-          ndfRescale(n);
+          ndfRescale();
         }
         m_h = m_hscale;
       } else {
@@ -802,6 +804,10 @@ public:
         if (m_hscale == 0.0) m_hscale = dt_s;
       }
     }
+
+    if (m_snapshot)
+      m_snapshot(static_cast<double>(ndf_detail::scalar_value(t_s)),
+                 static_cast<double>(ndf_detail::scalar_value(m_h)));
 
   // ================================================================
   //  1b. Error weights from the accepted solution, before the prediction
@@ -960,7 +966,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         m_crate,
         m_gamrat,
         m_prof,
-        m_ewt
+        m_ewt,
+        m_sens_err_con
   );
 
   m_acnrm = result.acnrm;
@@ -975,7 +982,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     callSetup = true;
     // CVODE classification: if gamrat is close to 1, drift cannot
     // explain the failure => J itself must be stale. If gamrat is
-    // far from 1, the drift is the likely culprit => keep J, only
+    // far from 1, the drift is the likely cause => keep J, only
     // refactorize W at the current gamma.
     if (std::abs(m_gamrat - 1.0) < 0.2) {
       nls_convfail = convfail_t::fail_bad_j;
@@ -1056,7 +1063,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       if (m_nst > 0) {
         if (std::abs(dt_s - m_hscale) > 1e-14 * std::max(1.0, std::abs(m_hscale))) {
           m_eta = dt_s / m_hscale;
-          ndfRescale(n);
+          ndfRescale();
         }
         m_h = m_hscale;
       } else {
@@ -1064,6 +1071,10 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         if (m_hscale == 0.0) m_hscale = dt_s;
       }
     }
+
+    if (m_snapshot)
+      m_snapshot(static_cast<double>(ndf_detail::scalar_value(t_s)),
+                 static_cast<double>(ndf_detail::scalar_value(m_h)));
 
     // ================================================================
     //  1b. Compute error weight vector from ACCEPTED solution
@@ -1132,7 +1143,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         m_ftemp.m_v,
         m_ftemp_slab,
         m_crate,
-        m_prof);
+        m_prof,
+        m_sens_err_con);
 
     m_acnrm     = result.acnrm;
     m_n_fevals += result.n_fevals;
@@ -1167,6 +1179,130 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     trace_step(/*is_adams_step=*/true,
                /*t_end=*/static_cast<double>(scalar_value(t_s + m_h)));
   }
+
+  // ====================================================================
+  //  set_step_snapshot: fires once per attempt, after the Nordsieck rescale and
+  //  before the prediction, which is where the carry a step reads is final.
+  //
+  //  The reverse checkpoint cannot be taken after the step: the history is
+  //  mutated in place, and an attempt the controller throws away rescales it
+  //  again before the accepted one runs. The last snapshot before an acceptance
+  //  is the accepted attempt's own. Unset costs one branch per attempt.
+  //
+  //  It is handed the step's time and the size it settled on, which is m_h and
+  //  not the size the controller offered.
+  // ====================================================================
+
+  using step_snapshot = std::function<void(double t, double h)>;
+  void set_step_snapshot(step_snapshot f) { m_snapshot = std::move(f); }
+
+  // Where the operations above get written. Unset, which is every run that is
+  // not being differentiated backwards, costs one null test per operation.
+  void set_history_log(history_log* log) { m_hlog = log; }
+
+  // ====================================================================
+  //  The carry across a step boundary, for the reverse checkpoint.
+  //
+  //  Everything a step reads that an earlier step wrote, apart from the
+  //  Nordsieck slots themselves: the order, the step-size history and the
+  //  counters that decide how the coefficients are built. Values only, so the
+  //  backward walk reads it as the forward run left it.
+  // ====================================================================
+
+  using carry = multistep_carry<max_order>;
+
+  void save_carry(carry& c) const
+  {
+    using ndf_detail::scalar_value;
+    c.q = m_q; c.L = m_L; c.qwait = m_qwait; c.nst = m_nst; c.nscon = m_nscon;
+    c.h      = static_cast<double>(scalar_value(m_h));
+    c.hscale = static_cast<double>(scalar_value(m_hscale));
+    c.eta    = static_cast<double>(scalar_value(m_eta));
+    for (int j = 0; j <= max_order; ++j)
+      c.tau[j] = static_cast<double>(scalar_value(m_tau[j]));
+  }
+
+  // Restores the scalars and sizes the history to n states. The slot values are
+  // written through zn_mut().
+  void load_carry(const carry& c, std::size_t n)
+  {
+    state_type probe(n);
+    resize_impl(probe);
+    m_q = c.q; m_L = c.L; m_qwait = c.qwait; m_nst = c.nst; m_nscon = c.nscon;
+    m_h      = static_cast<time_type>(c.h);
+    m_hscale = static_cast<time_type>(c.hscale);
+    m_eta    = static_cast<time_type>(c.eta);
+    for (int j = 0; j <= max_order; ++j)
+      m_tau[j] = static_cast<time_type>(c.tau[j]);
+    m_initialized = true;
+  }
+
+  state_type& zn_mut(int j) { return m_zn[j].m_v; }
+
+  // ====================================================================
+  //  replay_outputs: what the corrector's solution makes of the step. acor is
+  //  the correction the tail maps back into the history, and the error estimate
+  //  is that same vector. A probe stepper drives this with a unit slot to read
+  //  the tail's operators off.
+  // ====================================================================
+  void replay_outputs(const state_type& y, state_type& x_out, state_type& xerr)
+  {
+    const size_t n = y.size();
+    for (size_t i = 0; i < n; ++i) {
+      m_acor.m_v[i] = y[i] - m_zn[0].m_v[i];
+      x_out[i]      = y[i];
+      xerr[i]       = m_acor.m_v[i];
+    }
+    m_newton_converged = true;
+  }
+
+  // ====================================================================
+  //  replay_predict: everything a step does to the Nordsieck history before
+  //  its corrector, and the coefficients that follow from it. Returns rl1,
+  //  with m_h and m_gamma set.
+  //
+  //  A written step adjoint needs this transform without a system to evaluate:
+  //  applied to a unit slot it gives one column of the matrix the adjoint
+  //  transposes.
+  // ====================================================================
+  time_type replay_predict(size_t n, time_type dt_s)
+  {
+    if (m_nst > 0) {
+      if (std::abs(dt_s - m_hscale) > 1e-14 * std::max(1.0, std::abs(m_hscale))) {
+        m_eta = dt_s / m_hscale;
+        ndfRescale();
+      }
+      m_h = m_hscale;
+    } else {
+      m_h = dt_s;
+      if (m_hscale == 0.0) m_hscale = dt_s;
+    }
+
+    ndfPredict(n);
+
+    // Both families solve the same equation with different coefficients, so the
+    // residual is one formula: gamma = h * rl1 in either case.
+    time_type rl1;
+    if constexpr (Method == multistep_method::adams) {
+      adams_set_coefficients(m_q, m_qwait, m_h, m_tau, m_l, m_tq);
+      rl1 = time_type(1.0) / m_l[1];
+    } else {
+      ndfSet();
+      const double kappa_q = m_use_ndf_kappa ? ndf_constants::NDF_KAPPA[m_q] : 0.0;
+      rl1 = time_type(1.0) / (m_l[1] * time_type(1.0 - kappa_q));
+    }
+    m_gamma = m_h * rl1;
+    return rl1;
+  }
+
+  // The correction coefficients the tail maps acor back through, valid after
+  // replay_predict.
+  const time_type* nordsieck_l() const { return m_l.data(); }
+
+
+  // The step's own gamma, valid after replay_predict. The residual's derivative in
+  // y is gamma * W, so the transposed solve is scaled by it.
+  time_type gamma() const { return m_gamma; }
 
   // ====================================================================
   //  Error norm: dsm = acnrm * tq[2]
@@ -1239,8 +1375,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   {
     auto _tp = m_prof.timer(prof_cat::error_norm);
     using ndf_detail::scalar_value;
-    // Clamp to the current method's max order: for ++-instantiations
-    // this is 5 in BDF/NDF mode and 12 in Adams mode.
+    // Clamp to the method's max order: 5 for BDF/NDF, 12 for Adams.
     if (m_q >= q_max_current()) return 0.0;
     if (m_saved_tq5 == 0.0) return 0.0;
 
@@ -1253,8 +1388,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     if constexpr (ad_lu::is_ad<value_type>::value) {
       if (n > 0) nd = const_cast<value_type&>(m_acor.m_v[0]).size();
     }
+    const unsigned nw = m_sens_err_con ? nd : 0u;
     std::vector<double>& sens_sumsq = cppde::detail::tls_scratch_f64<3>();
-    sens_sumsq.assign(nd, 0.0);
+    sens_sumsq.assign(nw, 0.0);
 
     size_t ew = 0;  // ewt index (interleaved for AD)
     for (size_t i = 0; i < n; ++i) {
@@ -1266,6 +1402,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
       // Derivative components (compiles to nothing for double)
       if constexpr (ad_lu::is_ad<value_type>::value) {
+        if (nw == 0) { ew += nd; continue; }
         auto& acor_i = const_cast<value_type&>(m_acor.m_v[i]);
         auto& znqm_i = const_cast<value_type&>(m_zn[max_order].m_v[i]);
         for (unsigned j = 0; j < nd; ++j) {
@@ -1279,7 +1416,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
     // Max-norm over (state, each sens vector): CVODES convention.
     double dup = (n > 0) ? std::sqrt(state_sumsq / n) : 0.0;
-    for (unsigned j = 0; j < nd; ++j) {
+    for (unsigned j = 0; j < nw; ++j) {
       double sens_norm = std::sqrt(sens_sumsq[j] / n);
       if (sens_norm > dup) dup = sens_norm;
     }
@@ -1293,6 +1430,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   void complete_step()
   {
+    // A cut, not an operation: it separates the operations that belong to the
+    // step just accepted from those the previous one left behind.
+    log_history(history_op::complete, 0.0);
     auto _tp = m_prof.timer(prof_cat::nordsieck);
     const size_t n = m_zn[0].m_v.size();
     ++m_nst;
@@ -1433,11 +1573,12 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   {
     auto _tp = m_prof.timer(prof_cat::nordsieck);
     m_eta = eta;
-    ndfRescale(m_zn[0].m_v.size());
+    ndfRescale();
   }
 
   void set_order_for_next_step(int new_q)
   {
+    log_history(history_op::order, static_cast<double>(new_q));
     // BDF/NDF and Adams use different Nordsieck adjustment formulas
     // (cvAdjustBDF vs cvAdjustAdams in CVODE).  Selected at compile time.
     constexpr bool in_adams = (Method == multistep_method::adams);
@@ -1538,9 +1679,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     if (dense_resized && m_n_sens != 0)
       prepare_sensitivities(m_n_sens);
 
-    // Value layer: per-element dual = dual copy.  Only the first (q+1)
-    // slots are alive: leave the rest untouched (consistent with the
-    // legacy per-slot loop, which only ran for j ∈ [0, q]).
+    // Value layer: per-element dual = dual copy. Only the first (q+1)
+    // slots are alive; the rest are left untouched.
     for (int j = 0; j <= m_q; ++j) {
       auto& dst = m_zn_dense[j].m_v;
       const auto& src = m_zn[j].m_v;
@@ -1552,8 +1692,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // keep stale tangents, which eval_dense_into never reads.
   //
   // For dual2nd the loop above has already covered the inline value and gradient
-  // slots. The val_tan and hess sub-blocks are flat arrays and can be copied,
-  // but the outer block must not be: that would clobber the binding pointers.
+  // slots. The hess sub-block is a flat array and can be copied, but the outer
+  // block must not be: that would clobber the binding pointers.
     if constexpr (detail::is_dual2nd<value_type>::value) {
       // dual2nd: memcpy hess sub-block (flat doubles). Outer block (with
       // its inline gradient .val_ slots) was already copied per-element
@@ -1612,6 +1752,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   template<class TimeArg> void set_hscale(TimeArg hs) {
     m_hscale = static_cast<time_type>(ndf_detail::scalar_value(hs));
     m_h      = m_hscale;
+    log_history(history_op::hscale,
+                static_cast<double>(ndf_detail::scalar_value(m_hscale)));
   }
   double saved_tq5() const { return m_saved_tq5; }
   const state_type& zn(int j) const { return m_zn[j].m_v; }
@@ -1620,6 +1762,11 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   template<class TimeArg> void set_tn_current(TimeArg tn) { m_tn_current = static_cast<time_type>(ndf_detail::scalar_value(tn)); }
   void set_tolerances(double atol, double rtol) { m_atol = atol; m_rtol = rtol; }
+
+  // How many corrector iterations a step may spend. The default is the solver's
+  // own budget; a caller that needs the equation solved rather than the
+  // iteration stopped, such as a reverse-mode reference, raises it.
+  void set_max_corrector_iters(int n) { m_max_newton_iter = n; }
   void set_qwait(int qw) { m_qwait = qw; }
 
   int n_fevals() const { return m_n_fevals; }
@@ -1629,7 +1776,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   void report_setup_triggers() const {
     // Setup-trigger breakdown: only meaningful for methods that call
-    // lsetup (BDF / NDF / BDF++ / NDF++).  Pure Adams has no Jacobian.
+    // lsetup (BDF / NDF). Adams has no Jacobian.
     if constexpr (can_use_bdf_family) {
       std::fprintf(stderr, "\n=== BDF/NDF setup trigger breakdown (total = %d) ===\n", m_n_setup_total);
       std::fprintf(stderr, "  force_setup (err/conv fail): %d\n", m_n_setup_force);
@@ -1751,6 +1898,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // Save acor to zn[qmax]
   void save_acor_to_zn_qmax()
   {
+    log_history(history_op::save_acor, 0.0);
     const size_t n = m_zn[0].m_v.size();
     for (size_t i = 0; i < n; ++i)
       m_zn[max_order].m_v[i] = m_acor.m_v[i];
@@ -1760,6 +1908,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   template<class DerivFunc>
   void reload_zn1_from_f(DerivFunc& deriv_func)
   {
+    log_history(history_op::reload_zn1, 0.0);
     const size_t n = m_zn[0].m_v.size();
     deriv_func(m_zn[0].m_v, m_ftemp.m_v, m_tn_current);
     ++m_n_fevals;
@@ -2010,7 +2159,7 @@ private:
                           FCONE FCONE FCONE FCONE);
         }
       } else {
-        // Nested-dual / non-double inner: legacy per-slot path.
+        // Nested-dual / non-double inner: per-slot path.
         for (int k = 1; k <= m_q; ++k)
           for (int j = m_q; j >= k; --j)
             vec_axpy_with_slab(m_zn[j - 1].m_v, m_zn_block.slab(j - 1),
@@ -2149,8 +2298,14 @@ public:
     }
   }
 
-  void ndfRescale(size_t n)
+  void log_history(history_op op, double value) {
+    if (m_hlog) m_hlog->push_back(history_entry{op, value});
+  }
+
+  void ndfRescale()
   {
+    log_history(history_op::rescale,
+                static_cast<double>(ndf_detail::scalar_value(m_eta)));
     time_type factor = m_eta;
     for (int j = 1; j <= m_q; ++j) {
       vec_scale_with_slab(m_zn[j].m_v, m_zn_block.slab(j),
@@ -2193,7 +2348,6 @@ public:
 
   void ndfDecreaseOrder()
   {
-    const size_t n = m_zn[0].m_v.size();
     std::array<time_type, L_MAX + 1> ll;
     ll.fill(time_type(0));
     ll[2] = time_type(1);
@@ -2335,6 +2489,8 @@ public:
   time_type m_tn_current;
   bool m_initialized;
   int m_n_fevals, m_n_jevals;
+  step_snapshot m_snapshot;
+  history_log*  m_hlog = nullptr;
 
   // Setup trigger diagnostics
   int m_n_setup_total = 0, m_n_setup_force = 0, m_n_setup_nojac = 0;
@@ -2347,6 +2503,7 @@ public:
   std::array<int, max_order + 1> m_steps_at_order = {};
 
   bool m_use_ndf_kappa = true;   // NDF kappa coefficients (runtime, default: NDF)
+  bool m_sens_err_con = true;    // tangents count in the error and corrector tests
 
 #ifdef CPPDE_STEP_TRACE
   // Scratch state populated by step_bdf_family / step_adams and read by

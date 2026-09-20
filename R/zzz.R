@@ -16,7 +16,7 @@ cvodeConfig <- new.env(parent = emptyenv())
 #' @useDynLib cppDE, .registration = TRUE, .fixes = "C_"
 #' @noRd
 .onLoad <- function(libname, pkgname) {
-  reticulate::py_require("sympy")
+  reticulate::py_require("sympy", python_version = ">=3.9")
 
   cvodeConfig$available        <- FALSE
   cvodeConfig$cflags           <- ""
@@ -78,10 +78,9 @@ cvodeConfig <- new.env(parent = emptyenv())
   .announceForkGuard()
 }
 
-# Report the guard installed by R_init_cppDE(), so that single-threaded BLAS in a
-# forked worker is not a surprise, and say so where nothing resolved and the
-# deadlock is still reachable. Silent when there is nothing to pin. Reached from
-# .onAttach, not .onLoad: tooling loads a namespace without being asked to.
+# One-line report of the BLAS fork guard, or a warning when no entry point
+# resolved. Silent when there is nothing to pin. Called from .onAttach, not
+# .onLoad, since tooling loads namespaces without attaching them.
 .announceForkGuard <- function() {
   if (isTRUE(getOption("cppDE.quiet"))) return(invisible(NULL))
   g <- tryCatch(forkGuard(), error = function(e) NULL)
@@ -106,6 +105,13 @@ cvodeConfig <- new.env(parent = emptyenv())
 #' @noRd
 .cppde_py_cache <- new.env(parent = emptyenv())
 
+# Directory of the Python generators; CPPDE_PY_DIR overrides the installed one.
+.cppde_py_dir <- function() {
+  d <- Sys.getenv("CPPDE_PY_DIR")
+  if (nzchar(d)) normalizePath(d, "/", mustWork = TRUE)
+  else system.file("python", package = "cppDE")
+}
+
 #' @keywords internal
 #' @importFrom reticulate import_from_path
 #' @noRd
@@ -114,7 +120,7 @@ get_codegen_cppODE_py <- function() {
     .cppde_py_cache$codegen_cppODE <-
       reticulate::import_from_path(
         "codegen_cppODE",
-        path = system.file("python", package = "cppDE"),
+        path = .cppde_py_dir(),
         delay_load = TRUE
       )
   }
@@ -124,16 +130,16 @@ get_codegen_cppODE_py <- function() {
 #' @keywords internal
 #' @importFrom reticulate import_from_path
 #' @noRd
-get_codegen_funCpp_py <- function() {
-  if (!exists("codegen_funCpp", envir = .cppde_py_cache, inherits = FALSE)) {
-    .cppde_py_cache$codegen_funCpp <-
+get_codegen_cppFUN_py <- function() {
+  if (!exists("codegen_cppFUN", envir = .cppde_py_cache, inherits = FALSE)) {
+    .cppde_py_cache$codegen_cppFUN <-
       reticulate::import_from_path(
-        "codegen_funCpp",
-        path = system.file("python", package = "cppDE"),
+        "codegen_cppFUN",
+        path = .cppde_py_dir(),
         delay_load = TRUE
       )
   }
-  .cppde_py_cache$codegen_funCpp
+  .cppde_py_cache$codegen_cppFUN
 }
 
 #' @keywords internal
@@ -144,24 +150,9 @@ get_codegen_cvode_py <- function() {
     .cppde_py_cache$codegen_cvode <-
       reticulate::import_from_path(
         "codegen_cvode",
-        path = system.file("python", package = "cppDE"),
+        path = .cppde_py_dir(),
         delay_load = TRUE
       )
   }
   .cppde_py_cache$codegen_cvode
-}
-
-#' @keywords internal
-#' @importFrom reticulate import_from_path
-#' @noRd
-get_derivSymb_py <- function() {
-  if (!exists("derivSymb", envir = .cppde_py_cache, inherits = FALSE)) {
-    .cppde_py_cache$derivSymb <-
-      reticulate::import_from_path(
-        "derivSymb",
-        path = system.file("python", package = "cppDE"),
-        delay_load = TRUE
-      )
-  }
-  .cppde_py_cache$derivSymb
 }

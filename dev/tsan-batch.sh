@@ -35,11 +35,10 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 # --- 1. generate + compile, no preload -------------------------------------
 Rscript -e "
   suppressMessages(devtools::load_all('$PKG', quiet = TRUE))
-  for (cfg in list(list(nm='t_d1', d2=FALSE, ns=NULL),
-                   list(nm='t_d2', d2=TRUE,  ns=4L),
-                   list(nm='t_hp', d2=FALSE, ns=Inf))) {
+  for (cfg in list(list(nm='t_d1', d2=FALSE),
+                   list(nm='t_d2', d2=TRUE))) {
     m <- cppODE(c(A='-k*A', B='k*A', C='0.3*B-0.1*C'), modelname=cfg\$nm,
-                deriv=TRUE, deriv2=cfg\$d2, nStack=cfg\$ns,
+                deriv=TRUE, deriv2=cfg\$d2,
                 outdir='$WORK', compile=FALSE, verbose=FALSE)
     saveRDS(m, file.path('$WORK', paste0(cfg\$nm, '.rds')))
   }" >/dev/null

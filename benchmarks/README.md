@@ -88,7 +88,7 @@ Both backends are driven through exactly the same pipeline, so the
 measurement isolates the integrator and nothing else:
 
 * the **same C++ right-hand side**, generated from the same expression
-  strings by the same SymPy codegen;
+  strings by the same code generator;
 * the **same analytic Jacobian** (never a finite-difference one);
 * the **same output grid, tolerances and initial conditions**;
 * sensitivities from **forward AD** (cppDE) versus **CVODES forward
@@ -494,8 +494,8 @@ happens before anything is timed.
 
 ## Two cppDE issues this suite surfaced
 
-Both are worked around in `R/sbml.R` so the benchmark runs, but they are
-package-level bugs, not benchmark-level ones:
+Both were bugs of the former SymPy code generator and do not occur with
+the expression-graph generator. The workarounds in `R/sbml.R` remain:
 
 1. **Parameter names that are C++ reserved words generate uncompilable
    code.** SymPy's C++ printer renames a reserved word by appending an

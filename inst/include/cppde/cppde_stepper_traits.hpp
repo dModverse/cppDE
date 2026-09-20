@@ -113,8 +113,7 @@ struct inner_has_multistepper_tag<T,
                            : has_multistepper_tag<typename T::stepper_type> {};
 
 // Recursive version, chasing through several wrapper layers. The recursion
-// stops when T::stepper_type is T itself, which some Boost steppers declare and
-// which would otherwise not terminate.
+// stops when T::stepper_type is T itself, which would otherwise not terminate.
 template<class T, class = void>
 struct deep_has_multistepper_tag : has_multistepper_tag<T> {};
 

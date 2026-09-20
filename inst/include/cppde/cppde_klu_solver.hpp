@@ -2,7 +2,7 @@
  KLU sparse LU solver wrapper for cppDE: raw CSC interface.
 
  Takes raw int, double pointers (Ap, Ai, Ax) directly.
- Uses klu_refactor() after the first klu_factor() for maximum speed.
+ Uses klu_refactor() after the first klu_factor(), guarded by pivot growth.
 
  KLU settings (BTF, ordering) are determined at codegen time by
  analyzing the Jacobian sparsity pattern in Python and passed as
@@ -26,6 +26,8 @@
 #include <vector>
 #include <stdexcept>
 #include <cstdio>
+#include <cmath>
+#include <limits>
 
 // Compile-time KLU settings (set by codegen via -D flags).
 // Defaults match KLU's own defaults (BTF on, AMD ordering).
@@ -95,6 +97,14 @@ public:
     m_has_numeric = false;
   }
 
+  // Below this reciprocal pivot growth a reused pivot order is not worth
+  // trusting. eps^(2/3) is the threshold SUNDIALS uses for the same decision.
+  static double rgrowth_floor() {
+    static const double f =
+      std::pow(std::numeric_limits<double>::epsilon(), 2.0 / 3.0);
+    return f;
+  }
+
   // ------------------------------------------------------------------
   //  Factorize: analyze (if needed) + factor/refactor
   // ------------------------------------------------------------------
@@ -124,11 +134,20 @@ public:
                      KLUAMD == 0 ? "AMD" : "COLAMD");
 #endif
     } else {
-      // Fast path: reuse symbolic analysis + numeric structure
+      // Fast path: reuse symbolic analysis + numeric structure.
       int ok = klu_refactor(const_cast<int*>(Ap),
                             const_cast<int*>(Ai),
                             const_cast<double*>(Ax),
                             m_symbolic, m_numeric, &m_common);
+      // klu_refactor reuses the first pivot order and reports success even when
+      // that order is unstable for the new values. The reverse mode uses each
+      // solve directly, so the reciprocal pivot growth decides, as in SUNDIALS.
+      if (ok) {
+        klu_rgrowth(const_cast<int*>(Ap), const_cast<int*>(Ai),
+                    const_cast<double*>(Ax), m_symbolic, m_numeric, &m_common);
+        // Written so a NaN falls through to the full factorisation.
+        if (!(m_common.rgrowth > rgrowth_floor())) ok = 0;
+      }
       if (!ok) {
         // Fallback: full re-factor
         free_numeric();
@@ -156,6 +175,21 @@ public:
 
   void solve(std::vector<double>& b) const
   { solve(b.data()); }
+
+  // ------------------------------------------------------------------
+  //  Solve against the transpose: b <- W^-T b. KLU factorises once and
+  //  serves both directions, which is what the reverse mode needs.
+  // ------------------------------------------------------------------
+  void solve_transposed(double* b) const
+  {
+    klu_tsolve(const_cast<klu_symbolic*>(m_symbolic),
+               const_cast<klu_numeric*>(m_numeric),
+               m_n, 1, b,
+               const_cast<klu_common*>(&m_common));
+  }
+
+  void solve_transposed(std::vector<double>& b) const
+  { solve_transposed(b.data()); }
 
   // ------------------------------------------------------------------
   //  Batched solve: B ← W⁻¹ B  (B is n × nrhs, column-major)
