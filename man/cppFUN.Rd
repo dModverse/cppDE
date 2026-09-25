@@ -16,7 +16,7 @@ cppFUN(
   convenient = TRUE,
   deriv = TRUE,
   deriv2 = FALSE,
-  derivMode = c("forward", "reverse")
+  derivMode = "forward"
 )
 }
 \arguments{
@@ -52,15 +52,16 @@ arguments rather than the low-level \verb{(vars, params)} signature.}
 \item{deriv2}{Logical. Generate Hessian entry points; implies
 \code{deriv = TRUE}.}
 
-\item{derivMode}{Which derivative products to build. More than one may be
-named, and the default \code{c("forward", "reverse")} builds both.
+\item{derivMode}{Which derivative products to build, any of \code{"forward"}
+(default), \code{"reverse"} and \code{"forward-reverse"}.
 \itemize{
 \item \code{"forward"}: forward-mode AD on \code{cppde::dual}, delivering \code{jac},
 \code{hess}, \code{evaluate} and \code{evaluateBatch}.
 \item \code{"reverse"}: the vector-Jacobian product \code{vjp}, differentiated at
-code-generation time, together with its forward-reverse form.
-Naming one direction alone omits the other's entries, and its compile
-time with them.
+code-generation time.
+\item \code{"forward-reverse"}: \code{vjp} and its derivative along a tangent, also
+differentiated at code-generation time.
+A mode not named is not generated and costs no compile time.
 }}
 }
 \value{
@@ -78,7 +79,7 @@ Jacobian with a cotangent of the outputs, \verb{[n_obs, n_out]} or
 \code{cotangentP} sums over observations because the parameters are shared
 across them. Given \code{tangentX}, \code{tangentP} or \code{curvature}, the derivative
 of the cotangent along the tangent, the same call runs forward-reverse and
-adds \code{curvatureX} and \code{curvatureP}. Carries attributes \code{equations},
+adds \code{curvatureX} and \code{curvatureP}; this needs \code{"forward-reverse"}. Carries attributes \code{equations},
 \code{variables}, \code{parameters}, \code{fixed}, \code{modelname}, \code{srcfile} and
 \code{derivMode}.
 }

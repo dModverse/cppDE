@@ -72,7 +72,7 @@ fx <- list(
                    convenient = FALSE),
   vjp_fr = cppFUN(c(y1 = "a * x1^2 + b * x1 * x2", y2 = "sin(a * x2) + b^2 * x1"),
                   variables = c("x1", "x2"), parameters = c("a", "b"),
-                  deriv2 = TRUE, derivMode = c("forward", "reverse"),
+                  deriv2 = TRUE, derivMode = c("forward", "forward-reverse"),
                   modelname = "cf_vjpfr")
 )
 fx_collide <- lapply(seq_along(collide_orders), function(i)
@@ -98,7 +98,7 @@ test_that("cppFUN returns correct output", {
 test_that("an object that was not compiled says so", {
   # Every entry needs compiled code.
   f <- cppFUN(c(y = "a * x"), variables = "x", parameters = "a",
-              derivMode = c("forward", "reverse"), modelname = "fun_uncompiled",
+              derivMode = c("forward", "forward-reverse"), modelname = "fun_uncompiled",
               convenient = FALSE)
   M <- matrix(2, 1, 1, dimnames = list(NULL, "x"))
   msg <- "'fun_uncompiled' is not compiled; call compile\\(\\)"

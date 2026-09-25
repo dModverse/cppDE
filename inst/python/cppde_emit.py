@@ -394,6 +394,8 @@ class Printer:
         g = self.g
         name = g.attr[n]
         args = g.args[n]
+        if name == "_prod":
+            return "(%s)" % self.expr(args[0])
         if self.py:
             f = PY_CALLS.get(name, "R.call_%s" % name)
             return "%s(%s)" % (f, ", ".join(self.expr(a) for a in args))

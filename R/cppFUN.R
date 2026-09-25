@@ -35,14 +35,15 @@
 #' @param deriv Logical. Generate first-order derivative entry points.
 #' @param deriv2 Logical. Generate Hessian entry points; implies
 #'   `deriv = TRUE`.
-#' @param derivMode Which derivative products to build. More than one may be
-#'   named, and the default `c("forward", "reverse")` builds both.
+#' @param derivMode Which derivative products to build, any of `"forward"`
+#'   (default), `"reverse"` and `"forward-reverse"`.
 #'   * `"forward"`: forward-mode AD on `cppde::dual`, delivering `jac`,
 #'     `hess`, `evaluate` and `evaluateBatch`.
 #'   * `"reverse"`: the vector-Jacobian product `vjp`, differentiated at
-#'     code-generation time, together with its forward-reverse form.
-#'     Naming one direction alone omits the other's entries, and its compile
-#'     time with them.
+#'     code-generation time.
+#'   * `"forward-reverse"`: `vjp` and its derivative along a tangent, also
+#'     differentiated at code-generation time.
+#'   A mode not named is not generated and costs no compile time.
 #'
 #' @return A list with components `func`, `jac`, `hess`, `evaluate`,
 #'   `evaluateBatch` and `vjp`, each `NULL` when not generated.
@@ -58,7 +59,7 @@
 #'   `cotangentP` sums over observations because the parameters are shared
 #'   across them. Given `tangentX`, `tangentP` or `curvature`, the derivative
 #'   of the cotangent along the tangent, the same call runs forward-reverse and
-#'   adds `curvatureX` and `curvatureP`. Carries attributes `equations`,
+#'   adds `curvatureX` and `curvatureP`; this needs `"forward-reverse"`. Carries attributes `equations`,
 #'   `variables`, `parameters`, `fixed`, `modelname`, `srcfile` and
 #'   `derivMode`.
 #'
@@ -69,13 +70,14 @@
 cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parameters = NULL,
                    fixed = NULL, modelname = NULL, outdir = tempdir(), compile = FALSE,
                    verbose = FALSE, convenient = TRUE, deriv = TRUE, deriv2 = FALSE,
-                   derivMode = c("forward", "reverse")) {
+                   derivMode = "forward") {
 
-  derivMode <- matchDerivMode(derivMode, c("forward", "reverse"))
+  derivMode <- matchDerivMode(derivMode, c("forward", "reverse", "forward-reverse"))
   if (deriv2 && !deriv) { warning("deriv2 requires deriv. Setting deriv = TRUE."); deriv <- TRUE }
   emit_deriv <- deriv || deriv2
   use_ad     <- emit_deriv && "forward" %in% derivMode
-  use_vjp    <- emit_deriv && "reverse" %in% derivMode
+  use_vjpfr  <- emit_deriv && "forward-reverse" %in% derivMode
+  use_vjp    <- emit_deriv && ("reverse" %in% derivMode || use_vjpfr)
   ## Second order is a forward-mode facility. Asking for it with only the
   ## reverse direction would silently return no Hessian.
   if (deriv2 && !use_ad)
@@ -100,6 +102,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   codegen$generate_fun_cpp(exprs = setNames(as.list(eqns), outnames), variables = as.list(variables),
                            parameters = as.list(parameters),
                            ad = use_ad, deriv2 = deriv2, vjp = use_vjp,
+                           vjp_fr = use_vjpfr,
                            modelname = modelname, outdir = normalizePath(outdir, "/", FALSE), version = as.character(utils::packageVersion("cppDE")))
 
   # --- Instance state and thin wrappers ---
@@ -108,7 +111,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   st <- list2env(list(innames = innames, parameters = parameters,
                       outnames = outnames, modelname = modelname,
                       diff_syms = diff_syms, fixed = intersect(fixed, parameters),
-                      use_ad = use_ad, use_vjp = use_vjp),
+                      use_ad = use_ad, use_vjp = use_vjp, use_vjpfr = use_vjpfr),
                  parent = emptyenv())
 
   fun_impl      <- function(...) .fun_impl(st, ...)
@@ -408,6 +411,8 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
            else if (!is.null(tangentP)) utils::tail(dim(tangentP), 1L)
            else utils::tail(dim(curvature), 1L)
 
+  if (!isTRUE(st$use_vjpfr))
+    stop("tangents need derivMode \"forward-reverse\".", call. = FALSE)
   symc <- .nativeSym(paste0(st$modelname, "_vjp_ad_c"))
   if (is.null(symc)) .notCompiled(st)
   r <- .callSym(symc, .asdbl(M), .asdbl(p), .asdbl(w),

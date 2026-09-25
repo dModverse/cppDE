@@ -1,3 +1,14 @@
+# cppDE 0.10.1
+
+* `cppFUN()` builds `"forward"` only by default. `"forward-reverse"` is a mode of
+  its own; `"reverse"` no longer builds it.
+* The forward-reverse `vjp` is generated as derivative code instead of running
+  `vjp` over a dual. It compiles in a fraction of the time and memory and runs
+  about twice as fast.
+* Products of four or more factors are differentiated through shared prefix and
+  suffix products, and chained adjoints and tangents stay one factor. Reverse
+  and forward-reverse code grows linearly, not quadratically, with product length.
+
 # cppDE 0.10.0
 
 * **Reverse mode.** `cppODE(..., derivMode = "reverse")` computes the gradient

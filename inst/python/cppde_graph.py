@@ -163,7 +163,7 @@ NUMERIC_FUNCS = {
     "abs": abs, "sign": _sign, "floor": math.floor, "ceiling": math.ceil,
     "Heaviside": _heaviside, "delta": _delta, "erf": math.erf,
     "erfc": math.erfc, "gamma": math.gamma, "loggamma": math.lgamma,
-    "atan2": math.atan2, "min": min, "max": max,
+    "atan2": math.atan2, "min": min, "max": max, "_prod": lambda x: x,
 }
 
 # Functions with a built-in derivative rule.
@@ -615,6 +615,13 @@ class Graph:
 
     def inv(self, a):
         return self.mul_factors([(a, -1)])
+
+    def group(self, n):
+        """n itself, or for a product an identity node that later products
+        keep as one factor, so the product can be shared."""
+        if self.op[n] != MUL:
+            return n
+        return self._node(CALL, (n,), "_prod")
 
     def pow_split(self, n):
         if self.op[n] == POW:
@@ -1466,10 +1473,18 @@ class AD:
         if o == ADD:
             return [(i, g.num(c)) for i, c in enumerate(g.attr[n][1])]
         if o == MUL:
-            out = []
-            for i in range(len(a)):
-                out.append((i, g.prod([a[j] for j in range(len(a)) if j != i])))
-            return out
+            m = len(a)
+            if m < 4:
+                return [(i, g.prod([a[j] for j in range(m) if j != i]))
+                        for i in range(m)]
+            # prefix and suffix products, shared: linear, not quadratic, in m
+            pre = [g.ONE] * m
+            suf = [g.ONE] * m
+            for i in range(1, m):
+                pre[i] = g.group(g.mul(pre[i - 1], a[i - 1]))
+            for i in range(m - 2, -1, -1):
+                suf[i] = g.group(g.mul(a[i + 1], suf[i + 1]))
+            return [(i, g.mul(pre[i], suf[i])) for i in range(m)]
         if o == POW:
             b, e = a
             out = []
@@ -1495,6 +1510,8 @@ class AD:
         a = g.args[n]
         x = a[0] if a else None
         one = g.ONE
+        if name == "_prod":
+            return [(0, one)]
         if name == "exp":
             return [(0, n)]
         if name == "log":
@@ -1595,7 +1612,8 @@ class AD:
             for i, d in self.partials(n):
                 tc = tan[a[i]]
                 if tc != zero and not g.is_zero(d):
-                    terms.append((1, g.mul(d, tc)))
+                    # the tangent stays one factor: chained products do not grow
+                    terms.append((1, g.mul(d, g.group(tc))))
             tan[n] = g.add_terms(terms)
         return [tan[r] for r in roots]
 
@@ -1661,6 +1679,8 @@ class AD:
                 if g.flags[a[2]] & mask:
                     pending.setdefault(a[2], []).append(g.select(cnd, g.ZERO, adj))
                 continue
+            # the adjoint stays one factor: chained products do not grow
+            adj = g.group(adj)
             for i, d in self.partials(n):
                 t = a[i]
                 if not (g.flags[t] & mask) or g.is_zero(d):

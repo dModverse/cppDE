@@ -31,7 +31,8 @@ _USING_AD = (
 class FunModel:
     """Parsed outputs over per-observation variables and shared parameters.
 
-    Variable i prints as x_obs[i], parameter k as p[k], cotangent i as _w[i].
+    Variable i prints as x_obs[i], parameter k as p[k], vector leaf (name, i)
+    as _name[i]: _w the cotangent, _vx, _vp and _dw the tangents.
 
     Attributes:
         variables, parameters, out_names: name lists.
@@ -59,8 +60,8 @@ class FunModel:
             return "x_obs[%d]" % at[1]
         if k == cg.PARAM:
             return "p[%d]" % at[1]
-        if k == cg.VEC and at[1] == "w":
-            return "_w[%d]" % at[2]
+        if k == cg.VEC:
+            return "_%s[%d]" % (at[1], at[2])
         raise em.EmitError("no slot for leaf " + cg.KIND_NAMES[k])
 
     def render(self, stmts, level, indent):
@@ -73,7 +74,7 @@ class FunModel:
 # =====================================================================
 
 def generate_fun_cpp(exprs, variables, parameters=None,
-                     ad=False, deriv2=False, vjp=False,
+                     ad=False, deriv2=False, vjp=False, vjp_fr=False,
                      modelname="model", outdir=None, version="1.0.0"):
     """Write `<outdir>/<modelname>.cpp` for a cppFUN model.
 
@@ -82,7 +83,8 @@ def generate_fun_cpp(exprs, variables, parameters=None,
         variables: per-observation symbols.
         parameters: shared symbols, fixed ones included.
         ad: emit `_eval_ad` (dual); with `deriv2` also `_eval_ad2` (dual2nd).
-        vjp: emit `_vjp` and `_vjp_ad`.
+        vjp: emit `_vjp`.
+        vjp_fr: emit `_vjp` and its forward-reverse form `_vjp_ad`.
         outdir: output directory (required).
 
     Returns:
@@ -103,7 +105,8 @@ def generate_fun_cpp(exprs, variables, parameters=None,
         raise ValueError("outdir must be provided explicitly")
 
     model = FunModel(exprs, variables, parameters)
-    cpp_code = _generate_cpp_code(model, ad, deriv2, vjp, modelname, version)
+    cpp_code = _generate_cpp_code(model, ad, deriv2, vjp or vjp_fr, vjp_fr,
+                                  modelname, version)
 
     os.makedirs(outdir, exist_ok=True)
     filename = os.path.join(outdir, "%s.cpp" % modelname)
@@ -116,7 +119,7 @@ def generate_fun_cpp(exprs, variables, parameters=None,
 # C++ source assembly
 # =====================================================================
 
-def _generate_cpp_code(model, ad, deriv2, vjp, modelname, version):
+def _generate_cpp_code(model, ad, deriv2, vjp, vjp_fr, modelname, version):
     """Source text of the model; `vjp` is independent of `ad`."""
     ctx = model
     out_names = model.out_names
@@ -172,7 +175,8 @@ std::fill(dy, dy + ny_ * (size_t)(*n_theta_p), %s);""" % (NAN_, NAN_),
         # Templates cannot have C linkage.
         buf.write("} // extern \"C\"\n\n")
         _write_vjp_impl(buf, model, modelname)
-        _write_vjp_ad_impl(buf, modelname, ctx, out_names)
+        if vjp_fr:
+            _write_vjp_ad_impl(buf, model, modelname)
         buf.write("extern \"C\" {\n\n")
         _write_guarded(
             buf,
@@ -200,7 +204,7 @@ std::fill(d2y, d2y + ny_ * nt_ * nt_, %s);""" % (NAN_, NAN_, NAN_),
         buf, modelname,
         n_vars=len(ctx.variables), n_params=len(ctx.parameters),
         n_out=len(out_names),
-        ad=emit_ad, ad2=emit_ad2, vjp=emit_vjp)
+        ad=emit_ad, ad2=emit_ad2, vjp=emit_vjp, vjp_fr=vjp_fr)
 
     buf.write("} // extern \"C\"\n")
     return buf.getvalue()
@@ -447,7 +451,7 @@ def _write_eval_ad_function(buf, out_names, ctx, modelname):
 
 
 def _write_call_entries(buf, modelname, n_vars, n_params, n_out,
-                        ad=False, ad2=False, vjp=False):
+                        ad=False, ad2=False, vjp=False, vjp_fr=False):
     """Emit .Call entries beside the .C ones.
 
     They take the inputs by reference and allocate the results once, where
@@ -505,7 +509,9 @@ def _write_call_entries(buf, modelname, n_vars, n_params, n_out,
   return out;
 }}
 
-SEXP {modelname}_vjp_ad_c(SEXP xS, SEXP pS, SEXP wS, SEXP vxS, SEXP vpS,
+""")
+    if vjp_fr:
+        buf.write(f"""SEXP {modelname}_vjp_ad_c(SEXP xS, SEXP pS, SEXP wS, SEXP vxS, SEXP vpS,
                    SEXP dwS, SEXP nS, SEXP nsS, SEXP ndS) {{
   const int n_obs = INTEGER(nS)[0], n_seed = INTEGER(nsS)[0];
   const int n_dir = INTEGER(ndS)[0];
@@ -572,63 +578,129 @@ SEXP {modelname}_vjp_ad_c(SEXP xS, SEXP pS, SEXP wS, SEXP vxS, SEXP vpS,
 """)
 
 
-def _write_vjp_ad_impl(buf, modelname, ctx, out_names):
-    """`<model>_vjp_ad_impl`: `_vjp_impl` over a dual, forward over reverse.
+def vjp_fr_statements(model):
+    """(per-observation, per-seed, per-direction) statements of `_vjp_ad_impl`:
+    the adjoints of `_vjp_impl` and their derivative along the tangents
+    _vx, _vp of the inputs and _dw of the cotangent, differentiated here."""
+    g = model.g
+    n_out = len(model.roots)
+    w = [g.vec("w", i) for i in range(n_out)]
+    adj = model.ad.vjp(model.roots, w, cg.F_STATE | cg.F_PARAM)
+    leaves = sorted(adj, key=lambda n: g.attr[n])
+    seeds = {}
+    for n in g.topo(list(adj.values())):
+        if g.op[n] != cg.LEAF:
+            continue
+        k, idx = g.attr[n][0], g.attr[n][1]
+        if k == cg.STATE:
+            seeds[n] = g.vec("vx", idx)
+        elif k == cg.PARAM:
+            seeds[n] = g.vec("vp", idx)
+    for i, wn in enumerate(w):
+        seeds[wn] = g.vec("dw", i)
+    dadj = model.ad.jvp([adj[n] for n in leaves], seeds)
 
-    One pass gives both terms of d/dv (w' J): J differentiated along the input
-    tangents and J contracted with the cotangent's tangents. No Hessian is formed.
+    stores = []
+    for leaf, d in zip(leaves, dadj):
+        k, idx = g.attr[leaf][0], g.attr[leaf][1]
+        if k == cg.STATE:
+            at = "obs + (size_t)n_obs * (%d + (size_t)n_vars * s)" % idx
+            stores.append((("vec", "wx", at), adj[leaf], "+="))
+            if not g.is_zero(d):
+                stores.append((("vec", "dwx", at + " + nwx_ * k"), d, "+="))
+        else:
+            at = "%d + (size_t)n_params * s" % idx
+            stores.append((("vec", "wp", at), adj[leaf], "+="))
+            if not g.is_zero(d):
+                stores.append((("vec", "dwp", at + " + nwp_ * k"), d, "+="))
+    stmts, names = em.schedule(g, stores, prefix="_v")
+
+    # the loop a node belongs to: the innermost one of the leaves it reads
+    level = {}
+    for n in g.topo([n for _, n, _ in stores]):
+        if g.op[n] == cg.LEAF and g.attr[n][0] == cg.VEC:
+            level[n] = 1 if g.attr[n][1] == "w" else 2
+        else:
+            level[n] = max([level[c] for c in g.args[n]], default=0)
+    per = ([], [], [])
+    for st in stmts:
+        if st[0] == "decl":
+            per[level[st[2]]].append(st)
+        else:
+            per[2 if st[1][1] in ("dwx", "dwp") else 1].append(st)
+    return tuple([("block", names, x)] for x in per)
+
+
+def _write_vjp_ad_impl(buf, model, modelname):
+    """`<model>_vjp_ad_impl`: forward over reverse in double arithmetic.
+
+    Both terms of d/dv (w' J), J differentiated along the input tangents and J
+    contracted with the cotangent's tangents, generated as one derivative of the
+    adjoint graph. Code outside a loop does not depend on its index.
     """
-    n_vars = len(ctx.variables)
-    n_params = len(ctx.parameters)
-    n_out = len(out_names)
+    n_vars = len(model.variables)
+    n_params = len(model.parameters)
+    n_out = len(model.out_names)
+    obs, seed, dirs = vjp_fr_statements(model)
     buf.write(f"""static void {modelname}_vjp_ad_impl(
     const double* x, const double* p, const double* w,
     const double* vx, const double* vp, const double* dw,
     double* y, double* wx, double* wp, double* dwx, double* dwp,
     int n_obs, int n_vars, int n_params, int n_out, int n_seed, int n_dir) {{
-  using AD = cppde::dual<double, 0>;
-  // One scope for the whole call: the vectors below outlive any per-obs one.
-  cppde::dual_arena::scope _vjp_ad_scope;
-  const size_t ns1 = (size_t)(n_seed > 0 ? n_seed : 1);
-  const size_t nw  = (size_t)n_obs * (size_t)n_out * ns1;
-  std::vector<AD> x_ad((size_t)n_obs * (size_t)n_vars);
-  std::vector<AD> p_ad((size_t)n_params);
-  std::vector<AD> w_ad(nw);
-  std::vector<AD> y_ad((size_t)n_obs * (size_t)n_out);
-  std::vector<AD> wx_ad((size_t)n_obs * (size_t)n_vars * ns1);
-  std::vector<AD> wp_ad((size_t)n_params * ns1);
-
-  auto seed = [&](AD& a, double v, const double* tan, size_t stride) {{
-    a.x() = v;
-    if (n_dir > 0) {{
-      a.diff(0, n_dir);
-      for (int k = 0; k < n_dir; ++k) a[k] = tan ? tan[stride * (size_t)k] : 0.0;
-    }}
-  }};
-
-  for (size_t i = 0; i < x_ad.size(); ++i)
-    seed(x_ad[i], x[i], vx ? vx + i : nullptr, (size_t)n_obs * (size_t)n_vars);
-  for (size_t j = 0; j < p_ad.size(); ++j)
-    seed(p_ad[j], p[j], vp ? vp + j : nullptr, (size_t)n_params);
-  for (size_t i = 0; i < nw; ++i)
-    seed(w_ad[i], w[i], dw ? dw + i : nullptr, nw);
-
-  {modelname}_vjp_impl<AD>(x_ad.data(), p_ad.data(), w_ad.data(),
-                           y_ad.data(), wx_ad.data(), wp_ad.data(),
-                           n_obs, n_vars, n_params, n_out, n_seed);
-
-  for (size_t i = 0; i < y_ad.size(); ++i) y[i] = y_ad[i].val();
-  for (size_t i = 0; i < wx_ad.size(); ++i) {{
-    wx[i] = wx_ad[i].val();
-    for (int k = 0; k < n_dir; ++k) dwx[i + wx_ad.size() * (size_t)k] = wx_ad[i].d(k);
-  }}
-  for (size_t i = 0; i < wp_ad.size(); ++i) {{
-    wp[i] = wp_ad[i].val();
-    for (int k = 0; k < n_dir; ++k) dwp[i + wp_ad.size() * (size_t)k] = wp_ad[i].d(k);
-  }}
-}}
-
 """)
+    buf.write(_USING_STD)
+    buf.write("""    using T = double;
+    (void)n_vars; (void)n_params; (void)n_out; (void)x; (void)p;
+    const size_t ns1 = (size_t)(n_seed > 0 ? n_seed : 1);
+    const size_t nw  = (size_t)n_obs * (size_t)n_out * ns1;
+    const size_t nwx_ = (size_t)n_obs * (size_t)n_vars * ns1;
+    const size_t nwp_ = (size_t)n_params * ns1;
+    const size_t nd1 = (size_t)(n_dir > 0 ? n_dir : 1);
+    std::fill(wx, wx + nwx_, 0.0);
+    std::fill(wp, wp + nwp_, 0.0);
+    std::fill(dwx, dwx + nwx_ * nd1, 0.0);
+    std::fill(dwp, dwp + nwp_ * nd1, 0.0);
+
+    for (int obs = 0; obs < n_obs; ++obs) {
+""")
+    if n_vars > 0:
+        buf.write("        T x_obs_buf[%d];\n" % n_vars)
+        buf.write("        for (int j = 0; j < n_vars; ++j)\n")
+        buf.write("            x_obs_buf[j] = x[obs + (size_t)n_obs * j];\n")
+        buf.write("        const T* x_obs = x_obs_buf;\n")
+        buf.write("        (void)x_obs;\n")
+    buf.write("        T y_obs[%d];\n" % max(n_out, 1))
+    buf.write("        %s_eval_one<T>(%s, p, y_obs);\n"
+              % (modelname, "x_obs" if n_vars > 0 else "nullptr"))
+    buf.write("        for (int i = 0; i < n_out; ++i)\n")
+    buf.write("            y[obs + (size_t)n_obs * i] = y_obs[i];\n")
+    for line in model.render(obs, 0, "        "):
+        buf.write(line + "\n")
+    buf.write("        for (int s = 0; s < n_seed; ++s) {\n")
+    buf.write("            T _w[%d];\n" % max(n_out, 1))
+    buf.write("            for (int i = 0; i < n_out; ++i)\n")
+    buf.write("                _w[i] = w[obs + (size_t)n_obs * (i + (size_t)n_out * s)];\n")
+    buf.write("            (void)_w;\n")
+    for line in model.render(seed, 0, "            "):
+        buf.write(line + "\n")
+    buf.write("            for (int k = 0; k < n_dir; ++k) {\n")
+    if n_vars > 0:
+        buf.write("                T _vx[%d];\n" % n_vars)
+        buf.write("                for (int j = 0; j < n_vars; ++j)\n")
+        buf.write("                    _vx[j] = vx ? vx[obs + (size_t)n_obs * j + (size_t)n_obs * (size_t)n_vars * k] : 0.0;\n")
+        buf.write("                (void)_vx;\n")
+    if n_params > 0:
+        buf.write("                T _vp[%d];\n" % n_params)
+        buf.write("                for (int j = 0; j < n_params; ++j)\n")
+        buf.write("                    _vp[j] = vp ? vp[j + (size_t)n_params * k] : 0.0;\n")
+        buf.write("                (void)_vp;\n")
+    buf.write("                T _dw[%d];\n" % max(n_out, 1))
+    buf.write("                for (int i = 0; i < n_out; ++i)\n")
+    buf.write("                    _dw[i] = dw ? dw[obs + (size_t)n_obs * (i + (size_t)n_out * s) + nw * k] : 0.0;\n")
+    buf.write("                (void)_dw;\n")
+    for line in model.render(dirs, 0, "                "):
+        buf.write(line + "\n")
+    buf.write("            }\n        }\n    }\n}\n\n")
 
 
 def _write_vjp_function(buf, modelname):
