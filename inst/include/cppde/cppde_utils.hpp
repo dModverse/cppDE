@@ -195,6 +195,18 @@ inline double cvhub_max_ratio(
 constexpr double HLB_FACTOR = 100.0;
 constexpr double HUB_FACTOR = 0.1;
 
+// The smallest first step, in ticks of the time variable: a step of about one
+// tick either rounds away in t + h, at a late start and a tight atol, or
+// leaves the stage times of the method unresolved, and the stepper fails on
+// it. Four ticks of max(|t0|, |t_final|, 1) keep t + h exact to a quarter.
+constexpr double H_TICKS = 4.0;
+
+inline double min_first_step(double t0, double t_final)
+{
+  return H_TICKS * std::numeric_limits<double>::epsilon() *
+         std::max({std::abs(t0), std::abs(t_final), 1.0});
+}
+
 template<class Value, class System, class YddFn>
 inline double estimate_initial_dt(
     System      system,
@@ -278,8 +290,8 @@ inline double estimate_initial_dt(
   // --- 7. Combine ---
   double h = std::min({100.0 * h0, h1, hub});
 
-  // Minimal floor: h must advance t in double precision.
-  double h_tick = std::numeric_limits<double>::epsilon() * std::max(t_abs, 1.0);
+  // Minimal floor: h must advance t in double precision by more than a tick.
+  double h_tick = min_first_step(t0_s, t_final);
   if (h < h_tick) h = h_tick;
 
   if (!std::isfinite(h) || h <= 0.0) {
@@ -369,9 +381,13 @@ inline double cppde_hin(
   double hub     = HUB_F * tdist;
   if (hub * hub_inv > 1.0) hub = 1.0 / hub_inv;
 
-  // --- 3. Short-interval / huge-rate shortcut ---
+  // --- 3. Bounds that cross: their geometric mean, as cvHin takes it ---
+  //
+  // A huge rate relative to atol, as a sensitivity starting at zero shows
+  // under a tight tolerance, puts hub far below hlb. cvHin then takes
+  // sqrt(hlb*hub), not hub, which can lie below a tick of t at a late start.
   if (hub < hlb) {
-    return sign * hub;
+    return sign * std::max(std::sqrt(hlb * hub), min_first_step(t0_s, t_final));
   }
 
   // --- 4. Geometric-mean seed ---
@@ -403,6 +419,7 @@ inline double cppde_hin(
   double h0 = H_BIAS * hnew;
   if (h0 < hlb) h0 = hlb;
   if (h0 > hub) h0 = hub;
+  h0 = std::max(h0, min_first_step(t0_s, t_final));
   return sign * h0;
 }
 

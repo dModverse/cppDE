@@ -54,8 +54,12 @@ size_t integrate_times(
  // guard sits here because every stepper reaches one of these two overloads,
  // while the dense LU is skipped by sparse and explicit models.
  cppde::detail::single_thread_blas_scope _cppde_blas_guard;
- auto times = merge_user_and_event_times<Time>(t_begin, t_end, fixed);
- EventEngine<Stepper, System, State, Time, DtEstimator> eng(stepper, system, fixed, root, std::move(dt_est));
+ // Only the fixed events inside the grid's window fire, see
+ // cppde_event_window.hpp; the others neither run nor add a row.
+ std::vector<FixedEvent<State, typename State::value_type>> kept;
+ const auto& fires = fixed_events_in_window(t_begin, t_end, fixed, kept);
+ auto times = merge_user_and_event_times<Time>(t_begin, t_end, fires);
+ EventEngine<Stepper, System, State, Time, DtEstimator> eng(stepper, system, fires, root, std::move(dt_est));
  if (termination) eng.set_termination(std::move(termination));
  try {
    size_t steps = eng.process_controlled(x, times, dt, obs, checker, root_tol, max_trigger_root);
@@ -86,8 +90,12 @@ size_t integrate_times_dense(
  // guard sits here because every stepper reaches one of these two overloads,
  // while the dense LU is skipped by sparse and explicit models.
  cppde::detail::single_thread_blas_scope _cppde_blas_guard;
- auto times = merge_user_and_event_times<Time>(t_begin, t_end, fixed);
- EventEngine<Stepper, System, State, Time, DtEstimator> eng(stepper, system, fixed, root, std::move(dt_est));
+ // Only the fixed events inside the grid's window fire, see
+ // cppde_event_window.hpp; the others neither run nor add a row.
+ std::vector<FixedEvent<State, typename State::value_type>> kept;
+ const auto& fires = fixed_events_in_window(t_begin, t_end, fixed, kept);
+ auto times = merge_user_and_event_times<Time>(t_begin, t_end, fires);
+ EventEngine<Stepper, System, State, Time, DtEstimator> eng(stepper, system, fires, root, std::move(dt_est));
  if (termination) eng.set_termination(std::move(termination));
  // The reverse mode's checkpoint collector; see cppde_reverse_trajectory.hpp.
  if (step_obs) eng.set_step_observer(std::move(step_obs));

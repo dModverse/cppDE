@@ -791,6 +791,49 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
 }
 
 // ---------------------------------------------------------------------------
+//  A run that took no step, which is a run over a single time. Every
+//  observation there is the initial state itself, or the value a jump at that
+//  time produced, which reaches the initial state and the parameters through
+//  that jump's adjoint. The flow in between has length zero and is the
+//  identity.
+// ---------------------------------------------------------------------------
+template<class Store, class AdjTerms, class Jumps, class T>
+void sweep_without_steps(const Store& store, std::size_t n, const T* seeds,
+                         const AdjTerms& adj, const Jumps& jumps,
+                         std::vector<T>& w_x, std::vector<T>& w_theta,
+                         jump_workspace<T>& ws)
+{
+  for (std::size_t o = 0; o < store.n_obs(); ++o) {
+    if (store.obs(o).event < store.n_events()) continue;
+    for (std::size_t i = 0; i < n; ++i) w_x[i] += seeds[o * n + i];
+  }
+  if constexpr (Jumps::active) {
+    std::vector<T> w_after, w_before;
+    for (std::size_t ei = 0; ei < store.n_events(); ++ei) {
+      const auto& e = store.event(ei);
+      w_after.assign(n, T(0.0));
+      for (std::size_t o = 0; o < store.n_obs(); ++o)
+        if (store.obs(o).event == ei)
+          for (std::size_t i = 0; i < n; ++i) w_after[i] += seeds[o * n + i];
+      w_before.assign(n, T(0.0));
+      if (e.root)
+        apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
+                                e.triggered, jumps.sys, jumps.eadj, adj, n,
+                                w_after.data(), w_before.data(),
+                                w_theta.data(), ws);
+      else
+        apply_fixed_jump_adjoint(e.x_before, e.t, jumps.fixed, jumps.root,
+                                 e.switched, jumps.sys, jumps.eadj, adj, n,
+                                 w_after.data(), w_before.data(),
+                                 w_theta.data(), ws);
+      for (std::size_t i = 0; i < n; ++i) w_x[i] += w_before[i];
+    }
+  } else {
+    (void)adj; (void)jumps; (void)w_theta; (void)ws;
+  }
+}
+
+// ---------------------------------------------------------------------------
 //  A whole multistep trajectory backwards, step adjoints and jump adjoints in
 //  reverse order. An observation inside a step takes its row
 //  d x_interp / d (zn_pred, acor) from the probe's interpolant, so an observed
@@ -821,7 +864,10 @@ public:
     m_whist.clear();
     m_lam.assign(m_trace ? n_steps * n : 0u, T(0.0));
     m_eta.assign(m_trace ? n_steps : 0u, T(0.0));
-    if (n_steps == 0) return;
+    if (n_steps == 0) {
+      sweep_without_steps(store, n, seeds, adj, jumps, m_wx, m_wp, m_jws);
+      return;
+    }
 
     // The cotangent the step above hands down, on its own carry. Across an
     // intervention it is instead a cotangent on a point inside the step below,
@@ -991,9 +1037,11 @@ public:
       for (std::size_t i = 0; i < n; ++i) m_wx[i] += w_after[i];
     }
 
-    // Anything observed before the first step is the initial state itself.
+    // Anything observed before the first step is the initial state itself,
+    // except the value a jump at the start produced, which that jump seeded.
     while (next_obs > 0) {
       --next_obs;
+      if (store.obs(next_obs).event < store.n_events()) continue;
       const T* w = seeds + next_obs * n;
       for (std::size_t i = 0; i < n; ++i) m_wx[i] += w[i];
     }
@@ -1295,7 +1343,10 @@ public:
     m_whist.clear();
     m_lam.assign(m_trace ? n_steps * n : 0u, T(0.0));
     m_eta.assign(m_trace ? n_steps : 0u, T(0.0));
-    if (n_steps == 0) return;
+    if (n_steps == 0) {
+      sweep_without_steps(store, n, seeds, adj, jumps, m_wx, m_wp, m_jws);
+      return;
+    }
 
     std::size_t next_obs = store.n_obs();
     std::vector<T> w_out(n, T(0.0)), w_in(n, T(0.0)), w_start(n, T(0.0)), jv,
@@ -1428,9 +1479,11 @@ public:
 
     for (std::size_t i = 0; i < n; ++i) m_wx[i] += w_out[i];
 
-    // Anything observed before the first step is the initial state itself.
+    // Anything observed before the first step is the initial state itself,
+    // except the value a jump at the start produced, which that jump seeded.
     while (next_obs > 0) {
       --next_obs;
+      if (store.obs(next_obs).event < store.n_events()) continue;
       const T* w = seeds + next_obs * n;
       for (std::size_t i = 0; i < n; ++i) m_wx[i] += w[i];
     }

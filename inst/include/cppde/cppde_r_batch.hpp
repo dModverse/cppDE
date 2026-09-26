@@ -38,6 +38,7 @@
 
 #include <cppde/cppde_blas_threads.hpp>
 #include <cppde/cppde_err_weights.hpp>
+#include <cppde/cppde_event_window.hpp>
 #include <cppde/cppde_return_codes.hpp>
 #include <cppde/cppde_step_trace.hpp>
 
@@ -820,14 +821,22 @@ inline bool pre_acquire(void* vctx, solve_result& r) {
 }
 
 // Number of output points `times` will produce after the generated code's
-// zero-injection, sort and unique. A fixed event whose time is not already a
-// requested time adds a row of its own, so those times count too; the caller
-// passes them when it can evaluate them up front (no root event, no forcing).
+// zero-injection, sort and unique. A fixed event that fires and whose time is
+// not already a requested time adds a row of its own, so those times count
+// too; the caller passes them when it can evaluate them up front (no root
+// event, no forcing). One outside the grid's window does not fire, see
+// cppde_event_window.hpp.
 inline int processed_time_count(const double* t, int n, bool include_zero,
                                 const double* ev = nullptr, int n_ev = 0) {
   std::vector<double> v(t, t + n);
   if (include_zero && std::find(v.begin(), v.end(), 0.0) == v.end()) v.push_back(0.0);
-  for (int i = 0; i < n_ev; ++i) v.push_back(ev[i]);
+  std::sort(v.begin(), v.end());
+  v.erase(std::unique(v.begin(), v.end()), v.end());
+  if (v.empty() || n_ev == 0) return static_cast<int>(v.size());
+  const double t_first = v.front(), t_last = v.back();
+  for (int i = 0; i < n_ev; ++i)
+    if (cppde::detail::fixed_event_in_window(ev[i], t_first, t_last))
+      v.push_back(ev[i]);
   std::sort(v.begin(), v.end());
   v.erase(std::unique(v.begin(), v.end()), v.end());
   return static_cast<int>(v.size());

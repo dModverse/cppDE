@@ -93,7 +93,7 @@ public:
   };
 
   void clear() {
-    m_steps.clear(); m_obs.clear(); m_events.clear();
+    m_steps.clear(); m_obs.clear(); m_events.clear(); m_n = 0;
   }
 
   void reserve(std::size_t n_steps, std::size_t n_obs) {
@@ -132,6 +132,13 @@ public:
     m_obs.push_back(observation{t, m_steps.size(), ev});
   }
 
+  // The same, recording the state count. A run over a single time takes no
+  // step, and without this the store would have no checkpoint to read it off.
+  void observe(double t, std::size_t n_states) {
+    m_n = n_states;
+    observe(t);
+  }
+
   void push_event(const event_record<T>& e) {
     m_events.push_back(e);
     const std::size_t idx = m_events.size() - 1;
@@ -157,7 +164,9 @@ public:
   std::size_t n_steps() const { return m_steps.size(); }
   std::size_t n_obs()   const { return m_obs.size(); }
   std::size_t n_states() const {
-    return m_steps.empty() ? 0u : m_steps.front().n();
+    if (!m_steps.empty()) return m_steps.front().n();
+    if (m_n > 0) return m_n;
+    return m_events.empty() ? 0u : m_events.front().x_after.size();
   }
 
   const checkpoint_type& step(std::size_t k)    const { return m_steps[k]; }
@@ -172,6 +181,7 @@ private:
   std::vector<event_record<T>> m_events;
   std::size_t                  m_open_event = event_record<T>::npos;
   double                       m_open_t     = 0.0;
+  std::size_t                  m_n          = 0;   // from observe(t, n)
   cppde::profiler              m_prof;
 };
 

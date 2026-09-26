@@ -1,3 +1,37 @@
+# cppDE 0.10.2
+
+* **Bug fix.** A `"bdf"` or `"adams"` solve with sensitivities that starts late
+  under a tight tolerance takes its first step again. A sensitivity starting
+  at zero with a rate far above `abstol` crosses the bounds of the first-step
+  estimate; the port of CVODES' `cvHin` then took the upper bound instead of
+  their geometric mean, and at `t0 = 280` with `abstol = 1e-12` that step lay
+  below a tick of `t`. `t + h` rounded back to `t`, and the solve stopped with
+  "Too many failed steps in dense output stepper". The estimate now takes the
+  geometric mean, as `cvHin` does, and the first step of every method is at
+  least four ticks of `max(|t0|, |t_final|, 1)`.
+* **Bug fix.** A fixed-time event fires only from the first time of the
+  integration grid up to, but not including, the last one, and
+  `includeTimeZero` adds 0 to that grid. An event before the grid used to move
+  the start of the integration back to its own time, and one after it added a
+  row beyond the last requested time. An event at the last time is no longer
+  applied, which also ends the failure it caused under `"bdf"` and `"adams"`.
+  Two consecutive solves over `[t0, t1]` and `[t1, t2]` now reproduce one solve
+  over `[t0, t2]`, which multiple shooting relies on. A grid of a single time
+  applies the events at that time, as the start of a longer grid does. The
+  rule holds for event times that depend on parameters, in the batch, in the
+  reverse mode and in `cvode()`.
+* **Bug fix.** The reverse mode counted the cotangent of the first output row
+  twice when a fixed event sat at the first time, so the derivatives with
+  respect to the initial state were wrong.
+* **Bug fix.** A reverse solve over a single time no longer crashes R. It
+  integrates nothing, so the cotangent of the initial state is the seed and the
+  parameters receive only what an event at that time contributes. The sweep
+  read the state count off the first checkpoint, which such a run never
+  writes.
+* `cvode()` reports the state after an event at the first time in the first
+  row, as the native backend does, and no longer applies an event that lies
+  before the first time.
+
 # cppDE 0.10.1
 
 * `cppFUN()` builds `"forward"` only by default. `"forward-reverse"` is a mode of

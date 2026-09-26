@@ -14,6 +14,17 @@
 #' `"equilibrate"` stops at steady state; a character vector of
 #' expressions stops at the first zero crossing.
 #'
+#' A time event fires when its time lies between the first and the last
+#' integration time, the first included and the last not; with
+#' `includeTimeZero` the integration times contain 0. An event at the first
+#' time is applied before the solve starts, and one inside the window adds its
+#' time to the output, with the state after the event in that row. An event
+#' before the first or at or after the last time is ignored and changes neither
+#' the output nor the span of the integration. A grid of a single time applies
+#' the events at that time. A solve over `[t0, t1]` followed by one over
+#' `[t1, t2]`, started from the state the first ends on, therefore reproduces a
+#' single solve over `[t0, t2]`.
+#'
 #' @param rhs Named character vector of ODE right-hand sides. Names are
 #'   the state variables.
 #' @param events Optional event `data.frame`. See Details.
@@ -1335,8 +1346,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   dflag  <- if (deriv)  "true" else "false"
   d2flag <- if (deriv2) "true" else "false"
   ## Whether `times` alone fixes the output grid, so the batch can size its
-  ## results up front. An event time off the grid adds a row, which pre_acquire
-  ## declines; a root event or a rootfunc is dynamic and never qualifies.
+  ## results up front. An event time off the grid but inside its window adds a
+  ## row, which the prediction counts from the event times evaluated per
+  ## condition; a root event or a rootfunc is dynamic and never qualifies.
   has_root_events <- !is.null(events) && "root" %in% names(events) &&
     any(!is.na(events$root))
   fixed_grid <- !has_root_events && rootfunc_code == ""
@@ -1489,7 +1501,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "",
     sprintf("  void operator()(const cppde::vector_t<%s>& x, const %s& t) {",
             rev_num_type, rev_num_type),
-    "    store.observe(odeint_utils::scalar_value(t));",
+    "    store.observe(odeint_utils::scalar_value(t), x.size());",
     "    times.push_back(t);",
     "    for (size_t i = 0; i < x.size(); ++i) y.push_back(x[i]);",
     "  }",

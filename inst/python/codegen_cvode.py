@@ -454,6 +454,8 @@ static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
     # Time events land in a sorted std::vector<TimeEvent> traversed in the main
     # loop, root events in std::vector<RootEvent> dispatched from CV_ROOT_RETURN.
     event_block_includes = "#include <functional>\n" if has_events else ""
+    if has_time_events:
+        event_block_includes += "#include <cppde/cppde_event_window.hpp>\n"
     event_struct = ""
     if has_time_events:
         event_struct += f"""
@@ -725,23 +727,37 @@ static std::vector<RootEvent> build_root_events(const double* params,
     y_arr[ev.var_idx] = ev.g_fn(x_old.data(), t_e);
   };
 """
-        # Pre-t0 time events are applied before we write the t0 row.
-        event_pre_t0_block = f"""  {{
+        # A time event fires inside the grid's window only, the rule of
+        # cppde_event_window.hpp that the native backend applies: one before t0
+        # is skipped, one at t0 is applied before the solve starts, and the t0
+        # row is written again with the state after it, as every row at an
+        # event time carries. The main loop stops short of the last time.
+        event_pre_t0_block = f"""  const double t_last = times[n_times - 1];
+  size_t ev_idx = 0;
+  while (ev_idx < time_events.size() && time_events[ev_idx].time < t0 &&
+         !cppde::detail::same_event_time(time_events[ev_idx].time, t0)) ev_idx++;
+  {{
     size_t applied_pre = 0;
-    while (applied_pre < time_events.size() && time_events[applied_pre].time <= t0) {{
-      apply_time_event(time_events[applied_pre]);
+    while (ev_idx < time_events.size() &&
+           cppde::detail::same_event_time(time_events[ev_idx].time, t0)) {{
+      apply_time_event(time_events[ev_idx]);
+      ev_idx++;
       applied_pre++;
     }}
     if (applied_pre > 0) {{
       cv_harvest();
       if (CVodeReInit(cvode_mem, t0, y) < 0)
-        {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeReInit failed (pre-t0 events)"); }}
+        {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeReInit failed (events at t0)"); }}
 {event_sens_reinit}      cv_rebase();
+      out_y.clear();
+      out_s.clear();
+      {{
+        const double* y0 = N_VGetArrayPointer(y);
+        for (int i = 0; i < NEQ; ++i) out_y.push_back(y0[i]);
+{sens_t0_block}
+      }}
     }}
-    (void)applied_pre;
   }}
-  size_t ev_idx = 0;
-  while (ev_idx < time_events.size() && time_events[ev_idx].time <= t0) ev_idx++;
 """
     else:
         event_pre_t0_block = ""
@@ -1063,7 +1079,9 @@ static std::vector<RootEvent> build_root_events(const double* params,
     if has_events:
         if has_time_events:
             time_interleave_block = f"""    // Time-event interleave: integrate to each event time, apply, reinit.
-    while (ev_idx < time_events.size() && time_events[ev_idx].time <= times[k]) {{
+    // Events are sorted, so the first one at or past the last time ends it.
+    while (ev_idx < time_events.size() && time_events[ev_idx].time <= times[k] &&
+           cppde::detail::fixed_event_in_window(time_events[ev_idx].time, t0, t_last)) {{
       double t_e = time_events[ev_idx].time;
       if (t_e > t_reached) {{
         double tret_loc;

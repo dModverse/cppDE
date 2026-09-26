@@ -17,6 +17,7 @@
 #include <limits>
 #include <type_traits>
 #include <cppde/cppde_events.hpp>
+#include <cppde/cppde_event_window.hpp>
 #include <cppde/cppde_ad_traits.hpp>
 
 namespace cppde {
@@ -366,9 +367,38 @@ bool apply_fixed_events_at_time(
 }
 
 // ============================================================================
-// Merge user times with event times
+// The fixed events a grid applies, and the grid with their times merged in
 // ============================================================================
 
+// The events of `fix` that fire on the grid [ubegin, uend), by the rule in
+// cppde_event_window.hpp. Returns `fix` itself when every event fires, the
+// common case, and otherwise the ones that do, copied into `kept`.
+template<class It, class state_type, class V>
+const std::vector<FixedEvent<state_type, V>>& fixed_events_in_window(
+    It ubegin, It uend,
+    const std::vector<FixedEvent<state_type, V>>& fix,
+    std::vector<FixedEvent<state_type, V>>& kept)
+{
+  if (fix.empty() || ubegin == uend) return fix;
+  double t_first = scalar_value(*ubegin), t_last = t_first;
+  for (It it = ubegin; it != uend; ++it) {
+    const double t = scalar_value(*it);
+    if (t < t_first) t_first = t;
+    if (t > t_last)  t_last  = t;
+  }
+  auto fires = [&](const FixedEvent<state_type, V>& e) {
+    return fixed_event_in_window(scalar_value(e.time), t_first, t_last);
+  };
+  bool all = true;
+  for (const auto& e : fix) if (!fires(e)) { all = false; break; }
+  if (all) return fix;
+  kept.clear();
+  for (const auto& e : fix) if (fires(e)) kept.push_back(e);
+  return kept;
+}
+
+// `fix` holds the events that fire, from fixed_events_in_window(): an event
+// outside the window must not extend the grid.
 template<class Time, class It, class state_type, class V>
 std::vector<Time> merge_user_and_event_times(
     It ubegin, It uend,

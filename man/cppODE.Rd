@@ -115,6 +115,17 @@ variable), \code{value} (expression to apply), \code{method} (\code{"replace"},
 \code{root} (root expression). \code{rootfunc} terminates integration:
 \code{"equilibrate"} stops at steady state; a character vector of
 expressions stops at the first zero crossing.
+
+A time event fires when its time lies between the first and the last
+integration time, the first included and the last not; with
+\code{includeTimeZero} the integration times contain 0. An event at the first
+time is applied before the solve starts, and one inside the window adds its
+time to the output, with the state after the event in that row. An event
+before the first or at or after the last time is ignored and changes neither
+the output nor the span of the integration. A grid of a single time applies
+the events at that time. A solve over \verb{[t0, t1]} followed by one over
+\verb{[t1, t2]}, started from the state the first ends on, therefore reproduces a
+single solve over \verb{[t0, t2]}.
 }
 \examples{
 \donttest{
