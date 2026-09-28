@@ -56,6 +56,7 @@ struct event_record {
   double      t_before   = 0.0;  // where the state entering it was read
   bool        root       = false;
   bool        restart    = false;
+  bool        crossing   = false;  // a restart after a stall, no event fired
   double      dt_restart = 0.0;
 
   std::vector<T> x_before, x_after;
@@ -274,6 +275,7 @@ public:
     r.t_before   = e.t_before;
     r.root       = e.root;
     r.restart    = e.restart;
+    r.crossing   = e.crossing;
     r.dt_restart = e.dt_restart;
     if (e.x_before) copy_state(*e.x_before, r.x_before);
     if (e.x_after)  copy_state(*e.x_after,  r.x_after);

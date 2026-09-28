@@ -185,6 +185,7 @@ public:
     //  internal retry loop
     // ================================================================
 
+    m_stalled = false;
     int ncf = 0;   // Newton convergence failure count (this step attempt)
     int nef = 0;   // Error test failure count (this step attempt)
 
@@ -212,6 +213,7 @@ public:
         const double h_floor = std::numeric_limits<double>::epsilon() * tn_abs;
         if (dt_abs <= h_floor) {
           ++m_n_rejected;
+          m_stalled = true;
           return fail;
         }
       }
@@ -237,6 +239,7 @@ public:
       // ============================================================
       if (!m_stepper.newton_converged()) {
         ++ncf;
+        m_h_failed = static_cast<double>(ndf_detail::scalar_value(m_stepper.h()));
         m_stepper.set_etamax(1.0);   // prevent h increase after recovery
 
         // Max convergence failures: unrecoverable
@@ -321,6 +324,7 @@ public:
 
       // === Error test failed ===
       ++nef;
+      m_h_failed = static_cast<double>(ndf_detail::scalar_value(m_stepper.h()));
       nflag = NFlag::prev_err_fail;
       m_stepper.restore();
 
@@ -547,6 +551,11 @@ public:
     m_stepper.reset_counters();
   }
 
+  // Whether the last try_step failed at the step floor, and the signed size of
+  // the last attempt that failed the error test or the corrector.
+  bool   stalled()     const { return m_stalled; }
+  double failed_step() const { return m_h_failed; }
+
   // --- Profiler ---
   mutable cppde::profiler m_prof;
   void finalize_profiler() const { m_prof.merge(m_stepper.m_prof); }
@@ -641,6 +650,9 @@ private:
 
   int m_n_accepted;
   int m_n_rejected;
+
+  bool   m_stalled  = false;
+  double m_h_failed = 0.0;
 };
 
 } // namespace cppde

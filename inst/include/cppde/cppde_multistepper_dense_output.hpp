@@ -27,6 +27,8 @@
 
 #include <utility>
 #include <cassert>
+#include <cstdio>
+#include <cppde/cppde_step_checker.hpp>
 namespace cppde {
 // ============================================================================
 //  multistepper_dense_output<ControlledStepper>
@@ -97,13 +99,16 @@ public:
     m_t     = t0;
     m_t_old = t0;
     m_dt    = dt0;
+    m_bridge = false;
   }
   // ====================================================================
   //  do_step
   //
   //  Retries under step-size control until a step is accepted, and returns the
   //  interval on which calc_state is valid. The Nordsieck history is itself the
-  //  interpolation data, so there is no separate preparation phase.
+  //  interpolation data, so there is no separate preparation phase. A step
+  //  that fails at the floor of the step size throws step_size_stall: no retry
+  //  can change it.
   // ====================================================================
 
   template<class System>
@@ -113,6 +118,7 @@ public:
     controlled_step_result result = fail;
 
     m_t_old = m_t;
+    m_bridge = false;
 
     do {
       result = m_stepper.try_step(
@@ -122,6 +128,13 @@ public:
         get_old_state(),       // output, receives new state
         m_dt);                 // step size (adapted)
 
+      if (result == fail && m_stepper.stalled()) {
+        char msg[160];
+        std::snprintf(msg, sizeof(msg),
+                      "Step size fell below the resolution of t at t = %.17g.",
+                      static_cast<double>(ndf_detail::scalar_value(m_t)));
+        throw step_size_stall(msg, m_stepper.failed_step());
+      }
       fail_checker();
     }
     while (result == fail);
@@ -145,6 +158,15 @@ public:
   template<class StateOut>
   void calc_state(time_type t, StateOut& x)
   {
+    if (m_bridge) {
+      const auto& x0 = get_old_state();
+      const auto& x1 = get_current_state();
+      const auto s = (ndf_detail::scalar_value(t) - ndf_detail::scalar_value(m_t_old)) /
+                     (ndf_detail::scalar_value(m_t) - ndf_detail::scalar_value(m_t_old));
+      for (size_t i = 0; i < x0.size(); ++i)
+        x[i] = x0[i] + (x1[i] - x0[i]) * s;
+      return;
+    }
     auto _tp = m_stepper.stepper().m_prof.timer(cppde::prof_cat::dense_interp);
     // Nordsieck polynomial evaluation from the dense output snapshot :
     // delegates to multistepper::eval_dense_into which knows about the
@@ -177,6 +199,7 @@ public:
     m_t     = t_event;
     m_t_old = t_event;
     m_dt    = dt_before;
+    m_bridge = false;
 
     // Reset controller PI state
     m_stepper.reset_after_event(dt_before);
@@ -184,6 +207,24 @@ public:
     // Reset NDF history to order 1
     m_stepper.stepper().restart_from_order1(x_event, t_event, dt_before);
   }
+  // ====================================================================
+  //  bridge
+  //
+  //  Moves from the current state to x1 at t1 without a step, over the few
+  //  doubles of t a jump of the right-hand side keeps the stepper from
+  //  crossing. calc_state interpolates linearly on the bridge until the next
+  //  step; the caller restarts the stepper at t1 before that.
+  // ====================================================================
+
+  void bridge(const state_type& x1, time_type t1)
+  {
+    get_old_state() = x1;
+    toggle_current_state();
+    m_t_old  = m_t;
+    m_t      = t1;
+    m_bridge = true;
+  }
+
   // ====================================================================
   //  Accessors
   // ====================================================================
@@ -254,6 +295,7 @@ private:
   time_type               m_t;
   time_type               m_t_old;
   time_type               m_dt;
+  bool                    m_bridge = false;   // see bridge()
 };
 } // namespace cppde
 

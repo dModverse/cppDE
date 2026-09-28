@@ -30,6 +30,24 @@ public:
   explicit no_progress_error(const char* msg) : std::runtime_error(msg) {}
   explicit no_progress_error(const std::string& msg) : std::runtime_error(msg) {}
 };
+
+/**
+ * @class step_size_stall
+ * @brief The step size fell below the resolution of t
+ *
+ * Thrown by a stepper whose step size can no longer shrink. failed_step() is
+ * the signed size of the last step that failed, the interval a caller searches
+ * for a jump of the right-hand side in t.
+ */
+class step_size_stall : public no_progress_error {
+public:
+  step_size_stall(const char* msg, double failed_step)
+    : no_progress_error(msg), m_failed_step(failed_step) {}
+  double failed_step() const { return m_failed_step; }
+private:
+  double m_failed_step;
+};
+
 /**
  * @class StepChecker
  * @brief Combined step checker for ODE integration with diagnostics

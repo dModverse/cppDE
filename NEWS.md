@@ -1,3 +1,18 @@
+# cppDE 0.10.3
+
+* **Bug fix.** A `"bdf"` or `"adams"` solve crosses a jump of the right-hand
+  side in time, such as the step input `piecewise(0, time - ts < 0, 1)`. From
+  rest under a tight `abstol`, no step containing the jump passed the error
+  test above the resolution of `t`, and a solve without sensitivities stopped
+  in front of it with "Too many failed steps in dense output stepper". A step
+  that did cross it left the history with the right-hand side from before the
+  jump, and the solve stopped just behind it. When the step size fails at that
+  floor, the solve now locates the jump of `f(t, x)` in `t` within the failed
+  step, follows `f` over the few doubles up to it and restarts on the far side
+  as after an event. With no jump ahead, it restarts where it stands, once per
+  point of time. The reverse mode transposes both. A stall that persists stops
+  at once with "Step size fell below the resolution of t".
+
 # cppDE 0.10.2
 
 * **Bug fix.** A `"bdf"` or `"adams"` solve with sensitivities that starts late

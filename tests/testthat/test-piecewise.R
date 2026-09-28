@@ -11,6 +11,14 @@ library(cppDE)
 pw_cond <- function(cond, nm)
   cppODE(c(A = paste0("-k*A*piecewise(1, ", cond, ", 0)")), modelname = nm,
          deriv = FALSE, compile = FALSE)
+# A step input switched on at ts, in both spellings of the condition: x sees it
+# from ts on, y from the next double. a and b decay smoothly and keep the order
+# of a multistep method up.
+pw_step <- function(nm, ...)
+  cppODE(c(a = "-0.1*a", b = "0.1*a - 0.05*b",
+           x = "-k*(x - c*piecewise(0, time - ts < 0, 1))",
+           y = "-k*y + k*c*piecewise(1, time > ts, 0)"),
+         modelname = nm, compile = FALSE, ...)
 pw_mod <- list(
   time_switch = cppODE(c(A = "-piecewise(kf*A, time - ts < 0, ks*A)",
                          B = " piecewise(kf*A, time - ts < 0, ks*A)"),
@@ -29,7 +37,11 @@ pw_mod <- list(
   and_wrapped = pw_cond("(time > t1) && (time <= t2)", "pw_and_wrapped"),
   or_not = pw_cond("!(time > t1) || time > t2", "pw_or_not"),
   heaviside = cppODE(c(A = "-k * A * Heaviside(A - 0.5)", B = "k * A"),
-                     modelname = "heaviside_jac", compile = FALSE)
+                     modelname = "heaviside_jac", compile = FALSE),
+  step_bdf = pw_step("pw_step_bdf", method = "bdf", deriv = FALSE),
+  step_adams = pw_step("pw_step_adams", method = "adams", deriv = FALSE),
+  step_fwd = pw_step("pw_step_fwd", method = "bdf", deriv = TRUE),
+  step_rev = pw_step("pw_step_rev", method = "bdf", derivMode = "reverse")
 )
 do.call(compile, c(unname(pw_mod), list(output = "test_piecewise", cores = 1)))
 
@@ -65,6 +77,44 @@ test_that("a time switch integrates and differentiates like its closed form", {
   expect_equal(unname(out$tangent[, "B", "kf"]), tk * A, tolerance = 1e-6)
   expect_equal(unname(out$tangent[, "B", "ks"]), tl * A, tolerance = 1e-6)
   expect_equal(unname(out$tangent[, "B", "A"]), 1 - A / p[["A"]], tolerance = 1e-6)
+})
+
+test_that("a step in time is crossed on a dense output grid", {
+  # x and y rest until ts. No step containing the switch passes the error
+  # test, however few doubles it spans, and a step that crosses it leaves the
+  # right-hand side from before it in the history. Either takes a multistep
+  # method without sensitivities to the floor of the step size.
+  times <- 0:180
+  p <- c(k = 10, c = 1000, ts = 60, a = 1, b = 0, x = 0, y = 0)
+  on <- p[["c"]] * pmax(1 - exp(-p[["k"]] * (times - p[["ts"]])), 0)
+  exact <- cbind(a = exp(-0.1 * times),
+                 b = 2 * (exp(-0.05 * times) - exp(-0.1 * times)),
+                 x = on, y = on)
+  ref <- solveODE(pw_mod$step_fwd, times, p, abstol = 1e-12, reltol = 1e-10)
+
+  for (m in c("bdf", "adams")) {
+    out <- solveODE(pw_mod[[paste0("step_", m)]], times, p,
+                    abstol = 1e-12, reltol = 1e-10)
+    expect_equal(nrow(out$variable), length(times), info = m)
+    expect_equal(unname(out$variable[, colnames(exact)]), unname(exact),
+                 tolerance = 1e-8, info = m)
+    expect_equal(out$variable, ref$variable, tolerance = 1e-8, info = m)
+  }
+})
+
+test_that("the reverse mode differentiates across a step in time", {
+  times <- 0:180
+  p <- c(k = 10, c = 1000, ts = 60, a = 1, b = 0, x = 0.5, y = 0.5)
+  fwd <- solveODE(pw_mod$step_fwd, times, p, abstol = 1e-12, reltol = 1e-10)
+  set.seed(1)
+  W <- array(rnorm(length(fwd$variable)), c(dim(fwd$variable), 1))
+  rev <- solveODE(pw_mod$step_rev, times, p, cotangent = W,
+                  abstol = 1e-12, reltol = 1e-10)
+
+  expect_equal(rev$variable, fwd$variable, tolerance = 1e-8)
+  ref <- apply(fwd$tangent * as.vector(W[, , 1]), 3, sum)
+  expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref),
+               tolerance = 1e-6)
 })
 
 test_that("both branches of a state switch are taken", {

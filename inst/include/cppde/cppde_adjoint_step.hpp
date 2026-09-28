@@ -631,6 +631,23 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   adj.dfdp_t_vec_axpy(x_before, wfb, t, T(1.0), w_theta);
 }
 
+/// A restart after a stall, transposed. No event fired; the state followed
+/// f(t_before, x_before) from t_before to t, past a jump of f in t.
+template<class AdjTerms, class T>
+void apply_crossing_adjoint(const std::vector<T>& x_before, double t_before,
+                            double t, const AdjTerms& adj, std::size_t n,
+                            const T* w_after, T* w_before, T* w_theta,
+                            jump_workspace<T>& ws)
+{
+  const double d = t - t_before;
+  zero_armed(ws.wy, n);
+  for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w_after[i];
+  zero_armed(ws.g, n);
+  adj.jac_t_vec(x_before, ws.wy, t_before, ws.g);
+  for (std::size_t i = 0; i < n; ++i) w_before[i] = w_after[i] + d * ws.g[i];
+  adj.dfdp_t_vec_axpy(x_before, ws.wy, t_before, d, w_theta);
+}
+
 /// The fixed events at one time, each its own sandwich, applied in order. The
 /// last of them carries the root resets a jump switched on.
 template<class System, class FixedEvents, class RootEvents, class EvAdj,
@@ -816,7 +833,11 @@ void sweep_without_steps(const Store& store, std::size_t n, const T* seeds,
         if (store.obs(o).event == ei)
           for (std::size_t i = 0; i < n; ++i) w_after[i] += seeds[o * n + i];
       w_before.assign(n, T(0.0));
-      if (e.root)
+      if (e.crossing)
+        apply_crossing_adjoint(e.x_before, e.t_before, e.t, adj, n,
+                               w_after.data(), w_before.data(),
+                               w_theta.data(), ws);
+      else if (e.root)
         apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
                                 e.triggered, jumps.sys, jumps.eadj, adj, n,
                                 w_after.data(), w_before.data(),
@@ -999,7 +1020,11 @@ public:
                 w_after[i] += seeds[o * n + i];
 
           w_before.assign(n, T(0.0));
-          if (e.root)
+          if (e.crossing)
+            apply_crossing_adjoint(e.x_before, e.t_before, e.t, adj, n,
+                                   w_after.data(), w_before.data(),
+                                   m_wp.data(), m_jws);
+          else if (e.root)
             apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
                                     e.triggered, jumps.sys, jumps.eadj,
                                     adj, n,
@@ -1453,7 +1478,11 @@ public:
                 w_after[i] += seeds[o * n + i];
 
           w_before.assign(n, T(0.0));
-          if (e.root)
+          if (e.crossing)
+            apply_crossing_adjoint(e.x_before, e.t_before, e.t, adj, n,
+                                   w_after.data(), w_before.data(),
+                                   m_wp.data(), m_jws);
+          else if (e.root)
             apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
                                     e.triggered, jumps.sys, jumps.eadj,
                                     adj, n,
