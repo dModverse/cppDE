@@ -1527,24 +1527,60 @@ contribution is missing. Recovering the grid effect requires a smoothed
 controller, a fixed grid or a randomised estimator, none of which
 differentiating the existing chain provides.
 
-By this criterion the forward mode departs from internal numerical
-differentiation and the reverse does not. The value pass of the reverse
-mode runs the stepper on plain numbers, so the step sizes follow from
-the state error alone and the derivative is taken on the grid of the
-nominal run. The forward mode with the default
-\texttt{sensErrCon = TRUE} maximises its error norm over the
-sensitivity columns as in \eqref{eq:wrms-sens} and integrates on a
-finer grid, to which no reported value belongs. The reverse gradient is
-thus the derivative of the trajectory a value run returns, the forward
-gradient that of a trajectory that is not reported, and the
-$O(\mathrm{tol})$ difference between them is mainly due to the forward
-mode.
+Each mode returns the state it integrated together with the derivative
+of the scheme that produced it, so both follow internal numerical
+differentiation for the solve they answer. The grids differ from that
+of a value run. With the default \texttt{sensErrCon = TRUE} the
+forward mode maximises its error norm over the sensitivity columns as
+in \eqref{eq:wrms-sens}, and the value pass of the reverse mode over
+the state and a control tangent (Section \ref{sec:control-tangent}).
+Both integrate on a grid finer than a value run takes, and their values
+differ from its value by $O(\mathrm{tol})$.
 
 The default keeps the sensitivities in the error norm because they are
 integrated alongside the state and their errors accumulate; CVODES
 guards against this in the same way (\texttt{CVodeSetSensErrCon}).
-Value and gradient on slightly different grids is the smaller cost.
-\texttt{solveODE(..., sensErrCon = FALSE)} selects the alternative.
+A value run and a derivative run that differ by $O(\mathrm{tol})$ is
+the smaller cost. \texttt{solveODE(..., sensErrCon = FALSE)} selects
+the alternative: the step sizes follow from the state error alone, and
+the reverse gradient is the derivative of the trajectory a value run
+returns.
+
+### The control tangent \label{sec:control-tangent}
+
+A grid selected from the state error alone need not resolve the
+linearised flow. The derivative of the step map is accurate where the
+step resolves the flow on the modes the tangents carry, and the state
+error measures that only on the modes the state carries, weighted by
+its own magnitude. On a trajectory at rest it measures nothing: a state
+that starts at zero and is not driven, or a steady state, is a
+polynomial the corrector reproduces, its error estimate is zero, and the
+step grows by the largest admissible factor on every step. The adjoint
+on that grid is the exact derivative of a scheme far from the flow. For
+$\dot x = -k x$, $\dot y = k x - y$ from $x = y = 0$ over
+$0, 1, \ldots, 50$, a grid of four steps returns $+0.80$ for a
+contraction whose value is $-0.43$. Where a state is small against
+$\mathtt{abstol}/\mathtt{reltol}$ the effect is weaker but of the same
+kind.
+
+With \texttt{sensErrCon = TRUE} the value pass of the reverse mode
+therefore integrates a control tangent,
+\begin{equation}
+  \dot z = J(x, t)\, z, \qquad z(t_0) = z_0 ,
+  \label{eq:control-tangent}
+\end{equation}
+the directional derivative of the trajectory along $z_0$ in the initial
+state, and enters its error into the norm as one more column of
+\eqref{eq:wrms-sens}. $z_0$ has entries $\pm 1$ from a fixed hash of the
+state index, so it excites every mode and a solve is reproducible. A
+multistep method carries $z$ in a second Nordsieck history that takes
+every rescale, order change and restart of the first, and solves its
+corrector after the state's has converged, with $J$ at the step's
+solution, as the staggered corrector of CVODES treats a sensitivity. A
+single-step method steps $z$ by the same scheme with $J$ frozen at the
+step's start. $z$ enters no returned derivative; under the maximum it
+can only shrink a step, and the grid approaches the one a forward run
+seeded along $z_0$ takes. \texttt{sensErrCon = FALSE} leaves it out.
 
 ### Goal-oriented step-size control
 
@@ -1553,9 +1589,11 @@ the gradient: a step at which $\lambda$ is large contributes strongly to
 the error in $J$ even where its own state error is small, so the
 gradient inherits the order of the state error but not its constant.
 The forward mode settles this within the run by maximising the error
-norm over the sensitivity columns as in \eqref{eq:wrms-sens}. The
-reverse mode cannot, because $\lambda$ at step $k$ depends on every
-later step and is not available while step $k$ is taken.
+norm over the sensitivity columns as in \eqref{eq:wrms-sens}, and the
+control tangent does so for one direction. Weighting a step by its
+contribution to a particular objective needs $\lambda$, which at step
+$k$ depends on every later step and is not available while step $k$ is
+taken.
 
 It is available across runs. The \texttt{errWeights} argument of
 \texttt{solveODE()} takes the $\lambda$ of an earlier sweep, sampled on
@@ -1699,7 +1737,8 @@ contractions of $J v$, which are second derivatives of $f$.
 
 The sweep reads tangents from its checkpoints, so the forward pass is a
 sensitivity run in the same $N$ directions. Its error control reads the
-values only, so it takes the grid of a value run. The cost, one
+values and the control tangent only, so it takes the grid of the
+first-order reverse run whatever the directions. The cost, one
 sensitivity integration and one sweep, both of width $N$, is linear in
 $N$. Forward over forward, selected by
 \texttt{derivMode = "forward-forward"} or \texttt{deriv2 = TRUE},

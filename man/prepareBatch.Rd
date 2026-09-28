@@ -153,7 +153,12 @@ the step sequence is then the one a value-only run takes, whatever the
 direction count, and the sensitivities come back on a coarser grid than
 \code{abstol} and \code{reltol} would give them. Cheaper and less accurate, and the
 convention SUNDIALS ships (\code{CVodeSetSensErrCon}). Needs a model with
-sensitivities; under \code{derivMode = "forward-reverse"} it is off already.}
+sensitivities or one compiled with \code{derivMode = "reverse"}. The reverse
+modes keep their own tangents out of step-size control, so that the grid
+does not depend on them; there \code{TRUE} integrates a tangent along a fixed
+direction of the initial state, for step-size control only, which gives
+the gradient the resolution the forward mode gives it, and \code{FALSE} keeps
+the grid of a value-only run.}
 }
 \value{
 An object of class \code{"cppDEbatch"} for \code{\link[=solveBatch]{solveBatch()}}.

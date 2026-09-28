@@ -411,10 +411,8 @@
   if (!is.logical(sensErrCon) || length(sensErrCon) != 1L || is.na(sensErrCon))
     stop("'sensErrCon' must be TRUE or FALSE", call. = FALSE)
   if (!sensErrCon) {
-    if (identical(attr(model, "derivMode"), "forward-reverse"))
-      stop("'sensErrCon' is off already under derivMode = \"forward-reverse\": ",
-           "that mode differentiates the grid a value run takes", call. = FALSE)
-    if (!isTRUE(attr(model, "deriv")))
+    if (!isTRUE(attr(model, "deriv")) &&
+        !identical(attr(model, "derivMode"), "reverse"))
       stop("'sensErrCon' weighs the sensitivity error against the state error, ",
            "and this model carries no sensitivities", call. = FALSE)
     if (is_cvode)
@@ -715,7 +713,12 @@
 #'   direction count, and the sensitivities come back on a coarser grid than
 #'   `abstol` and `reltol` would give them. Cheaper and less accurate, and the
 #'   convention SUNDIALS ships (`CVodeSetSensErrCon`). Needs a model with
-#'   sensitivities; under `derivMode = "forward-reverse"` it is off already.
+#'   sensitivities or one compiled with `derivMode = "reverse"`. The reverse
+#'   modes keep their own tangents out of step-size control, so that the grid
+#'   does not depend on them; there `TRUE` integrates a tangent along a fixed
+#'   direction of the initial state, for step-size control only, which gives
+#'   the gradient the resolution the forward mode gives it, and `FALSE` keeps
+#'   the grid of a value-only run.
 #' @param adjointGrid Whether the sweep also reports the grid it ran on, as
 #'   `$adjointGrid`. `FALSE` by default; requires a `cotangent` and the native
 #'   backend. Costs one

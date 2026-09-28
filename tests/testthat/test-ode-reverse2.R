@@ -2,10 +2,11 @@
 # never been run on. Stages 2 to 4 of dev/closed-adjoint-plan.md's successor.
 #
 # The first block is exact and not a tolerance test. A forward-reverse solve
-# takes its step sequence from value arithmetic alone, so it lands on the grid
-# a plain value run takes, whatever the tangent count is and whatever the
-# tangents contain. That is what makes a Hessian assembled from blocks of
-# directions one matrix rather than several.
+# takes its step sequence from value arithmetic and a control tangent that reads
+# values alone, so it lands on the grid a first-order reverse run takes,
+# whatever the tangent count is and whatever the tangents contain. That is what
+# makes a Hessian assembled from blocks of directions one matrix rather than
+# several.
 #
 # The feature block's oracle is forward-forward, which keeps the sensitivity
 # error control and therefore its own grid, so those comparisons are O(tol).
@@ -96,7 +97,7 @@ if (isTRUE(cppDE:::cvodeConfig$klu_available)) {
                      cores = 1))
 }
 
-test_that("a forward-reverse solve lands on the value run's grid at any width", {
+test_that("a forward-reverse solve lands on the reverse run's grid at any width", {
   mr <- m_r$bdf
   m  <- m_fr$bdf
   W  <- seed_for(length(times))
@@ -133,15 +134,15 @@ test_that("the grid does not depend on what the tangents contain", {
   }
 })
 
-test_that("every method takes the value grid backwards", {
-  # A forward-reverse solve chooses its steps from value arithmetic alone, so it
-  # takes a value run's grid. The numbers on it are not bit-identical: a
-  # corrector sums in a different order over the AD type than over double. The
-  # step count agrees wherever those last bits do not straddle an acceptance
-  # threshold, which is three of the four methods; adams carries twelve orders
-  # of history and comes out a few steps apart. What a blocked Hessian stands on
-  # is not this but that blocks ride one grid, asserted below at tolerance
-  # zero.
+test_that("every method takes the reverse run's grid backwards", {
+  # A forward-reverse solve chooses its steps as a first-order reverse run does,
+  # from value arithmetic and the control tangent, so it takes that run's grid.
+  # The numbers on it are not bit-identical: a corrector sums in a different
+  # order over the AD type than over double. The step count agrees wherever
+  # those last bits do not straddle an acceptance threshold, which is three of
+  # the four methods; adams carries twelve orders of history and comes out a
+  # few steps apart. What a blocked Hessian stands on is not this but that
+  # blocks ride one grid, asserted below at tolerance zero.
   W <- seed_for(length(times))
   for (meth in c("bdf", "adams", "rb4", "tsit5")) {
     mr <- m_r[[meth]]

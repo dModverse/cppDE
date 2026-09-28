@@ -1,3 +1,26 @@
+# cppDE 0.10.5
+
+* **Bug fix.** `derivMode = "reverse"` and `"forward-reverse"` return the
+  gradient the forward mode returns where the trajectory is at rest. Their
+  forward run took its steps from the state's error alone. On a trajectory
+  that stays exactly zero, such as a state that starts at 0 and is not driven
+  within the grid, that error is zero, the step grew without bound, and the
+  adjoint on that grid was off by more than its size: +0.80 against -0.43 for a
+  derivative with respect to a zero initial state on `0:50`. Where a state is
+  small against `abstol / reltol` the grid was too coarse for the same reason,
+  which left the gradients of the PEtab benchmark models up to 1e-5 off at a
+  tolerance of 1e-8. The forward run now integrates a control tangent,
+  `z' = J(x) z` along a fixed direction of the initial state, on the same steps
+  as the state, and its error joins the state's in the error test as a
+  sensitivity's does under `sensErrCon`. On those models the reverse solve
+  now takes about as many steps as the forward mode and gets its accuracy, at
+  1.4 to 6 times the time it took before. `sensErrCon = FALSE`, now accepted by
+  both reverse modes, keeps the grid of a value-only run. Reverse models with
+  `method = "tsit5"` generate their Jacobian for it.
+* With `sensErrCon = FALSE` the order-decrease candidate of `"bdf"` and
+  `"adams"` reads the state alone, as the error test does. It read the
+  sensitivities, so the grid could depend on them.
+
 # cppDE 0.10.4
 
 * **Bug fix.** A pulse such as `piecewise(1, time > ts && time <= t2, 0)` on a

@@ -38,6 +38,7 @@
 #include <type_traits>
 #include <cassert>
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include <cppde/cppde_tls.hpp>
@@ -51,6 +52,7 @@
 #include <cppde/cppde_ad_traits.hpp>
 #include <cppde/cppde_dual_slab.hpp>
 #include <cppde/cppde_nordsieck_block.hpp>
+#include <cppde/cppde_control_tangent.hpp>
 
 namespace cppde {
 
@@ -555,6 +557,10 @@ public:
   template<class Value2> using rebind_value =
     multistepper<Method, Value2, JacobianPattern, Resizer>;
 
+  // The control tangent's stepper, which reaches into this one's history.
+  using ct_stepper = rebind_value<double>;
+  template<multistep_method, class, class, class> friend class multistepper;
+
   static constexpr bool is_sparse = is_sparse_tag<JacobianPattern>::value;
 
   // Maximum order this instantiation supports.  For pure NDF / pure BDF
@@ -682,7 +688,38 @@ public:
   //  Default: true (NDF).  Call before the first step.
   // ====================================================================
 
-  void set_use_ndf_kappa(bool v) { m_use_ndf_kappa = v; }
+  void set_use_ndf_kappa(bool v) {
+    m_use_ndf_kappa = v;
+    if (m_ct) m_ct->set_use_ndf_kappa(v);
+  }
+
+  // ====================================================================
+  //  Control tangent
+  //
+  //  A plain double run carries no tangent, so its error test does not see
+  //  where the linearised flow needs smaller steps than the state: on a
+  //  trajectory at rest the state's error estimate is exactly zero. A control
+  //  tangent is a second history on the same steps and orders that integrates
+  //  z' = J(x) z from a fixed direction, J taken at each step's solution. Its
+  //  corrector norm joins the state's under the max, as a tangent's does under
+  //  sens_err_con, so it can only shrink a step. The tangent is plain double
+  //  and reads the values of an AD run only, so with sens_err_con off the grid
+  //  stays independent of the tangents that run carries.
+  // ====================================================================
+
+  void set_control_tangent(bool on)
+  {
+    if (!on) { m_ct.reset(); return; }
+    if (!m_ct) {
+      m_ct = std::make_unique<ct_stepper>();
+      m_ct->set_use_ndf_kappa(m_use_ndf_kappa);
+      m_ct->set_tolerances(m_atol, m_rtol);
+      m_ct->set_max_corrector_iters(m_max_newton_iter);
+    }
+    m_ct_reset = true;
+    m_ct_started = false;
+  }
+  bool control_tangent() const { return static_cast<bool>(m_ct); }
 
   // With the tangents out of the error test, the corrector test and the order
   // choice, every control decision reads value arithmetic only, so the step
@@ -788,6 +825,7 @@ public:
 
     // --- Resize ---
     resize_impl(x);
+    if (m_ct && m_ct_reset) ct_rebuild(jacobi_func);
 
     // ================================================================
     //  1. Nordsieck rescale
@@ -998,6 +1036,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 }
     }
 
+    if (m_ct && m_newton_converged)
+      ct_step(jacobi_func, t_s, dt_s, t_s + m_h);
+
     // ================================================================
     //  6. Output
     // ================================================================
@@ -1055,6 +1096,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
     // --- Resize ---
     resize_impl(x);
+    if (m_ct && m_ct_reset) ct_rebuild(sys.second);
 
     // ================================================================
     //  1. Nordsieck rescale (identical to BDF/NDF path)
@@ -1157,6 +1199,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     m_trace_pece_iters   = result.n_iters;
     m_trace_pece_diverged = result.diverged;
 #endif
+
+    if (m_ct && m_newton_converged)
+      ct_step(sys.second, t_s, dt_s, t_new_s);
 
     // ================================================================
     //  5. Output
@@ -1321,6 +1366,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // Returns max(state_wrms, max_j sens_wrms[j]): every sensitivity
   // vector is judged on its own per-vector WRMS, and the controller
   // sees the worst.  Matches CVODES `cvSensUpdateNorm` (CV_STAGGERED).
+  // Without sens_err_con the state alone, as in the error test.
   double wrms_norm_ewt(const std::vector<value_type>& v) const
   {
     using ndf_detail::scalar_value;
@@ -1332,14 +1378,17 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     if constexpr (ad_lu::is_ad<value_type>::value) {
       nd = const_cast<value_type&>(v[0]).size();
     }
+    // ewt stays interleaved at nd tangents per state, whatever the norm reads.
+    const unsigned nw = m_sens_err_con ? nd : 0u;
     std::vector<double>& sens_sumsq = cppde::detail::tls_scratch_f64<2>();
-    sens_sumsq.assign(nd, 0.0);
+    sens_sumsq.assign(nw, 0.0);
 
     size_t ew = 0;
     for (size_t i = 0; i < n; ++i) {
       double r = std::abs(scalar_value(v[i])) * m_ewt[ew++];
       state_sumsq += r * r;
       if constexpr (ad_lu::is_ad<value_type>::value) {
+        if (nw == 0) { ew += nd; continue; }
         auto& v_ad = const_cast<value_type&>(v[i]);
         for (unsigned j = 0; j < nd; ++j) {
           double rd = std::abs(scalar_value(v_ad.d(j))) * m_ewt[ew++];
@@ -1349,7 +1398,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     }
 
     double max_norm = std::sqrt(state_sumsq / n);
-    for (unsigned j = 0; j < nd; ++j) {
+    for (unsigned j = 0; j < nw; ++j) {
       double sens_norm = std::sqrt(sens_sumsq[j] / n);
       if (sens_norm > max_norm) max_norm = sens_norm;
     }
@@ -1363,7 +1412,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     // Use ewt (pre-prediction weights) for consistency with error test,
     // matching CVODE which uses ewt in all WRMS norms.
     double ddn = wrms_norm_ewt(m_zn[m_q].m_v) * m_tq[1];
-    return 1.0 / (std::pow(ndf_constants::BIAS1 * ddn, 1.0 / m_q) + ndf_constants::ADDON);
+    const double eta = 1.0 / (std::pow(ndf_constants::BIAS1 * ddn, 1.0 / m_q) + ndf_constants::ADDON);
+    return m_ct ? std::min(eta, m_ct->compute_etaqm1()) : eta;
   }
 
   double compute_etaq(double dsm) const
@@ -1421,7 +1471,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       if (sens_norm > dup) dup = sens_norm;
     }
     dup *= m_tq[3];
-    return 1.0 / (std::pow(ndf_constants::BIAS3 * dup, 1.0 / (m_L + 1)) + ndf_constants::ADDON);
+    const double eta = 1.0 / (std::pow(ndf_constants::BIAS3 * dup, 1.0 / (m_L + 1)) + ndf_constants::ADDON);
+    return m_ct ? std::min(eta, m_ct->compute_etaqp1()) : eta;
   }
 
   // ====================================================================
@@ -1561,12 +1612,17 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         m_zn[max_order].m_v[i] = m_acor.m_v[i];
       m_saved_tq5 = m_tq[5];
     }
+
+    if (m_ct) m_ct->complete_step();
+    m_ct_live = false;
   }
 
   void restore()
   {
     auto _tp = m_prof.timer(prof_cat::nordsieck);
     ndfRestore(m_zn[0].m_v.size());
+    if (m_ct && m_ct_live) m_ct->restore();
+    m_ct_live = false;
   }
 
   void rescale(time_type eta)
@@ -1574,6 +1630,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     auto _tp = m_prof.timer(prof_cat::nordsieck);
     m_eta = eta;
     ndfRescale();
+    if (m_ct) m_ct->rescale(eta);
   }
 
   void set_order_for_next_step(int new_q)
@@ -1597,6 +1654,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       m_L = new_q + 1;
     }
     m_nscon = 0;
+    if (m_ct) m_ct->set_order_for_next_step(new_q);
   }
 
   // ====================================================================
@@ -1635,6 +1693,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     m_tau[1] = dt_s;
     m_initialized = true;
     m_lu.invalidate();
+    m_ct_reset = true;
 
     // Filling zn above can drop a static-width dual's depend_ flag, and
     // with it the slab row it reports through size()/d().  Re-binding
@@ -1656,6 +1715,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     m_gamrat = 1.0; m_crate = 1.0;
     m_saved_tq5 = 0; m_tn_current = static_cast<time_type>(ndf_detail::scalar_value(t));
     m_lu.invalidate();
+    m_ct_reset = true;
   }
 
   // ====================================================================
@@ -1744,7 +1804,10 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   int qwait() const { return m_qwait; }
   int nst() const { return m_nst; }
   double etamax() const { return m_etamax; }
-  void set_etamax(double em) { m_etamax = em; }
+  void set_etamax(double em) {
+    m_etamax = em;
+    if (m_ct) m_ct->set_etamax(em);
+  }
   time_type h() const { return m_h; }
   time_type hscale() const { return m_hscale; }
   // m_h moves with m_hscale, so reload_zn1_from_f seeds zn[1] with the
@@ -1754,20 +1817,33 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     m_h      = m_hscale;
     log_history(history_op::hscale,
                 static_cast<double>(ndf_detail::scalar_value(m_hscale)));
+    if (m_ct) m_ct->set_hscale(hs);
   }
   double saved_tq5() const { return m_saved_tq5; }
   const state_type& zn(int j) const { return m_zn[j].m_v; }
   int current_L() const { return m_L; }
   const std::array<time_type, max_order + 1>& tau() const { return m_tau; }
 
-  template<class TimeArg> void set_tn_current(TimeArg tn) { m_tn_current = static_cast<time_type>(ndf_detail::scalar_value(tn)); }
-  void set_tolerances(double atol, double rtol) { m_atol = atol; m_rtol = rtol; }
+  template<class TimeArg> void set_tn_current(TimeArg tn) {
+    m_tn_current = static_cast<time_type>(ndf_detail::scalar_value(tn));
+    if (m_ct) m_ct->set_tn_current(tn);
+  }
+  void set_tolerances(double atol, double rtol) {
+    m_atol = atol; m_rtol = rtol;
+    if (m_ct) m_ct->set_tolerances(atol, rtol);
+  }
 
   // How many corrector iterations a step may spend. The default is the solver's
   // own budget; a caller that needs the equation solved rather than the
   // iteration stopped, such as a reverse-mode reference, raises it.
-  void set_max_corrector_iters(int n) { m_max_newton_iter = n; }
-  void set_qwait(int qw) { m_qwait = qw; }
+  void set_max_corrector_iters(int n) {
+    m_max_newton_iter = n;
+    if (m_ct) m_ct->set_max_corrector_iters(n);
+  }
+  void set_qwait(int qw) {
+    m_qwait = qw;
+    if (m_ct) m_ct->set_qwait(qw);
+  }
 
   int n_fevals() const { return m_n_fevals; }
   int n_jevals() const { return m_n_jevals; }
@@ -1888,7 +1964,10 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   value_type error_constant_kp1() const { return value_type(m_tq[3]); }
 
   // LU access (for controller invalidation)
-  void invalidate_lu() { m_lu.invalidate(); }
+  void invalidate_lu() {
+    m_lu.invalidate();
+    if (m_ct) m_ct->invalidate_lu();
+  }
   bool has_valid_jacobian() const { return m_lu.has_valid_jacobian(); }
   bool has_valid_lu() const { return m_lu.has_valid_lu(); }
   double last_factorized_dt() const {
@@ -1902,6 +1981,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     const size_t n = m_zn[0].m_v.size();
     for (size_t i = 0; i < n; ++i)
       m_zn[max_order].m_v[i] = m_acor.m_v[i];
+    if (m_ct) m_ct->save_acor_to_zn_qmax();
   }
 
   // Reload zn[1] = h * f(tn, zn[0]) for order-1 restart
@@ -1914,6 +1994,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     ++m_n_fevals;
     for (size_t i = 0; i < n; ++i)
       m_zn[1].m_v[i] = m_h * m_ftemp.m_v[i];
+    // The tangent's slot 1 needs the Jacobian, which this call is not handed.
+    m_ct_reset = true;
   }
 
   template<class StateType>
@@ -2440,6 +2522,75 @@ public:
   }
 
   // ====================================================================
+  //  Control tangent: rebuild and step
+  // ====================================================================
+
+  using ct_lin    = tangent_detail::linearisation<value_type, is_sparse>;
+  using ct_matrix = typename ct_lin::matrix;
+
+  // A restart, an initialisation or an order-1 reload leaves the history at
+  // order one. The tangent follows it there: the carry, its current direction
+  // in slot 0 (the start direction the first time) and h J z in slot 1, with J
+  // at the state the history restarts from.
+  template<class JacFunc>
+  void ct_rebuild(JacFunc& jf)
+  {
+    const size_t n = m_zn[0].m_v.size();
+    ct_stepper& ct = *m_ct;
+    if (!m_ct_started) {
+      m_ct_z.resize(n);
+      for (size_t i = 0; i < n; ++i)
+        m_ct_z[i] = tangent_detail::start_direction(i);
+      m_ct_started = true;
+    } else {
+      m_ct_z = ct.m_zn[0].m_v;
+    }
+    m_ct_lin.at(jf, m_zn[0].m_v,
+                static_cast<double>(ndf_detail::scalar_value(m_tn_current)));
+    carry c;
+    save_carry(c);
+    ct.load_carry(c, n);
+    ct.m_saved_tq5  = m_saved_tq5;
+    ct.m_tn_current = static_cast<double>(ndf_detail::scalar_value(m_tn_current));
+    ct.m_etamax     = m_etamax;
+    ct.m_crate      = 1.0;
+    ct.m_gamrat     = 1.0;
+    ct.m_lu.invalidate();
+    ct.m_zn[0].m_v = m_ct_z;
+    tangent_detail::apply_jacobian(m_ct_lin.negJ(), m_ct_z, ct.m_zn[1].m_v);
+    const double hs = static_cast<double>(ndf_detail::scalar_value(m_hscale));
+    for (size_t i = 0; i < n; ++i) ct.m_zn[1].m_v[i] *= hs;
+    for (int j = 2; j <= max_order + 1; ++j)
+      std::fill(ct.m_zn[j].m_v.begin(), ct.m_zn[j].m_v.end(), 0.0);
+    m_ct_reset = false;
+    m_ct_live  = false;
+  }
+
+  // The tangent's step, after the state's corrector converged at m_y: the same
+  // step size, J at the solution. A tangent that fails to converge fails the
+  // step, which the caller then restores.
+  template<class JacFunc>
+  void ct_step(JacFunc& jf, time_type t, time_type dt, time_type t_new)
+  {
+    m_ct_lin.at(jf, m_y.m_v, static_cast<double>(ndf_detail::scalar_value(t_new)));
+    const ct_matrix* J = &m_ct_lin.negJ();
+    auto sys = std::make_pair(tangent_detail::linear_rhs<ct_matrix>{J},
+                              tangent_detail::linear_jac<ct_matrix>{J});
+    m_ct_z = m_ct->m_zn[0].m_v;
+    m_ct_out.resize(m_ct_z.size());
+    m_ct_err.resize(m_ct_z.size());
+    m_ct->do_step(sys, m_ct_z, static_cast<double>(ndf_detail::scalar_value(t)),
+                  m_ct_out, static_cast<double>(ndf_detail::scalar_value(dt)),
+                  m_ct_err);
+    if (m_ct->m_newton_converged) {
+      if (m_ct->m_acnrm > m_acnrm) m_acnrm = m_ct->m_acnrm;
+      m_ct_live = true;
+    } else {
+      m_newton_converged = false;
+    }
+  }
+
+  // ====================================================================
   //  Members
   // ====================================================================
 
@@ -2504,6 +2655,15 @@ public:
 
   bool m_use_ndf_kappa = true;   // NDF kappa coefficients (runtime, default: NDF)
   bool m_sens_err_con = true;    // tangents count in the error and corrector tests
+
+  // Control tangent, null when off. m_ct_live: it predicted in the attempt
+  // under test, so a restore has to undo that too.
+  std::unique_ptr<ct_stepper> m_ct;
+  bool m_ct_reset   = false;
+  bool m_ct_started = false;
+  bool m_ct_live    = false;
+  ct_lin m_ct_lin;
+  std::vector<double> m_ct_z, m_ct_out, m_ct_err;
 
 #ifdef CPPDE_STEP_TRACE
   // Scratch state populated by step_bdf_family / step_adams and read by

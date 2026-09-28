@@ -32,6 +32,12 @@ eq_eqns <- c(R  = "k_act - k_deact * R",
              A  = "-k1 * A * R + k2 * pA",
              pA = "k1 * A * R - k2 * pA")
 
+# A trajectory at rest: x stays exactly zero over 0:50, since the switch at
+# ts = 60 lies beyond it, and the state's error estimate is zero with it.
+rest_eqns <- c(x = "-k*(x - c*piecewise(0, time - ts < 0, 1))",
+               y = "k*x - y")
+rest_pars <- c(k = 1, c = 1000, ts = 60, x = 0, y = 0)
+
 # A model wider than the Nordsieck history is deep. Every other model in this
 # file has fewer states than a step has slots, so a buffer sized by one and used
 # for the other fits, and a contraction writing per state stays inside it.
@@ -80,7 +86,11 @@ models <- list(
                         rootfunc = "equilibrate", derivMode = "reverse"),
   wide_fwd = per_method(wide, "rev_wide_f_", c("bdf", "adams"), deriv = TRUE),
   wide_rev = per_method(wide, "rev_wide_r_", c("bdf", "adams"),
-                        derivMode = "reverse"))
+                        derivMode = "reverse"),
+  rest_fwd = per_method(rest_eqns, "rev_rest_f_", deriv = TRUE),
+  rest_rev = per_method(rest_eqns, "rev_rest_r_", derivMode = "reverse"),
+  rest_fr  = per_method(rest_eqns, "rev_rest_fr_",
+                        derivMode = "forward-reverse"))
 compile_all(models, "test_reverse")
 
 # The sparse models need KLU. They all have the Jacobian of eqns, so the KLU
@@ -250,7 +260,7 @@ test_that("an equilibrated run goes backwards", {
   # on the tangents as well and reaches the root elsewhere, so there is no
   # forward gradient on this grid to compare against. What is asserted is that
   # the backward pass answers on the grid its own forward pass produced, and
-  # that this pass is the value run to the last bit.
+  # that without the control tangent this pass is the value run to the last bit.
   pe <- c(R = 1, A = 1, pA = 0, k_act = 0.1, k_deact = 0.7, k1 = 0.1, k2 = 0.05)
   tt <- seq(0, 1e3, length.out = 50)
   for (m in c("bdf", "rb4")) {
@@ -259,8 +269,15 @@ test_that("an equilibrated run goes backwards", {
     val <- do.call(solveODE, c(list(mv, tt, pe), tol))
     expect_lt(nrow(val$variable), length(tt))   # it really did stop early
     W   <- seed_for(val)
-    rv  <- do.call(solveODE, c(list(mr, tt, pe, cotangent = W), tol))
+    rv  <- do.call(solveODE, c(list(mr, tt, pe, cotangent = W,
+                                    sensErrCon = FALSE), tol))
     expect_identical(rv$variable, val$variable)
+
+    # With it, the rows come from the reverse run's own values.
+    fp  <- do.call(solveODE, c(list(mr, tt, pe, keepStore = TRUE), tol))
+    expect_lt(nrow(fp$variable), length(tt))
+    rv  <- do.call(solveODE, c(list(mr, tt, pe, cotangent = seed_for(fp),
+                                    store = fp$store), tol))
     expect_equal(dim(rv$cotangent), c(length(pe), 1L), info = m)
     expect_true(all(is.finite(rv$cotangent)), info = m)
     expect_gt(max(abs(rv$cotangent)), 1e-6)
@@ -288,6 +305,33 @@ test_that("every method carries the reverse mode", {
     ref <- contract(fwd$tangent, W)[, 1]
     expect_equal(unname(rv$cotangent[names(ref), 1]), unname(ref),
                  tolerance = 1e-5, info = m)
+  }
+})
+
+test_that("a trajectory at rest gets the forward mode's gradient", {
+  # The state's error estimate is zero, so the grid of a value-only run grows
+  # without bound and the adjoint on it is off by more than its size. The
+  # control tangent brings the grid down to what the tangents need.
+  o <- list(abstol = 1e-12, reltol = 1e-10)
+  for (m in methods) {
+    fwd <- do.call(solveODE, c(list(models$rest_fwd[[m]], 0:50, rest_pars), o))
+    W   <- seed_for(fwd, n_seed = 2L)
+    rv  <- do.call(solveODE, c(list(models$rest_rev[[m]], 0:50, rest_pars,
+                                    cotangent = W), o))
+    ref <- contract(fwd$tangent, W)
+    expect_equal(unname(rv$cotangent[rownames(ref), ]), unname(ref),
+                 tolerance = 1e-8, info = m)
+
+    # Forward-reverse runs the same control tangent on its values.
+    fr <- do.call(solveODE, c(list(models$rest_fr[[m]], 0:50, rest_pars,
+                                   cotangent = W), o))
+    expect_equal(unname(fr$cotangent[rownames(ref), ]), unname(ref),
+                 tolerance = 1e-8, info = m)
+
+    # sensErrCon = FALSE keeps the value-only grid, a handful of steps here.
+    off <- do.call(solveODE, c(list(models$rest_rev[[m]], 0:50, rest_pars,
+                                    cotangent = W, sensErrCon = FALSE), o))
+    expect_lt(off$diagnostics$accepted, rv$diagnostics$accepted / 10)
   }
 })
 

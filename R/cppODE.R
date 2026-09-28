@@ -269,7 +269,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     fixed_params = fixed_params,
     forcings_list = forcings,
     sparse = sparse_for_codegen,
-    skip_jacobian = is_explicit(method),
+    # An explicit method needs no Jacobian, except for the control tangent of a
+    # reverse model.
+    skip_jacobian = is_explicit(method) && !is_reverse,
     # The step adjoint needs two contractions of f, emitted in the model's scalar.
     emit_contractions = is_reverse,
     # Only the Rosenbrock adjoint needs the Jacobian's derivative times a vector.
@@ -877,8 +879,10 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   } else NULL
 
   # Whether step-size control reads the tangents. Fixed off under forward-reverse,
-  # which differentiates the grid of a value-only run; the caller's choice elsewhere.
+  # whose grid must not depend on the directions it carries; the caller's choice
+  # elsewhere. The reverse modes run a control tangent under sensErrCon instead.
   sens_err_con_arg <- if (second_reverse) "false" else "args.sens_err_con"
+  control_tangent_arg <- if (is_reverse) "args.sens_err_con" else NULL
 
   if (is_multistep(method)) {
     # ---- Multistep stepper (bdf / adams) ----
@@ -890,6 +894,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
               if (useNDF) "true" else "false"),
       sprintf("  controlledStepper.stepper().set_sens_err_con(%s);",
               sens_err_con_arg),
+      if (!is.null(control_tangent_arg))
+        sprintf("  controlledStepper.stepper().set_control_tangent(%s);",
+                control_tangent_arg),
       # Slab priming for any AD path (heap dual<T,0> or static-N dual<T,N>),
       # a no-op for non-AD and nested-AD types. Emitted before the
       # std::move into denseStepper.
@@ -943,6 +950,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       stepper_line <- paste(
         c(sprintf("  auto controlledStepper = cppde::onestep_controller<%s>(abstol, reltol);", os_type),
           sprintf("  controlledStepper.set_sens_err_con(%s);", sens_err_con_arg),
+          if (!is.null(control_tangent_arg))
+            sprintf("  controlledStepper.set_control_tangent(%s);",
+                    control_tangent_arg),
           "  auto denseStepper = cppde::onestep_dense_output<decltype(controlledStepper)>(std::move(controlledStepper));",
           if (deriv)
             "  denseStepper.prepare_sensitivities(static_cast<unsigned>(n_sens));"

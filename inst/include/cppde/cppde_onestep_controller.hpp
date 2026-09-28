@@ -36,9 +36,13 @@
 #include <cmath>
 #include <algorithm>
 #include <cstdio>
+#include <memory>
+#include <tuple>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include <cppde/cppde_types.hpp>
+#include <cppde/cppde_control_tangent.hpp>
 #include <cppde/cppde_ad_lu.hpp>   // for ad_lu::is_ad
 #include <cppde/cppde_ad_traits.hpp>
 #include <cppde/cppde_dual_slab.hpp>
@@ -324,6 +328,7 @@ public:
     double err = error(xout, x, m_xerr.m_v,
                        controller_detail::scalar_value(t) +
                        controller_detail::scalar_value(dt));
+    if (m_ct) err = std::max(err, ct_error(sys, x, t, dt));
 
     // Prevent division by zero
     err = std::max(err, 1e-15);
@@ -360,7 +365,12 @@ public:
     }
 #endif
 
-    return update_stepsize(err, t, dt);
+    const controlled_step_result res = update_stepsize(err, t, dt);
+    if (m_ct && res == success) {
+      std::swap(m_ct_z, m_ct_out);
+      m_ct_lin_valid = false;
+    }
+    return res;
   }
 
   // ====================================================================
@@ -385,7 +395,25 @@ public:
     m_dt_old = 1.0;
     m_last_rejected = false;
     m_stepper.invalidate_lu();
+    m_ct_lin_valid = false;
   }
+
+  // ====================================================================
+  //  Control tangent
+  //
+  //  See multistepper::set_control_tangent(). A one-step method carries no
+  //  history, so each attempt steps z by the same method on z' = J z, J frozen
+  //  at the attempt's start, and its error joins the state's under the max.
+  // ====================================================================
+
+  void set_control_tangent(bool on)
+  {
+    if (!on) { m_ct.reset(); return; }
+    if (!m_ct) m_ct = std::make_unique<ct_stepper>();
+    m_ct_started = false;
+    m_ct_lin_valid = false;
+  }
+  bool control_tangent() const { return static_cast<bool>(m_ct); }
 
   // ====================================================================
   //  Accessors
@@ -508,6 +536,54 @@ private:
   }
 
   // ====================================================================
+  //  Control tangent: one attempt
+  // ====================================================================
+
+  // The error of stepping z over the attempt. J is evaluated once per step
+  // start and kept over the retries of that step.
+  template<class System>
+  double ct_error(System& sys, const state_type& x, time_type t, time_type dt)
+  {
+    using controller_detail::scalar_value;
+    using jac_type = std::decay_t<typename std::decay_t<System>::second_type>;
+    constexpr bool dense = std::is_invocable_v<
+        jac_type&, const std::vector<value_type>&, dense_matrix<value_type>&,
+        const value_type&, std::vector<value_type>&>;
+    auto& lin = std::get<dense ? 0 : 1>(m_ct_lin);
+    using mat_type = typename std::decay_t<decltype(lin)>::matrix;
+
+    const size_t n = x.size();
+    const double t_d = scalar_value(t);
+    if (!m_ct_started) {
+      m_ct_z.resize(n);
+      for (size_t i = 0; i < n; ++i)
+        m_ct_z[i] = tangent_detail::start_direction(i);
+      m_ct_started = true;
+    }
+    bool same = m_ct_lin_valid && m_ct_lin_t == t_d && m_ct_lin_x.size() == n;
+    for (size_t i = 0; same && i < n; ++i)
+      same = (m_ct_lin_x[i] == scalar_value(x[i]));
+    if (!same) {
+      lin.at(sys.second, x, t_d);
+      m_ct_lin_t = t_d;
+      m_ct_lin_x.resize(n);
+      for (size_t i = 0; i < n; ++i) m_ct_lin_x[i] = scalar_value(x[i]);
+      m_ct_lin_valid = true;
+    }
+    const mat_type* J = &lin.negJ();
+    auto ct_sys = std::make_pair(tangent_detail::linear_rhs<mat_type>{J},
+                                 tangent_detail::linear_jac<mat_type>{J});
+    m_ct_out.resize(n);
+    m_ct_err.resize(n);
+    // No FSAL across attempts: J moves with the step start.
+    m_ct->invalidate_lu();
+    m_ct->do_step(ct_sys, m_ct_z, t_d, m_ct_out, scalar_value(dt), m_ct_err);
+    return onestep_detail::wrms_state(m_ct_out, m_ct_z, m_ct_err,
+                                      m_atol, m_rtol,
+                                      [](double v) { return v; });
+  }
+
+  // ====================================================================
   //  Resize helpers
   // ====================================================================
 
@@ -563,6 +639,18 @@ private:
   // Diagnostics
   int m_n_accepted;
   int m_n_rejected;
+
+  // Control tangent, null when off, and the Jacobian it was last linearised
+  // with, at the values m_ct_lin_x, m_ct_lin_t: dense or sparse as the model's
+  // Jacobian is written.
+  using ct_stepper = typename stepper_type::template rebind_value<double>;
+  std::unique_ptr<ct_stepper> m_ct;
+  bool m_ct_started   = false;
+  bool m_ct_lin_valid = false;
+  double m_ct_lin_t   = 0.0;
+  std::vector<double> m_ct_z, m_ct_out, m_ct_err, m_ct_lin_x;
+  std::tuple<tangent_detail::linearisation<value_type, false>,
+             tangent_detail::linearisation<value_type, true>> m_ct_lin;
 
 public:
   mutable cppde::profiler m_prof;
