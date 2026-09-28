@@ -19,6 +19,12 @@ pw_step <- function(nm, ...)
            x = "-k*(x - c*piecewise(0, time - ts < 0, 1))",
            y = "-k*y + k*c*piecewise(1, time > ts, 0)"),
          modelname = nm, compile = FALSE, ...)
+# A pulse between ts and t2 on a state at rest, where f and with it the error
+# estimate are zero until ts.
+pw_pulse <- function(nm, ...)
+  cppODE(c(x = "-k*x + c*piecewise(1, time > ts && time <= t2, 0)",
+           y = "k*x - y"),
+         modelname = nm, compile = FALSE, ...)
 pw_mod <- list(
   time_switch = cppODE(c(A = "-piecewise(kf*A, time - ts < 0, ks*A)",
                          B = " piecewise(kf*A, time - ts < 0, ks*A)"),
@@ -41,7 +47,15 @@ pw_mod <- list(
   step_bdf = pw_step("pw_step_bdf", method = "bdf", deriv = FALSE),
   step_adams = pw_step("pw_step_adams", method = "adams", deriv = FALSE),
   step_fwd = pw_step("pw_step_fwd", method = "bdf", deriv = TRUE),
-  step_rev = pw_step("pw_step_rev", method = "bdf", derivMode = "reverse")
+  step_rev = pw_step("pw_step_rev", method = "bdf", derivMode = "reverse"),
+  pulse_bdf = pw_pulse("pw_pulse_bdf", method = "bdf", deriv = FALSE),
+  pulse_bdf_s = pw_pulse("pw_pulse_bdf_s", method = "bdf", deriv = TRUE),
+  pulse_adams = pw_pulse("pw_pulse_adams", method = "adams", deriv = FALSE),
+  pulse_adams_s = pw_pulse("pw_pulse_adams_s", method = "adams", deriv = TRUE),
+  pulse_rb4 = pw_pulse("pw_pulse_rb4", method = "rb4", deriv = FALSE),
+  pulse_rb4_s = pw_pulse("pw_pulse_rb4_s", method = "rb4", deriv = TRUE),
+  pulse_rb4_grid = pw_pulse("pw_pulse_rb4_grid", method = "rb4", deriv = FALSE,
+                            useDenseOutput = FALSE)
 )
 do.call(compile, c(unname(pw_mod), list(output = "test_piecewise", cores = 1)))
 
@@ -115,6 +129,39 @@ test_that("the reverse mode differentiates across a step in time", {
   ref <- apply(fwd$tangent * as.vector(W[, , 1]), 3, sum)
   expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref),
                tolerance = 1e-6)
+})
+
+test_that("a pulse on a state at rest is not stepped over", {
+  # Nothing but the switching times at ts and t2 keeps a step from growing
+  # across the pulse: without sensitivities from 60 to 90, and for a short one
+  # late in the grid with them too. Closed form for k = 1.
+  cases <- list(list(ts = 60, t2 = 90, times = 0:180),
+                list(ts = 600, t2 = 602, times = c(0, seq(590, 620, 2))))
+  for (cs in cases) {
+    times <- cs$times
+    p <- c(k = 1, c = 1000, ts = cs$ts, t2 = cs$t2, x = 0, y = 0)
+    u <- pmin(pmax(times - p[["ts"]], 0), p[["t2"]] - p[["ts"]])
+    v <- pmax(times - p[["t2"]], 0)
+    x2 <- p[["c"]] * (1 - exp(-u))
+    y2 <- p[["c"]] * (1 - exp(-u) - u * exp(-u))
+    exact <- cbind(x = x2 * exp(-v), y = (y2 + x2 * v) * exp(-v))
+    run <- function(nm)
+      solveODE(pw_mod[[nm]], times, p, abstol = 1e-12, reltol = 1e-10)$variable
+
+    for (m in c("bdf", "adams", "rb4")) {
+      info <- paste(m, cs$ts)
+      plain <- run(paste0("pulse_", m))
+      sens <- run(paste0("pulse_", m, "_s"))
+      expect_equal(nrow(plain), length(times), info = info)
+      expect_equal(unname(plain), unname(exact), tolerance = 1e-8, info = info)
+      expect_equal(unname(sens), unname(exact), tolerance = 1e-8, info = info)
+      expect_equal(plain, sens, tolerance = 1e-8, info = info)
+    }
+    # The controlled loop lands on every output time and crosses the switches
+    # between them.
+    expect_equal(unname(run("pulse_rb4_grid")), unname(exact),
+                 tolerance = 1e-8, info = cs$ts)
+  }
 })
 
 test_that("both branches of a state switch are taken", {

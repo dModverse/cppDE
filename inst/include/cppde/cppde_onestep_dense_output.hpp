@@ -22,6 +22,7 @@
 #ifndef CPPDE_ONESTEP_DENSE_OUTPUT_HPP
 #define CPPDE_ONESTEP_DENSE_OUTPUT_HPP
 
+#include <cmath>
 #include <utility>
 #include <type_traits>
 #include <cppde/cppde_dual_slab.hpp>
@@ -108,6 +109,7 @@ public:
     m_t     = t0;
     m_t_old = t0;
     m_dt    = dt0;
+    m_bridge = false;
   }
 
   template<class System>
@@ -117,6 +119,7 @@ public:
     failed_step_checker fail_checker;
     controlled_step_result result = fail;
     m_t_old = m_t;
+    m_bridge = false;
 
     do {
       result = cs.try_step(
@@ -137,6 +140,16 @@ public:
   template<class StateOut>
   void calc_state(time_type t, StateOut &x)
   {
+    if (m_bridge) {
+      using controller_detail::scalar_value;
+      const auto& x0 = get_old_state();
+      const auto& x1 = get_current_state();
+      const double s = (scalar_value(t) - scalar_value(m_t_old)) /
+                       (scalar_value(m_t) - scalar_value(m_t_old));
+      for (size_t i = 0; i < x0.size(); ++i)
+        x[i] = x0[i] + (x1[i] - x0[i]) * s;
+      return;
+    }
     unwrapped_stepper &cs = m_stepper;
     cs.stepper().calc_state(
         t, x,
@@ -164,7 +177,30 @@ public:
     m_t     = t_event;
     m_t_old = t_event;
     m_dt    = dt_before;
+    m_bridge = false;
     try_reset_after_event_impl(m_stepper, dt_before);
+  }
+
+  // Moves from the current state to x1 at t1 without a step, over the few
+  // doubles of t around a jump of the right-hand side. calc_state interpolates
+  // linearly on the bridge until the next step; the caller restarts the
+  // stepper at t1 before that.
+  void bridge(const state_type& x1, time_type t1)
+  {
+    get_old_state() = x1;
+    toggle_current_state();
+    m_t_old  = m_t;
+    m_t      = t1;
+    m_bridge = true;
+  }
+
+  // Shortens the next step to end at t_stop where it would reach beyond it.
+  void limit_step(time_type t_stop)
+  {
+    using controller_detail::scalar_value;
+    const double rem = scalar_value(t_stop) - scalar_value(m_t);
+    const double h = scalar_value(m_dt);
+    if (rem * h > 0.0 && std::abs(h) > std::abs(rem)) m_dt = time_type(rem);
   }
 
   const state_type& current_state()  const { return get_current_state(); }
@@ -237,6 +273,7 @@ private:
   unsigned                m_n_sens = 0;
   bool                    m_current_state_x1;
   time_type               m_t, m_t_old, m_dt;
+  bool                    m_bridge = false;   // see bridge()
 };
 
 } // namespace cppde

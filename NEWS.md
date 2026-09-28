@@ -1,3 +1,22 @@
+# cppDE 0.10.4
+
+* **Bug fix.** A pulse such as `piecewise(1, time > ts && time <= t2, 0)` on a
+  state at rest is no longer stepped over. Before `ts` the right-hand side and
+  with it the error estimate are zero, so the step size grew until one step
+  went across the whole pulse: without sensitivities under `"bdf"` and
+  `"adams"` for the pulse from 60 to 90 on `0:180`, and for a short pulse late
+  in the grid under every method, with sensitivities too. `"rb4"` with
+  `useDenseOutput = FALSE` stopped at such a jump with "Maximum number of steps
+  exceeded". `cppODE()` now solves every comparison, `Heaviside()` and `sign()`
+  of the right-hand side on time and parameters alone that is affine in time
+  for its switching time. The solve stops a few doubles in front of each
+  switching time inside the grid, follows `f` over them to the jump and
+  restarts past it, as at a jump in time since 0.10.3. The switching times add
+  no output rows, and the reverse mode transposes the crossing.
+* After an event, `"rb4"` and `"tsit5"` with dense output also restart their
+  step-size controller, and `"tsit5"` evaluates its first stage anew rather
+  than reusing the last stage from before the event.
+
 # cppDE 0.10.3
 
 * **Bug fix.** A `"bdf"` or `"adams"` solve crosses a jump of the right-hand

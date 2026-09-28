@@ -1,9 +1,9 @@
 """C++ generators of the native cppDE solvers.
 
 Public API: generate_ode_cpp, generate_event_code, generate_rootfunc_code,
-generate_forcing_init_code, fixed_event_time_exprs, decide_sparse and
-analyze_klu_settings. Expressions and derivatives come from cppde_graph via
-cppde_model.
+generate_forcing_init_code, fixed_event_time_exprs, switch_time_exprs,
+decide_sparse and analyze_klu_settings. Expressions and derivatives come from
+cppde_graph via cppde_model.
 """
 
 import math
@@ -152,6 +152,18 @@ def fixed_event_time_exprs(events_df, states_list, params_list, n_states,
         return None
     model = _event_model(states_list, params_list, forcings_list)
     return cppde_model.fixed_event_times(model, rows)
+
+
+def switch_time_exprs(rhs_dict, params_list, forcings_list=None):
+    """Double expressions over the flat vector `params` of the times at which
+    a condition of the right-hand side on time and parameters switches, see
+    cppde_model.switch_times.
+
+    Returns:
+        list of str, empty when there is none.
+    """
+    model = cppde_model.model_for(rhs_dict, params_list, forcings_list)
+    return cppde_model.switch_times(model)
 
 
 def generate_event_code(events_df, states_list, params_list, n_states,

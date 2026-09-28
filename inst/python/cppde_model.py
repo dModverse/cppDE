@@ -1297,6 +1297,40 @@ def fixed_event_times(model, rows):
     return out or None
 
 
+def switch_times(model):
+    """Double expressions over the flat parameter vector `params` of the times
+    at which a condition of the right-hand side on time and parameters alone
+    switches: the comparisons of piecewise and the logical operators, and the
+    arguments of Heaviside and sign. A condition not affine in time is left
+    out. Each time appears once."""
+    g = model.g
+    t = g.time()
+    other = ~(cg.F_TIME | cg.F_PARAM | cg.F_INIT)
+    out, seen = [], set()
+    pr = em.Printer(g, model.slot("cpp"), style="double")
+    for n in g.topo(model.rhs_plain):
+        o = g.op[n]
+        if o == cg.CMP and g.attr[n] in ("<", "<=", ">", ">="):
+            d = g.sub(*g.args[n])
+        elif o == cg.CALL and g.attr[n] in ("Heaviside", "sign"):
+            d = g.args[n][0]
+        else:
+            continue
+        if not g.flags[d] & cg.F_TIME or g.flags[d] & other:
+            continue
+        # d = a*time + b with a free of time: the switch sits at -b/a.
+        a = model.ad.jvp([d], {t: g.ONE})[0]
+        if g.is_zero(a) or g.flags[a] & cg.F_TIME:
+            continue
+        b = g.substitute([d], {t: g.ZERO})[0]
+        ts = g.neg(g.div(b, a))
+        if ts in seen:
+            continue
+        seen.add(ts)
+        out.append(pr.expr(ts))
+    return out
+
+
 _MODELS = {}
 
 

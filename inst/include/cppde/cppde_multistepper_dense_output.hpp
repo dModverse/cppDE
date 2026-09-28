@@ -27,6 +27,7 @@
 
 #include <utility>
 #include <cassert>
+#include <cmath>
 #include <cstdio>
 #include <cppde/cppde_step_checker.hpp>
 namespace cppde {
@@ -223,6 +224,32 @@ public:
     m_t_old  = m_t;
     m_t      = t1;
     m_bridge = true;
+  }
+
+  // ====================================================================
+  //  limit_step
+  //
+  //  Shortens the next step to end at t_stop where it would reach beyond it.
+  //  The history is rescaled here, since the step keeps its size for a change
+  //  below its own rescale threshold and would then end past t_stop.
+  // ====================================================================
+
+  void limit_step(time_type t_stop)
+  {
+    using ndf_detail::scalar_value;
+    auto& st = m_stepper.stepper();
+    const double rem = static_cast<double>(scalar_value(t_stop)) -
+                       static_cast<double>(scalar_value(m_t));
+    double h = static_cast<double>(scalar_value(m_dt));
+    if (st.is_initialized() && std::abs(st.hscale()) > std::abs(h))
+      h = st.hscale();
+    if (!(rem * h > 0.0) || std::abs(h) <= std::abs(rem)) return;
+    if (st.is_initialized()) {
+      st.rescale(rem / st.hscale());
+      m_dt = time_type(st.hscale());
+    } else {
+      m_dt = time_type(rem);
+    }
   }
 
   // ====================================================================

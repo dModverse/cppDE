@@ -126,6 +126,12 @@ the output nor the span of the integration. A grid of a single time applies
 the events at that time. A solve over \verb{[t0, t1]} followed by one over
 \verb{[t1, t2]}, started from the state the first ends on, therefore reproduces a
 single solve over \verb{[t0, t2]}.
+
+A comparison in \code{rhs}, or a \code{Heaviside()} or \code{sign()}, on time and
+parameters alone and affine in time switches the right-hand side at a time
+the parameters determine. The solver stops in front of each such time
+inside the window and restarts past it, without an output row, so a pulse
+such as \code{piecewise(1, time > ts && time <= t2, 0)} is not stepped over.
 }
 \examples{
 \donttest{
