@@ -647,6 +647,33 @@ inline double max_abs_all_levels_vec(const State& v) {
   return m;
 }
 
+// steady_all_levels(f, x, tol, atol): every |f| <= tol |x| + atol over a value
+// and all of its tangent slots, with f the time derivative of x. The steady-state
+// check of rootfunc = "equilibrate".
+template<class T>
+inline std::enable_if_t<std::is_arithmetic_v<T>, bool>
+steady_all_levels(const T& f, const T& x, double tol, double atol) {
+  return std::abs(static_cast<double>(f)) <= tol * std::abs(static_cast<double>(x)) + atol;
+}
+
+template<class T, unsigned N>
+inline bool steady_all_levels(const dual<T, N>& f, const dual<T, N>& x, double tol, double atol) {
+  auto& fm = const_cast<dual<T, N>&>(f);
+  auto& xm = const_cast<dual<T, N>&>(x);
+  if (!steady_all_levels(fm.x(), xm.x(), tol, atol)) return false;
+  unsigned nd = fm.size(), nx = xm.size();
+  for (unsigned i = 0; i < nd; ++i)
+    if (!steady_all_levels(fm.d(i), i < nx ? xm.d(i) : T(0), tol, atol)) return false;
+  return true;
+}
+
+template<class State>
+inline bool steady_all_levels_vec(const State& f, const State& x, double tol, double atol) {
+  for (std::size_t i = 0; i < f.size(); ++i)
+    if (!steady_all_levels(f[i], x[i], tol, atol)) return false;
+  return true;
+}
+
 } // namespace cppde
 
 #endif // CPPDE_DUAL_MATH_HPP

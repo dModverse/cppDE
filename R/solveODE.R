@@ -659,7 +659,9 @@
 #' @param roottol Tolerance for root finding in root-triggered events.
 #'   Default `1e-6`. An event `value` that depends on `time` evaluates the
 #'   firing time directly, so its derivatives inherit this tolerance rather
-#'   than `reltol`.
+#'   than `reltol`. With `rootfunc = "equilibrate"` the integration stops once
+#'   every `|dx/dt| <= roottol |x| + abstol`; the native backend includes the
+#'   sensitivities.
 #' @param maxroot Maximum number of triggers per root event. Default `1`.
 #' @param onFailure How to react when the solver returns a non-zero
 #'   return code. One of `"stop"` (default; raise an error with the solver

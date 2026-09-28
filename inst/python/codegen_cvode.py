@@ -883,18 +883,17 @@ static std::vector<RootEvent> build_root_events(const double* params,
     event_apply_lambda = time_event_apply_lambda + root_event_apply_lambda
 
     if rootfunc_mode == "equilibrate":
-        # Post-step check uses rhs_fn to compute ydot and tests max |ydot|.
+        # Post-step check: every |ydot| <= root_tol |y| + abstol.
         equilibrate_check_block = """    {
       N_Vector ydot_tmp = N_VClone(y);
       rhs_fn(t_reached, y, ydot_tmp, &ud);
       const double* yd = N_VGetArrayPointer(ydot_tmp);
-      double max_abs = 0.0;
-      for (int i = 0; i < NEQ; ++i) {
-        double a = std::fabs(yd[i]);
-        if (a > max_abs) max_abs = a;
-      }
+      const double* yv = N_VGetArrayPointer(y);
+      bool steady = true;
+      for (int i = 0; i < NEQ && steady; ++i)
+        steady = std::fabs(yd[i]) <= root_tol * std::fabs(yv[i]) + abstol;
       N_VDestroy(ydot_tmp);
-      if (max_abs < root_tol) {
+      if (steady) {
         solver_msg = "Terminated: steady state reached (equilibrate)";
         root_terminated = true;
         break;

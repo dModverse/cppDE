@@ -32,7 +32,11 @@ eq_mod <- lapply(setNames(nm = all_methods), function(m)
          modelname = paste0("eq_", m), compile = FALSE))
 eq_nosens <- cppODE(rhs, rootfunc = "equilibrate", deriv = FALSE,
                     modelname = "eq_at_ss", compile = FALSE)
-do.call(compile, c(unname(eq_mod), list(eq_nosens),
+# Two states whose steady states lie 15 orders apart.
+rhs_scale <- c(small = "ks - d * small", big = "kb - d * big")
+eq_scale  <- cppODE(rhs_scale, rootfunc = "equilibrate", deriv = FALSE,
+                    modelname = "eq_scale", compile = FALSE)
+do.call(compile, c(unname(eq_mod), list(eq_nosens, eq_scale),
                    output = "test_ode_equilibrate", cores = 1))
 
 # -- Basic equilibrate: reaches correct steady state ---------------------------
@@ -196,4 +200,24 @@ test_that("equilibrate at SS with deriv=TRUE still needs sensitivity equilibrati
   # But should still reach the correct state SS
   y_final <- res$variable[nrow(res$variable), ]
   expect_equal(unname(y_final["R"]), ss_R, tolerance = 1e-4)
+})
+
+
+# -- Relative criterion ---------------------------------------------------------
+
+test_that("equilibrate judges each state relative to its size", {
+  # CVODE checks at output times, so both run on a grid
+  tt <- c(0, 10^seq(0, 6, by = 0.25))
+  p  <- c(small = 0, big = 0, ks = 1e-10, kb = 1e5, d = 0.1)
+  check <- function(res) {
+    last <- length(res$time)
+    expect_lt(res$time[last], 1e6)
+    expect_equal(unname(res$variable[last, "small"]), 1e-9, tolerance = 1e-6)
+    expect_equal(unname(res$variable[last, "big"]), 1e6, tolerance = 1e-6)
+  }
+  check(solveODE(eq_scale, tt, p, roottol = 1e-8, abstol = 1e-16, reltol = 1e-10))
+
+  skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
+  cv <- cvode(rhs_scale, rootfunc = "equilibrate", modelname = "eq_scale_cv")
+  check(solveODE(cv, tt, p, roottol = 1e-8, abstol = 1e-16, reltol = 1e-10))
 })

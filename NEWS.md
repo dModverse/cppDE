@@ -1,3 +1,14 @@
+# cppDE 0.11.0
+
+* New `ptc()`: steady state of a `cppFUN()` model by pseudo-transient
+  continuation, with linear constraints `C x = total` and positive variables.
+  Implicit Euler steps under local error control follow the flow to a stable
+  steady state and become Newton steps near it; `flow = FALSE` solves plain
+  equations.
+* `rootfunc = "equilibrate"` stops once every `|dx/dt| <= roottol |x| + abstol`,
+  in both backends. The absolute `|dx/dt| < roottol` stopped small states too
+  early and large ones too late.
+
 # cppDE 0.10.5
 
 * **Bug fix.** `derivMode = "reverse"` and `"forward-reverse"` return the

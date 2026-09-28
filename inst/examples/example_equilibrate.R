@@ -14,7 +14,8 @@ rhs <- c(
   pA = "k1*A*R-k2*pA"
 )
 
-# Equilibrate - stoppt wenn alle Ableitungen (inkl. Sensitivitaeten) < roottol
+# Equilibrate: stops once every |dx/dt| <= roottol |x| + abstol,
+# sensitivities included
 model <- cppODE(
   rhs = rhs,
   rootfunc = "equilibrate",

@@ -11,8 +11,8 @@
 #' variable), `value` (expression to apply), `method` (`"replace"`,
 #' `"add"`, or `"multiply"`), and exactly one of `time` (event time) or
 #' `root` (root expression). `rootfunc` terminates integration:
-#' `"equilibrate"` stops at steady state; a character vector of
-#' expressions stops at the first zero crossing.
+#' `"equilibrate"` stops at steady state (see `roottol` in [solveODE()]); a
+#' character vector of expressions stops at the first zero crossing.
 #'
 #' A time event fires when its time lies between the first and the last
 #' integration time, the first included and the last not; with

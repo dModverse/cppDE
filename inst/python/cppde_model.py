@@ -1254,7 +1254,7 @@ def rootfunc_code(model, rootfunc, scalar):
         if rootfunc.strip().lower() == "equilibrate":
             return ["", "  // --- Steady-state termination (rootfunc = 'equilibrate') ---",
                     "  auto ss_termination = make_steady_state_termination"
-                    "<ode_system, %s, %s>(sys, root_tol);" % (V, T), ""]
+                    "<ode_system, %s, %s>(sys, root_tol, abstol);" % (V, T), ""]
         rootfunc = [rootfunc]
     ec = EventCode(model, scalar)
     lines = ["", "  // --- User-defined root function termination ---"]

@@ -113,8 +113,8 @@ Events are specified as a \code{data.frame} with columns \code{var} (affected
 variable), \code{value} (expression to apply), \code{method} (\code{"replace"},
 \code{"add"}, or \code{"multiply"}), and exactly one of \code{time} (event time) or
 \code{root} (root expression). \code{rootfunc} terminates integration:
-\code{"equilibrate"} stops at steady state; a character vector of
-expressions stops at the first zero crossing.
+\code{"equilibrate"} stops at steady state (see \code{roottol} in \code{\link[=solveODE]{solveODE()}}); a
+character vector of expressions stops at the first zero crossing.
 
 A time event fires when its time lies between the first and the last
 integration time, the first included and the last not; with

@@ -108,12 +108,14 @@ inline bool direction_matches(double last_val, int direction) {
 // Steady-state termination helper (threshold check, no root-finding)
 // ============================================================================
 
+// Steady state: every |dx/dt| <= tol |x| + atol, on every AD level.
 template<class System, class State, class Time>
-std::function<bool(const State&, const Time&)> make_steady_state_termination(System& sys, double tol) {
-  return [&sys, tol](const State& x, const Time& t) -> bool {
+std::function<bool(const State&, const Time&)> make_steady_state_termination(System& sys, double tol,
+                                                                              double atol) {
+  return [&sys, tol, atol](const State& x, const Time& t) -> bool {
     State dxdt(x.size());
     sys(x, dxdt, t);
-    return cppde::max_abs_all_levels_vec(dxdt) < tol;
+    return cppde::steady_all_levels_vec(dxdt, x, tol, atol);
   };
 }
 

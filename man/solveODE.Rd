@@ -93,7 +93,9 @@ estimation.}
 \item{roottol}{Tolerance for root finding in root-triggered events.
 Default \code{1e-6}. An event \code{value} that depends on \code{time} evaluates the
 firing time directly, so its derivatives inherit this tolerance rather
-than \code{reltol}.}
+than \code{reltol}. With \code{rootfunc = "equilibrate"} the integration stops once
+every \verb{|dx/dt| <= roottol |x| + abstol}; the native backend includes the
+sensitivities.}
 
 \item{maxroot}{Maximum number of triggers per root event. Default \code{1}.}
 
