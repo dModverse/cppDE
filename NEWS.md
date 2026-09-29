@@ -1,3 +1,8 @@
+# cppDE 0.11.2
+
+* `ptc()` builds with clang and libc++ (macOS): `R_NO_REMAP` before the R
+  headers, whose `length()` macro broke `<vector>`.
+
 # cppDE 0.11.1
 
 * `ptc()`: the absolute floor of a row's residual scale is `atol` times its largest

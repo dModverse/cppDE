@@ -21,6 +21,8 @@
  Copyright (C) 2026 Simon Beyer
  */
 
+// no length(), error() ... macros: they break libc++ headers included below
+#define R_NO_REMAP
 #include <R.h>
 #include <Rinternals.h>
 #include <R_ext/Lapack.h>
