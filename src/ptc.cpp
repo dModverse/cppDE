@@ -15,7 +15,8 @@
  d = -J^+ G dt / (1 + dt). Positive variables are updated as x exp(d / x),
  exponent capped at +-zmax, and projected onto C x = T by x exp(C' lambda).
  Converged: every row within rtol of its turnover sum_k |dG_i/dx_k| |x_k| plus
- atol times its diagonal, or, for dt >= dtNewton, a step within rtol |x| + atol.
+ atol times its largest |dG_i/dx_k|, or, for dt >= dtNewton, a step within
+ rtol |x| + atol.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -245,7 +246,11 @@ extern "C" SEXP cppde_ptc(SEXP fnS, SEXP nOutS, SEXP xS, SEXP pS, SEXP actS, SEX
     for (int r = 0; r < m; ++r) {
       double tv = 0;
       for (int t = 0; t < n; ++t) tv += std::fabs(Jv[r + m * t]) * std::fabs(xv[t]);
-      double own = r < nf ? std::fabs(Jv[r + m * r]) : 1.0;
+      double own = 1.0;
+      if (r < nf) {
+        own = 0;
+        for (int t = 0; t < n; ++t) own = std::max(own, std::fabs(Jv[r + m * t]));
+      }
       sc[r] = rtol * tv + atol * std::max(own, std::numeric_limits<double>::epsilon());
     }
   };

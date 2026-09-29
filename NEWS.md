@@ -1,3 +1,10 @@
+# cppDE 0.11.1
+
+* `ptc()`: the absolute floor of a row's residual scale is `atol` times its largest
+  partial derivative, not its diagonal. A row whose own rate is tiny but whose
+  partner's is not (Smad2 next to pSmad2) was scaled up to 1e12 times too tight,
+  the step matrix became numerically singular and `ptc()` only shrank `dt`.
+
 # cppDE 0.11.0
 
 * New `ptc()`: steady state of a `cppFUN()` model by pseudo-transient
