@@ -32,7 +32,7 @@ d2prim <- Map(function(expr, parameters)
   names(d2prim_pars), d2prim_pars)
 names(d2prim) <- vapply(names(d2prim_pars), name_of, "")
 do.call(compile, c(unname(d2prim),
-                   list(output = "test_dual2nd_primitives", cores = 1)))
+                   list(output = "test_dual2nd_primitives", cores = test_cores())))
 
 # Helper: the compiled forward result and its stats::D() reference, both as
 # (y, tangent, hessian) arrays in the layout evaluate() returns.

@@ -36,7 +36,8 @@
 #' @param derivMode Direction the derivatives are taken in. `"forward"` (default)
 #'   is the CVODES forward sensitivity solver, driven by `deriv`. `"reverse"`
 #'   is CVODES adjoint sensitivity analysis, one backward solve per cotangent
-#'   column. It needs `deriv = FALSE` and refuses `events` and `rootfunc`.
+#'   column. It needs `deriv = FALSE`. With `events` the forward run is split
+#'   at the jumps and the adjoint is passed through each of them.
 #' @param stepTrace Logical. Compile to record per-step diagnostics
 #'   (returned as `$trace` from [solveODE()]). Without `events` or
 #'   `rootfunc` the integrator is driven in `CV_ONE_STEP` mode and one row
@@ -77,7 +78,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   # The two directions are separate compilations, as they are on the native
   # backend: the direction decides what the generated code is.
   if (is_reverse && deriv)
-    stop("derivMode = \"reverse\" carries no forward sensitivities; use ",
+    stop("derivMode = \"reverse\" computes no forward sensitivities; use ",
          "deriv = FALSE.", call. = FALSE)
   asaCheckpoints <- as.integer(asaCheckpoints)[1]
   if (is.na(asaCheckpoints) || asaCheckpoints < 1L)
@@ -257,7 +258,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   attr(modelname, "backend")     <- "cvode"
 
   # The sens dim defaults to model-parameter names; solveODE() overrides it per
-  # call when the tangent carries a full Phi' shape.
+  # call when the tangent has a full Phi' shape.
   attr(modelname, "dimNames") <- if (deriv) {
     list(time = "time", variable = variables, sens = sens_names)
   } else {

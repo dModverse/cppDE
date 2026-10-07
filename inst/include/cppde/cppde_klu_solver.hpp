@@ -58,8 +58,9 @@ public:
     m_common.ordering = KLUAMD;
     // Disable row scaling.  BDF iteration matrices W = 1/(γh)I − J
     // are diagonally dominant, so scaling adds O(nnz) work per
-    // klu_factor/klu_refactor with no numerical benefit.
-    m_common.scale = 0;
+    // klu_factor/klu_refactor with no numerical benefit. -1 also skips the
+    // check of the input matrix, which the codegen assembles valid.
+    m_common.scale = -1;
   }
   ~klu_lu_solver() { free_numeric(); free_symbolic(); }
 
@@ -105,10 +106,29 @@ public:
     return f;
   }
 
+  // Floating-point work of one refactorisation over that of one pair of
+  // triangular solves, read off the factors the last full factorisation built.
+  // Zero before the first one.
+  double refactor_solve_ratio()
+  {
+    if (!m_has_numeric) return 0.0;
+    if (m_ratio <= 0.0) {
+      klu_flops(m_symbolic, m_numeric, &m_common);
+      const double solve = 2.0 * (static_cast<double>(m_numeric->lnz) +
+                                  static_cast<double>(m_numeric->unz));
+      m_ratio = (solve > 0.0 && m_common.flops > 0.0) ? m_common.flops / solve : 0.0;
+    }
+    return m_ratio;
+  }
+
   // ------------------------------------------------------------------
   //  Factorize: analyze (if needed) + factor/refactor
   // ------------------------------------------------------------------
-  void factorize(int n, const int* Ap, const int* Ai, const double* Ax)
+  // `check_growth` false skips the pivot growth test of a refactorisation,
+  // for a caller that knows the matrix only grew on its diagonal since the
+  // last tested one.
+  void factorize(int n, const int* Ap, const int* Ai, const double* Ax,
+                 bool check_growth = true)
   {
     if (!m_pattern_analyzed)
       analyze_pattern(n, Ap, Ai);
@@ -124,6 +144,7 @@ public:
       // One-time O(nnz) cost that accelerates every subsequent klu_solve.
       klu_sort(m_symbolic, m_numeric, &m_common);
       m_has_numeric = true;
+      m_ratio = 0.0;
 #ifdef CPPDE_PROFILE
       // Report fill-in and settings (once)
       std::fprintf(stderr, "KLU: n=%d, nnz=%d, L_nnz=%d, U_nnz=%d, fill=%.1fx, "
@@ -142,7 +163,7 @@ public:
       // klu_refactor reuses the first pivot order and reports success even when
       // that order is unstable for the new values. The reverse mode uses each
       // solve directly, so the reciprocal pivot growth decides, as in SUNDIALS.
-      if (ok) {
+      if (ok && check_growth) {
         klu_rgrowth(const_cast<int*>(Ap), const_cast<int*>(Ai),
                     const_cast<double*>(Ax), m_symbolic, m_numeric, &m_common);
         // Written so a NaN falls through to the full factorisation.
@@ -158,6 +179,7 @@ public:
         if (!m_numeric)
           throw std::runtime_error("klu_factor failed after refactor fallback");
         klu_sort(m_symbolic, m_numeric, &m_common);
+        m_ratio = 0.0;
       }
     }
   }
@@ -238,6 +260,7 @@ private:
 
   klu_symbolic* m_symbolic = nullptr;
   klu_numeric*  m_numeric  = nullptr;
+  double        m_ratio    = 0.0;
   klu_common    m_common;
   int           m_n = 0;
   bool          m_pattern_analyzed = false;

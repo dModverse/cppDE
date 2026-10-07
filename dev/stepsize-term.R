@@ -1,5 +1,5 @@
 ## =================================================================
-## How much gradient does the step-size control carry?
+## How much gradient does the step-size control contribute?
 ##
 ## Forward sensitivities differentiate the solution at a frozen step
 ## sequence. The adaptive controller picks that sequence from theta, so

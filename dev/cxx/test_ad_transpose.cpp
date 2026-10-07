@@ -1,6 +1,6 @@
-// The transposed solve on a derivative-carrying iteration matrix.
+// The transposed solve on an iteration matrix that has derivatives.
 //
-// A written adjoint over a dual scalar needs W^-T where W itself carries
+// A written adjoint over a dual scalar needs W^-T where W itself has
 // tangents. The peeling transposes with the matrix: the value layer solves
 // W_val^T x = b_val, and each direction solves W_val^T x' = b' - (dW)^T x_val.
 //
@@ -41,7 +41,7 @@ static constexpr unsigned N = 3;      // derivative directions
 using D = dual<double, N>;
 
 // A matrix that is not symmetric, is well conditioned, and whose every entry
-// carries a different tangent, so a transpose that acts on the wrong index
+// has a different tangent, so a transpose that acts on the wrong index
 // shows up in the derivative layer even where the value layer is right.
 static void fill(cppde::dense_matrix<D>& W, int n) {
   W.resize(n, n);
@@ -56,7 +56,7 @@ static void fill(cppde::dense_matrix<D>& W, int n) {
 }
 
 // The same matrix in compressed sparse column, transposed or not. Every entry
-// is structurally present, so the pattern says nothing and the indices carry
+// is structurally present, so the pattern says nothing and the indices decide
 // the whole question.
 static void to_csc(const cppde::dense_matrix<D>& A, int n,
                    cppde::csc_matrix<D>& out) {

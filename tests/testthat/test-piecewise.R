@@ -57,7 +57,7 @@ pw_mod <- list(
   pulse_rb4_grid = pw_pulse("pw_pulse_rb4_grid", method = "rb4", deriv = FALSE,
                             useDenseOutput = FALSE)
 )
-do.call(compile, c(unname(pw_mod), list(output = "test_piecewise", cores = 1)))
+do.call(compile, c(unname(pw_mod), list(output = "test_piecewise", cores = test_cores())))
 
 # -- Emitted form -------------------------------------------------------------
 
@@ -181,7 +181,7 @@ test_that("both branches of a state switch are taken", {
 
 # -- Second order -------------------------------------------------------------
 
-test_that("select carries value, gradient and Hessian on both branches", {
+test_that("select propagates value, gradient and Hessian on both branches", {
   # Reference: stats::D() of the branch the condition selects, an independent
   # derivation of the same closed forms.
   nms <- c("a", "b")
@@ -206,7 +206,7 @@ test_that("select carries value, gradient and Hessian on both branches", {
 
 test_that("a branch that is a literal clears the tangents it replaces", {
   # The second-order materialiser leaves the target's tangent buffers alone
-  # when a tree carries no dependence, and dxdt is reused across calls, so a
+  # when a tree has no dependence, and dxdt is reused across calls, so a
   # select landing on a literal has to stay on the writing path.
   f <- pw_mod$freeze
 

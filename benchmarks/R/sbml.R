@@ -70,7 +70,7 @@ subst_lang <- function(e, map) {
 }
 
 ## Symbol names occurring in a language object, minus call heads. The large
-## models carry expressions with tens of thousands of nodes, so these walk the
+## models contain expressions with tens of thousands of nodes, so these walk the
 ## tree directly: deparsing and re-parsing per node is quadratic.
 lang_symbols <- function(e) {
   out <- character(0)
@@ -533,7 +533,7 @@ sbml_to_ode <- function(sbml) {
 ## applies the jump and restarts instead of stepping across a discontinuity.
 
 ## Events act on state variables, so each switch gets an auxiliary state with
-## dx/dt = 0 carrying the switched value, or indicator states where a branch is
+## dx/dt = 0 holding the switched value, or indicator states where a branch is
 ## itself a function of time. Identical switches share one auxiliary state.
 resolve_piecewise <- function(exprs, env, tspan, ngrid = 4001L,
                               make_events = TRUE, prefix = "pw") {
@@ -611,7 +611,7 @@ resolve_piecewise <- function(exprs, env, tspan, ngrid = 4001L,
                          function(v) "time" %in% expr_symbols(deparse_expr(v)), NA)
 
       repl <- if (!any(time_dep)) {
-        ## One auxiliary state carrying the switched value.
+        ## One auxiliary state holding the switched value.
         nm <- sprintf("%ssw%d", prefix, counter)
         aux_init[[nm]] <<- deparse_expr(vals[[seg_branch[1L]]])
         for (j in seq_along(tsw))

@@ -3,8 +3,11 @@
 
  The multistep_method enum selects the family at compile time:
 
-   bdf     : BDF/NDF with a Newton corrector, max order 5   (default)
-   adams   : Adams-Moulton in PECE form,       max order 12
+   bdf     : BDF/NDF,        max order 5   (default)
+   adams   : Adams-Moulton,  max order 12
+
+ Both solve their corrector by Newton's method, as CVODES does with a linear
+ solver attached.
 
  On the stiff side set_use_ndf_kappa() chooses between the Klopfenstein-Shampine
  NDF (default; Shampine & Reichelt 1997, "The MATLAB ODE Suite", SIAM J. Sci.
@@ -13,14 +16,14 @@
  appendix "BDF and NDF coefficients".
 
  The Newton corrector is ndf_newton_solve() in cppde_newton.hpp; the Adams
- coefficients and the PECE corrector are defined below. For AD types
- lu_W::solve() carries the IFT and the WRMS norms include the tangents.
+ coefficients are defined below. For AD types lu_W::solve() applies the IFT and
+ the WRMS norms include the tangents.
 
  Copyright (C) 2026 Simon Beyer
 
  Portions of this file are derived from SUNDIALS/CVODE(S)
- (cvode.c: cvSetAdams, cvAdjustParams, cvNlsFunctional, cvHin,
- error-weight machinery, NDF kappa modification, Adams PECE control),
+ (cvode.c: cvSetAdams, cvAdjustParams, cvHin, error-weight machinery,
+ NDF kappa modification),
  Copyright (c) 2002-2024 Lawrence Livermore National Security and
  Southern Methodist University, distributed under the BSD-3-Clause
  license.  See inst/COPYRIGHTS for the full license text.
@@ -48,11 +51,10 @@
 #include <cppde/cppde_stepper_traits.hpp>
 #include <cppde/cppde_profiler.hpp>
 #include <cppde/cppde_step_trace.hpp>
-#include <cppde/cppde_ad_lu.hpp>          // ad_lu::is_ad: used by adams_pece_solve
+#include <cppde/cppde_ad_lu.hpp>
 #include <cppde/cppde_ad_traits.hpp>
 #include <cppde/cppde_dual_slab.hpp>
 #include <cppde/cppde_nordsieck_block.hpp>
-#include <cppde/cppde_control_tangent.hpp>
 
 namespace cppde {
 
@@ -266,201 +268,16 @@ void adams_set_coefficients(
 }
 
   // ============================================================================
-  //  Adams-Moulton PECE corrector (sibling of ndf_newton_solve)
-  //
-  //    P : y_pred from the Pascal predictor, the caller's job
-  //    E : f_pred = f(t_n, y_pred)
-  //    C : y_n = y_pred + l[1] * (h * f_pred - z_pred[1])
-  //    E : f_new = f(t_n, y_n), kept for the next step
-  //
-  //  Two f evaluations per accepted step, no Jacobian and no solve. A diverging
-  //  fixed point (|h * lambda * l[1]| > 1) sets `diverged`, a diagnostic the
-  //  step trace reports. Dual types pass through the arithmetic.
-  // ============================================================================
-
-struct pece_result {
-  bool   converged;     // Did the PECE fixed-point iteration converge?
-  bool   diverged;      // Hard divergence; diagnostic, reported in the trace.
-  double acnrm;         // WRMS norm of the accumulated correction.
-  int    n_fevals;      // Number of f-evaluations used (2 for converged step).
-  int    n_iters;       // Number of corrector iterations performed.
-
-  // Maximum convergence rate over the corrector iterations, rm = del/delp as in
-  // LSODA correction(). A diagnostic that no caller reads; zero below two runs.
-  double rate_max;
-};
-
-  // adams_pece_solve: one PECE Adams-Moulton corrector solve.
-  //
-  //   zn0, zn0_pred, zn1_pred : Nordsieck slot 0 before the predict (weighting
-  //                             only), and slots 0 and 1 after it
-  //   h, l1, t_new            : step, leading correction weight, new time
-  //   tq4, atol, rtol         : convergence threshold and the error weights
-  //   acor, y, tempv, ftemp   : correction, result, and caller-owned scratch
-  //   crate                   : damped convergence rate, diagnostic only
-  //
-  // A result that did not converge, diverged or not, is a convergence failure
-  // the controller retries with a smaller step.
-template<class DerivFunc, class Value, class TimeType>
-pece_result adams_pece_solve(
-    DerivFunc& deriv_func,
-    const std::vector<Value>& zn0,
-    const std::vector<Value>& zn0_pred,
-    const detail::tangent_slab<Value>& zn0_pred_slab,
-    const std::vector<Value>& zn1_pred,
-    const detail::tangent_slab<Value>& zn1_pred_slab,
-    TimeType h,
-    TimeType rl1,                 // rl1 = 1 / l[1], matches CVODE cvNlsFunctional
-    TimeType t_new,
-    double tq4,
-    double atol,
-    double rtol,
-    int max_iter,
-    std::vector<Value>& acor,
-    detail::tangent_slab<Value>& acor_slab,
-    std::vector<Value>& y,
-    detail::tangent_slab<Value>& y_slab,
-    std::vector<Value>& tempv,
-    detail::tangent_slab<Value>& tempv_slab,
-    std::vector<Value>& ftemp,
-    const detail::tangent_slab<Value>& ftemp_slab,
-    double& crate,
-    cppde::profiler& prof,
-    bool sens_err_con = true)
-{
-  using newton_detail::wrms_norm;
-  using cppde::ad_traits::scalar_value;
-
-  const size_t n = zn0_pred.size();
-  int n_fevals = 0;
-
-  // Initialize: y starts at the predictor, acor = 0.  AD goes through
-  // the slab kernels, scalar Value through fused element loops.
-  { auto _t = prof.timer(prof_cat::newton_overhead);
-    if constexpr (ad_lu::is_ad<Value>::value) {
-      vec_zero_with_slab(acor, acor_slab);
-      vec_copy_with_slab(y, y_slab, zn0_pred, zn0_pred_slab);
-    } else {
-      for (size_t i = 0; i < n; ++i) {
-        acor[i] = Value(0);
-        y[i]    = zn0_pred[i];
-      }
-    }
-  }
-
-  // E: first f-evaluation at the predicted point.
-  { auto _t = prof.timer(prof_cat::f_eval);
-    deriv_func(y, ftemp, t_new); }
-  ++n_fevals;
-
-  double del = 0.0, delp = 0.0;
-  double rate_max = 0.0;
-
-  // Coefficients of new_corr = rl1 * (h*ftemp - zn1_pred).
-  const double c_ftemp = static_cast<double>(scalar_value(rl1 * h));
-  const double c_zn1   = -static_cast<double>(scalar_value(rl1));
-
-  // C: PECE fixed-point iteration
-  //
-  // Adams-Moulton corrector in Nordsieck form:
-  //   y_{n,new} = y_pred + l[1] * (h * f(y) - z_pred[1])
-  // Fixed point exists iff |h * lambda * l[1]| < 1.
-  int m;
-  for (m = 0; m < max_iter; ++m) {
-
-  // CVODE cvNlsFunctional:
-  //   tempv = rl1 * (h*f(y_prev) - zn[1])   the full new correction
-  //   del   = ||tempv - acor||              the increment over the previous one
-  // rl1 is 1/l[1], as in cvNlsFunctional.
-    { auto _t = prof.timer(prof_cat::newton_overhead);
-      // tempv = rl1 * (h*f - zn1_pred) - acor, the increment; acor takes
-      // it up and equals the full correction afterwards.
-      if constexpr (ad_lu::is_ad<Value>::value) {
-        vec_copy_with_slab(tempv, tempv_slab, ftemp, ftemp_slab);
-        vec_scale_with_slab(tempv, tempv_slab, c_ftemp);
-        vec_axpy_with_slab(tempv, tempv_slab, c_zn1, zn1_pred, zn1_pred_slab);
-        vec_axpy_with_slab(tempv, tempv_slab, -1.0, acor, acor_slab);
-        vec_axpy_with_slab(acor, acor_slab, 1.0, tempv, tempv_slab);
-      } else {
-        for (size_t i = 0; i < n; ++i) {
-          const Value inc = c_ftemp * ftemp[i] + c_zn1 * zn1_pred[i] - acor[i];
-          tempv[i] = inc;
-          acor[i] += inc;
-        }
-      }
-    }
-
-    { auto _t = prof.timer(prof_cat::error_norm);
-      del = wrms_norm(tempv, y, n, atol, rtol, sens_err_con); }
-
-    // y = zn[0]_pred + acor; both take the same increment.
-    { auto _t = prof.timer(prof_cat::newton_overhead);
-      if constexpr (ad_lu::is_ad<Value>::value) {
-        vec_axpy_with_slab(y, y_slab, 1.0, tempv, tempv_slab);
-      } else {
-        for (size_t i = 0; i < n; ++i) y[i] += tempv[i];
-      }
-    }
-
-    // Rate estimate: needs m >= 1 (need previous delp).  LSODA caps
-    // rm at 1024 to guard against pathological growth.
-    if (m > 0) {
-      const double rm = (delp > 0.0)
-        ? std::min(1024.0, del / delp)
-        : 1024.0;
-      crate    = std::max(ndf_constants::CRDOWN * crate, rm);
-      rate_max = std::max(rate_max, rm);
-    }
-    double dcon = del * std::min(1.0, crate) / tq4;
-
-    if (dcon <= 1.0) {
-      // Converged: compute acnrm AD-aware, same convention as Newton.
-      double acnrm;
-      { auto _t = prof.timer(prof_cat::error_norm);
-        acnrm = wrms_norm(acor, zn0, n, atol, rtol, sens_err_con); }
-
-      // Final E: re-evaluate at corrected y so next step has fresh data.
-      { auto _t = prof.timer(prof_cat::f_eval);
-        deriv_func(y, ftemp, t_new); }
-      ++n_fevals;
-
-      return { /*converged=*/true, /*diverged=*/false,
-               acnrm, n_fevals, m + 1, rate_max };
-    }
-
-    // Hard divergence: update growing rapidly, the fixed point cannot
-    // exist for the current h.  PECE can legitimately wobble so we
-    // use 2*delp rather than Newton's RDIV = 2.
-    if (m >= 1 && delp > 0.0 && del > 2.0 * delp) {
-      return { /*converged=*/false, /*diverged=*/true,
-               0.0, n_fevals, m + 1, rate_max };
-    }
-
-    delp = del;
-
-    // E: re-evaluate f at updated y for the next iteration.
-    { auto _t = prof.timer(prof_cat::f_eval);
-      deriv_func(y, ftemp, t_new); }
-    ++n_fevals;
-  }
-
-  // Ran out of iterations without converging or hard-diverging.
-  return { /*converged=*/false, /*diverged=*/false,
-           0.0, n_fevals, m, rate_max };
-}
-
-
-  // ============================================================================
   //  multistep_method: compile-time method selector
   //
-  //  Both families share the Nordsieck history, the controller, and the resize,
-  //  dense-output and AD machinery. They differ in the coefficient routine, in
-  //  Newton against PECE for the corrector, and in the maximum order.
+  //  Both families share the Nordsieck history, the controller, the Newton
+  //  corrector, and the resize, dense-output and AD machinery. They differ in
+  //  the coefficient routine and in the maximum order.
   // ============================================================================
 
 enum class multistep_method {
   bdf,      // pure BDF/NDF (default)
-  adams     // pure Adams-Moulton PECE
+  adams     // Adams-Moulton
 };
 
 namespace multistep_detail {
@@ -535,7 +352,6 @@ public:
 
   // Compile-time method properties (derived from Method)
   static constexpr multistep_method method            = Method;
-  static constexpr bool             can_use_adams     = multistep_detail::method_can_use_adams(Method);
   static constexpr bool             can_use_bdf_family= multistep_detail::method_can_use_bdf_family(Method);
 
   typedef Value                            value_type;
@@ -557,8 +373,6 @@ public:
   template<class Value2> using rebind_value =
     multistepper<Method, Value2, JacobianPattern, Resizer>;
 
-  // The control tangent's stepper, which reaches into this one's history.
-  using ct_stepper = rebind_value<double>;
   template<multistep_method, class, class, class> friend class multistepper;
 
   static constexpr bool is_sparse = is_sparse_tag<JacobianPattern>::value;
@@ -690,36 +504,7 @@ public:
 
   void set_use_ndf_kappa(bool v) {
     m_use_ndf_kappa = v;
-    if (m_ct) m_ct->set_use_ndf_kappa(v);
   }
-
-  // ====================================================================
-  //  Control tangent
-  //
-  //  A plain double run carries no tangent, so its error test does not see
-  //  where the linearised flow needs smaller steps than the state: on a
-  //  trajectory at rest the state's error estimate is exactly zero. A control
-  //  tangent is a second history on the same steps and orders that integrates
-  //  z' = J(x) z from a fixed direction, J taken at each step's solution. Its
-  //  corrector norm joins the state's under the max, as a tangent's does under
-  //  sens_err_con, so it can only shrink a step. The tangent is plain double
-  //  and reads the values of an AD run only, so with sens_err_con off the grid
-  //  stays independent of the tangents that run carries.
-  // ====================================================================
-
-  void set_control_tangent(bool on)
-  {
-    if (!on) { m_ct.reset(); return; }
-    if (!m_ct) {
-      m_ct = std::make_unique<ct_stepper>();
-      m_ct->set_use_ndf_kappa(m_use_ndf_kappa);
-      m_ct->set_tolerances(m_atol, m_rtol);
-      m_ct->set_max_corrector_iters(m_max_newton_iter);
-    }
-    m_ct_reset = true;
-    m_ct_started = false;
-  }
-  bool control_tangent() const { return static_cast<bool>(m_ct); }
 
   // With the tangents out of the error test, the corrector test and the order
   // choice, every control decision reads value arithmetic only, so the step
@@ -760,8 +545,7 @@ public:
   // ====================================================================
   //  do_step: public dispatcher
   //
-  //  Selects between the BDF/NDF Newton corrector path and the Adams
-  //  PECE corrector path at compile time.
+  //  One step of either family; the coefficients are chosen at compile time.
   // ====================================================================
 
   template<class System, class TimeArg>
@@ -775,11 +559,7 @@ public:
       bool force_setup = false,
       convfail_t convfail = convfail_t::no_failures)
   {
-    if constexpr (Method == multistep_method::adams) {
-      step_adams(system, x, t, x_out, dt, xerr);
-    } else {
-      step_bdf_family(system, x, t, x_out, dt, xerr, force_setup, convfail);
-    }
+    step_newton(system, x, t, x_out, dt, xerr, force_setup, convfail);
   }
 
   // ====================================================================
@@ -791,12 +571,12 @@ public:
   void on_step_accepted(System& /*system*/, TimeArg /*t*/) {}
 
   // ====================================================================
-  //  step_bdf_family: one BDF/NDF step, Newton iteration delegated to
-  //  ndf_newton_solve().
+  //  step_newton: one BDF/NDF or Adams-Moulton step, the corrector solved by
+  //  Newton's method in ndf_newton_solve(), as CVODES solves both.
   // ====================================================================
 
   template<class System, class TimeArg>
-  void step_bdf_family(
+  void step_newton(
       System& system,
       const state_type& x,
       TimeArg t,
@@ -825,7 +605,6 @@ public:
 
     // --- Resize ---
     resize_impl(x);
-    if (m_ct && m_ct_reset) ct_rebuild(jacobi_func);
 
     // ================================================================
     //  1. Nordsieck rescale
@@ -878,15 +657,18 @@ public:
     { auto _tp = m_prof.timer(prof_cat::nordsieck); ndfPredict(n); }
 
     // ================================================================
-    //  3. NDF coefficients
+    //  3. Coefficients
     // ================================================================
-    ndfSet();
-
-  // --- NDF kappa modification of the iteration matrix ---
-  // Classical BDF uses gamma = h / m_l[1], NDF uses h / ((1 - kappa_q) * m_l[1])
-  // so that W = I - gamma*J matches Shampine's formulation. The factor is
-  // absorbed into rl1; with m_use_ndf_kappa false, kappa_q = 0 gives back BDF.
-    const double kappa_q = m_use_ndf_kappa ? ndf_constants::NDF_KAPPA[m_q] : 0.0;
+  // Classical BDF and Adams use gamma = h / m_l[1], NDF uses
+  // h / ((1 - kappa_q) * m_l[1]) so that W = I - gamma*J matches Shampine's
+  // formulation. The factor is absorbed into rl1; kappa_q = 0 gives back BDF.
+    double kappa_q = 0.0;
+    if constexpr (Method == multistep_method::adams) {
+      adams_set_coefficients(m_q, m_qwait, m_h, m_tau, m_l, m_tq);
+    } else {
+      ndfSet();
+      if (m_use_ndf_kappa) kappa_q = ndf_constants::NDF_KAPPA[m_q];
+    }
     time_type rl1 = time_type(1.0) / (m_l[1] * time_type(1.0 - kappa_q));
     m_gamma = m_h * rl1;
     if (m_nst == 0) m_gammap = m_gamma;
@@ -915,7 +697,7 @@ public:
           else if (std::abs(m_gamrat - 1.0) > ndf_constants::DGMAX) ++m_n_setup_dgmax;
         }
 
-  // The trace line is emitted at the end of step_bdf_family, so the setup reason
+  // The trace line is emitted at the end of step_newton, so the setup reason
   // is stashed here to be rendered there. m_gamrat is reset to 1 in the setup
   // block below, hence the pre-setup value is the one worth recording.
 #ifdef CPPDE_STEP_TRACE
@@ -1005,7 +787,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         m_gamrat,
         m_prof,
         m_ewt,
-        m_sens_err_con
+        m_sens_err_con,
+        /*scale_solution=*/Method != multistep_method::adams
   );
 
   m_acnrm = result.acnrm;
@@ -1036,9 +819,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 }
     }
 
-    if (m_ct && m_newton_converged)
-      ct_step(jacobi_func, t_s, dt_s, t_s + m_h);
-
     // ================================================================
     //  6. Output
     // ================================================================
@@ -1057,172 +837,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       }
     }
 
-    trace_step(/*is_adams_step=*/false,
-               /*t_end=*/static_cast<double>(scalar_value(t_s + m_h)));
-  }
-
-  // ====================================================================
-  //  step_adams: one Adams-Moulton PECE step
-  //
-  //  The structure of step_bdf_family with adams_set_coefficients() and
-  //  adams_pece_solve() in place of ndfSet() and ndf_newton_solve(). No LU, no
-  //  Jacobian, no setup triggers.
-  // ====================================================================
-
-  template<class System, class TimeArg>
-  void step_adams(
-      System& system,
-      const state_type& x,
-      TimeArg t,
-      state_type& x_out,
-      TimeArg dt,
-      state_type& xerr)
-  {
-    static_assert(can_use_adams,
-      "step_adams() instantiated for a Method that does not support Adams");
-
-    using ndf_detail::scalar_value;
-    time_type t_s  = static_cast<time_type>(scalar_value(t));
-    time_type dt_s = static_cast<time_type>(scalar_value(dt));
-
-    typedef typename unwrap_reference<System>::type system_type;
-    typedef typename unwrap_reference<
-      typename system_type::first_type>::type deriv_func_type;
-
-    system_type&     sys        = system;
-    deriv_func_type& deriv_func = sys.first;
-
-    const size_t n = x.size();
-
-    // --- Resize ---
-    resize_impl(x);
-    if (m_ct && m_ct_reset) ct_rebuild(sys.second);
-
-    // ================================================================
-    //  1. Nordsieck rescale (identical to BDF/NDF path)
-    // ================================================================
-    { auto _tp = m_prof.timer(prof_cat::nordsieck);
-      if (m_nst > 0) {
-        if (std::abs(dt_s - m_hscale) > 1e-14 * std::max(1.0, std::abs(m_hscale))) {
-          m_eta = dt_s / m_hscale;
-          ndfRescale();
-        }
-        m_h = m_hscale;
-      } else {
-        m_h = dt_s;
-        if (m_hscale == 0.0) m_hscale = dt_s;
-      }
-    }
-
-    if (m_snapshot)
-      m_snapshot(static_cast<double>(ndf_detail::scalar_value(t_s)),
-                 static_cast<double>(ndf_detail::scalar_value(m_h)));
-
-    // ================================================================
-    //  1b. Compute error weight vector from ACCEPTED solution
-    //      (before prediction modifies zn[0]).  Same as BDF path.
-    // ================================================================
-    {
-      using ndf_detail::scalar_value;
-      m_ewt.clear();
-      m_ewt.reserve(n * 2);
-      for (size_t i = 0; i < n; ++i) {
-        double yi = std::abs(scalar_value(m_zn[0].m_v[i]));
-        m_ewt.push_back(1.0 / (m_atol + m_rtol * yi));
-
-        if constexpr (ad_lu::is_ad<value_type>::value) {
-          auto& y_ad = const_cast<value_type&>(m_zn[0].m_v[i]);
-          unsigned nd = y_ad.size();
-          for (unsigned j = 0; j < nd; ++j) {
-            double yd = std::abs(scalar_value(y_ad.d(j)));
-            m_ewt.push_back(1.0 / (m_atol + m_rtol * yd));
-          }
-        }
-      }
-    }
-
-    // ================================================================
-    //  2. Predict (Pascal triangle, methodneutral)
-    // ================================================================
-    { auto _tp = m_prof.timer(prof_cat::nordsieck); ndfPredict(n); }
-
-    // ================================================================
-    //  3. Adams coefficients
-    // ================================================================
-    adams_set_coefficients(m_q, m_qwait, m_h, m_tau, m_l, m_tq);
-
-    // For Adams, gamma = h / l[1] is still defined and the dense-output
-    // / order-selection code reads it; keep it consistent.
-    time_type rl1 = time_type(1.0) / m_l[1];
-    m_gamma  = m_h * rl1;
-    if (m_nst == 0) m_gammap = m_gamma;
-    m_gamrat = (m_nst > 0) ? m_gamma / m_gammap : 1.0;
-
-    // ================================================================
-    //  4. PECE corrector (no LU, no Jacobian, no setup)
-    // ================================================================
-    time_type t_new_s = t_s + m_h;
-
-    auto result = adams_pece_solve(
-        deriv_func,
-        x,                    // zn0: previous accepted state (for atol weighting)
-        m_zn[0].m_v,          // zn0_pred: Nordsieck slot 0 after predict
-        m_zn_block.slab(0),
-        m_zn[1].m_v,          // zn1_pred: Nordsieck slot 1 after predict
-        m_zn_block.slab(1),
-        m_h,
-        rl1,                  // 1 / l[1]: matches cvNlsFunctional
-        t_new_s,
-        m_tq[4],
-        m_atol, m_rtol,
-        m_max_newton_iter,
-        m_acor.m_v,
-        m_acor_slab,
-        m_y.m_v,
-        m_y_slab,
-        m_tempv.m_v,
-        m_tempv_slab,
-        m_ftemp.m_v,
-        m_ftemp_slab,
-        m_crate,
-        m_prof,
-        m_sens_err_con);
-
-    m_acnrm     = result.acnrm;
-    m_n_fevals += result.n_fevals;
-    m_newton_converged = result.converged;   // reuse the same flag
-
-#ifdef CPPDE_STEP_TRACE
-    // Adams path doesn't go through the BDF setup gate: clear stash.
-    m_trace_setup_fired  = false;
-    m_trace_setup_reason = "";
-    m_trace_pece_iters   = result.n_iters;
-    m_trace_pece_diverged = result.diverged;
-#endif
-
-    if (m_ct && m_newton_converged)
-      ct_step(sys.second, t_s, dt_s, t_new_s);
-
-    // ================================================================
-    //  5. Output
-    // ================================================================
-    { auto _tp = m_prof.timer(prof_cat::step_overhead);
-      if (m_newton_converged) {
-        for (size_t i = 0; i < n; ++i) {
-          x_out[i] = m_y.m_v[i];
-          xerr[i]  = m_acor.m_v[i];
-        }
-      } else {
-        ndfRestore(n);
-        for (size_t i = 0; i < n; ++i) {
-          x_out[i] = x[i];
-          xerr[i]  = value_type(0);
-        }
-      }
-    }
-
-    trace_step(/*is_adams_step=*/true,
-               /*t_end=*/static_cast<double>(scalar_value(t_s + m_h)));
+    trace_step(/*t_end=*/static_cast<double>(scalar_value(t_s + m_h)));
   }
 
   // ====================================================================
@@ -1412,8 +1027,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     // Use ewt (pre-prediction weights) for consistency with error test,
     // matching CVODE which uses ewt in all WRMS norms.
     double ddn = wrms_norm_ewt(m_zn[m_q].m_v) * m_tq[1];
-    const double eta = 1.0 / (std::pow(ndf_constants::BIAS1 * ddn, 1.0 / m_q) + ndf_constants::ADDON);
-    return m_ct ? std::min(eta, m_ct->compute_etaqm1()) : eta;
+    return 1.0 / (std::pow(ndf_constants::BIAS1 * ddn, 1.0 / m_q) + ndf_constants::ADDON);
   }
 
   double compute_etaq(double dsm) const
@@ -1471,8 +1085,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       if (sens_norm > dup) dup = sens_norm;
     }
     dup *= m_tq[3];
-    const double eta = 1.0 / (std::pow(ndf_constants::BIAS3 * dup, 1.0 / (m_L + 1)) + ndf_constants::ADDON);
-    return m_ct ? std::min(eta, m_ct->compute_etaqp1()) : eta;
+    return 1.0 / (std::pow(ndf_constants::BIAS3 * dup, 1.0 / (m_L + 1)) + ndf_constants::ADDON);
   }
 
   // ====================================================================
@@ -1613,16 +1226,12 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       m_saved_tq5 = m_tq[5];
     }
 
-    if (m_ct) m_ct->complete_step();
-    m_ct_live = false;
   }
 
   void restore()
   {
     auto _tp = m_prof.timer(prof_cat::nordsieck);
     ndfRestore(m_zn[0].m_v.size());
-    if (m_ct && m_ct_live) m_ct->restore();
-    m_ct_live = false;
   }
 
   void rescale(time_type eta)
@@ -1630,7 +1239,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     auto _tp = m_prof.timer(prof_cat::nordsieck);
     m_eta = eta;
     ndfRescale();
-    if (m_ct) m_ct->rescale(eta);
   }
 
   void set_order_for_next_step(int new_q)
@@ -1654,7 +1262,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       m_L = new_q + 1;
     }
     m_nscon = 0;
-    if (m_ct) m_ct->set_order_for_next_step(new_q);
   }
 
   // ====================================================================
@@ -1693,7 +1300,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     m_tau[1] = dt_s;
     m_initialized = true;
     m_lu.invalidate();
-    m_ct_reset = true;
 
     // Filling zn above can drop a static-width dual's depend_ flag, and
     // with it the slab row it reports through size()/d().  Re-binding
@@ -1715,7 +1321,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     m_gamrat = 1.0; m_crate = 1.0;
     m_saved_tq5 = 0; m_tn_current = static_cast<time_type>(ndf_detail::scalar_value(t));
     m_lu.invalidate();
-    m_ct_reset = true;
   }
 
   // ====================================================================
@@ -1806,7 +1411,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   double etamax() const { return m_etamax; }
   void set_etamax(double em) {
     m_etamax = em;
-    if (m_ct) m_ct->set_etamax(em);
   }
   time_type h() const { return m_h; }
   time_type hscale() const { return m_hscale; }
@@ -1817,7 +1421,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     m_h      = m_hscale;
     log_history(history_op::hscale,
                 static_cast<double>(ndf_detail::scalar_value(m_hscale)));
-    if (m_ct) m_ct->set_hscale(hs);
   }
   double saved_tq5() const { return m_saved_tq5; }
   const state_type& zn(int j) const { return m_zn[j].m_v; }
@@ -1826,11 +1429,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   template<class TimeArg> void set_tn_current(TimeArg tn) {
     m_tn_current = static_cast<time_type>(ndf_detail::scalar_value(tn));
-    if (m_ct) m_ct->set_tn_current(tn);
   }
   void set_tolerances(double atol, double rtol) {
     m_atol = atol; m_rtol = rtol;
-    if (m_ct) m_ct->set_tolerances(atol, rtol);
   }
 
   // How many corrector iterations a step may spend. The default is the solver's
@@ -1838,11 +1439,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // iteration stopped, such as a reverse-mode reference, raises it.
   void set_max_corrector_iters(int n) {
     m_max_newton_iter = n;
-    if (m_ct) m_ct->set_max_corrector_iters(n);
   }
   void set_qwait(int qw) {
     m_qwait = qw;
-    if (m_ct) m_ct->set_qwait(qw);
   }
 
   int n_fevals() const { return m_n_fevals; }
@@ -1885,7 +1484,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   //  dsm is the post-step error norm the controller will test, stored before
   //  the test, so a row with dsm > 1 is a step the controller then rejects.
   // ====================================================================
-  void trace_step(bool is_adams_step, double t_end) const {
+  void trace_step(double t_end) const {
 #ifdef CPPDE_STEP_TRACE
     using ndf_detail::scalar_value;
     const double h_d      = static_cast<double>(scalar_value(m_h));
@@ -1918,15 +1517,13 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       mode_label = m_use_ndf_kappa ? "NDF" : "BDF";
     }
 
-    const char* setup_reason =
-      (!is_adams_step && m_trace_setup_fired) ? m_trace_setup_reason : "";
+    const char* setup_reason = m_trace_setup_fired ? m_trace_setup_reason : "";
 
     // m_gamrat is reset to 1.0 by the setup block before trace_step runs.
     // Report the pre-setup value stashed in m_trace_gamrat_pre so the trace
     // reflects the value that actually triggered (or did not trigger) the
     // DGMAX setup path.
-    const double gamrat_out =
-      (!is_adams_step && m_trace_setup_fired) ? m_trace_gamrat_pre : m_gamrat;
+    const double gamrat_out = m_trace_setup_fired ? m_trace_gamrat_pre : m_gamrat;
 
     ndf_detail::TraceBuffer* _tbp = ndf_detail::trace_sink();
     if (_tbp) {
@@ -1947,12 +1544,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     tb.njev.push_back(m_n_jevals);
     tb.nsetups.push_back(m_n_setup_total);
     tb.setup_reason.emplace_back(setup_reason);
-    tb.pece_iters.push_back(is_adams_step ? m_trace_pece_iters : 0);
-    tb.pece_diverged.push_back(
-      is_adams_step ? static_cast<int>(m_trace_pece_diverged) : 0);
     }
 #else
-    (void)is_adams_step; (void)t_end;
+    (void)t_end;
 #endif
   }
 
@@ -1966,7 +1560,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // LU access (for controller invalidation)
   void invalidate_lu() {
     m_lu.invalidate();
-    if (m_ct) m_ct->invalidate_lu();
   }
   bool has_valid_jacobian() const { return m_lu.has_valid_jacobian(); }
   bool has_valid_lu() const { return m_lu.has_valid_lu(); }
@@ -1981,7 +1574,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     const size_t n = m_zn[0].m_v.size();
     for (size_t i = 0; i < n; ++i)
       m_zn[max_order].m_v[i] = m_acor.m_v[i];
-    if (m_ct) m_ct->save_acor_to_zn_qmax();
   }
 
   // Reload zn[1] = h * f(tn, zn[0]) for order-1 restart
@@ -1994,8 +1586,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     ++m_n_fevals;
     for (size_t i = 0; i < n; ++i)
       m_zn[1].m_v[i] = m_h * m_ftemp.m_v[i];
-    // The tangent's slot 1 needs the Jacobian, which this call is not handed.
-    m_ct_reset = true;
   }
 
   template<class StateType>
@@ -2522,75 +2112,6 @@ public:
   }
 
   // ====================================================================
-  //  Control tangent: rebuild and step
-  // ====================================================================
-
-  using ct_lin    = tangent_detail::linearisation<value_type, is_sparse>;
-  using ct_matrix = typename ct_lin::matrix;
-
-  // A restart, an initialisation or an order-1 reload leaves the history at
-  // order one. The tangent follows it there: the carry, its current direction
-  // in slot 0 (the start direction the first time) and h J z in slot 1, with J
-  // at the state the history restarts from.
-  template<class JacFunc>
-  void ct_rebuild(JacFunc& jf)
-  {
-    const size_t n = m_zn[0].m_v.size();
-    ct_stepper& ct = *m_ct;
-    if (!m_ct_started) {
-      m_ct_z.resize(n);
-      for (size_t i = 0; i < n; ++i)
-        m_ct_z[i] = tangent_detail::start_direction(i);
-      m_ct_started = true;
-    } else {
-      m_ct_z = ct.m_zn[0].m_v;
-    }
-    m_ct_lin.at(jf, m_zn[0].m_v,
-                static_cast<double>(ndf_detail::scalar_value(m_tn_current)));
-    carry c;
-    save_carry(c);
-    ct.load_carry(c, n);
-    ct.m_saved_tq5  = m_saved_tq5;
-    ct.m_tn_current = static_cast<double>(ndf_detail::scalar_value(m_tn_current));
-    ct.m_etamax     = m_etamax;
-    ct.m_crate      = 1.0;
-    ct.m_gamrat     = 1.0;
-    ct.m_lu.invalidate();
-    ct.m_zn[0].m_v = m_ct_z;
-    tangent_detail::apply_jacobian(m_ct_lin.negJ(), m_ct_z, ct.m_zn[1].m_v);
-    const double hs = static_cast<double>(ndf_detail::scalar_value(m_hscale));
-    for (size_t i = 0; i < n; ++i) ct.m_zn[1].m_v[i] *= hs;
-    for (int j = 2; j <= max_order + 1; ++j)
-      std::fill(ct.m_zn[j].m_v.begin(), ct.m_zn[j].m_v.end(), 0.0);
-    m_ct_reset = false;
-    m_ct_live  = false;
-  }
-
-  // The tangent's step, after the state's corrector converged at m_y: the same
-  // step size, J at the solution. A tangent that fails to converge fails the
-  // step, which the caller then restores.
-  template<class JacFunc>
-  void ct_step(JacFunc& jf, time_type t, time_type dt, time_type t_new)
-  {
-    m_ct_lin.at(jf, m_y.m_v, static_cast<double>(ndf_detail::scalar_value(t_new)));
-    const ct_matrix* J = &m_ct_lin.negJ();
-    auto sys = std::make_pair(tangent_detail::linear_rhs<ct_matrix>{J},
-                              tangent_detail::linear_jac<ct_matrix>{J});
-    m_ct_z = m_ct->m_zn[0].m_v;
-    m_ct_out.resize(m_ct_z.size());
-    m_ct_err.resize(m_ct_z.size());
-    m_ct->do_step(sys, m_ct_z, static_cast<double>(ndf_detail::scalar_value(t)),
-                  m_ct_out, static_cast<double>(ndf_detail::scalar_value(dt)),
-                  m_ct_err);
-    if (m_ct->m_newton_converged) {
-      if (m_ct->m_acnrm > m_acnrm) m_acnrm = m_ct->m_acnrm;
-      m_ct_live = true;
-    } else {
-      m_newton_converged = false;
-    }
-  }
-
-  // ====================================================================
   //  Members
   // ====================================================================
 
@@ -2656,23 +2177,12 @@ public:
   bool m_use_ndf_kappa = true;   // NDF kappa coefficients (runtime, default: NDF)
   bool m_sens_err_con = true;    // tangents count in the error and corrector tests
 
-  // Control tangent, null when off. m_ct_live: it predicted in the attempt
-  // under test, so a restore has to undo that too.
-  std::unique_ptr<ct_stepper> m_ct;
-  bool m_ct_reset   = false;
-  bool m_ct_started = false;
-  bool m_ct_live    = false;
-  ct_lin m_ct_lin;
-  std::vector<double> m_ct_z, m_ct_out, m_ct_err;
-
 #ifdef CPPDE_STEP_TRACE
-  // Scratch state populated by step_bdf_family / step_adams and read by
-  // trace_step() at the end of the respective step body.
+  // Scratch state populated by step_newton and read by trace_step() at the
+  // end of the step.
   bool        m_trace_setup_fired   = false;
   const char* m_trace_setup_reason  = "";
   double      m_trace_gamrat_pre    = 1.0;
-  int         m_trace_pece_iters    = 0;
-  bool        m_trace_pece_diverged = false;
 #endif
 
 public:

@@ -146,6 +146,22 @@ public:
     }
   }
 
+  // W again for a larger inv_gamma_dt on the Jacobian factorised last: the
+  // diagonal only grows, so a sparse refactorisation keeps the tested pivots.
+  void refactorize_W_larger_diagonal(size_t n, value_type inv_gamma_dt)
+  {
+    if constexpr (is_sparse && std::is_same<value_type, double>::value) {
+      m_dfdt.m_v = m_dfdt_cache.m_v;
+      const value_type delta = inv_gamma_dt - m_last_inv_gamma_dt;
+      for (size_t i = 0; i < n; ++i)
+        m_W_work.Ax[m_diag_offsets[i]] += delta;
+      m_last_inv_gamma_dt = inv_gamma_dt;
+      m_sparse_lu.factorize(m_W_work, false);
+    } else {
+      refactorize_W_from_cache(n, inv_gamma_dt);
+    }
+  }
+
   void refactorize_W_from_cache(size_t n, value_type inv_gamma_dt)
   {
     if constexpr (is_sparse) {
@@ -231,6 +247,42 @@ public:
   // ====================================================================
   //  Lagged Jacobian / LU state tracking
   // ====================================================================
+
+  // Work of one factorisation over that of one pair of triangular solves.
+  double refactor_solve_ratio()
+  {
+    static_assert(std::is_same<value_type, double>::value,
+                  "refactor_solve_ratio reads a double factorisation");
+    if constexpr (is_sparse) return m_sparse_lu.refactor_solve_ratio();
+    else return static_cast<double>(m_W_temp.rows()) / 3.0;
+  }
+
+  // y = (-J)^T x from the Jacobian call_jacobian wrote last, before build_W.
+  void negJ_transposed_apply(const std::vector<double>& x,
+                             std::vector<double>& y) const
+  {
+    static_assert(std::is_same<value_type, double>::value,
+                  "negJ_transposed_apply reads a double Jacobian");
+    const std::size_t n = x.size();
+    y.assign(n, 0.0);
+    if constexpr (is_sparse) {
+      const auto& A = m_W_sparse;
+      for (int j = 0; j < A.n; ++j) {
+        double s = 0.0;
+        for (int k = A.Ap[j]; k < A.Ap[j + 1]; ++k)
+          s += A.Ax[static_cast<std::size_t>(k)] * x[static_cast<std::size_t>(A.Ai[k])];
+        y[static_cast<std::size_t>(j)] = s;
+      }
+    } else {
+      const double* d = m_W_temp.data.data();
+      for (std::size_t j = 0; j < n; ++j) {
+        const double* col = d + j * n;
+        double s = 0.0;
+        for (std::size_t i = 0; i < n; ++i) s += col[i] * x[i];
+        y[j] = s;
+      }
+    }
+  }
 
   void invalidate()
   {

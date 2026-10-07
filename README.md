@@ -25,10 +25,10 @@ first and second order.
   [Boost.Odeint](https://www.boost.org/doc/libs/release/libs/numeric/odeint/);
   the Tsitouras 5(4) pair, an explicit Runge-Kutta method with dense
   output
-- **Sensitivities in both directions**: forward mode carries one tangent
-  per parameter through the solve; reverse mode returns the gradient of
-  a functional in one backward sweep, at a cost independent of the
-  parameter count
+- **Sensitivities in both directions**: forward mode integrates one
+  tangent per parameter through the solve; reverse mode returns the
+  gradient of a functional in one backward sweep, at a cost independent
+  of the parameter count
 - **Second order**: exact Hessians, forward over forward or forward over
   reverse
 - **Events**: time-based and root-triggered, with the saltation

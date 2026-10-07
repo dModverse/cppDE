@@ -19,7 +19,11 @@
 #ifndef CPPDE_REVERSE_STEP_HPP
 #define CPPDE_REVERSE_STEP_HPP
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
+#include <cstdio>
+#include <limits>
 #include <type_traits>
 #include <vector>
 
@@ -77,7 +81,7 @@ struct has_error_constant<S, std::void_t<decltype(std::declval<const S&>().error
 : std::true_type {};
 
 // ----------------------------------------------------------------------------
-//  tsit5: an explicit one-step method carries nothing across a step boundary.
+//  tsit5: an explicit one-step method keeps nothing across a step boundary.
 //
 //  FSAL is an optimisation, not a dependence: the recycled k1 is f(x, t) at the
 //  checkpointed x, so the replay recomputes it bit for bit and k7 is not stored.
@@ -238,7 +242,7 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern, Resiz
 //
 //  The matrix an implicit method's equations are linearised against, factorised
 //  once per reverse step and used in both directions: forward to recover a value
-//  a stage solved for, transposed to carry a cotangent back through it.
+//  a stage solved for, transposed to pass a cotangent back through it.
 //
 //  Fresh rather than the forward run's own, which belongs to its iteration and is
 //  stale by design; MSBP and MSBJ are exactly that staleness. res_scale is what
@@ -248,28 +252,41 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern, Resiz
 
 template<class JacFunc, class T = double, bool Sparse = false>
 class equation_solver {
+  // A transposed solve in double may go through the factorisation of a step
+  // the sweep has already passed and be refined against this step's matrix;
+  // any other use factorises this step's matrix.
+  static constexpr bool refinable = std::is_same<T, double>::value;
+
 public:
   explicit equation_solver(JacFunc& jac) : m_jac(&jac) {}
 
   void prepare(const std::vector<T>& x, T t, T inv_gamma_dt, T res_scale = T(1)) {
     m_lu.resize(x);
+    m_n = x.size();
     { auto _tp = m_prof.timer(cppde::prof_cat::jac_eval);
       m_lu.call_jacobian(*m_jac, const_cast<std::vector<T>&>(x), t); }
-    { auto _tp = m_prof.timer(cppde::prof_cat::w_build);
-      m_lu.build_W(x.size(), inv_gamma_dt); }
-    { auto _tp = m_prof.timer(cppde::prof_cat::lu_factor);
-      m_lu.factorize_built_W(); }
+    m_c = inv_gamma_dt;
     m_scale = res_scale;
+    m_pending = true;
+    if constexpr (!refinable) factorise();
   }
 
   void forward(std::vector<T>& b) {
+    if (m_pending) factorise();
     auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
     m_lu.solve(b);
   }
 
   void transposed(std::vector<T>& b) {
-    auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
-    m_lu.solve_transposed(b);
+    bool done = false;
+    if constexpr (refinable) {
+      if (m_pending && m_held) done = refine(b);
+    }
+    if (!done) {
+      if (m_pending) factorise();
+      auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
+      m_lu.solve_transposed(b);
+    }
     if (m_scale != T(1)) for (T& v : b) v /= m_scale;
   }
 
@@ -278,12 +295,99 @@ public:
   // Compiled away without CPPDE_PROFILE.
   void report_profile() const {
     m_prof.report("cppDE reverse linear algebra");
+#ifdef CPPDE_PROFILE
+    std::fprintf(stderr, "  refinement: ratio %.2f, budget %d, %d tried, %d accepted, %d passes\n",
+                 m_ratio_seen, m_budget, m_n_try, m_n_ok, m_n_pass);
+#endif
   }
 
 private:
+  void factorise() {
+    { auto _tp = m_prof.timer(cppde::prof_cat::w_build);
+      m_lu.build_W(m_n, m_c); }
+    { auto _tp = m_prof.timer(cppde::prof_cat::lu_factor);
+      m_lu.factorize_built_W(); }
+    m_pending = false;
+    m_held = true;
+  }
+
+  // W_k^T x = b by refinement on the held factorisation of a swept step's W_h,
+  // x <- x + W_h^{-T} (b - W_k^T x), until the correction is at rounding level.
+  // False, b untouched, when it contracts too slowly to beat a factorisation.
+  bool refine(std::vector<T>& b) {
+    const int budget = iteration_budget();
+    m_budget = budget;
+    if (budget < min_budget) return false;
+    // After a refinement that did not pay, the next few steps factorise
+    // directly, twice as many after each further miss.
+    if (m_skip > 0) { --m_skip; return false; }
+    ++m_n_try;
+    auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
+    const std::size_t n = b.size();
+    m_b = b;
+    m_x = b;
+    m_lu.solve_transposed(m_x);
+    double prev = 0.0;
+    for (int it = 0; it < budget; ++it) {
+      m_lu.negJ_transposed_apply(m_x, m_r);
+      double xmax = 0.0;
+      for (std::size_t i = 0; i < n; ++i) {
+        m_r[i] = m_b[i] - (m_c * m_x[i] + m_r[i]);
+        xmax = std::max(xmax, std::abs(m_x[i]));
+      }
+      m_lu.solve_transposed(m_r);
+      ++m_n_pass;
+      double dmax = 0.0;
+      for (std::size_t i = 0; i < n; ++i) {
+        m_x[i] += m_r[i];
+        dmax = std::max(dmax, std::abs(m_r[i]));
+      }
+      if (dmax <= 4.0 * eps * xmax ||
+          (it > 0 && dmax <= stall_tol * xmax && dmax > stall_rate * prev)) {
+        b.swap(m_x);
+        ++m_n_ok;
+        m_backoff = 0;
+        return true;
+      }
+      if (it > 0 && dmax > rate_max * prev) break;
+      prev = dmax;
+    }
+    m_backoff = std::min(2 * m_backoff + 1, max_backoff);
+    m_skip = m_backoff;
+    return false;
+  }
+
+  // As many passes as one factorisation costs in flops, a pass being a pair of
+  // triangular solves and a product with J. Fixed by the factors, so a sweep
+  // is reproducible.
+  int iteration_budget() {
+    m_ratio_seen = m_lu.refactor_solve_ratio();
+    const double k = m_ratio_seen / pass_cost - 1.0;
+    return static_cast<int>(std::min(static_cast<double>(max_iter), std::floor(k)));
+  }
+
+  static constexpr double eps = std::numeric_limits<double>::epsilon();
+  static constexpr double rate_max = 0.5;
+  // A correction this small that no longer halves has reached its floor.
+  static constexpr double stall_tol = 1e-12;
+  static constexpr double stall_rate = 0.5;
+  // One pass, the solve plus the product with J, in units of one solve.
+  static constexpr double pass_cost = 1.5;
+  static constexpr int max_iter = 12;
+  static constexpr int max_backoff = 31;
+  static constexpr int min_budget = 3;
+
   JacFunc*             m_jac;
   cppde::lu_W<T, Sparse> m_lu;
   T                    m_scale = T(1);
+  T                    m_c = T(0);
+  bool                 m_pending = false;
+  bool                 m_held = false;
+  std::size_t          m_n = 0;
+  std::vector<double>  m_b, m_x, m_r;
+  int                  m_budget = 0, m_n_try = 0, m_n_ok = 0, m_n_pass = 0;
+  int                  m_skip = 0, m_backoff = 0;
+  double               m_ratio_seen = 0.0;
   cppde::profiler      m_prof;
 };
 

@@ -44,12 +44,12 @@ models <- list(
   ctl  = per_method("ewin_ctl_", "rb4", events = ev_fixed, deriv = TRUE,
                     useDenseOutput = FALSE, includeTimeZero = FALSE))
 do.call(compile, c(unname(unlist(models, recursive = FALSE)),
-                   list(output = "test_event_window", cores = 1)))
+                   list(output = "test_event_window", cores = test_cores())))
 
 if (isTRUE(cvodeConfig$available)) {
   cv_par <- cvode(fhn, events = ev_param, modelname = "ewin_cv_par",
                   deriv = TRUE, includeTimeZero = FALSE, compile = FALSE)
-  compile(cv_par, output = "test_event_window_cvode", cores = 1)
+  compile(cv_par, output = "test_event_window_cvode", cores = test_cores())
 }
 
 solve <- function(model, times, parms, ...)
@@ -129,7 +129,7 @@ test_that("an event at the first time is applied before the solve starts", {
     r   <- solve(models$ev[[m]], 5:8, pars)
     ref <- solve(models$none[[m]], 5:8, shifted)
     expect_identical(r$time, as.numeric(5:8), info = m)
-    # The first row carries the state after the event, as every row at an
+    # The first row holds the state after the event, as every row at an
     # event time does.
     expect_identical(r$variable[1, ], shifted[c("V", "R")], info = m)
     expect_equal(r$variable, ref$variable, tolerance = 1e-8, info = m)
@@ -294,7 +294,7 @@ test_that("the CVODE backend applies the same window", {
     expect_equal(rc$tangent[, , colnames(si)], rn$tangent[, , colnames(si)],
                  tolerance = 1e-5, info = g)
   }
-  # An event at the first time: the first row carries the state after it.
+  # An event at the first time: the first row holds the state after it.
   r <- solve(cv_par, 5:8, ppar, tangent = si)
   expect_identical(unname(r$variable[1, ]), c(0, 1))
 

@@ -13,7 +13,7 @@ library(ggplot2)
 
 ## Categorical palette: slots 1-4 of the validated default order, verified for
 ## all-pairs colour-vision separation, so the same colours work in scatter and
-## bar alike. Shape is carried alongside colour as a secondary encoding.
+## bar alike. Shape is mapped alongside colour as a secondary encoding.
 BENCH_COLS <- c(
   cppDE_ndf = "#2a78d6",
   CVODE_bdf  = "#eb6834",
@@ -229,7 +229,7 @@ plot_sens_overhead <- function(df) {
 ## ---------------------------------------------------------------------
 
 ## cppDE-only: CVODES has no second-order sensitivities, so this is a cost
-## curve, not a comparison. Forward-over-forward AD carries M(M+1)/2 directions,
+## curve, not a comparison. Forward-over-forward AD uses M(M+1)/2 directions,
 ## so the price of a full Hessian is expected to grow quadratically.
 plot_sens2_cost <- function(df) {
   d <- df[df$ok & is.finite(df$time_ms) & df$mode == "sens2", ]
@@ -259,7 +259,7 @@ plot_sens2_cost <- function(df) {
          subtitle = "cppDE only, CVODES has no second-order sensitivities",
          x = "number of sensitivity parameters M",
          y = "cost relative to a plain solve", colour = NULL,
-         caption = paste("Forward-forward carries M(M+1)/2 second-order directions,",
+         caption = paste("Forward-forward adds M(M+1)/2 second-order directions,",
                          "forward-reverse M tangents through one backward sweep.")) +
     theme_bench()
 }

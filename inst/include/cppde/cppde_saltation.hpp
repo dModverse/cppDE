@@ -27,7 +27,7 @@ namespace detail {
 // Analytical saltation correction for root events (AD path)
 //
 // dt* comes from the implicit function theorem as a dual quotient, the state
-// is carried across the surface on Heun shifts so that the second-order
+// is transported across the surface on Heun shifts so that the second-order
 // components survive, and events triggered together share one roundtrip.
 // See vignette("Methods"), section "Root-triggered events".
 // ============================================================================
@@ -159,7 +159,7 @@ inline void saltation_root_analytical_batch(
   // --- 3. Forward Heun shift to event surface ---
   //     f2 is evaluated at t_event + dt_star, not at t_event. The scalar time
   //     is the same either way, but the AD components of the shift are what
-  //     carry the curvature term when the right-hand side depends on time.
+  //     contain the curvature term when the right-hand side depends on time.
   state_type x_euler(n);
   for (size_t i = 0; i < n; ++i)
     x_euler[i] = x_before[i] + f_before[i] * dt_star;
@@ -214,7 +214,7 @@ inline void saltation_root_analytical_batch(
 // Analytical saltation correction for fixed-time events (AD path)
 //
 // The residual dt_corr = t_event - scalar(t_event) has scalar part zero and
-// carries dt_event/dp in its AD components. The sandwich around it is the one
+// holds dt_event/dp in its AD components. The sandwich around it is the one
 // the root path uses.
 // ============================================================================
 
@@ -273,7 +273,7 @@ inline void saltation_fixed_to_surface(
     }
   }
   // Resets that the jump switches on belong on the same surface, so the whole
-  // discontinuity is carried across by one forward and one backward shift.
+  // discontinuity is crossed by one forward and one backward shift.
   at_surface(x_after, evt.time);
   for (size_t i = 0; i < n; ++i) x_surf[i] = x_after[i];
 }

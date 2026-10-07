@@ -50,7 +50,7 @@ struct blas_vendor {
 inline void* find_symbol(const char* symbol) {
 #ifdef _WIN32
   // The BLAS lives in a DLL, so the process image's own export table never
-  // carries these.  Ask the modules that can, then the image as a fallback.
+  // lists these.  Ask the modules that can, then the image as a fallback.
   static const char* modules[] = {"mkl_rt.dll", "mkl_rt.2.dll", "flexiblas.dll",
                                   "libopenblas.dll", "Rblas.dll", "libblas.dll",
                                   nullptr};

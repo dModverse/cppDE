@@ -118,7 +118,7 @@ cppDE benchmark suite, cppDE vs SUNDIALS CVODE(S)
   --modes <nosens,sens1,sens2>  integration modes                [nosens,sens1]
         sens2 measures second-order (Hessian) runtimes.  CVODES has no
         second-order sensitivities, so those rows are cppDE-only and
-        carry timings without a cross-implementation comparison.
+        report timings without a cross-implementation comparison.
   --max-sens2 <n>               directions for forward-forward sens2,
                                 whose cost grows with M^2            [10]
   --max-sens2-fr <n>            directions for forward-reverse sens2 [32]
@@ -269,7 +269,7 @@ if (max_worker_gb > 0 && !isTRUE(bench_limit_process(max_worker_gb)))
   warning("no per-worker memory limit set: install the `unix` package",
           call. = FALSE, immediate. = TRUE)
 
-## The directory name carries what the run was, not only when: a results tree is
+## The directory name says what the run was, not only when: a results tree is
 ## browsed far more often than opened, and "tiny_c8_nosens-sens1" answers at a
 ## glance. The timestamp stays first so the tree still sorts by time.
 stamp <- format(Sys.time(), "%Y%m%d-%H%M%S")

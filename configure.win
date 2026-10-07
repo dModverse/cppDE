@@ -362,7 +362,7 @@ fi
 # `[ -n "$runtime_dll_path" ] && log ...` returned 1 when the var
 # was empty, and that became the script's exit code.)
 # ---------------------------------------------------------------------------
-# Vignette: carry it into an install that did not go through a full build.
+# Vignette: copy it into an install that did not go through a full build.
 #
 # Only R CMD build moves the PDF into inst/doc, so a source tree and the
 # tarball install_github makes would both install without the vignette. The

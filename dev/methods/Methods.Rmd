@@ -165,7 +165,7 @@ products; the derivatives the Rosenbrock stages and the event
 localisation require are Jacobian-vector products along $\dot x = f$.
 
 The Jacobian $J = \partial f/\partial x$ is assembled by entries or by
-colouring. By entries, each state-dependent node carries the
+colouring. By entries, each state-dependent node holds the
 sparse gradient of its value with respect to the states, and the
 gradients of the graph roots are the nonzero entries of $J$. The cost
 of this accumulation,
@@ -328,7 +328,7 @@ a failed corrector; $J$ is re-evaluated after $51$ steps or when a
 failure is attributed to it. Without a new Jacobian, a sparse $W$
 changes only on its diagonal.
 
-### Adams-Moulton in PECE form ($\mathtt{adams}$)
+### Adams-Moulton ($\mathtt{adams}$)
 
 The Adams-Moulton family integrates the interpolant of $f$ through
 the $q+1$ samples $\{(t_{n-j}, f_{n-j})\}_{j=0}^{q}$ over $[t_{n-1}, t_n]$,
@@ -337,25 +337,23 @@ the $q+1$ samples $\{(t_{n-j}, f_{n-j})\}_{j=0}^{q}$ over $[t_{n-1}, t_n]$,
             f(x_{n-j}, t_{n-j}),
   \label{eq:adams}
 \end{equation}
-implicit in $x_n$ through the $j=0$ term. cppDE solves it by
-fixed-point iteration in predict-evaluate-correct-evaluate (PECE)
-form, without Jacobian or linear solve: the Nordsieck predictor
-supplies $x_n^{P}$, $f$ is evaluated there, and \eqref{eq:adams} is
-applied with $f(x_n^{P}, t_n)$ in place of $f(x_n, t_n)$. Evaluation
-and correction are repeated until convergence, at most three times in
-all, as in CVODE. A step that converges on the first correction costs
-two right-hand-side evaluations.
+implicit in $x_n$ through the $j=0$ term. cppDE solves it by the Newton
+iteration of the BDF corrector, on $W = I - \gamma J$ with
+$\gamma = h/\ell_1$ from the Adams coefficients, as CVODES does with a
+linear solver attached: the same setup triggers, Jacobian reuse and
+convergence test, the same controller. Only the coefficients and the
+maximum order $q_{\max} = 12$ differ.
 
 Its stability domain on the negative real axis shrinks rapidly with
 order; for $q \ge 3$ it contains no wedge of $\mathbb{C}^-$, so the
-method is unsuitable for stiff problems. For non-stiff problems with
-smooth solutions and a long horizon, its maximum order
-$q_{\max} = 12$ and two right-hand-side evaluations per step make it
-competitive with fixed-order explicit Runge-Kutta methods.
+method suits non-stiff problems with smooth solutions and a long
+horizon. The Newton corrector keeps a mildly stiff component from
+stalling the iteration, but the step size stays bounded by the
+stability domain.
 
 ## Single-step methods
 
-Single-step methods carry no information beyond the current state and
+Single-step methods keep no information beyond the current state and
 reach order $p > 1$ through internal stages. They therefore restart
 after an event at full order, whereas the multistep methods rebuild
 the Nordsieck history from order $1$.
@@ -553,7 +551,7 @@ the post-event state.
 ## Dense output
 
 Requested output times in general do not coincide with the adaptive step grid.
-Each accepted step therefore carries a local interpolant that yields
+Each accepted step therefore provides a local interpolant that yields
 $x(t)$ anywhere inside the step by polynomial arithmetic alone,
 without right-hand-side evaluations. With
 $s = (t - t_n)/h_n \in [0, 1]$ the three families use:
@@ -588,7 +586,7 @@ Parameter sensitivities of the trajectory are computed by forward-mode
 automatic differentiation [@griewank2008evaluating], not by finite
 differences, whose truncation and round-off errors take several
 integrations to control. Every floating-point scalar is augmented by a
-component carrying its directional derivative. Arithmetic and
+component holding its directional derivative. Arithmetic and
 elementary functions are overloaded for the augmented type, so the C++
 source that evaluates $f$ is compiled unchanged for the primal and the
 sensitivity computation.
@@ -611,7 +609,7 @@ and for any smooth scalar function $g$,
 \[
   g(\tilde x) = g(x) + g'(x)\,x'\,\varepsilon.
 \]
-Compositions carry the derivative of the composed function, so the
+Compositions propagate the derivative of the composed function, so the
 source that evaluates $f$ over $\mathbb{R}$ returns $f$ and its
 directional derivative when called with dual inputs.
 
@@ -624,7 +622,7 @@ arena, and everything a generated model body allocates there is
 released in one operation when the body returns. State vectors the
 stepper keeps across steps point into one contiguous $n_x \times m$
 block per vector, the tangent slab, sized once per solve. A tangent
-wider than one call should carry is split into blocks of directions;
+wider than one call should handle is split into blocks of directions;
 since the step sequence of a tangent-blind solve does not depend on
 $m$, the blocks share one grid and the assembled Hessian equals that of
 a single pass exactly.
@@ -704,7 +702,7 @@ the $M$ directions of $\theta$-space costs one additional state vector.
 
 ### Error norm with sensitivities
 
-With forward sensitivities the integrator carries
+With forward sensitivities the integrator integrates
 $S_\theta \in \mathbb{R}^{n_x \times M}$ beside the state, and every
 step produces $1+M$ error vectors of length $n_x$: $e_n^{(x)}$ for the
 state and $e_S^{(k)}$ for each column $\partial x/\partial \theta_k$.
@@ -896,7 +894,7 @@ stagnation of the classical rule and keeps its speed on a nearly linear
 $g_e$. The iteration stops when the bracket is narrower than the root
 tolerance, after at most fifty iterations, or when an iterate gives
 $g_e = 0$ exactly. It returns as $t_*^{(0)} := \mathrm{scalar}(t^{*})$
-the end of the final bracket that still carries the pre-crossing sign
+the end of the final bracket that still has the pre-crossing sign
 of $g_e$. Localisation yields no $\theta$-dependence of $t^{*}$, so the
 dual residual $\delta t^{*} = t^{*} - t_*^{(0)}$ is reconstructed from
 \eqref{eq:root-condition}.
@@ -931,7 +929,7 @@ $\partial g_e/\partial t$ are needed only for $\dot g_e$; the dual
 arithmetic forms $\nabla_x g_e \cdot S_\theta$ in the numerator. The
 scalar value of the numerator, of the order of the root tolerance, is
 set to zero before the division, so $\delta t^{*}$ is zero in value and
-carries only derivatives.
+has only derivatives.
 
 The first-order part of \eqref{eq:dt-star-quotient} equals
 \eqref{eq:dt-star-first}. At second order the quotient lacks the
@@ -964,7 +962,7 @@ forward finite difference of $\dot g_e$. The correction
 \eqref{eq:dt-star-second} changes only the second-order components of
 $\delta t^{*}$.
 
-The Heun transport \eqref{eq:fixed-heun} then carries $x^{-}$ across
+The Heun transport \eqref{eq:fixed-heun} then moves $x^{-}$ across
 the event to the grid time $t_*^{(0)}$, with $\delta t^{*}$ in place of
 $\delta t$ and $t_*^{(0)} + \delta t^{*}$ in place of $t_e$.
 
@@ -1000,7 +998,7 @@ already held before the jump does not fire again.
 The switched resets are applied at the jump, between the forward and
 the backward shift of the event that caused it, not after the
 transport has returned to the grid time. One Heun transport then
-carries the composition of both resets, and its first- and
+applies the composition of both resets, and its first- and
 second-order sensitivities equal those of the same reset written as a
 time-triggered event at that time.
 
@@ -1152,7 +1150,7 @@ with its own step-size control and step count.
 ### The step map and its adjoint
 
 Reverse accumulation has no counterpart in an augmented arithmetic: a
-dual number carries its derivative with its value, available as soon
+dual number holds its derivative with its value, available as soon
 as an operation has executed, whereas an adjoint sums over all later
 uses of a quantity. A step's adjoint is obtained either by recording
 its operations on a tape and traversing it backwards, or in closed
@@ -1172,7 +1170,7 @@ The operators $A$, $B$ and $c$ act on the slot index only; their
 coefficients follow from the carry and are the same for every state
 component. They are read off the stepper, not transposed by hand: a
 probe whose states are the Nordsieck slots is driven through the
-routines of the forward step, carrying the identity in the
+routines of the forward step, seeded with the identity in the
 $[\text{slot} \times \text{component}]$ array, and one pass returns
 every column. The adjoint therefore uses exactly the coefficients of
 the forward step.
@@ -1188,7 +1186,7 @@ tableau.
 The code generator emits the contractions the adjoint requires beside
 the right-hand side: $J^{\mathsf T}\lambda$,
 $(\partial f/\partial p)^{\mathsf T}\lambda$ and, for a Rosenbrock
-method, the same two applied to $J v$, which carry a second derivative
+method, the same two applied to $J v$, which contain a second derivative
 because the stages solve against a matrix built from the Jacobian.
 
 ### Checkpoint per step
@@ -1198,9 +1196,26 @@ step-start state, the carry, the time, the step size, and a record of
 the operations the controller applied to the carry afterwards. Memory
 is linear in the number of steps and holds no derivatives. The
 factorisations of the forward run are not kept, so the sweep re-forms
-and refactorises the iteration matrix at each checkpoint. The slot
-operators are cached, keyed on the carry and the step size, so the
-probe runs only where the controller changed the control state.
+the iteration matrix $W_k$ at each checkpoint. The slot operators are
+cached, keyed on the carry and the step size, so the probe runs only
+where the controller changed the control state.
+
+The transposed solve $W_k^{\mathsf T} \mu = b$ goes through the
+factorisation of a later step's matrix $W_h$, which the sweep holds, by
+iterative refinement,
+\[
+  \mu \leftarrow \mu + W_h^{-\mathsf T}\bigl(b - W_k^{\mathsf T}\mu\bigr),
+  \qquad
+  W_k^{\mathsf T}\mu = \tfrac{1}{\gamma}\,\mu - J_k^{\mathsf T}\mu ,
+\]
+until the correction is at rounding level, so the answer is that of a
+direct solve. Each pass costs a pair of triangular solves and a product
+with $J_k^{\mathsf T}$. A pass is cheaper than a factorisation by the
+ratio of their floating-point work, which KLU reports, and the sweep
+refines only while that ratio allows at least three passes; where the
+iteration converges too slowly or exhausts that budget, $W_k$ is
+factorised and becomes the held matrix. The budget depends on the
+factors alone, so a sweep is reproducible.
 
 Observations lie at interpolated times and are evaluated through the
 continuous extension of the step containing them. The adjoint of that
@@ -1228,17 +1243,17 @@ $n_{\text{seed}}$ cotangents cost $n_{\text{seed}}$ sweeps and a single
 integration.
 
 Under \verb|derivMode = "forward-reverse"| both arguments are refused:
-a checkpoint of that mode carries tangents, which live in the arena of
+a checkpoint of that mode holds tangents, which live in the arena of
 the recording solve and do not outlive it, so every second-order sweep
 is preceded by its own integration.
 
-### The adjoint of an event
+### The adjoint of an event \label{sec:event-adjoint}
 
 An event is a map of its own between two steps. The forward run
 transports the discontinuity with the Heun sandwich of Section
 \ref{sec:saltation}: a shift to the event surface, the resets, and a
 shift back to the grid time. Each shift is taken over the residual of
-the event time, which is zero in value and carries only derivatives.
+the event time, which is zero in value and has only derivatives.
 In value the jump is therefore a plain jump, and the sandwich reduces
 to the classical saltation relation
 \begin{equation}
@@ -1268,7 +1283,7 @@ multiply $s$ leaves one scalar $\kappa$,
 \end{equation}
 and the parameter cotangent additionally receives
 $\kappa\,(\partial s/\partial p)^{\mathsf T}$. For a root event both
-derivatives of $s$ carry the factor $-\kappa/\dot g$: the state picks up
+derivatives of $s$ contain the factor $-\kappa/\dot g$: the state picks up
 $-(\kappa/\dot g)\nabla g$ and the parameters
 $-(\kappa/\dot g)\,\partial g/\partial p$. For a fixed event
 $\partial s/\partial x = 0$ and the parameters pick up
@@ -1282,7 +1297,7 @@ the state or the parameters, its derivatives enter the same transpose.
 The adjoint of a jump therefore requires the right-hand side at both
 ends, $\nabla g$ and $\dot g$, and the model's derivatives of the reset
 and event-time expressions, but no Jacobian of $f$: every term the two
-shifts would contribute carries the residual as a factor, and that
+shifts would contribute has the residual as a factor, and that
 factor is zero.
 
 After a jump the multistepper restarts: \verb|initialize| builds the
@@ -1365,7 +1380,7 @@ Only parameters whose $\partial f / \partial p_{k}$ depends on a state
 the reset changed contribute.
 
 Implemented as accumulations scaled by the residual, all three are
-zero in value and carry $\partial t^{*} / \partial v$ in their tangent,
+zero in value and hold $\partial t^{*} / \partial v$ in their tangent,
 so the gradient is unchanged. For a fixed event at $t = \tau(p)$ the
 residual is $\tau - \lfloor \tau \rceil$; for a root event it is
 \begin{equation}
@@ -1375,7 +1390,7 @@ residual is $\tau - \lfloor \tau \rceil$; for a root event it is
   \label{eq:root-residual}
 \end{equation}
 read at the stored state. Localisation ignores the tangents, so that
-state carries $\partial x / \partial \theta$ at a fixed time and
+state holds $\partial x / \partial \theta$ at a fixed time and
 $\nabla g$ contracts it to the event time's.
 
 ### Transposing the root sandwich
@@ -1405,7 +1420,7 @@ and $f_{a}$ at $t^{*}$, which depends on $\theta$:
     + \left(\frac{\partial f}{\partial t}\right)_{\!(x_{e}, t^{*})}\!\!\cdot \bar f_{e} .
   \label{eq:shift-clock}
 \end{equation}
-Both cotangents carry a factor $s$, so \eqref{eq:shift-clock} is absent
+Both cotangents contain a factor $s$, so \eqref{eq:shift-clock} is absent
 from the gradient and enters the Hessian at full strength. It vanishes
 identically for an autonomous right-hand side; a pruned form omits it
 whenever $\partial f/\partial t \neq 0$.
@@ -1413,7 +1428,7 @@ whenever $\partial f/\partial t \neq 0$.
 The forward path corrects the shift by
 $-\tfrac{1}{2}(\ddot g / \dot g)\,s^{2}$, whose chain factor
 $1 + 2 c_{2} s$, $c_{2} = -\ddot g / (2\dot g)$, is one in value and a
-second-order tangent; the transpose carries it on
+second-order tangent; the transpose applies it to
 $\partial s / \partial x$.
 
 The sweep binds the tangent storage of every buffer it hands to a
@@ -1431,7 +1446,7 @@ rank-one term.
                 + \left(\nabla^{2} g\right) f + J^{\mathsf T}\nabla g ,
   \label{eq:root-quotient}
 \end{equation}
-and the second term carries $g$, which is zero in value: absent from
+and the second term contains $g$, which is zero in value: absent from
 the gradient, full strength in the Hessian. A $g$ linear in the state
 and independent of time reduces $\nabla \dot g$ to
 $J^{\mathsf T}\nabla g$ and leaves the other two terms untested, so the
@@ -1459,7 +1474,7 @@ which contributes to $\kappa$ of \eqref{eq:saltation-adjoint}. This
 term is first order: omitting it makes the gradient wrong, not only the
 Hessian. For the same reason the transposed reset receives the event
 time as a dual rather than a plain number, so that
-$\partial h/\partial\theta$ carries the dependence of $t^{*}$ on
+$\partial h/\partial\theta$ includes the dependence of $t^{*}$ on
 $\theta$. Such a value evaluates $t^{*}$ directly and inherits the root
 tolerance rather than the integration tolerance; in a value that
 depends only on the state at $t^{*}$ the localisation error is damped
@@ -1478,7 +1493,7 @@ sides cancels.
 
 ### Verifying a derivative across a moving event
 
-When $t^{*}$ depends on a parameter, the reported trajectory carries a
+When $t^{*}$ depends on a parameter, the reported trajectory contains a
 row whose time moves with it. A functional $w^{\mathsf T} x$ seeded on
 that row differs between parameter values and has no derivative to
 compare against. Restricting the cotangent to the user's own output
@@ -1489,11 +1504,12 @@ tolerance of the solve.
 ### Internal numerical differentiation
 
 The step sizes the controller selected are constants of the
-differentiated map. This is Bock's internal numerical differentiation:
-the nominal run adapts freely, and the derivative is taken of the
+differentiated map. This is Bock's internal numerical differentiation
+[@bock1981numerical; @albersmeyer2010adjoint]: the nominal run adapts freely, and the derivative is taken of the
 scheme that run applied. Differentiating the control law instead adds
 derivatives of the step sizes to the chain rule and makes the discrete
-adjoint inconsistent with the adjoint ODE; that term, measured at
+adjoint inconsistent with the adjoint ODE
+[@eberhard1999automatic; @alexe2009discrete]; that term, measured at
 $O(\text{tol})$, is left out.
 
 The usual justification, that $h$ is piecewise constant in $\theta$
@@ -1530,122 +1546,142 @@ differentiating the existing chain provides.
 Each mode returns the state it integrated together with the derivative
 of the scheme that produced it, so both follow internal numerical
 differentiation for the solve they answer. The grids differ from that
-of a value run. With the default \texttt{sensErrCon = TRUE} the
-forward mode maximises its error norm over the sensitivity columns as
-in \eqref{eq:wrms-sens}, and the value pass of the reverse mode over
-the state and a control tangent (Section \ref{sec:control-tangent}).
-Both integrate on a grid finer than a value run takes, and their values
-differ from its value by $O(\mathrm{tol})$.
+of a value run in the forward mode: with the default
+\texttt{sensErrCon = TRUE} it maximises its error norm over the
+sensitivity columns as in \eqref{eq:wrms-sens}, integrates on a grid
+finer than a value run takes, and its values differ from a value run's by
+$O(\mathrm{tol})$. The default keeps the sensitivities in the error norm
+because they are integrated alongside the state and their errors
+accumulate; CVODES guards against this in the same way
+(\texttt{CVodeSetSensErrCon}). The value pass of the reverse mode takes the
+grid of a value run, as the forward run of CVODES' adjoint sensitivity
+analysis does, and the reverse gradient is the derivative of the trajectory
+a value run returns.
 
-The default keeps the sensitivities in the error norm because they are
-integrated alongside the state and their errors accumulate; CVODES
-guards against this in the same way (\texttt{CVodeSetSensErrCon}).
-A value run and a derivative run that differ by $O(\mathrm{tol})$ is
-the smaller cost. \texttt{solveODE(..., sensErrCon = FALSE)} selects
-the alternative: the step sizes follow from the state error alone, and
-the reverse gradient is the derivative of the trajectory a value run
-returns.
-
-### The control tangent \label{sec:control-tangent}
+### Why the state error is not enough
 
 A grid selected from the state error alone need not resolve the
 linearised flow. The derivative of the step map is accurate where the
-step resolves the flow on the modes the tangents carry, and the state
-error measures that only on the modes the state carries, weighted by
-its own magnitude. On a trajectory at rest it measures nothing: a state
-that starts at zero and is not driven, or a steady state, is a
-polynomial the corrector reproduces, its error estimate is zero, and the
-step grows by the largest admissible factor on every step. The adjoint
-on that grid is the exact derivative of a scheme far from the flow. For
-$\dot x = -k x$, $\dot y = k x - y$ from $x = y = 0$ over
+step resolves the flow on the modes present in the tangents, and the
+state error measures that only on the modes present in the state,
+weighted by its own magnitude. On a trajectory at rest it measures
+nothing: a state that starts at zero and is not driven, or a steady
+state, is a polynomial the corrector reproduces, its error estimate is
+zero, and the step grows by the largest admissible factor on every step.
+The adjoint on that grid is the exact derivative of a scheme far from
+the flow. For $\dot x = -k x$, $\dot y = k x - y$ from $x = y = 0$ over
 $0, 1, \ldots, 50$, a grid of four steps returns $+0.80$ for a
-contraction whose value is $-0.43$. Where a state is small against
+contraction whose value is $-0.43$. Internal numerical differentiation
+meets the same failure for $\dot x = p x$ from $x = 0$
+[@albersmeyer2010adjoint, Sec. 6.7.5], and forward automatic
+differentiation through an adaptive solver meets it unless the
+controller's norm includes the derivative parts
+[@sapienza2024differentiable]. Where a state is small against
 $\mathtt{abstol}/\mathtt{reltol}$ the effect is weaker but of the same
-kind.
+kind. A parameter can also reach the flow where the state does not see
+it: in $\dot x = -k x + \sin(100 t)\, q$ at $q = 0$ the state is smooth
+while $\partial x/\partial q$ follows the fast forcing, and a parameter
+that enters only through an event's value acts on the flow from that
+event on. Such a gradient is resolved by checking the sweep (Section
+\ref{sec:refine}), not the value pass.
 
-With \texttt{sensErrCon = TRUE} the value pass of the reverse mode
-therefore integrates a control tangent,
+### Checking the sweep \label{sec:refine}
+
+\texttt{adjointControl(refine = TRUE)} holds the sweep to the tolerances,
+step by step, on the trajectory the value pass stored. It applies the local
+error test of the backward problem of CVODES [@serban2005cvodes], so that a
+tolerance means the same for both. Step $n$ hands $\lambda(t_n)$ to the step
+below and adds a share $\Delta\bar\theta_n$ to the parameter gradient, whose
+sum from the end of the run down to $t_n$ is the running gradient
+$\bar\theta(t_n)$. With $\delta$ the error estimate of the step's adjoint,
+the step passes when
 \begin{equation}
-  \dot z = J(x, t)\, z, \qquad z(t_0) = z_0 ,
-  \label{eq:control-tangent}
+  \max\Bigl(\bigl\|\delta\lambda(t_n)\bigr\|_{\mathrm{rms},\,w_\lambda},\;
+             \bigl\|\delta\Delta\bar\theta_n\bigr\|_{\mathrm{rms},\,w_\theta}\Bigr) \le 1,
+  \qquad
+  w_{\lambda,i} = \mathtt{reltol}\,|\lambda_i(t_n)| + \mathtt{abstol},
+  \quad
+  w_{\theta,i} = \mathtt{reltol}\,|\bar\theta_i(t_n)| + \mathtt{gradtol},
+  \label{eq:refine-test}
 \end{equation}
-the directional derivative of the trajectory along $z_0$ in the initial
-state, and enters its error into the norm as one more column of
-\eqref{eq:wrms-sens}. $z_0$ has entries $\pm 1$ from a fixed hash of the
-state index, so it excites every mode and a solve is reproducible. A
-multistep method carries $z$ in a second Nordsieck history that takes
-every rescale, order change and restart of the first, and solves its
-corrector after the state's has converged, with $J$ at the step's
-solution, as the staggered corrector of CVODES treats a sensitivity. A
-single-step method steps $z$ by the same scheme with $J$ frozen at the
-step's start. $z$ enters no returned derivative; under the maximum it
-can only shrink a step, and the grid approaches the one a forward run
-seeded along $z_0$ takes. \texttt{sensErrCon = FALSE} leaves it out.
+in the weighted root-mean-square norm of \eqref{eq:wrms}. The gradient term
+enters only with \texttt{gradtol}, as CVODES holds its quadrature to the
+error test only with an absolute tolerance on it
+(\texttt{CVodeSetQuadErrConB}). The test is local: the errors of the steps
+add up over the sweep, as the forward mode's do over the run.
 
-### Goal-oriented step-size control
+**The estimate.** Under \texttt{rb4} the step's output is $X_6 + e$ and
+its embedded solution $X_6$, so the adjoints of the two differ by the
+response to a seed on $e$ alone. That response is one more backward pass
+over the same stages and the same factorisation, and estimates the error
+of the embedded adjoint. A step that meets \eqref{eq:refine-test} with it
+is taken as it is. Otherwise the step is taken again in $m = 2, 4,
+\ldots, 1024$ substeps from its own start state, forward and back with the
+observations that fall into each, and successive refinements are
+compared. The difference $d_m$ is divided by Richardson's factor
+$\min\bigl(2^q - 1,\; d_{m/2}/d_m - 1\bigr)$ only as far as two successive
+differences show the order $q$; the first halving is taken at face
+value. \texttt{tsit5} has no embedded adjoint and starts with the halving.
+\verb|$adjoint$substeps| reports the $m$ each step took.
 
-A grid selected from the state error alone need not be fine enough for
-the gradient: a step at which $\lambda$ is large contributes strongly to
-the error in $J$ even where its own state error is small, so the
-gradient inherits the order of the state error but not its constant.
-The forward mode settles this within the run by maximising the error
-norm over the sensitivity columns as in \eqref{eq:wrms-sens}, and the
-control tangent does so for one direction. Weighting a step by its
-contribution to a particular objective needs $\lambda$, which at step
-$k$ depends on every later step and is not available while step $k$ is
-taken.
+**Multistep methods.** The share of a \texttt{bdf} or \texttt{adams} step
+cannot be recomputed in halves: the Nordsieck array couples the step to
+the history before it at order one, and replacing one step by substeps
+changes what every later step reads. The checked sweep integrates the
+flow's adjoint between the grid points instead, each interval from the
+stored start state, and hands only the state cotangent across a grid
+point. Its gradient is the derivative of the flow along the computed
+trajectory, not of the scheme, and differs from the scheme's derivative
+by the order of the tolerance, as the continuous adjoint of CVODES does
+[@serban2005cvodes].
 
-It is available across runs. The \texttt{errWeights} argument of
-\texttt{solveODE()} takes the $\lambda$ of an earlier sweep, sampled on
-that sweep's grid, interpolates it linearly and enters it into the
-error norm as
+The flow over an interval of length $H$ is extrapolated linearly implicit
+Euler, the scheme of SEULEX [@hairer2010solving, §IV.9]. Chain $j$
+takes $n_j = j$ steps of $h_j = H/n_j$,
 \begin{equation}
-  \mathrm{err} = \max\!\left(
-    \mathrm{err}_{\text{state}},\;
-    \frac{\left|\lambda(t_{n+1})^{\mathsf T} e_n\right|}{\mathtt{gradtol}}
-  \right),
-  \label{eq:goal-oriented}
+  \bigl(h_j^{-1} I - J_0\bigr)\, D_k = f(x_k, t_k), \qquad x_{k+1} = x_k + D_k,
+  \label{eq:lie-chain}
 \end{equation}
-where $e_n$ is the embedded error estimate of the step. The numerator
-estimates the step's contribution to the error in the objective, and
-\texttt{gradtol}, the tolerance to which that contribution is held,
-makes the two terms comparable.
+on the one Jacobian $J_0$ at the interval's start. A chain is a W-method:
+it is consistent for any matrix in place of the Jacobian, so its error has
+an expansion in powers of $h_j$, and the Aitken-Neville tableau
+$T_{j,k} = T_{j,k-1} + (T_{j,k-1} - T_{j-1,k-1}) / (n_j/n_{j-k} - 1)$
+raises the order by one per column. Chain $j$ costs one factorisation of
+$h_j^{-1} I - J_0$, a change of the diagonal of one Jacobian, $n_j$
+right-hand sides and $n_j$ solves.
 
-Because of the maximum, the grid can only become finer than
-\texttt{abstol} and \texttt{reltol} require, never coarser, and the
-accuracy of the trajectory is unaffected. An inaccurate $\lambda$ costs
-at most computing time: too large, and the steps are unnecessarily
-small; too small, and the state term governs as before. An estimate
-from a neighbouring parameter value is therefore admissible, so an
-optimiser can pass the sweep of iteration $i-1$ to iteration $i$ and
-run one pass rather than two.
+The extrapolated state $T_{j,j}$ is a fixed linear combination of the
+chains' end states, so its adjoint is the same combination of the chains'
+adjoints, and the tableau is built on those: the cotangent of the start
+state and the interval's share of the gradient, each chain swept back on
+its own factorisation. A step of \eqref{eq:lie-chain} hands
+$\mu_k = (h_j^{-1} I - J_0)^{-\mathsf T} \lambda_{k+1}$ to $x_k$ through
+$J(x_k)^{\mathsf T} \mu_k$ and to $\theta$ through
+$f_\theta(x_k)^{\mathsf T} \mu_k$, and through $J_0$ to the interval's
+start: $\sum_k \mu_k^{\mathsf T} (\partial J_0)\, D_k$ is one bilinear
+form over the Jacobian's pattern, $M_{rc} = \sum_k \mu_{k,r} D_{k,c}$,
+which the generated code pulls back in one evaluation. The difference
+$e_j$ of two neighbouring entries $T_{j,j}$, $T_{j,j-1}$ estimates the
+error of $T_{j,j-1}$; $T_{j,j}$ is returned, and its error is estimated as
+$e_j \min(1, e_j/e_{j-1})$, the rate of the last two differences applied
+one column on, as CVODES estimates the error of the solution it returns.
+The first column whose estimate passes \eqref{eq:refine-test} is taken,
+and an interval the eighth does not pass is halved, its midpoint reached forward under the state's
+own test. An observation inside the interval cuts it there, the piece
+after it starting from the state the state's own test reaches.
 
-The weight is a controller input held in plain \texttt{double}: the
-controller is not differentiated, and a weight carried into the
-derivative would reintroduce the step-size term above. The
-interpolation is linear rather than PCHIP for the same reason and two
-more: $\lambda$ jumps where the objective seeds it and where an event
-resets the state, and shape preservation is of no value for a weight
-whose overshoots cost only time. \texttt{breaks} names the sample
-indices an interpolant must not span, and a query inside such an
-interval takes the nearer endpoint. A \texttt{floor} raises weights
-below a given fraction of the largest, as a precaution rather than a
-necessity: $\lambda$ measures a linearised influence, and a state it
-weights near zero may still move nonlinearly.
-
-With \texttt{adjointGrid = TRUE} a reverse solve also returns the grid
-the sweep ran on, $\lambda$ at the start of each step, and
-$\eta_n = \lambda(t_{n+1})^{\mathsf T} e_n$ for each step, the
-numerator of \eqref{eq:goal-oriented}. The estimate is of first order,
-since it evaluates $\lambda$ at the computed rather than the exact
-state; the adaptation needs the ranking of the steps, not the
-magnitude.
+**Limits.** A one-step method's step that misses the test at 1024
+substeps is taken with 1024, and the halving stops early where from
+$m = 32$ on a halving no longer shrinks the difference; a multistep
+interval is halved at most ten times. An error source that the
+refinement does not reduce, a forcing far faster than the steps, leaves
+the estimate below the error.
 
 ### Relation to the forward mode
 
 Forward and reverse derivatives of the same model do not agree to
-machine precision: with \texttt{sensErrCon = TRUE} the two modes
-differentiate different discretisations, each exactly, and the
+machine precision: the two modes differentiate different discretisations,
+each exactly, or under \texttt{refine} the reverse mode the flow, and the
 difference falls with the tolerance. The value and the reverse gradient
 returned to the caller are consistent, which a trust-region method,
 comparing a predicted with an achieved reduction, relies on.
@@ -1724,7 +1760,7 @@ half $\mu(t_0)$ and the parameter half
 \end{equation}
 cppDE does not integrate \eqref{eq:soa-tangent} to
 \eqref{eq:soa-quadrature} but obtains their discrete counterpart from
-the dual instantiation: the tangent carried alongside $\lambda$ is
+the dual instantiation: the tangent propagated alongside $\lambda$ is
 $\mu$ on the grid the forward run chose, and the tangent of the
 parameter accumulator is \eqref{eq:soa-quadrature}. The second
 derivatives of $f$ in \eqref{eq:soa-adjoint} and
@@ -1737,8 +1773,7 @@ contractions of $J v$, which are second derivatives of $f$.
 
 The sweep reads tangents from its checkpoints, so the forward pass is a
 sensitivity run in the same $N$ directions. Its error control reads the
-values and the control tangent only, so it takes the grid of the
-first-order reverse run whatever the directions. The cost, one
+values only, so its grid does not depend on the directions. The cost, one
 sensitivity integration and one sweep, both of width $N$, is linear in
 $N$. Forward over forward, selected by
 \texttt{derivMode = "forward-forward"} or \texttt{deriv2 = TRUE},
@@ -1756,7 +1791,7 @@ of $M$; where the states themselves are of interest, \verb|hessian| is
 the only route.
 
 The second order needs two further facilities. The iteration matrix
-carries tangents, so the transposed solve applies the implicit function
+has tangents, so the transposed solve applies the implicit function
 theorem with the matrix transposed alongside;
 \texttt{cppde\_ad\_lu.hpp} and \texttt{cppde\_sparse\_ad\_lu.hpp}
 provide this in the dense and the sparse case. And a generated model
@@ -1847,7 +1882,7 @@ in \texttt{double} without forming $J$. The in-tree backend obtains the
 same equation, \eqref{eq:sensitivity-p}, by evaluating $f$ on
 dual-typed state. The generated product avoids the arena allocation of
 each dual evaluation but runs once per direction; the dual evaluation
-carries all directions in one pass.
+covers all directions in one pass.
 
 \textbf{Methods.} CVODE provides only the multistep families, selected
 by \texttt{method = "bdf"} or \texttt{"adams"}; \texttt{rb4} and
@@ -1885,9 +1920,13 @@ the contractions of the native reverse mode, without forming $J$:
   \label{eq:asa-system}
 \end{equation}
 the second being the quadrature \eqref{eq:adjoint-quadrature} with
-$q(T) = 0$. CVODES carries it alongside the backward state and, by
+$q(T) = 0$. CVODES integrates it alongside the backward state and, by
 default, leaves it out of the error test: with gradient entries of very
-different scale the test would stall the backward step. Both equations run from $T$ down to
+different scale the test would stall the backward step against
+\texttt{reltol} alone. \texttt{adjointControl(gradtol = g)} puts it in,
+with absolute tolerance $g$, so the backward step size then holds the
+gradient's own error. The checked sweep of Section \ref{sec:refine}
+applies the same test to the discrete steps. Both equations run from $T$ down to
 $t_0$; the minus signs cancel against the reversed limits, so
 $\lambda(t_0)$ is the state part of the gradient and $q(t_0)$ the
 parameter part. The backward problem is a BDF solve with the linear
@@ -1917,17 +1956,35 @@ first order at times the objective does not observe.
 
 \textbf{Several cotangents.} The columns of a cotangent share the
 checkpoints, but each needs its own backward integration, where the
-native mode sweeps its stored checkpoints once per column. The native
-arguments \texttt{keepStore}, \texttt{store}, \texttt{adjointGrid} and
-\texttt{errWeights} have no counterpart, since CVODES holds its own
-checkpoints and runs its own backward controller.
+native mode sweeps its stored checkpoints once per column.
+\texttt{keepStore}, \texttt{store} and the rest of
+\texttt{adjointControl()} have no counterpart: CVODES holds its own
+checkpoints and runs its own backward controller, and the continuous
+adjoint has no discrete steps whose errors could be estimated, weighted
+or reported.
 
-\textbf{Restrictions.} Events and root functions are rejected at code
-generation: a jump in the state implies a jump in $\lambda$, which ASA
-cannot apply. The same model cannot also provide forward
-sensitivities, and there is no second-order mode. An event model, a
-Hessian, or a gradient consistent with the value it accompanies
-therefore requires the native backend.
+\textbf{Events.} CVODES cannot be re-initialised in the middle of a
+forward run it records for the adjoint, so a model with events is
+integrated in stretches between the jumps, each on its own CVODES memory
+with its own checkpoints, root functions and linear solver. A jump
+starts the next stretch from the state after it. The backward sweep runs
+the stretches last to first, each as its own backward problem started
+from the adjoint the later stretch handed back, and between two stretches
+applies the transpose of the jump: for $x^+ = h(x^-, p, t_e)$,
+$\lambda^- = (\partial_x h)^{\mathsf T}\lambda^+$ and the gradient gains
+$(\partial_p h)^{\mathsf T}\lambda^+$, together with the terms of an event
+time that moves with $p$ or, for a root $g(x, p, t) = 0$, with the state,
+$\delta\tau = -(\nabla_x g\,\delta x + \partial_p g\,\delta p)/\dot g$, as in
+Section \ref{sec:event-adjoint}. Root finding is switched off on a
+stretch before the sweep: CVODES recomputes the forward solution between
+checkpoints step by step, and a root reported again there would label
+the stored data with the root's time. A model without events keeps the
+single stretch.
+
+\textbf{Restrictions.} The same model cannot also provide forward
+sensitivities, and there is no second-order mode. A Hessian, or a
+gradient consistent with the value it accompanies, therefore requires
+the native backend.
 
 As an independent implementation of the same mathematics, ASA checks
 the in-tree adjoint: the two agree to $10^{-6}$ on the test models.
@@ -2129,7 +2186,7 @@ the tangent slots of the duals. Each input scalar $x_i$ becomes
              + \bigl(\partial\Phi_{i,\cdot}
                      + \partial^2\Phi_{i,\cdot,\cdot}\,\varepsilon_{\mathrm{in}}\bigr)\,\varepsilon_{\mathrm{out}},
 \end{equation*}
-a nested dual whose inner tangent slots carry $\partial x_i/\partial\theta$
+a nested dual whose inner tangent slots hold $\partial x_i/\partial\theta$
 and whose outer tangent slot $k$ is an inner dual with value
 $\partial x_i/\partial\theta_k$ and inner tangents
 $\partial^2 x_i/\partial\theta_k\partial\theta$. The multiplication rule
@@ -2227,7 +2284,7 @@ $41$ problems, by $1.29$, and the ratio grows with $M$: $1.01$ for
 $M \le 3$, $1.22$ for $4 \le M \le 12$ and $1.52$ for
 $13 \le M \le 32$. CVODES evaluates one Jacobian-vector product per
 parameter; the in-tree backend evaluates $f$ once on a dual state that
-carries all $M$ tangents and needs about one eleventh of the
+holds all $M$ tangents and needs about one eleventh of the
 right-hand-side evaluations. The dual evaluation has a cost per state
 component independent of $M$, so problems with few parameters fall
 below parity: six of the seven slower ones have $M \le 6$, the lowest
@@ -2240,8 +2297,7 @@ $1.8 + 0.60\,M$ for \texttt{cppODE()} and $1.2 + 0.84\,M$ for CVODES,
 about $92$ and $129$ at $M = 152$. The discrete adjoint of
 Section \ref{sec:reverse} costs $6.3$ plain solves on Chen and
 $3.6$ on Lang, independent of $M$. The CVODES
-adjoint of Section \ref{sec:asa}, which does not support the events
-of Chen, costs $27$ plain CVODE solves on Lang and takes $8.8$ to
+adjoint of Section \ref{sec:asa}, measured on Lang, costs $27$ plain CVODE solves and takes $8.8$ to
 $13.7$ times as long as the discrete adjoint.
 
 \begin{figure}[h]

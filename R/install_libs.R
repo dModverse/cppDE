@@ -121,8 +121,8 @@
 #' @export
 install_libs <- function(which = c("sundials", "suitesparse"),
                          dir = NULL,
-                         sundials_version = "7.4.0",
-                         suitesparse_version = "7.10.0",
+                         sundials_version = "7.9.0",
+                         suitesparse_version = "7.14.1",
                          quiet = FALSE,
                          ask = interactive()) {
 

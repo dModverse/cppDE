@@ -129,12 +129,8 @@ using stepper_d = cppde::multistepper<M, double, cppde::dense_lu_tag>;
 template<cppde::multistep_method M>
 using checkpoint = cppde::reverse::step_checkpoint<stepper_d<M>, double>;
 
-// Iterates the corrector to machine precision, value and tangents together.
-// PECE stops at its own dcon, which is only about the solver tolerance, and both
-// modes are defined to differentiate the exactly solved equation, so that
-// stopping rule would set the comparison's floor rather than rounding. Not for
-// the BDF family: there the fixed point is Newton's, and this iteration does not
-// converge to it on a stiff step.
+// Iterates the corrector to machine precision, value and tangents together, so
+// the comparison's floor is rounding and not the solver tolerance.
 template<cppde::multistep_method M, class V, class Sys, class St>
 static void polish_corrector(Sys& sys, St& st, double t, std::vector<V>& y)
 {

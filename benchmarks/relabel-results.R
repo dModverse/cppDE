@@ -7,7 +7,7 @@
 ##      Rscript benchmarks/relabel-results.R            # show the plan
 ##      Rscript benchmarks/relabel-results.R --apply    # do it
 
-##  Folders written before the naming change carry a bare timestamp and a
+##  Folders written before the naming change have a bare timestamp and a
 ##  plain-text run-info.txt. This reads what each run was, renames the folder to
 ##  the descriptive scheme and writes the README.md a fresh run produces.
 

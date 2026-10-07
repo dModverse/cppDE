@@ -121,11 +121,12 @@ class OdeModel:
         seeds.update(zip(self.linrows(), self.linv()))
         return self.cached("jv", lambda: self.ad.jvp(self.rhs, seeds))
 
-    def pullback(self, roots):
-        """(state, parameter, map row) adjoints of roots against lam. The
-        state adjoints lack C^T times the row adjoints."""
+    def pullback(self, roots, cots=None):
+        """(state, parameter, map row) adjoints of roots against lam, or
+        against `cots`. The state adjoints lack C^T times the row adjoints."""
         g = self.g
-        adj = self.ad.vjp(roots, self.lam(), cg.F_STATE | cg.F_PARAM | cg.F_LINROW)
+        adj = self.ad.vjp(roots, self.lam() if cots is None else cots,
+                          cg.F_STATE | cg.F_PARAM | cg.F_LINROW)
         out = {cg.STATE: {}, cg.PARAM: {}, cg.LINROW: {}}
         for leaf, a in adj.items():
             k = g.attr[leaf]
@@ -279,6 +280,13 @@ class OdeModel:
 
     # -- stores of the contractions -----------------------------------------
 
+    def bundle_pairs(self):
+        """The (row, column) pairs of df/dx that sum_s lam_s' J v_s reads, or
+        None where a linear map enters the Jacobian."""
+        if self.nlin:
+            return None
+        return sorted(self.entries())
+
     def contraction_stores(self, emit_jvp):
         """Stores of adjoint_terms, as [(name, kind, stores)].
 
@@ -297,9 +305,28 @@ class OdeModel:
             xs, ps, ls = self.pullback(roots)
             stores = [(("vec", "out", j), xs[j], "=") for j in sorted(xs)]
             stores += [(lin_axpy(r), ls[r], "+=") for r in sorted(ls)]
+            pstores = [(("vec", "out", n + k), g.mul(sc, ps[k]), "+=") for k in sorted(ps)]
             out.append((xname, "x", stores))
-            out.append((pname, "p", [(("vec", "out", n + k), g.mul(sc, ps[k]), "+=")
-                                     for k in sorted(ps)]))
+            out.append((pname, "p", pstores))
+            # Both halves of the right-hand side's pullback in one pass, their
+            # common subexpressions taken once.
+            if xname == "jac_t_vec":
+                out.append(("vjp_t_vec", "xp", stores + [
+                    (("vec", "outp", t[2]), e, op) for (t, e, op) in pstores]))
+        bp = self.bundle_pairs() if emit_jvp else None
+        if bp:
+            # sum_s lam_s' J(x) v_s from M[k] = sum_s lam_s[i_k] v_s[j_k]: one
+            # pullback for any number of pairs at the same x.
+            ent = self.entries()
+            roots = [ent[pr] for pr in bp]
+            cots = [g.vec("M", k) for k in range(len(bp))]
+            xs, ps, ls = self.pullback(roots, cots)
+            xst = [(("vec", "out", j), xs[j], "=") for j in sorted(xs)]
+            pst = [(("vec", "out", n + k), g.mul(sc, ps[k]), "+=") for k in sorted(ps)]
+            out.append(("jvp_x_t_mat", "x", xst))
+            out.append(("jvp_p_t_mat_axpy", "p", pst))
+            out.append(("jvp_t_mat", "xp", xst + [(("vec", "outp", t[2]), e, op)
+                                                  for (t, e, op) in pst]))
         lam = self.lam()
         dot = g.sum([g.mul(d, lam[i]) for i, d in enumerate(self.dfdt())
                      if not g.is_zero(d)])
@@ -805,11 +832,16 @@ def cpp_adjoint_terms(model, scalar, emit_jvp):
     lines += _struct_head("adjoint_terms", T)
     vec = "const std::vector<%s>&" % T
     for name, kind, stores in model.contraction_stores(emit_jvp):
-        with_v = name.startswith("jvp_")
+        with_m = "_t_mat" in name
+        with_v = name.startswith("jvp_") and not with_m
         args = ["%s x" % vec] + (["%s v" % vec] if with_v else [])
-        args += ["%s lam" % vec, "const %s& t" % T]
+        args += ["%s M" % vec] if with_m else []
+        args += (["const %s& t" % T] if with_m else ["%s lam" % vec, "const %s& t" % T])
         if kind == "x":
             args.append("std::vector<%s>& out" % T)
+            head = "  void %s(" % name
+        elif kind == "xp":
+            args += ["const %s& sc" % T, "std::vector<%s>& out" % T, "%s* outp" % T]
             head = "  void %s(" % name
         elif kind == "p":
             args += ["const %s& sc" % T, "%s* out" % T]
@@ -819,11 +851,14 @@ def cpp_adjoint_terms(model, scalar, emit_jvp):
         pad = " " * len(head)
         sig = head + (",\n" + pad).join(args) + ") const {"
         lines += sig.split("\n")
-        used = "    (void)x; (void)t; (void)lam;" + (" (void)v;" if with_v else "")
-        if kind == "p":
+        used = "    (void)x; (void)t;" + ("" if with_m else " (void)lam;")
+        used += (" (void)v;" if with_v else "") + (" (void)M;" if with_m else "")
+        if kind in ("p", "xp"):
             used += " (void)sc;"
+        if kind == "xp":
+            used += " (void)outp;"
         lines.append(used)
-        if kind == "x":
+        if kind in ("x", "xp"):
             lines.append("    out.assign(%du, %s(0.0));" % (n, T))
         if kind != "dot":
             lines += scalar.arena_scope()
@@ -831,6 +866,14 @@ def cpp_adjoint_terms(model, scalar, emit_jvp):
         body.append(block(model.g, stores, "_%s" % _short(name)))
         lines += cpp_statements_raw(model, body, scalar)
         lines += ["  }", ""]
+    bp = model.bundle_pairs() if emit_jvp else None
+    lines.append("  static constexpr bool has_jvp_bundle = %s;" % ("true" if bp else "false"))
+    lines.append("  static constexpr int jvp_bundle_size = %d;" % (len(bp) if bp else 0))
+    if bp:
+        lines.append("  static const int* jvp_bundle_rows() { static const int r[] = {%s}; return r; }"
+                     % ", ".join(str(i) for i, _ in bp))
+        lines.append("  static const int* jvp_bundle_cols() { static const int c[] = {%s}; return c; }"
+                     % ", ".join(str(j) for _, j in bp))
     lines += ["};", "// adjoint_terms writes into %d slots" % (n + len(model.params))]
     return lines
 

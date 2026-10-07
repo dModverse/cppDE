@@ -1098,8 +1098,8 @@ def _write_vjp_ad_impl(buf, modelname, ctx, out_names):
     """The same contraction over a dual, which is forward over reverse.
 
     Both terms of d/dv (w' J) fall out of one pass: the Jacobian differentiated
-    along the tangents the inputs carry, and the Jacobian contracted with the
-    tangents the cotangent carries. No Hessian is emitted and none is stored.
+    along the tangents of the inputs, and the Jacobian contracted with the
+    tangents of the cotangent. No Hessian is emitted and none is stored.
     """
     n_vars = len(ctx.variables)
     n_params = len(ctx.parameters)

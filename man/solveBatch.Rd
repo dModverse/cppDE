@@ -11,7 +11,8 @@ solveBatch(
   hessian = NULL,
   cotangent = NULL,
   curvature = NULL,
-  errWeights = NULL,
+  adjoint = NULL,
+  store = NULL,
   cores = NULL,
   traceFile = NULL,
   onFailure = c("stop", "warn", "silent")
@@ -27,9 +28,12 @@ reuse the prepared values.}
 condition, each as the argument of the same name in \code{\link[=solveODE]{solveODE()}}, or
 \code{NULL} to reuse. Shapes must match the prepared ones.}
 
-\item{errWeights}{List of weightings for the step-size controller, one per
-condition, or \code{NULL} to keep the prepared ones. Each is the \code{errWeights}
-list of \code{\link[=solveODE]{solveODE()}}, typically lambda from the previous iteration.}
+\item{adjoint}{List of \code{\link[=adjointControl]{adjointControl()}} objects, one per condition, or
+\code{NULL} to keep the prepared ones.}
+
+\item{store}{List of checkpoint stores, one per condition, each the \verb{$store}
+of an earlier reverse solve or \code{NULL} to integrate; \code{NULL} for the whole
+argument keeps the prepared ones.}
 
 \item{cores, traceFile, onFailure}{As in \code{\link[=solveODEBatch]{solveODEBatch()}}.}
 }
@@ -38,20 +42,30 @@ A list of \code{\link[=solveODE]{solveODE()}} results, named as the prepared con
 }
 \description{
 Re-solves the conditions of a \code{\link[=prepareBatch]{prepareBatch()}} handle with new numbers.
-Only \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent}, \code{curvature} and
-\code{errWeights} may change; anything else needs a fresh handle.
+Only \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent}, \code{curvature}, \code{adjoint}
+and \code{store} may change; anything else needs a fresh handle.
 }
 \examples{
 \donttest{
 if (codegenAvailable()) {
   ## Marshal the conditions once, then re-solve with new numbers, as inside an
   ## optimiser.
-  f <- cppODE(c(x = "-k*x"), deriv = FALSE)
+  f <- cppODE(c(x = "-k*x"), deriv = FALSE, compile = FALSE)
+  r <- cppODE(c(x = "-k*x"), derivMode = "reverse", compile = FALSE)
+  compile(f, r, output = "solveBatch_example")
   conditions <- list(a = list(parms = c(x = 1, k = 0.1)),
                      b = list(parms = c(x = 2, k = 0.1)))
   h   <- prepareBatch(f, conditions, times = 0:5)
   res <- solveBatch(h, parms = list(c(x = 1, k = 0.5), c(x = 2, k = 0.5)))
   res$b$variable
+
+  ## Reverse mode: the forward passes keep their checkpoints, and a prepared
+  ## sweep reuses them for a new cotangent.
+  fw <- solveODEBatch(r, lapply(conditions, c, keepStore = TRUE), times = 0:5)
+  W  <- matrix(1, 6, 1, dimnames = list(NULL, "x"))
+  hr <- prepareBatch(r, conditions, times = 0:5, cotangent = W)
+  solveBatch(hr, cotangent = list(W, 2 * W),
+             store = lapply(fw, `[[`, "store"))$b$cotangent
 }
 }
 }

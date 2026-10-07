@@ -8,14 +8,15 @@ compile(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
 }
 \arguments{
 \item{...}{One or more objects returned by \code{\link[=cppODE]{cppODE()}}, \code{\link[=cvode]{cvode()}} or
-\code{\link[=cppFUN]{cppFUN()}} that carry a \code{"srcfile"} attribute.}
+\code{\link[=cppFUN]{cppFUN()}} that have a \code{"srcfile"} attribute.}
 
 \item{output}{Optional base name for a combined shared library.}
 
 \item{args}{Optional additional compiler or linker arguments appended
 after the flags from \code{"compileArgs"}.}
 
-\item{cores}{Number of parallel compilation jobs (Unix only).}
+\item{cores}{Number of parallel compilation jobs (Unix only): separate
+libraries are built side by side, a combined \code{output} with \code{make -j}.}
 
 \item{verbose}{Logical; if \code{TRUE}, show compiler commands.}
 }

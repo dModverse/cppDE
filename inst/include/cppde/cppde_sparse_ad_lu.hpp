@@ -72,9 +72,9 @@ public:
   sparse_lu_solver(sparse_lu_solver&& o) noexcept
     : m_solver(std::move(o.m_solver)) {}
 
-  void factorize(const csc_matrix<Scalar>& W)
+  void factorize(const csc_matrix<Scalar>& W, bool check_growth = true)
   {
-    m_solver.factorize(W.n, W.Ap.data(), W.Ai.data(), W.Ax.data());
+    m_solver.factorize(W.n, W.Ap.data(), W.Ai.data(), W.Ax.data(), check_growth);
   }
 
   void analyze_pattern(const csc_matrix<Scalar>& W)
@@ -109,6 +109,9 @@ public:
   { m_solver.solve(b); }
 
   void reset_pattern() { m_solver.reset_pattern(); }
+
+  // See klu_lu_solver::refactor_solve_ratio.
+  double refactor_solve_ratio() { return m_solver.refactor_solve_ratio(); }
 
 private:
   klu_lu_solver m_solver;

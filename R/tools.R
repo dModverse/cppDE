@@ -99,11 +99,12 @@ clearNativeSymbols <- function() {
 #' generated models under ThreadSanitizer.
 #'
 #' @param ... One or more objects returned by [cppODE()], [cvode()] or
-#'   [cppFUN()] that carry a `"srcfile"` attribute.
+#'   [cppFUN()] that have a `"srcfile"` attribute.
 #' @param output Optional base name for a combined shared library.
 #' @param args Optional additional compiler or linker arguments appended
 #'   after the flags from `"compileArgs"`.
-#' @param cores Number of parallel compilation jobs (Unix only).
+#' @param cores Number of parallel compilation jobs (Unix only): separate
+#'   libraries are built side by side, a combined `output` with `make -j`.
 #' @param verbose Logical; if `TRUE`, show compiler commands.
 #'
 #' @return Invisibly returns `TRUE` on successful compilation.
@@ -112,7 +113,8 @@ clearNativeSymbols <- function() {
 compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE) {
 
   ## save & restore env
-  old <- Sys.getenv(c("PKG_CFLAGS", "PKG_CXXFLAGS", "PKG_CPPFLAGS", "PKG_LIBS"), unset = NA)
+  old <- Sys.getenv(c("PKG_CFLAGS", "PKG_CXXFLAGS", "PKG_CPPFLAGS", "PKG_LIBS",
+                      "MAKEFLAGS"), unset = NA)
   on.exit({
     for (n in names(old))
       if (is.na(old[n])) Sys.unsetenv(n) else Sys.setenv(structure(old[n], names = n))
@@ -310,6 +312,12 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
     out_so <- file.path(outdir, paste0(output, so))
     try(dyn.unload(out_so), silent = TRUE)
     if (file.exists(out_so)) unlink(out_so)
+    ## One make run builds every object of the combined library, as many at once
+    ## as `cores` allows.
+    if (cores > 1)
+      Sys.setenv(MAKEFLAGS = paste(c(Sys.getenv("MAKEFLAGS"),
+                                     paste0("-j", as.integer(cores))),
+                                   collapse = " "))
     log <- shlib(c("CMD", "SHLIB", shQuote(files), "-o", shQuote(out_so)),
                  output)
     built_or_stop(out_so, list(log))

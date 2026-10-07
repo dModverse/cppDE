@@ -101,9 +101,9 @@ if [ -z "$cache_root" ]; then
     'cat(tools::R_user_dir("cppDE", "cache"))' 2>/dev/null || true)
 fi
 scan_libs_cache() {
-  # Prefixes are version-keyed; the lexically last usable one is the
-  # newest pin. A prefix may hold SuiteSparse only, so the two libraries
-  # are looked for independently.
+  # Prefixes are version-keyed. The pin of build-libs.sh wins; without a
+  # finished build of it, the lexically last usable prefix. A prefix may
+  # hold SuiteSparse only, so the two libraries are looked for independently.
   [ -n "$cache_root" ] && [ -d "$cache_root" ] || return 0
   cached_prefix=""
   # Only prefixes whose build ran to completion; build-libs.sh writes the
@@ -113,6 +113,14 @@ scan_libs_cache() {
       cached_prefix="$d"
     fi
   done
+  pin_file="$(dirname "$0")/inst/tools/build-libs.sh"
+  pin_sv=$(sed -n 's/^SUNDIALS_VERSION="${CPPDE_SUNDIALS_VERSION:-\([^}]*\)}"$/\1/p' "$pin_file" 2>/dev/null)
+  pin_ssv=$(sed -n 's/^SUITESPARSE_VERSION="${CPPDE_SUITESPARSE_VERSION:-\([^}]*\)}"$/\1/p' "$pin_file" 2>/dev/null)
+  pinned="$cache_root/deps-sundials-${pin_sv}-suitesparse-${pin_ssv}"
+  if [ -n "$pin_sv" ] && [ -n "$pin_ssv" ] && \
+     { [ -f "$pinned/.suitesparse-complete" ] || [ -f "$pinned/.sundials-complete" ]; }; then
+    cached_prefix="$pinned"
+  fi
   [ -n "$cached_prefix" ] || return 0
   case " $prefix_roots " in
     *" $cached_prefix "*) ;;
@@ -898,7 +906,7 @@ openmp_libs: $openmp_libs
 EOF
 
 # ---------------------------------------------------------------------------
-# Vignette: carry it into an install that did not go through a full build.
+# Vignette: copy it into an install that did not go through a full build.
 #
 # Only R CMD build moves the PDF into inst/doc, so a source tree and the
 # tarball install_github makes would both install without the vignette. The

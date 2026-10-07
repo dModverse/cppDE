@@ -9,8 +9,7 @@
  2. Internal retry loop:
     a. Predict Nordsieck array (ndfPredict)
     b. Set NDF/BDF/Adams coefficients
-    c. Corrector solve (Newton for BDF/NDF, PECE for Adams)
-       with Jacobian retry on stale J (BDF/NDF side)
+    c. Newton corrector solve with Jacobian retry on stale J
     d. Error test with:
        - nef counter: after MXNEF1 failures, force order reduction
        - q==1 restart: reload zn[1] = h*f(tn, zn[0])
@@ -43,7 +42,6 @@
 #include <cassert>
 #include <type_traits>
 #include <utility>
-#include <cppde/cppde_err_weights.hpp>
 #include <cppde/cppde_multistepper.hpp>
 #include <cppde/cppde_utils.hpp>
 #include <cppde/cppde_dual_slab.hpp>
@@ -266,23 +264,6 @@ public:
       // ============================================================
       double dsm = m_stepper.error_norm();
 
-      // The goal-oriented term. The weight contracts against the local error,
-      // acor times the order's error constant, so steps of different order are
-      // comparable. Under the max it only refines.
-      {
-        const double tq2 = static_cast<double>(
-            ndf_detail::scalar_value(m_stepper.error_constant()));
-        const double t_new_d = static_cast<double>(
-            ndf_detail::scalar_value(t)) +
-            static_cast<double>(ndf_detail::scalar_value(m_stepper.h()));
-        const double lam = ::cppde::detail::weighted_error(
-            m_stepper.acor(), t_new_d,
-            [tq2](const value_type& v) {
-              return ndf_detail::scalar_value(v) * tq2;
-            });
-        if (lam > dsm) dsm = lam;
-      }
-
       if (dsm <= 1.0) {
         // === Step accepted: break out of retry loop ===
 
@@ -385,7 +366,8 @@ public:
         double h_est = odeint_utils::cppde_hin<value_type>(
             deriv_func,
             x_cur, t, tn_abs,  // no t_final known here: use |t0| as upper hint
-            m_atol, m_rtol, m_stepper.sens_err_con());
+            m_atol, m_rtol,
+            m_stepper.sens_err_con());
 
         // Clamp: don't exceed the h that just failed, stay above floor.
         h_est = std::min(h_est, h_cur);

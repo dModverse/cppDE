@@ -1,7 +1,7 @@
 // The trajectory backwards over a sparse factorisation.
 //
 // The reverse pass leans on one factorisation in both directions: forward to
-// recover what a stage solved for, transposed to carry a cotangent back. The
+// recover what a stage solved for, transposed to pass a cotangent back. The
 // transposed KLU kernel is checked against LAPACK in test_sparse_transpose.cpp,
 // but no sparse model had ever been run through the reverse stepper itself,
 // which left the seam between the two untested: the pattern the Jacobian
@@ -78,7 +78,7 @@ struct jacobian {
                   std::vector<V>& dfdt) const {
     if (!W.pattern_built) {
       W.n = static_cast<int>(NX);
-      // Every column carries its diagonal, structural zero or not: W is
+      // Every column stores its diagonal, structural zero or not: W is
       // 1/(gamma*h) I - J and has nowhere to put the identity otherwise.
       W.Ap = {0, 2, 5, 8};
       W.Ai = {0, 1,  0, 1, 2,  0, 1, 2};
@@ -146,8 +146,7 @@ struct adjoint_terms {
     out[NX + 2] += sc*((-x[1] * x[1]) * lam[1] + (x[1] * x[1] * std::cos(t)) * lam[2]);
   }
 
-  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v,
-                   const std::vector<double>& lam, const double& t,
+  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v, const std::vector<double>& lam, const double& t,
                    std::vector<double>& out) const {
     out.assign(NX, 0.0);
     out[0] = 0.0;
@@ -158,8 +157,7 @@ struct adjoint_terms {
   }
 
   void jvp_p_t_vec_axpy(const std::vector<double>& x,
-                        const std::vector<double>& v,
-                        const std::vector<double>& lam, const double& t,
+                        const std::vector<double>& v, const std::vector<double>& lam, const double& t,
                         const double& sc, double* out) const {
     const double q = x[2] * v[1] + x[1] * v[2];
     out[NX + 0] += sc * ((-v[0]) * lam[0] + (v[0]) * lam[1]);

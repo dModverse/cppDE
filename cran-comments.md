@@ -21,7 +21,7 @@ user defines, compiles it at run time and calls the resulting entry point. That
 entry point lives in a shared object that does not exist when cppDE is
 installed, so there is nothing to register and no symbol a static check can
 resolve. The name and the shared object it belongs to are both determined at
-run time, which is what `sym$name` and `sym$dll` carry.
+run time, which is what `sym$name` and `sym$dll` hold.
 
 The lookup is scoped to the shared object the model was compiled into, so a
 model can only reach its own entry points, and a missing symbol is reported by

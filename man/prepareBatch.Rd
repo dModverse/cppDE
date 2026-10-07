@@ -22,11 +22,10 @@ prepareBatch(
   maxroot = 1L,
   cotangent = NULL,
   curvature = NULL,
-  adjointGrid = FALSE,
-  errWeights = NULL,
   keepStore = FALSE,
   store = NULL,
-  sensErrCon = TRUE
+  sensErrCon = TRUE,
+  adjoint = NULL
 )
 }
 \arguments{
@@ -35,9 +34,9 @@ prepareBatch(
 \item{conditions}{A list of per-condition argument lists. Recognized names
 are \code{times}, \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent}, \code{curvature},
 \code{fixed}, \code{forcings}, the solver options \code{abstol}, \code{reltol}, \code{maxattemps},
-\code{maxsteps}, \code{hini}, \code{roottol}, \code{maxroot}, and \code{adjointGrid}, \code{errWeights},
-\code{keepStore}, \code{store}, \code{sensErrCon}; anything given here overrides the
-batch-wide value of the same name.}
+\code{maxsteps}, \code{hini}, \code{roottol}, \code{maxroot}, and
+\code{keepStore}, \code{store}, \code{sensErrCon}, \code{adjoint}; anything given here
+overrides the batch-wide value of the same name.}
 
 \item{times}{Numeric vector of time points at which to return the
 solution. Must be non-empty and contain only finite values.}
@@ -124,22 +123,6 @@ of a functional of the outputs, this is that functional's Hessian applied
 to the output tangent. \code{NULL} treats the cotangent as constant in
 \eqn{\theta}.}
 
-\item{adjointGrid}{Whether the sweep also reports the grid it ran on, as
-\verb{$adjointGrid}. \code{FALSE} by default; requires a \code{cotangent} and the native
-backend. Costs one
-\verb{[n_steps, n_states, n_seed]} array, so it is a diagnostic.}
-
-\item{errWeights}{Optional lambda from an earlier sweep, used as a
-step-size weight. Native backend only. A list with \code{time} (ascending,
-length \code{n}), \code{lambda} (\verb{[n, n_states]}), and optionally \code{breaks}
-(indices into \code{time} the interpolant must not span), \code{gradtol}
-(default \code{1e-6}) and \code{floor}
-(smallest weight as a fraction of the largest, default \code{0}). The
-controller then takes the maximum of its own error norm and
-\eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
-finer than \code{abstol} and \code{reltol} ask, never coarser. Requires a
-\code{cotangent}.}
-
 \item{keepStore}{Whether a reverse solve returns its checkpoints as
 \verb{$store}, for a later solve to reuse through \code{store}. The \code{cotangent} may then
 be omitted, which runs the model for its values alone. Native backend
@@ -158,12 +141,12 @@ the step sequence is then the one a value-only run takes, whatever the
 direction count, and the sensitivities come back on a coarser grid than
 \code{abstol} and \code{reltol} would give them. Cheaper and less accurate, and the
 convention SUNDIALS ships (\code{CVodeSetSensErrCon}). Needs a model with
-sensitivities or one compiled with \code{derivMode = "reverse"}. The reverse
-modes keep their own tangents out of step-size control, so that the grid
-does not depend on them; there \code{TRUE} integrates a tangent along a fixed
-direction of the initial state, for step-size control only, which gives
-the gradient the resolution the forward mode gives it, and \code{FALSE} keeps
-the grid of a value-only run.}
+sensitivities. A model compiled with \code{derivMode = "reverse"} takes the
+grid of a value-only run either way.}
+
+\item{adjoint}{Optional \code{\link[=adjointControl]{adjointControl()}}, what a reverse solve does
+beyond its gradient: check the sweep against the tolerances, report its
+grid.}
 }
 \value{
 An object of class \code{"cppDEbatch"} for \code{\link[=solveBatch]{solveBatch()}}.

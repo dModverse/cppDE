@@ -1,7 +1,7 @@
 // The trajectory backwards across events: stage 5 of dev/adjoint-plan.md.
 //
 // An event is two maps between two steps. The jump, which for a fixed time is
-// the reset carried across the discontinuity by the Heun sandwich and for a
+// the reset transported across the discontinuity by the Heun sandwich and for a
 // root the same sandwich around a crossing time the implicit function theorem
 // supplies; and the restart, which for a multistep method throws the Nordsieck
 // history away and builds a new one out of the post-jump state alone. The
@@ -52,7 +52,7 @@ static void close(double a, double b, const std::string& what, double tol) {
 
 // ---------------------------------------------------------------------------
 //  Model: three states, four parameters, non-autonomous so the crossing time
-//  carries a derivative through the right-hand side as well as through g.
+//  picks up a derivative through the right-hand side as well as through g.
 // ---------------------------------------------------------------------------
 
 static constexpr std::size_t NX = 3;
@@ -110,7 +110,7 @@ using D = dual<double, ND>;
 //
 //  Both read a parameter, so both put a cotangent on wp: the fixed reset scales
 //  x0 by a function of p3, the root reset adds a multiple of p1 to x2 when x0
-//  falls through G_LEVEL. The root carries its partials, without which the
+//  falls through G_LEVEL. The root has its partials, without which the
 //  engine applies the reset with no transport and the crossing time drops out
 //  of the derivative entirely.
 // ---------------------------------------------------------------------------
@@ -180,8 +180,7 @@ struct adjoint_terms {
     out[NX + 3] += sc * ((-x[2]) * lam[2]);
   }
 
-  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v,
-                   const std::vector<double>& lam, const double& t,
+  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v, const std::vector<double>& lam, const double& t,
                    std::vector<double>& out) const {
     out.assign(NX, 0.0);
     out[0] = 0.0;
@@ -192,8 +191,7 @@ struct adjoint_terms {
   }
 
   void jvp_p_t_vec_axpy(const std::vector<double>& x,
-                        const std::vector<double>& v,
-                        const std::vector<double>& lam, const double& t,
+                        const std::vector<double>& v, const std::vector<double>& lam, const double& t,
                         const double& sc, double* out) const {
     const double q = x[2] * v[1] + x[1] * v[2];
     out[NX + 0] += sc * ((-v[0]) * lam[0] + (v[0]) * lam[1]);
@@ -447,7 +445,7 @@ static void forward_sens(const store_of<S>& store, std::vector<double>& S_obs,
         st.initialize(xa, D(e.t), f0, D(e.dt_restart));
       } else {
         // The engine restarts the stepper on the far side, which drops the
-        // FSAL stage. Reusing it would carry a derivative from before the jump
+        // FSAL stage. Reusing it would take a derivative from before the jump
         // into the step after it.
         st.invalidate_lu();
       }
@@ -540,7 +538,7 @@ int main() {
   using cppde::multistep_method;
   // All four, because a jump is the one place where the three carry shapes
   // differ: the multistep methods throw their Nordsieck history away and build
-  // a new one, the one-step methods carry the state alone, and rb4 solves its
+  // a new one, the one-step methods hand on the state alone, and rb4 solves its
   // stages against a matrix the restart invalidates.
   run_method<cppde::multistepper<multistep_method::bdf, double, cppde::dense_lu_tag>>("bdf", 1e-6);
   run_method<cppde::multistepper<multistep_method::adams, double, cppde::dense_lu_tag>>("adams", 1e-6);

@@ -27,8 +27,6 @@
    nfe,njev     int     cumulative counters (function / Jacobian evals)
    nsetups      int     cumulative LU setups
    setup_reason string  trigger for the most recent setup
-   pece_iters   int     Adams PECE iteration count (0 for BDF)
-   pece_diverged int    1 if PECE hit divergence watchdog
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -59,8 +57,6 @@ struct TraceBuffer {
   std::vector<int>         njev;
   std::vector<int>         nsetups;
   std::vector<std::string> setup_reason;
-  std::vector<int>         pece_iters;
-  std::vector<int>         pece_diverged;
 
   std::size_t size() const { return nst.size(); }
 
@@ -70,7 +66,7 @@ struct TraceBuffer {
     acnrm_state.clear();  tq2.clear();          gamma.clear();
     gamrat.clear();       newton_conv.clear();  mode.clear();
     nfe.clear();          njev.clear();         nsetups.clear();
-    setup_reason.clear(); pece_iters.clear();   pece_diverged.clear();
+    setup_reason.clear();
   }
 };
 

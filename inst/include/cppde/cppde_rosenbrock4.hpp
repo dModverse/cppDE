@@ -41,7 +41,8 @@ struct default_rosenbrock_coefficients
       d1 ( static_cast<value_type>( 0.25 ) ) ,
       d2 ( static_cast<value_type>( -0.1043 ) ) ,
       d3 ( static_cast<value_type>( 0.1035 ) ) ,
-      d4 ( static_cast<value_type>( 0.3620000000000023e-01 ) ) ,
+      // gamma_4 of RODAS (Hairer and Wanner, rodas.f).
+      d4 ( static_cast<value_type>( -0.3620000000000023e-01 ) ) ,
       c2 ( static_cast<value_type>( 0.386 ) ) ,
       c3 ( static_cast<value_type>( 0.21 ) ) ,
       c4 ( static_cast<value_type>( 0.63 ) ) ,
@@ -509,7 +510,7 @@ public:
   //
   //  The stage recursion belongs to the method and is stated once, in stages().
   //  The adjoint transposes it, and reads the coefficients and the stage
-  //  vectors from here rather than carrying a second copy of either.
+  //  vectors from here rather than keeping a second copy of either.
   // ====================================================================
 
   /// Stage vectors g1..g5; the sixth solve is the embedded error, which
@@ -558,7 +559,7 @@ public:
     }
   }
 
-  /// The df/dt weights d_i, one-based; stages five and six carry none.
+  /// The df/dt weights d_i, one-based; stages five and six have none.
   static double stage_d(int i) {
     const rosenbrock_coefficients c;
     switch (i) {

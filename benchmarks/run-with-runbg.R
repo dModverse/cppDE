@@ -17,7 +17,7 @@
 ##  refuses a placement that does not fit and the memory guards bound the rest.
 
 ##  Nothing reserves the machine, so ratios stay valid while absolute
-##  milliseconds do not; every row carries node and cpu. Authentication has to
+##  milliseconds do not; every row records node and cpu. Authentication has to
 ##  be non-interactive, including for `--machines localhost`.
 
 ##  runbg's own `walltime` is not exposed: in dMod2 it splices a second

@@ -16,7 +16,9 @@
 //
 // Covered: bdf, adams, rb4 and tsit5, each on an adaptive run with observations
 // interpolated inside the steps, seeded one carry slot at a time and with a
-// mixed seed over every observation at once.
+// mixed seed over every observation at once. Then the checked sweep
+// (set_refine, and the extrapolated flow for bdf) against finite differences
+// of the flow, and the extrapolated flow backwards in time.
 //
 // Every number is printed at %.17g, so the output is the assertion as well.
 //
@@ -35,6 +37,7 @@
 
 #include <cppde/cppde.hpp>
 #include <cppde/cppde_adjoint_step.hpp>
+#include <cppde/cppde_extrapolated_flow.hpp>
 
 using cppde::dual;
 
@@ -116,8 +119,7 @@ struct adjoint_terms {
     out[NX + 2] += sc*((-x[1] * x[1]) * lam[1] + (x[1] * x[1] * std::cos(t)) * lam[2]);
   }
 
-  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v,
-                   const std::vector<double>& lam, const double& t,
+  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v, const std::vector<double>& lam, const double& t,
                    std::vector<double>& out) const {
     out.assign(NX, 0.0);
     out[0] = 0.0;
@@ -128,8 +130,7 @@ struct adjoint_terms {
   }
 
   void jvp_p_t_vec_axpy(const std::vector<double>& x,
-                        const std::vector<double>& v,
-                        const std::vector<double>& lam, const double& t,
+                        const std::vector<double>& v, const std::vector<double>& lam, const double& t,
                         const double& sc, double* out) const {
     const double q = x[2] * v[1] + x[1] * v[2];
     out[NX + 0] += sc * ((-v[0]) * lam[0] + (v[0]) * lam[1]);
@@ -203,15 +204,18 @@ template<class S> struct is_adams<S, std::void_t<decltype(S::method)>>
 // ---------------------------------------------------------------------------
 
 template<class S>
-static void forward_value(store_of<S>& store, std::vector<double>& x_obs)
+static void forward_value(store_of<S>& store, std::vector<double>& x_obs,
+                          const std::vector<double>& times = TIMES,
+                          double atol = ATOL, double rtol = RTOL,
+                          const double* x0 = X0)
 {
   std::vector<double> p(P, P + NP);
   auto sys = make_system<double>(p);
 
-  typename pipeline<S>::controller ctl(ATOL, RTOL);
+  typename pipeline<S>::controller ctl(atol, rtol);
   typename pipeline<S>::dense dense(std::move(ctl));
 
-  std::vector<double> x(X0, X0 + NX);
+  std::vector<double> x(x0, x0 + NX);
   std::vector<cppde::detail::FixedEvent<std::vector<double>, double>> fixed;
   std::vector<cppde::detail::RootEvent<std::vector<double>, double>>  root;
   cppde::StepChecker checker(1000000, 1000000);
@@ -223,7 +227,7 @@ static void forward_value(store_of<S>& store, std::vector<double>& x_obs)
   };
   cppde::reverse::step_collector<decltype(dense), S, double> step_obs(store, dense, HINI);
 
-  cppde::integrate_times_dense(dense, sys, x, TIMES.begin(), TIMES.end(), HINI,
+  cppde::integrate_times_dense(dense, sys, x, times.begin(), times.end(), HINI,
                                obs, fixed, root, checker, 1e-8, 1,
                                cppde::detail::no_dt_estimator{}, nullptr,
                                std::ref(step_obs));
@@ -538,6 +542,102 @@ static void run_method(const char* name, double tol)
 
 }
 
+// ---------------------------------------------------------------------------
+//  The checked sweep differentiates the flow, not the scheme, so its oracle is
+//  finite differences of a tight value run over the same times. The seed is one
+//  mixed row over every observation.
+// ---------------------------------------------------------------------------
+
+template<class S>
+static double seeded_value(const std::vector<double>& times, const double* x0,
+                           const std::vector<double>& seeds)
+{
+  using tight = cppde::rosenbrock4<double>;
+  store_of<tight> store;
+  std::vector<double> x_obs;
+  forward_value<tight>(store, x_obs, times, 1e-13, 1e-12, x0);
+  double v = 0.0;
+  for (std::size_t k = 0; k < x_obs.size(); ++k) v += seeds[k] * x_obs[k];
+  return v;
+}
+
+template<class S>
+static void run_refined(const char* name, const std::vector<double>& times)
+{
+  store_of<S> store;
+  std::vector<double> x_run;
+  forward_value<S>(store, x_run, times, 1e-6, 1e-6);
+  const std::size_t n_seed = store.n_obs() * NX;
+  std::vector<double> seeds(n_seed);
+  for (std::size_t k = 0; k < n_seed; ++k)
+    seeds[k] = 0.3 * static_cast<double>(k % 5) - 0.7;
+
+  std::vector<double> pv(P, P + NP);
+  auto sysd = make_system<double>(pv);
+  adjoint_terms adj{pv};
+  std::vector<double> got(NX + NP, 0.0);
+  constexpr bool multistep = cppde::reverse::has_step_snapshot<S>::value;
+  if constexpr (multistep) {
+    cppde::adjoint::closed_multistep_trajectory<S> tr;
+    cppde::adjoint::extrapolated_flow<typename cppde::rosenbrock4<double>::lu_type> flow;
+    flow.set_refine(1e-9, 1e-11, 1e-11);
+    tr.sweep_flow(store, NX + NP, seeds.data(), sysd, adj, flow);
+    for (std::size_t i = 0; i < NX; ++i) got[i] = tr.wx0()[i] + tr.wp()[i];
+    for (std::size_t j = 0; j < NP; ++j) got[NX + j] = tr.wp()[NX + j];
+    check(flow.refine_failures() == 0, std::string(name) + " refined flow met the test");
+  } else {
+    S st;
+    cppde::adjoint::closed_onestep_trajectory<S> tr;
+    tr.set_refine(1e-9, 1e-11, 1e-11);
+    tr.sweep(store, NX + NP, seeds.data(), sysd, adj, st);
+    for (std::size_t i = 0; i < NX; ++i) got[i] = tr.wx0()[i];
+    for (std::size_t j = 0; j < NP; ++j) got[NX + j] = tr.wp()[NX + j];
+    check(tr.refine_failures() == 0, std::string(name) + " refined steps met the test");
+  }
+
+  // Central differences on the initial state and the parameters.
+  double x0[NX];
+  for (std::size_t i = 0; i < NX; ++i) x0[i] = store.step(0).start_state()[i];
+  for (std::size_t d = 0; d < NX + NP; ++d) {
+    double* v = d < NX ? &x0[d] : &P[d - NX];
+    const double saved = *v, h = 1e-5 * std::max(1.0, std::fabs(saved));
+    *v = saved + h; const double hi = seeded_value<S>(times, x0, seeds);
+    *v = saved - h; const double lo = seeded_value<S>(times, x0, seeds);
+    *v = saved;
+    close((hi - lo) / (2 * h), got[d],
+          std::string(name) + " refined d" + std::to_string(d), 1e-5);
+  }
+}
+
+// The extrapolated flow from t1 back to t0 and forward again is the identity:
+// the cotangent comes back unchanged and the two shares of the gradient cancel.
+static void flow_roundtrip()
+{
+  const double t0 = 0.3, t1 = 1.1;
+  using tight = cppde::rosenbrock4<double>;
+  store_of<tight> store;
+  std::vector<double> x_obs;
+  forward_value<tight>(store, x_obs, {t0, t1}, 1e-13, 1e-12);
+  const std::vector<double> x0(X0, X0 + NX), x1(x_obs.end() - NX, x_obs.end());
+
+  std::vector<double> pv(P, P + NP);
+  auto sysd = make_system<double>(pv);
+  adjoint_terms adj{pv};
+  cppde::adjoint::extrapolated_flow<typename tight::lu_type> flow;
+  flow.set_refine(1e-8, 1e-10, 1e-10);
+  flow.begin_flow(NX + NP);
+  const std::vector<double> w = {0.3, -0.7, 0.5};
+  const std::vector<cppde::adjoint::obs_ref<double>> none;
+  std::vector<double> lam1, lam0;
+  flow.flow_interval(sysd, adj, NX, NX + NP, x1, t1, t0 - t1, none, w, lam1);
+  flow.flow_interval(sysd, adj, NX, NX + NP, x0, t0, t1 - t0, none, lam1, lam0);
+  for (std::size_t i = 0; i < NX; ++i)
+    close(w[i], lam0[i], "flow roundtrip cotangent " + std::to_string(i), 1e-5);
+  for (std::size_t j = 0; j < NP; ++j)
+    close(0.0, flow.wp()[NX + j], "flow roundtrip share " + std::to_string(j), 1e-5);
+  check(flow.refine_failures() == 0, "flow roundtrip met the test");
+}
+
 int main() {
   using cppde::multistep_method;
   // The two floors are the oracle's, not the adjoint's. An explicit method's
@@ -553,7 +653,10 @@ int main() {
   run_method<cppde::rosenbrock4<double>>("rb4", 1e-10);
   run_method<cppde::tsit5<double>>("tsit5", 1e-10);
 
-
+  run_refined<cppde::multistepper<multistep_method::bdf, double, cppde::dense_lu_tag>>("bdf", TIMES);
+  run_refined<cppde::rosenbrock4<double>>("rb4", TIMES);
+  run_refined<cppde::tsit5<double>>("tsit5", TIMES);
+  flow_roundtrip();
 
   std::printf(g_failures == 0 ? "\nOK\n" : "\n%d FAILURES\n", g_failures);
   return g_failures == 0 ? 0 : 1;

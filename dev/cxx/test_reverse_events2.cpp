@@ -194,8 +194,7 @@ struct adjoint_terms {
     out[NX + 3] += sc * ((V(0.0) - x[2]) * lam[2]);
   }
 
-  void jvp_x_t_vec(const std::vector<V>& x, const std::vector<V>& v,
-                   const std::vector<V>& lam, const V& t,
+  void jvp_x_t_vec(const std::vector<V>& x, const std::vector<V>& v, const std::vector<V>& lam, const V& t,
                    std::vector<V>& out) const {
     out.assign(NX, V(0.0));
     out[1] = (p[1] * v[2]) * lam[0]
@@ -205,8 +204,7 @@ struct adjoint_terms {
     (void)x;
   }
 
-  void jvp_p_t_vec_axpy(const std::vector<V>& x, const std::vector<V>& v,
-                        const std::vector<V>& lam, const V& t,
+  void jvp_p_t_vec_axpy(const std::vector<V>& x, const std::vector<V>& v, const std::vector<V>& lam, const V& t,
                         const V& sc, V* out) const {
     const V q = x[2] * v[1] + x[1] * v[2];
     out[NX + 0] += sc * ((V(0.0) - v[0]) * lam[0] + v[0] * lam[1]);
@@ -295,7 +293,7 @@ static constexpr std::size_t NPOS = cppde::reverse::event_record<D>::npos;
 
 // ---------------------------------------------------------------------------
 //  The value run, on the type forward over reverse runs it on: a dual seeded
-//  with the identity, so the store's event states carry dx/dtheta.
+//  with the identity, so the store's event states hold dx/dtheta.
 //
 //  One-step methods only. A multistep carry is typed by the scalar it was
 //  recorded on, so a dual2nd replay cannot load a dual store's Nordsieck

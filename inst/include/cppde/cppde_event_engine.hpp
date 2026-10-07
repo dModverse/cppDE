@@ -30,6 +30,7 @@
 #include <cppde/cppde_events.hpp>
 #include <cppde/cppde_saltation.hpp>
 #include <cppde/cppde_switch_times.hpp>
+#include <cppde/cppde_step_limits.hpp>
 
 namespace cppde {
 namespace detail {
@@ -138,7 +139,7 @@ struct event_note {
   const State* x_after  = nullptr;
   const std::vector<TriggeredEvent>* triggered = nullptr;
   // Root conditions a fixed jump switched on, in the order they were applied on
-  // the event surface. Non-null only where a model carries both kinds.
+  // the event surface. Non-null only where a model has both kinds.
   const std::vector<size_t>* switched = nullptr;
 };
 
@@ -331,7 +332,7 @@ private:
      last_time[j] = t_start;
    }
    // The step restarts on the surface of the events that just fired. Their
-   // round-off residual there carries a sign, and keeping it would let the
+   // round-off residual there has a sign, and keeping it would let the
    // crossing that was just handled be detected a second time.
    for (const auto& te : triggered) last_val[te.index] = 0.0;
  }
@@ -735,7 +736,7 @@ private:
  // right-hand side in t is bridged over it too. Either bridge is no step and
  // leaves no checkpoint; the stepper restarts past it before the next step. A
  // stall with no jump ahead restarts the stepper where it stands: its history
- // may still carry the right-hand side from before a jump a step went across.
+ // may still hold the right-hand side from before a jump a step went across.
  // --------------------------------------------------------------------------
  template<class Checker>
  void advance(size_t& steps, Checker& checker) {
@@ -822,12 +823,18 @@ private:
    return std::isnan(t1) ? t_past : t1;
  }
 
- // The next step ends a margin short of the next switching time at the latest.
+ // The next step ends a margin short of the next switching time at the latest,
+ // and within the step-size bound of a refined run where one is set.
  void limit_to_switch() {
    if constexpr (has_limit_step<Stepper, Time>::value) {
-     const double s = next_switch(scalar_value(m_st.current_time()));
+     const double t0 = scalar_value(m_st.current_time());
+     const double s = next_switch(t0);
      if (!std::isnan(s))
        m_st.limit_step(Time(s - m_switch_dir * m_switch_margin));
+     if (const step_limits* lim = step_limit_sink()) {
+       const double c = lim->cap(t0, m_switch_dir);
+       if (std::isfinite(c) && c > 0.0) m_st.limit_step(Time(t0 + m_switch_dir * c));
+     }
    }
  }
 
@@ -865,7 +872,7 @@ private:
  }
 
  // The first double in (t0, t0 + h] from which on f(., x0) differs from f0 by
- // more than a step of size h can carry, NaN if there is none. The difference
+ // more than a step of size h can absorb, NaN if there is none. The difference
  // is measured as the error test measures it, and a jump has to sit between
  // two adjacent doubles, which a continuous f never shows at this h.
  double locate_time_jump(const State& x0, const State& f0, double t0, double h) {
@@ -947,7 +954,7 @@ private:
      }
      double g_mid = scalar_value(m_root[idx].func(x_mid, t_mid));
      // An exact zero is the root itself. Moving the lower end onto it and
-     // carrying on would step past it and lose the bracket.
+     // continuing would step past it and lose the bracket.
      if (g_mid == 0.0) { x_lo = x_mid; t_lo = t_mid; break; }
      if (g_lo * g_mid < 0.0) { x_hi = x_mid; t_hi = t_mid; g_hi = g_mid; }
      else { x_lo = x_mid; t_lo = t_mid; g_lo = g_mid; }
@@ -969,7 +976,7 @@ private:
      State x_mid(x_root.size()); m_st.calc_state(t_mid, x_mid);
      double g_mid = scalar_value(m_root[idx].func(x_mid, t_mid));
      // An exact zero is the root itself. Moving the lower end onto it and
-     // carrying on would step past it and lose the bracket.
+     // continuing would step past it and lose the bracket.
      if (g_mid == 0.0) { t_lo = t_mid; break; }
      if (g_lo * g_mid < 0.0) { t_hi = t_mid; g_hi = g_mid; }
      else { t_lo = t_mid; g_lo = g_mid; x_root = x_mid; t_root = t_mid; }

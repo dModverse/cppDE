@@ -19,7 +19,7 @@ chunks are the sections of
 | field | 1 to 3 T, seven values, about 30° from the film normal |
 
 The signal rises within 0.5 ps (ultrafast demagnetisation) and recovers
-within a few picoseconds. The recovery carries a precession at 40 to 100
+within a few picoseconds. The recovery shows a precession at 40 to 100
 GHz. The seven traces are fitted jointly.
 
 ``` r
@@ -301,7 +301,7 @@ Gauss-Newton on a trust region with exact subproblem (Moré-Sorensen),
 from 100 random starts. Positive parameters are fitted as $`\log_{10}`$,
 the fractions $`K`$ and $`\phi/90^\circ`$ as
 $`\log_{10}\bigl(x/(1-x)\bigr)`$, so one unit is one decade. The physics
-parameters carry a Gaussian prior with a standard deviation of three
+parameters have a Gaussian prior with a standard deviation of three
 decades, centred on orders of magnitude and the nominal field angle.
 
 ``` r

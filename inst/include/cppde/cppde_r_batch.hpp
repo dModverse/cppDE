@@ -37,7 +37,7 @@
 #endif
 
 #include <cppde/cppde_blas_threads.hpp>
-#include <cppde/cppde_err_weights.hpp>
+#include <cppde/cppde_step_limits.hpp>
 #include <cppde/cppde_event_window.hpp>
 #include <cppde/cppde_return_codes.hpp>
 #include <cppde/cppde_step_trace.hpp>
@@ -61,6 +61,11 @@ struct solve_args {
   // Whether the sweep also reports the grid it ran on. An attribute of the seed
   // rather than a sixteenth argument, which every compiled model would need.
   bool adj_trace = false;
+  // Check each step of the sweep, to this multiple of reltol; 0 is off.
+  double refine = 0.0;
+  // The absolute tolerance on the gradient: the CVODES backward problem holds
+  // its quadrature to it, the checked sweep each step's share; 0 keeps it out.
+  double gradtol = 0.0;
   // A gradient needs two solves at one theta: values, then the sweep. The first
   // hands its checkpoints out, the second takes them back and integrates
   // nothing. Opaque here: only the model knows the store's type.
@@ -73,13 +78,13 @@ struct solve_args {
   bool sens_err_con = true;
   // The seed's own tangents, [n_out, n_states, n_seed, n_sens]. A cotangent
   // handed down by a node above the ODE moves with theta, and forward over
-  // reverse has to see that: the sweep carries the seed as a dual, so this is
-  // what fills its derivative slots. Rides on the seed, like errWeights.
+  // reverse has to see that: the sweep takes the seed as a dual, so this is
+  // what fills its derivative slots, and rides on the seed.
   const double* seed_tan = nullptr;
   int n_seed_tan = 0;
-  // lambda from an earlier sweep, read back as a step-size weight. Empty is the
-  // shipped state and costs nothing. See cppde_err_weights.hpp.
-  cppde::err_weights weights;
+  // Step-size bounds, empty for none. Internal: set only by tests, through
+  // attr(times, "hmax").
+  cppde::step_limits limits;
   double abstol = 1e-6, reltol = 1e-6, hini = 0.0, root_tol = 1e-6;
   int maxprogress = 50, maxsteps = 1000000, maxroot = 1;
   std::vector<const double*> ftimes, fvalues;
@@ -95,7 +100,7 @@ struct solve_result {
   std::vector<double> adjoint;
   int n_adj_rows = 0, n_adj_cols = 0;
   // Forward over reverse: the same sweep run over a dual, so every entry of
-  // `adjoint` carries its directional derivatives. [n_adj_rows, n_sens,
+  // `adjoint` has its directional derivatives. [n_adj_rows, n_sens,
   // n_adj_cols], and under the identity seeding that is the Hessian.
   std::vector<double> adjoint2;
   int n_adj_derivs = 0;
@@ -105,6 +110,8 @@ struct solve_result {
   //   eta             [n_adj_steps, n_adj_cols]   lambda^T e_k
   //   lambda          [n_adj_steps, n_states, n_adj_cols]
   std::vector<double> step_t, step_h, eta, lambda;
+  std::vector<int> step_m;   // the substeps the sweep took each step in
+  int refine_failures = 0;   // checked steps that missed the test, all columns
   int n_adj_steps = 0, n_adj_states = 0;
   // Set only under args.want_store. `wrap_store` is emitted by the model, the
   // only place the store's type is known; phase C calls it on the main thread.
@@ -251,57 +258,6 @@ inline void run_batch(int K, int nthreads, Fn&& fn) {
 // ---------------------------------------------------------------------------
 //  Phase A: SEXP -> solve_args
 // ---------------------------------------------------------------------------
-// The weights as R hands them: list(time, lambda, breaks, gradtol, floor).
-// Anything malformed leaves the object empty rather than half-filled, so a
-// mistake upstream costs the weighting and never the answer.
-inline void read_err_weights(SEXP wl, cppde::err_weights& out) {
-  out.clear();
-  if (Rf_isNull(wl) || TYPEOF(wl) != VECSXP) return;
-
-  SEXP nms = Rf_getAttrib(wl, R_NamesSymbol);
-  if (Rf_isNull(nms)) return;
-  auto elt = [&](const char* want) -> SEXP {
-    for (int i = 0; i < Rf_length(nms); ++i)
-      if (std::strcmp(CHAR(STRING_ELT(nms, i)), want) == 0)
-        return VECTOR_ELT(wl, i);
-    return R_NilValue;
-  };
-
-  SEXP tS = elt("time"), lS = elt("lambda");
-  if (Rf_isNull(tS) || Rf_isNull(lS)) return;
-  const int nt = Rf_length(tS);
-  const int nl = Rf_length(lS);
-  if (nt <= 0 || nl <= 0 || nl % nt != 0) return;
-  const std::size_t n_x = static_cast<std::size_t>(nl / nt);
-
-  // R hands lambda column-major, [n_t, n_x]; err_weights wants it row-major by
-  // sample, so this is a transpose and not a copy.
-  std::vector<double> t(REAL(tS), REAL(tS) + nt);
-  std::vector<double> lam(static_cast<std::size_t>(nl));
-  const double* src = REAL(lS);
-  for (int i = 0; i < nt; ++i)
-    for (std::size_t j = 0; j < n_x; ++j)
-      lam[static_cast<std::size_t>(i) * n_x + j] =
-          src[static_cast<std::size_t>(i) + static_cast<std::size_t>(nt) * j];
-
-  std::vector<std::size_t> breaks;
-  SEXP bS = elt("breaks");
-  if (!Rf_isNull(bS)) {
-    SEXP bI = PROTECT(Rf_coerceVector(bS, INTSXP));
-    for (int i = 0; i < Rf_length(bI); ++i) {
-      const int v = INTEGER(bI)[i];
-      if (v >= 1 && v <= nt) breaks.push_back(static_cast<std::size_t>(v - 1));
-    }
-    UNPROTECT(1);
-  }
-
-  out.set(std::move(t), std::move(lam), n_x, std::move(breaks));
-  SEXP gS = elt("gradtol");
-  if (!Rf_isNull(gS) && Rf_length(gS) >= 1) out.gradtol(Rf_asReal(gS));
-  SEXP fS = elt("floor");
-  if (!Rf_isNull(fS) && Rf_length(fS) >= 1) out.floor(Rf_asReal(fS));
-}
-
 inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
                                   SEXP sens1iniSEXP, SEXP sens2iniSEXP,
                                   SEXP fixedSEXP, SEXP abstolSEXP,
@@ -337,7 +293,10 @@ inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
     a.n_seed_cols   = nd >= 3 ? INTEGER(d)[2] : 1;
     SEXP tr = Rf_getAttrib(seedSEXP, Rf_install("adjointGrid"));
     a.adj_trace = (!Rf_isNull(tr) && Rf_asLogical(tr) == TRUE);
-    read_err_weights(Rf_getAttrib(seedSEXP, Rf_install("errWeights")), a.weights);
+    SEXP rf = Rf_getAttrib(seedSEXP, Rf_install("refine"));
+    if (!Rf_isNull(rf) && Rf_length(rf) >= 1) a.refine = Rf_asReal(rf);
+    SEXP gt = Rf_getAttrib(seedSEXP, Rf_install("gradtol"));
+    if (!Rf_isNull(gt) && Rf_length(gt) >= 1) a.gradtol = Rf_asReal(gt);
     SEXP stg = Rf_getAttrib(seedSEXP, Rf_install("curvature"));
     if (!Rf_isNull(stg) && TYPEOF(stg) == REALSXP) {
       SEXP sd = Rf_getAttrib(stg, R_DimSymbol);
@@ -358,6 +317,16 @@ inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
       a.store_in = R_ExternalPtrAddr(st);
     SEXP se = Rf_getAttrib(timesSEXP, Rf_install("sensErrCon"));
     if (!Rf_isNull(se)) a.sens_err_con = (Rf_asLogical(se) == TRUE);
+    SEXP hm = Rf_getAttrib(timesSEXP, Rf_install("hmax"));
+    if (!Rf_isNull(hm) && TYPEOF(hm) == VECSXP && Rf_length(hm) == 2) {
+      SEXP ht = VECTOR_ELT(hm, 0), hh = VECTOR_ELT(hm, 1);
+      if (TYPEOF(ht) != REALSXP || TYPEOF(hh) != REALSXP ||
+          Rf_xlength(hh) != Rf_xlength(ht))
+        Rf_error("attr(times, \"hmax\") must hold two double vectors of equal length");
+      const R_xlen_t nh = Rf_xlength(ht);
+      a.limits.t.assign(REAL(ht), REAL(ht) + nh);
+      a.limits.h.assign(REAL(hh), REAL(hh) + nh);
+    }
   }
 
   a.abstol      = REAL(abstolSEXP)[0];
@@ -430,16 +399,16 @@ inline SEXP build_diagnostics(const solve_result& r) {
 
 inline SEXP build_trace(const ndf_detail::TraceBuffer& tb) {
   const int n = static_cast<int>(tb.size());
-  // Not tracing: 18 zero-length vectors plus a names vector, per condition, is
+  // Not tracing: 16 zero-length vectors plus a names vector, per condition, is
   // pure allocation in the serial phase. R drops the element anyway.
   if (n == 0) return R_NilValue;
-  static const char* cn[18] = {
+  static const char* cn[16] = {
       "nst",   "t",      "h",       "q",        "dsm",          "acnrm",
       "acnrm_state", "tq2", "gamma", "gamrat",  "newton_conv",  "mode",
-      "nfe",   "njev",   "nsetups", "setup_reason", "pece_iters", "pece_diverged"};
-  SEXP lst = PROTECT(Rf_allocVector(VECSXP, 18));
-  SEXP nm  = PROTECT(Rf_allocVector(STRSXP, 18));
-  for (int i = 0; i < 18; ++i) SET_STRING_ELT(nm, i, Rf_mkChar(cn[i]));
+      "nfe",   "njev",   "nsetups", "setup_reason"};
+  SEXP lst = PROTECT(Rf_allocVector(VECSXP, 16));
+  SEXP nm  = PROTECT(Rf_allocVector(STRSXP, 16));
+  for (int i = 0; i < 16; ++i) SET_STRING_ELT(nm, i, Rf_mkChar(cn[i]));
   Rf_setAttrib(lst, R_NamesSymbol, nm);
   UNPROTECT(1);
 
@@ -467,30 +436,31 @@ inline SEXP build_trace(const ndf_detail::TraceBuffer& tb) {
   put_dbl(6, tb.acnrm_state);  put_dbl(7, tb.tq2);          put_dbl(8, tb.gamma);
   put_dbl(9, tb.gamrat);       put_int(10, tb.newton_conv); put_str(11, tb.mode);
   put_int(12, tb.nfe);         put_int(13, tb.njev);        put_int(14, tb.nsetups);
-  put_str(15, tb.setup_reason);put_int(16, tb.pece_iters);  put_int(17, tb.pece_diverged);
+  put_str(15, tb.setup_reason);
 
   UNPROTECT(1);
   return lst;
 }
 
-// list(time, h, eta, lambda): the grid the sweep ran on and what the adjoint
-// says about each step. eta is the refinement indicator.
+// list(time, h, eta, lambda, substeps, failures): the grid the sweep ran on and
+// what the adjoint says about each step. eta is the refinement indicator.
 inline SEXP build_adjoint_grid(const solve_result& r) {
   const int ns = r.n_adj_steps, nc = r.n_adj_cols, nx = r.n_adj_states;
-  SEXP ans   = PROTECT(Rf_allocVector(VECSXP, 4));
-  SEXP names = PROTECT(Rf_allocVector(STRSXP, 4));
-  const char* nm[4] = {"time", "h", "eta", "lambda"};
-  for (int i = 0; i < 4; ++i) SET_STRING_ELT(names, i, Rf_mkChar(nm[i]));
+  const int nel = 6;
+  SEXP ans   = PROTECT(Rf_allocVector(VECSXP, nel));
+  SEXP names = PROTECT(Rf_allocVector(STRSXP, nel));
+  const char* nm[nel] = {"time", "h", "eta", "lambda", "substeps", "failures"};
+  for (int i = 0; i < nel; ++i) SET_STRING_ELT(names, i, Rf_mkChar(nm[i]));
   Rf_setAttrib(ans, R_NamesSymbol, names);
   UNPROTECT(1);
 
   SEXP tv = PROTECT(Rf_allocVector(REALSXP, ns));
-  if (ns) std::memcpy(REAL(tv), r.step_t.data(), sizeof(double) * (size_t)ns);
+  if (ns) std::memcpy(REAL(tv), r.step_t.data(), sizeof(double) * static_cast<size_t>(ns));
   SET_VECTOR_ELT(ans, 0, tv);
   UNPROTECT(1);
 
   SEXP hv = PROTECT(Rf_allocVector(REALSXP, ns));
-  if (ns) std::memcpy(REAL(hv), r.step_h.data(), sizeof(double) * (size_t)ns);
+  if (ns) std::memcpy(REAL(hv), r.step_h.data(), sizeof(double) * static_cast<size_t>(ns));
   SET_VECTOR_ELT(ans, 1, hv);
   UNPROTECT(1);
 
@@ -506,6 +476,15 @@ inline SEXP build_adjoint_grid(const solve_result& r) {
     std::memcpy(REAL(lm), r.lambda.data(), sizeof(double) * r.lambda.size());
   SET_VECTOR_ELT(ans, 3, lm);
   UNPROTECT(2);
+
+  SEXP mv = PROTECT(Rf_allocVector(INTSXP, ns));
+  for (int k = 0; k < ns; ++k)
+    INTEGER(mv)[k] = static_cast<std::size_t>(k) < r.step_m.size()
+                         ? r.step_m[static_cast<std::size_t>(k)] : 1;
+  SET_VECTOR_ELT(ans, 4, mv);
+  UNPROTECT(1);
+
+  SET_VECTOR_ELT(ans, 5, Rf_ScalarInteger(r.refine_failures));
 
   UNPROTECT(1);
   return ans;

@@ -3,7 +3,7 @@
 ## =====================================================================
 
 ##  A results tree is browsed far more often than it is opened, so the directory
-##  name carries what the run was, not only when. Both it and the README inside
+##  name says what the run was, not only when. Both it and the README inside
 ##  are generated here, so a fresh run and a retro-fitted one describe alike.
 
 ## <timestamp>_<tier>[_<suite>]_c<cores>_<modes>[_<models>][_allcond]
@@ -34,7 +34,7 @@ SPARSE_FIGURE_LEGEND <- c(
   "`09-sparse-crossover` | the same ratios against system size")
 
 
-## `info` carries whatever is known about the run; every field is
+## `info` holds whatever is known about the run; every field is
 ## optional so that a folder retro-fitted from an old run still gets a
 ## README rather than an error.
 write_run_readme <- function(df, outdir, info = list()) {

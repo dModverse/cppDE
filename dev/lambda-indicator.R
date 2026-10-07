@@ -134,7 +134,7 @@ gradient <- function(m, rtol, grid = FALSE) {
 # adjoint belongs to.
 functional <- function(r, m) sum(r$variable * m$cotangent[, , 1])
 
-# Worst relative deviation over the components that carry something. A
+# Worst relative deviation over the components that hold something. A
 # component three decades below the largest contributes nothing to any use of
 # the gradient and would otherwise dominate a per-component ratio.
 rel_worst <- function(g, g_ref) {
@@ -143,8 +143,8 @@ rel_worst <- function(g, g_ref) {
   max(abs(g[keep] - g_ref[keep]) / abs(g_ref[keep]))
 }
 
-# Share of the total carried by the worst tenth of steps. 1 means one step
-# carries everything, 0.1 means the indicator is flat.
+# Share of the total taken by the worst tenth of steps. 1 means one step
+# holds everything, 0.1 means the indicator is flat.
 concentration <- function(v) {
   s <- sum(v)
   if (!is.finite(s) || s <= 0) return(NA_real_)
@@ -193,7 +193,7 @@ study <- function(name, m) {
   cat("  eta / errG spreads by ", spread(out$eta_over_G),
       "   (this is what Stufe 9 wants to control)\n", sep = "")
   cat("  (wdt*h) / errG spreads by ", spread(out$wdt_over_G), "\n", sep = "")
-  cat("  worst tenth of steps carries ",
+  cat("  worst tenth of steps holds ",
       signif(100 * mean(out$conc_eta), 3), "% of sum |eta|\n", sep = "")
   invisible(out)
 }

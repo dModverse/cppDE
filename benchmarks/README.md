@@ -146,7 +146,7 @@ compare against and none is invented: the `sens2` rows report wall-clock
 time and step counts only, with `err` and `err_sens` left `NA`. They are
 cppDE measurements, not a comparison.
 
-Second-order forward AD carries M(M+1)/2 additional directions, so cost
+Second-order forward AD propagates M(M+1)/2 additional directions, so cost
 grows quadratically in the number of parameters. `--max-sens2` (default
 10) caps M for this mode separately from `--max-sens`, and `deriv2`
 requires a finite compile-time AD width, which the harness sets to
@@ -317,7 +317,7 @@ product inside the machine, remembering that a worker can peak in the
 gigabytes while it compiles. Nothing reserves the host either, so
 co-tenants land in the timings: ratios stay valid, both solvers of a
 matched cell run in the same process, while absolute milliseconds are
-only comparable within one host. Every row carries `node` and `cpu`.
+only comparable within one host. Every row records `node` and `cpu`.
 
 `--submit` first probes each host over ssh for R, cppDE, the CVODE
 backend, KLU and a C++ compiler, and refuses to send anything if one is

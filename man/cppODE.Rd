@@ -94,7 +94,7 @@ returned as \verb{$trace} from \code{\link[=solveODE]{solveODE()}}.}
 \item{verbose}{Logical. Print progress messages.}
 }
 \value{
-The compiled model name (character) carrying the attributes
+The compiled model name (character) with the attributes
 required by \code{\link[=solveODE]{solveODE()}}: \code{equations}, \code{srcfile}, \code{variables},
 \code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed}, \code{deriv},
 \code{deriv2}, \code{derivMode}, \code{sparse}, \code{method}, \code{useNDF}, \code{dimNames},

@@ -20,7 +20,7 @@ mods <- list(
               variables = c("slow", "fast"), parameters = c("ks", "kslow", "kf", "kfast"),
               modelname = "ptc_rt", compile = FALSE)
 )
-do.call(compile, c(unname(mods), list(output = "test_ptc", cores = 1)))
+do.call(compile, c(unname(mods), list(output = "test_ptc", cores = test_cores())))
 
 # -- Flow ---------------------------------------------------------------------------
 

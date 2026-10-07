@@ -79,7 +79,7 @@ Jacobian with a cotangent of the outputs, \verb{[n_obs, n_out]} or
 \code{cotangentP} sums over observations because the parameters are shared
 across them. Given \code{tangentX}, \code{tangentP} or \code{curvature}, the derivative
 of the cotangent along the tangent, the same call runs forward-reverse and
-adds \code{curvatureX} and \code{curvatureP}; this needs \code{"forward-reverse"}. Carries attributes \code{equations},
+adds \code{curvatureX} and \code{curvatureP}; this needs \code{"forward-reverse"}. Has attributes \code{equations},
 \code{variables}, \code{parameters}, \code{fixed}, \code{modelname}, \code{srcfile} and
 \code{derivMode}.
 }

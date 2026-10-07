@@ -465,7 +465,7 @@ inline void vec_zero_with_slab(
     const std::size_t n = y.size();
     for (std::size_t i = 0; i < n; ++i) y[i].x() = S(0);
     // memset only over trivially copyable tangents: a dual tangent element
-    // carries a tan_ pointer that must survive.
+    // holds a tan_ pointer that must survive.
     if constexpr (std::is_trivially_copyable_v<S>) {
       if (y_slab.primed()) {
         const std::size_t total = y_slab.tangent_size();
@@ -518,7 +518,7 @@ inline void vec_copy_with_slab(
     for (std::size_t i = 0; i < n; ++i)
       y[i].x() = x[i].x();
     // memcpy only over trivially copyable tangents: a dual tangent element
-    // carries a tan_ pointer that must not be aliased into y.
+    // holds a tan_ pointer that must not be aliased into y.
     if constexpr (std::is_trivially_copyable_v<S>) {
       if (y_slab.primed() && x_slab.primed()) {
         assert(y_slab.tangent_size() == x_slab.tangent_size()

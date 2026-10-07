@@ -8,7 +8,7 @@
 # A leading --reverse-step, --reverse-step-rb4, --reverse-step-multistep,
 # --reverse-trajectory-methods, --reverse-events, --reverse-events2,
 # --reverse-forcing,
-# --reverse-sparse, --err-weights, --ad-transpose or --sparse-transpose selects a reverse-AD
+# --reverse-sparse, --ad-transpose or --sparse-transpose selects a reverse-AD
 # harness; --linmap the constant linear maps; --bench-adjoint-step selects a
 # bench rather than a test.
 #
@@ -65,11 +65,6 @@ case "${1:-}" in
   --bench-adjoint-step)
     SRC="$REPO/dev/cxx/bench_adjoint_step.cpp"
     OUT=${TMPDIR:-/tmp}/cppde_bench_adjoint_step
-    shift
-    ;;
-  --err-weights)
-    SRC="$REPO/dev/cxx/test_err_weights.cpp"
-    OUT=${TMPDIR:-/tmp}/cppde_err_weights
     shift
     ;;
   --linmap)

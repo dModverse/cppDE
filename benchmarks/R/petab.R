@@ -6,7 +6,7 @@
 ##  R-syntax strings, parms as state initials followed by parameters, times as
 ##  the output grid, and sens as the parameters to differentiate with respect to.
 
-##  PEtab carries more than that. What is used and what is dropped is recorded
+##  PEtab specifies more than that. What is used and what is dropped is recorded
 ##  in the problem's `notes` and printed by the runner, so nothing is silent.
 
 ## Requires sbml.R to have been sourced first (see bench_source() in
@@ -134,7 +134,7 @@ petab_load <- function(yaml_path) {
        yaml = yaml_path)
 }
 
-## Conditions ranked by how much trajectory they actually carry.  PEtab
+## Conditions ranked by how much trajectory they actually hold.  PEtab
 ## marks steady-state measurements with time = inf; a condition made up
 ## entirely of those has nothing to integrate.
 petab_conditions <- function(loaded) {

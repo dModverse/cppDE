@@ -81,7 +81,7 @@ fx_collide <- lapply(seq_along(collide_orders), function(i)
          parameters = collide_orders[[i]], deriv = TRUE, derivMode = "forward",
          modelname = paste0("collide_", i), convenient = TRUE))
 do.call(compile, c(unname(fx), fx_collide,
-                   list(output = "test_cppFUN", cores = 1)))
+                   list(output = "test_cppFUN", cores = test_cores())))
 
 # -- Basic cppFUN output structure ---------------------------------------------
 
@@ -366,7 +366,7 @@ test_that("derivMode builds exactly the directions it names", {
 #  vjp over a dual: forward over reverse on an observation function.
 #
 #  Oracle is the forward Hessian of the same object, contracted with the
-#  cotangent and read along the tangents the inputs carry. Both are exact
+#  cotangent and read along the tangents of the inputs. Both are exact
 #  derivatives of the same expressions, so the gap is rounding.
 # ---------------------------------------------------------------------------
 
@@ -388,7 +388,7 @@ test_that("the dual vjp keeps the first order it already answered", {
   expect_identical(dim(r2$curvatureP), c(2L, 1L, 3L))
 })
 
-test_that("the dual vjp answers the curvature the forward Hessian carries", {
+test_that("the dual vjp answers the curvature the forward Hessian holds", {
   f <- fx$vjp_fr
   set.seed(3)
   n <- 4L; nd <- 3L

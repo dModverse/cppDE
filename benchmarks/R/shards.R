@@ -24,7 +24,7 @@ BENCH_TOLSETS <- list(
 
 ## Parses the tier's classic and PEtab problems, then drops what the runner
 ## would drop anyway, flagged unusable or over the state cap, so that a shard
-## never carries a case that dies on arrival.
+## never contains a case that dies on arrival.
 
 ## `conditions` is the string the drivers take on the command line: "all", or a
 ## count per PEtab model.
@@ -80,7 +80,7 @@ bench_problems_for_tier <- function(tier, petab_root, conditions = "1",
 ## stay comparable shard by shard.
 
 ## The cost proxy is states x conditions x forward directions; a reverse case
-## counts as ten. A model marked for the sparse sweep carries three times the
+## counts as ten. A model marked for the sparse sweep runs three times the
 ## solver configs and is weighted for it.
 balance_shards <- function(problems, n, max_sens = 32L, reverse_from = 120L) {
   cost <- vapply(problems, function(cs) {

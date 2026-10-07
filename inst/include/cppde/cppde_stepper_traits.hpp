@@ -74,7 +74,7 @@ template<class T>
 struct has_multistepper_tag<T, std::void_t<typename T::is_multistepper_tag>>
 : std::true_type {};
 
-// Specialisation for any type carrying the multistepper tag
+// Specialisation for any type with the multistepper tag
 template<class Stepper>
 struct stepper_traits<Stepper,
                      std::enable_if_t<has_multistepper_tag<Stepper>::value>>

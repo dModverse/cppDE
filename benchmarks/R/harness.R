@@ -140,7 +140,7 @@ compile_sem_reap <- function(slot, stale = 3600) {
 
 ## The wrapper execs what `R CMD config` reports, not a bare `g++`: some builds
 ## answer CXX20 with the compiler alone and keep the standard in CXX20STD,
-## others carry it inline, and hard-coding would drop it on the latter.
+## others put it inline, and hard-coding would drop it on the latter.
 
 ## `ulimit -v` is RLIMIT_AS, address space rather than resident set, so set it
 ## generously: it is a ceiling against runaway growth, not an accounting. g++
@@ -493,7 +493,7 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
     n  <- nrow(solveODE(m0, prob$times, prob$parms, onFailure = "stop")$variable)
     matrix(1, n, prob$nstates, dimnames = list(NULL, names(prob$rhs)))
   }
-  ## The integrator carries the lower triangle of each Hessian; it is read and
+  ## The integrator returns the lower triangle of each Hessian; it is read and
   ## mirrored.
   hessian_of <- function(res, derivMode) {
     if (derivMode == "forward-forward") {
@@ -754,7 +754,7 @@ run_all_problems <- function(problems, builddir, tolerances, modes, configs,
 
 ## The `pinned` column, or what it would have been for a results.csv
 ## written before it existed: there, the sweep was a separate run whose
-## solver labels carry the pinning, and everything else was auto.
+## solver labels record the pinning, and everything else was auto.
 pinned_col <- function(df) {
   if ("pinned" %in% names(df)) return(df$pinned)
   ifelse(grepl("_dense$", df$solver), "dense",
@@ -786,7 +786,7 @@ speedup_table <- function(df, baseline = "CVODE_bdf") {
 }
 
 ## Dense/sparse time ratio per backend and cell. Keyed on `pinned`, not on
-## `lu`: the auto-detected head-to-head rows also carry an `lu`, and pairing
+## `lu`: the auto-detected head-to-head rows also have an `lu`, and pairing
 ## one of those with a pinned row would compare a model against itself.
 sparse_gain_table <- function(df) {
   if (!nrow(df) || !"lu" %in% names(df)) return(NULL)

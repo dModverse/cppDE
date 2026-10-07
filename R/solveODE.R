@@ -1,45 +1,3 @@
-# lambda from an earlier sweep, checked into the shape the C++ side reads.
-# Anything malformed is an error rather than a silently dropped weighting.
-.checkErrWeights <- function(w, n_states) {
-  if (!is.list(w)) stop("'errWeights' must be a list", call. = FALSE)
-  need <- c("time", "lambda")
-  miss <- setdiff(need, names(w))
-  if (length(miss))
-    stop("'errWeights' is missing: ", paste(miss, collapse = ", "), call. = FALSE)
-
-  tt <- as.double(w$time)
-  if (!length(tt) || anyNA(tt))
-    stop("'errWeights$time' must be a non-empty numeric vector", call. = FALSE)
-  if (is.unsorted(tt))
-    stop("'errWeights$time' must be ascending", call. = FALSE)
-
-  lam <- w$lambda
-  if (length(dim(lam)) == 3L && dim(lam)[3] == 1L) dim(lam) <- dim(lam)[1:2]
-  lam <- as.matrix(lam)
-  if (nrow(lam) != length(tt))
-    stop("'errWeights$lambda' has ", nrow(lam), " rows but 'time' has ",
-         length(tt), call. = FALSE)
-  if (ncol(lam) != n_states)
-    stop("'errWeights$lambda' has ", ncol(lam), " columns but the model has ",
-         n_states, " states", call. = FALSE)
-  storage.mode(lam) <- "double"
-
-  ## Indices into `time` the interpolant must not span, because lambda jumps
-  ## there: an observation the objective seeds, or an event reset.
-  br <- if (is.null(w$breaks)) integer(0) else as.integer(w$breaks)
-  if (length(br) && (anyNA(br) || any(br < 1L) || any(br > length(tt))))
-    stop("'errWeights$breaks' must index 'time'", call. = FALSE)
-
-  g <- if (is.null(w$gradtol)) 1e-6 else as.double(w$gradtol)[1]
-  if (!is.finite(g) || g <= 0)
-    stop("'errWeights$gradtol' must be positive", call. = FALSE)
-  f <- if (is.null(w$floor)) 0 else as.double(w$floor)[1]
-  if (!is.finite(f) || f < 0 || f >= 1)
-    stop("'errWeights$floor' must be in [0, 1)", call. = FALSE)
-
-  list(time = tt, lambda = lam, breaks = br, gradtol = g, floor = f)
-}
-
 # The points of one forcing as times and values, from a data.frame with
 # columns time and value or a two-column matrix.
 .parseForcing <- function(f, nm) {
@@ -65,9 +23,8 @@
                          maxattemps = 50L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
                          cotangent = NULL, curvature = NULL,
-                         adjointGrid = FALSE,
-                         errWeights = NULL, keepStore = FALSE, store = NULL,
-                         sensErrCon = TRUE) {
+                         keepStore = FALSE, store = NULL,
+                         sensErrCon = TRUE, adjoint = NULL) {
 
   ## --- Unpack model attributes ---
   stopifnot(is.character(model), length(model) == 1L)
@@ -117,14 +74,6 @@
     if (d[2] != n_states)
       stop("'cotangent' has ", d[2], " state columns, the model has ", n_states)
     storage.mode(cotangent) <- "double"
-    ## Seed attributes keep the .Call signature fixed. adjointGrid and
-    ## errWeights exist only on the native reverse pass; CVODE refuses them.
-    if (isTRUE(adjointGrid)) {
-      if (is_cvode)
-        stop("'adjointGrid' is not available on the CVODE backend: the sweep ",
-             "is CVODES' own backward solve and reports no grid.", call. = FALSE)
-      attr(cotangent, "adjointGrid") <- TRUE
-    }
     ## The cotangent's derivative along the tangent, [n_out, n_states, n_seed,
     ## n_sens]. It rides on the cotangent so the .Call signature stays fixed.
     if (!is.null(curvature)) {
@@ -140,19 +89,10 @@
       storage.mode(curvature) <- "double"
       attr(cotangent, "curvature") <- curvature
     }
-    if (!is.null(errWeights)) {
-      if (is_cvode)
-        stop("'errWeights' is not available on the CVODE backend: the backward ",
-             "solve runs under CVODES' own step-size control.", call. = FALSE)
-      attr(cotangent, "errWeights") <- .checkErrWeights(errWeights, n_states)
-    }
 
   }
   if (!is.null(curvature) && is.null(cotangent))
     stop("'curvature' is the derivative of a cotangent and needs one",
-         call. = FALSE)
-  if (!is.null(errWeights) && is.null(cotangent))
-    stop("'errWeights' weights a reverse solve's step size and needs a 'cotangent'",
          call. = FALSE)
 
 
@@ -204,7 +144,7 @@
   }
 
   ## --- Output sens column names (per call) ---
-  ## Full Phi' uses its own colnames, or theta1..thetaM when it carries none;
+  ## Full Phi' uses its own colnames, or theta1..thetaM when it has none;
   ## state-only and NULL use active_sens, the model-parameter basis.
   sens_col_names <- if (tangent_is_full) {
     cn <- colnames(tangent)
@@ -311,6 +251,9 @@
     tangent <- flat
   }
 
+  if (!is.null(adjoint) && !inherits(adjoint, "cppDEadjointControl"))
+    stop("'adjoint' must come from adjointControl()", call. = FALSE)
+
   if (!is.null(hessian)) {
     if (!is.numeric(hessian)) stop("'hessian' must be numeric")
     ## State-only [n_states, M, M] is accepted only alongside a state-only or absent
@@ -402,7 +345,11 @@
   ## --- times ---
   if (!is.numeric(times) || !length(times) || anyNA(times) || any(!is.finite(times)))
     stop("'times' must be a non-empty finite numeric vector")
+  # An upper bound on the step size, list(time, h), rides on `times`; only the
+  # tests set it.
+  hmax <- attr(times, "hmax")
   times <- as.double(times)
+  attr(times, "hmax") <- hmax
 
   ## Store flags travel as attributes of `times`, since the call that makes a
   ## store has no cotangent. Native backend only: CVODES keeps its checkpoints.
@@ -430,7 +377,7 @@
     if (!isTRUE(attr(model, "deriv")) &&
         !identical(attr(model, "derivMode"), "reverse"))
       stop("'sensErrCon' weighs the sensitivity error against the state error, ",
-           "and this model carries no sensitivities", call. = FALSE)
+           "and this model computes no sensitivities", call. = FALSE)
     if (is_cvode)
       stop("'sensErrCon' is not available on the CVODE backend", call. = FALSE)
     attr(times, "sensErrCon") <- FALSE
@@ -480,11 +427,14 @@
   if (maxsteps    <= 0L) stop("'maxsteps' must be positive")
   if (maxroot     <= 0L) stop("'maxroot' must be positive")
 
+  cotangent <- .adjointApply(adjoint, model, cotangent, is_cvode)
+
   list(call_args = list(times, parms_ordered, tangent, hessian, fixed_indices,
                         as.double(abstol), as.double(reltol), maxattemps, maxsteps,
                         as.double(hini), as.double(roottol), maxroot,
                         forcing_times_list, forcing_values_list, cotangent),
        times = times, variables = variables, sens_col_names = sens_col_names,
+       adjoint_wanted = .adjointWanted(adjoint),
        theta_names = c(variables, parameters),
        seed_names = if (!is.null(cotangent) && length(dim(cotangent)) == 3L)
                       dimnames(cotangent)[[3]] else NULL)
@@ -515,16 +465,8 @@
   if (!is.null(result$curvature) && is.null(dimnames(result$curvature)))
     dimnames(result$curvature) <- list(theta = prep$theta_names, sens = out_sens,
                                        seed = prep$seed_names)
-  ## The sweep's own grid. lambda is [step, state, seed]; eta carries one column
-  ## per cotangent column, so it names the way the cotangent's columns do.
-  if (!is.null(result$adjointGrid)) {
-    g <- result$adjointGrid
-    if (is.null(dimnames(g$lambda)))
-      dimnames(g$lambda) <- list(step = NULL, variable = prep$variables,
-                                 seed = prep$seed_names)
-    if (is.null(dimnames(g$eta))) dimnames(g$eta) <- list(NULL, prep$seed_names)
-    result$adjointGrid <- g
-  }
+  ## The sweep's own grid, as $adjoint.
+  result <- .adjointResult(result, prep)
 
   diag <- result$diagnostics
   if (!is.null(diag)) {
@@ -571,7 +513,7 @@
 #' @details
 #' ## Derivative arguments and results
 #'
-#' A derivative argument and its result carry the same name. `tangent` and
+#' A derivative argument and its result have the same name. `tangent` and
 #' `hessian` are the first and second derivative in \eqn{\theta} of the
 #' inputs going in, and of the states coming out. `cotangent` is the gradient
 #' of a functional with respect to the outputs going in, and with respect to
@@ -693,16 +635,6 @@
 #'   of a functional of the outputs, this is that functional's Hessian applied
 #'   to the output tangent. `NULL` treats the cotangent as constant in
 #'   \eqn{\theta}.
-#' @param errWeights Optional lambda from an earlier sweep, used as a
-#'   step-size weight. Native backend only. A list with `time` (ascending,
-#'   length `n`), `lambda` (`[n, n_states]`), and optionally `breaks`
-#'   (indices into `time` the interpolant must not span), `gradtol`
-#'   (default `1e-6`) and `floor`
-#'   (smallest weight as a fraction of the largest, default `0`). The
-#'   controller then takes the maximum of its own error norm and
-#'   \eqn{|\lambda^T e_k| / \mathtt{gradtol}}, so the grid can only become
-#'   finer than `abstol` and `reltol` ask, never coarser. Requires a
-#'   `cotangent`.
 #' @param keepStore Whether a reverse solve returns its checkpoints as
 #'   `$store`, for a later solve to reuse through `store`. The `cotangent` may then
 #'   be omitted, which runs the model for its values alone. Native backend
@@ -719,25 +651,20 @@
 #'   direction count, and the sensitivities come back on a coarser grid than
 #'   `abstol` and `reltol` would give them. Cheaper and less accurate, and the
 #'   convention SUNDIALS ships (`CVodeSetSensErrCon`). Needs a model with
-#'   sensitivities or one compiled with `derivMode = "reverse"`. The reverse
-#'   modes keep their own tangents out of step-size control, so that the grid
-#'   does not depend on them; there `TRUE` integrates a tangent along a fixed
-#'   direction of the initial state, for step-size control only, which gives
-#'   the gradient the resolution the forward mode gives it, and `FALSE` keeps
-#'   the grid of a value-only run.
-#' @param adjointGrid Whether the sweep also reports the grid it ran on, as
-#'   `$adjointGrid`. `FALSE` by default; requires a `cotangent` and the native
-#'   backend. Costs one
-#'   `[n_steps, n_states, n_seed]` array, so it is a diagnostic.
+#'   sensitivities. A model compiled with `derivMode = "reverse"` takes the
+#'   grid of a value-only run either way.
+#' @param adjoint Optional [adjointControl()], what a reverse solve does
+#'   beyond its gradient: check the sweep against the tolerances, report its
+#'   grid.
 #'
 #' @return
 #' A named list with components `time`, `variable`, `diagnostics`, and,
 #' when `attr(model, "deriv")` is `TRUE`, `tangent`, plus `hessian` when
 #' `attr(model, "deriv2")` is `TRUE`. A model compiled with
-#' `derivMode = "reverse"` carries neither, and returns `cotangent` instead:
+#' `derivMode = "reverse"` has neither, and returns `cotangent` instead:
 #' `[n_states + n_params, n_seed]`, the cotangent of the inputs, indexed exactly
 #' as the argument `tangent`. One compiled with `derivMode = "forward-reverse"`
-#' carries `tangent` and `cotangent` and adds `curvature`,
+#' returns `tangent` and `cotangent` and adds `curvature`,
 #' `[n_states + n_params, n_s, n_seed]`: the derivatives of each `cotangent`
 #' entry along the tangent, which under the identity tangent are the columns of
 #' the Hessian of the seeded functional. Output arrays are time-first:
@@ -749,13 +676,10 @@
 #' an additional `$trace` `data.frame` with per-step diagnostics is
 #' attached.
 #'
-#' With `adjointGrid = TRUE` a reverse solve also carries `$adjointGrid`, a
-#' list of `time` and `h`, the start and length of each accepted step; `eta`,
-#' one column per cotangent column, being \eqn{\lambda^T e_k}; and `lambda`,
-#' `[n_steps, n_states, n_seed]`, the adjoint state at each step's start. `eta`
-#' estimates the step's share of the error in the objective.
+#' Under `adjoint = adjointControl(trace = TRUE)` a reverse solve also returns
+#' `$adjoint`, the grid and adjoint of the sweep; see [adjointControl()].
 #'
-#' With `keepStore = TRUE` a reverse solve also carries `$store`, an external
+#' With `keepStore = TRUE` a reverse solve also returns `$store`, an external
 #' pointer to the checkpoints, for a later solve to take through `store`.
 #'
 #' @seealso [cppODE()] and [cvode()] for model compilation;
@@ -771,16 +695,15 @@ solveODE <- function(model, times, parms,
                      hini = 0, roottol = 1e-6, maxroot = 1L,
                      onFailure = c("stop", "warn", "silent"),
                      traceFile = NULL, cotangent = NULL, curvature = NULL,
-                     adjointGrid = FALSE,
-                     errWeights = NULL, keepStore = FALSE, store = NULL,
-                     sensErrCon = TRUE) {
+                     keepStore = FALSE, store = NULL,
+                     sensErrCon = TRUE, adjoint = NULL) {
 
   onFailure <- match.arg(onFailure)
 
   prep <- .odeCallArgs(model, times, parms, tangent, hessian, fixed, forcings,
                        abstol, reltol, maxattemps, maxsteps, hini, roottol, maxroot,
-                       cotangent, curvature, adjointGrid, errWeights, keepStore,
-                       store, sensErrCon)
+                       cotangent, curvature, keepStore, store, sensErrCon,
+                       adjoint)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model)))
   if (is.null(SYM)) stop("Model not loaded. Run compile() first.", call. = FALSE)
@@ -824,9 +747,9 @@ solveODE <- function(model, times, parms,
 #' @param conditions A list of per-condition argument lists. Recognized names
 #'   are `times`, `parms`, `tangent`, `hessian`, `cotangent`, `curvature`,
 #'   `fixed`, `forcings`, the solver options `abstol`, `reltol`, `maxattemps`,
-#'   `maxsteps`, `hini`, `roottol`, `maxroot`, and `adjointGrid`, `errWeights`,
-#'   `keepStore`, `store`, `sensErrCon`; anything given here overrides the
-#'   batch-wide value of the same name.
+#'   `maxsteps`, `hini`, `roottol`, `maxroot`, and
+#'   `keepStore`, `store`, `sensErrCon`, `adjoint`; anything given here
+#'   overrides the batch-wide value of the same name.
 #' @param traceFile Optional. Either one path per condition, or a single path
 #'   used as a template, in which case the condition's name (or its index) is
 #'   inserted before the extension. Needs a model built with `stepTrace = TRUE`.
@@ -842,8 +765,8 @@ solveODE <- function(model, times, parms,
 #'   been run.
 #' @inheritParams solveODE
 #'
-#' @return A list of [solveODE()] results, one per condition, carrying the
-#'   names of `conditions`.
+#' @return A list of [solveODE()] results, one per condition, named after
+#'   `conditions`.
 #'
 #' @seealso [solveODE()]
 #' @example inst/examples/solveODEBatch.R
@@ -859,15 +782,14 @@ solveODEBatch <- function(model, conditions,
                           traceFile = NULL,
                           onFailure = c("stop", "warn", "silent"),
                           cotangent = NULL, curvature = NULL,
-                          adjointGrid = FALSE,
-                          errWeights = NULL, keepStore = FALSE, store = NULL,
-                          sensErrCon = TRUE) {
+                          keepStore = FALSE, store = NULL,
+                          sensErrCon = TRUE, adjoint = NULL) {
 
   onFailure <- match.arg(onFailure)
   preps <- .batchPreps(model, conditions, times, parms, tangent, hessian,
                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                       hini, roottol, maxroot, cotangent, curvature, adjointGrid,
-                       errWeights, keepStore, store, sensErrCon)
+                       hini, roottol, maxroot, cotangent, curvature,
+                       keepStore, store, sensErrCon, adjoint)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   .batchRun(model, preps, SYM, .batchDimnames(preps, SYM), names(conditions),
@@ -892,8 +814,8 @@ solveODEBatch <- function(model, conditions,
 .batchPreps <- function(model, conditions, times, parms, tangent, hessian,
                         fixed, forcings, abstol, reltol, maxattemps, maxsteps,
                         hini, roottol, maxroot, cotangent = NULL, curvature = NULL,
-                        adjointGrid = FALSE, errWeights = NULL,
-                        keepStore = FALSE, store = NULL, sensErrCon = TRUE) {
+                        keepStore = FALSE, store = NULL, sensErrCon = TRUE,
+                        adjoint = NULL) {
 
   if (!is.list(conditions) || !length(conditions))
     stop("'conditions' must be a non-empty list", call. = FALSE)
@@ -902,8 +824,8 @@ solveODEBatch <- function(model, conditions,
 
   known <- c("times", "parms", "tangent", "hessian", "fixed", "forcings",
              "abstol", "reltol", "maxattemps", "maxsteps", "hini", "roottol",
-             "maxroot", "cotangent", "curvature", "adjointGrid", "errWeights",
-             "keepStore", "store", "sensErrCon")
+             "maxroot", "cotangent", "curvature", "keepStore", "store",
+             "sensErrCon", "adjoint")
   bad <- setdiff(unlist(lapply(conditions, names)), known)
   if (length(bad))
     stop("unknown per-condition argument(s): ", paste(unique(bad), collapse = ", "),
@@ -915,8 +837,8 @@ solveODEBatch <- function(model, conditions,
                  abstol = abstol, reltol = reltol, maxattemps = maxattemps,
                  maxsteps = maxsteps, hini = hini, roottol = roottol,
                  maxroot = maxroot, cotangent = cotangent, curvature = curvature,
-                 adjointGrid = adjointGrid, errWeights = errWeights,
-                 keepStore = keepStore, store = store, sensErrCon = sensErrCon)
+                 keepStore = keepStore, store = store, sensErrCon = sensErrCon,
+                 adjoint = adjoint)
 
   lapply(seq_along(conditions), function(i) {
     a <- utils::modifyList(shared, conditions[[i]])
@@ -926,8 +848,7 @@ solveODEBatch <- function(model, conditions,
     .odeCallArgs(model, a$times, a$parms, a$tangent, a$hessian, a$fixed,
                  a$forcings, a$abstol, a$reltol, a$maxattemps, a$maxsteps,
                  a$hini, a$roottol, a$maxroot, a$cotangent, a$curvature,
-                 a$adjointGrid, a$errWeights, a$keepStore, a$store,
-                 a$sensErrCon)
+                 a$keepStore, a$store, a$sensErrCon, a$adjoint)
   })
 }
 
@@ -1040,14 +961,13 @@ prepareBatch <- function(model, conditions,
                          maxattemps = 50L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
                          cotangent = NULL, curvature = NULL,
-                         adjointGrid = FALSE,
-                         errWeights = NULL, keepStore = FALSE, store = NULL,
-                         sensErrCon = TRUE) {
+                         keepStore = FALSE, store = NULL,
+                         sensErrCon = TRUE, adjoint = NULL) {
 
   preps <- .batchPreps(model, conditions, times, parms, tangent, hessian,
                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
-                       hini, roottol, maxroot, cotangent, curvature, adjointGrid,
-                       errWeights, keepStore, store, sensErrCon)
+                       hini, roottol, maxroot, cotangent, curvature,
+                       keepStore, store, sensErrCon, adjoint)
 
   sym <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   structure(list(
@@ -1066,8 +986,8 @@ prepareBatch <- function(model, conditions,
 #'
 #' @description
 #' Re-solves the conditions of a [prepareBatch()] handle with new numbers.
-#' Only `parms`, `tangent`, `hessian`, `cotangent`, `curvature` and
-#' `errWeights` may change; anything else needs a fresh handle.
+#' Only `parms`, `tangent`, `hessian`, `cotangent`, `curvature`, `adjoint`
+#' and `store` may change; anything else needs a fresh handle.
 #'
 #' @param handle A `"cppDEbatch"` object from [prepareBatch()].
 #' @param parms List of named numeric vectors, one per condition, or `NULL` to
@@ -1075,17 +995,19 @@ prepareBatch <- function(model, conditions,
 #' @param tangent,hessian,cotangent,curvature Lists with one element per
 #'   condition, each as the argument of the same name in [solveODE()], or
 #'   `NULL` to reuse. Shapes must match the prepared ones.
-#' @param errWeights List of weightings for the step-size controller, one per
-#'   condition, or `NULL` to keep the prepared ones. Each is the `errWeights`
-#'   list of [solveODE()], typically lambda from the previous iteration.
+#' @param adjoint List of [adjointControl()] objects, one per condition, or
+#'   `NULL` to keep the prepared ones.
+#' @param store List of checkpoint stores, one per condition, each the `$store`
+#'   of an earlier reverse solve or `NULL` to integrate; `NULL` for the whole
+#'   argument keeps the prepared ones.
 #' @param cores,traceFile,onFailure As in [solveODEBatch()].
 #' @return A list of [solveODE()] results, named as the prepared conditions.
 #' @seealso [prepareBatch()]
 #' @example inst/examples/solveBatch.R
 #' @export
 solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
-                       cotangent = NULL, curvature = NULL, errWeights = NULL,
-                       cores = NULL, traceFile = NULL,
+                       cotangent = NULL, curvature = NULL, adjoint = NULL,
+                       store = NULL, cores = NULL, traceFile = NULL,
                        onFailure = c("stop", "warn", "silent")) {
 
   onFailure <- match.arg(onFailure)
@@ -1103,8 +1025,18 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
   }
   parms <- chk(parms, "parms"); tangent <- chk(tangent, "tangent")
   hessian <- chk(hessian, "hessian"); cotangent <- chk(cotangent, "cotangent")
-  curvature <- chk(curvature, "curvature"); errWeights <- chk(errWeights, "errWeights")
+  curvature <- chk(curvature, "curvature"); adjoint <- chk(adjoint, "adjoint")
+  store <- chk(store, "store")
   n_states <- length(attr(handle$model, "variables"))
+  if (!is.null(store)) {
+    if (!identical(attr(handle$model, "derivMode"), "reverse"))
+      stop("'store' belongs to a model compiled with derivMode = \"reverse\"",
+           call. = FALSE)
+    for (k in seq_len(K))
+      if (!is.null(store[[k]]) && !inherits(store[[k]], "externalptr"))
+        stop("condition ", k, ": 'store' must be the `store` element of an ",
+             "earlier solve", call. = FALSE)
+  }
 
   for (k in seq_len(K)) {
     if (!is.null(parms)) {
@@ -1129,9 +1061,9 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
     }
     if (!is.null(hessian) && !is.null(hessian[[k]]))
       preps[[k]]$call_args[[4L]] <- hessian[[k]]
-    # The cotangent carries the grid flag, the curvature and the step-size
-    # weights as attributes, so a replacement takes the prepared ones over
-    # unless new ones are given below.
+    # The cotangent holds the curvature and the adjoint control as attributes,
+    # so a replacement takes the prepared ones over unless new ones are given
+    # below.
     if (!is.null(cotangent) && !is.null(cotangent[[k]])) {
       sk  <- cotangent[[k]]
       old <- preps[[k]]$call_args[[15L]]
@@ -1159,14 +1091,18 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
       attr(sk, "curvature") <- ck
       preps[[k]]$call_args[[15L]] <- sk
     }
-    if (!is.null(errWeights) && !is.null(errWeights[[k]])) {
-      sk <- preps[[k]]$call_args[[15L]]
-      if (is.null(sk))
-        stop("condition ", k, ": 'errWeights' weights a reverse solve's step ",
-             "size and needs a 'cotangent'.", call. = FALSE)
-      attr(sk, "errWeights") <- .checkErrWeights(errWeights[[k]], n_states)
-      preps[[k]]$call_args[[15L]] <- sk
+    # A new control replaces every attribute the prepared one wrote.
+    if (!is.null(adjoint) && !is.null(adjoint[[k]])) {
+      a <- adjoint[[k]]
+      ck <- preps[[k]]$call_args[[15L]]
+      if (!is.null(ck)) {
+        for (nm in c("adjointGrid", "refine", "gradtol")) attr(ck, nm) <- NULL
+        preps[[k]]$call_args[[15L]] <- .adjointApply(a, handle$model, ck, FALSE)
+      }
+      preps[[k]]$adjoint_wanted <- .adjointWanted(a)
     }
+    # The store travels on `times`, the first argument; NULL drops it.
+    if (!is.null(store)) attr(preps[[k]]$call_args[[1L]], "store") <- store[[k]]
   }
 
   .batchRun(handle$model, preps, handle$sym, handle$dn, handle$names,

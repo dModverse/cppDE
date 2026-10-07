@@ -156,7 +156,7 @@ public:
   // The stage matrix binds m_k1's tangents to column 0 and m_k7's to column 6,
   // and those bindings hold across steps, so reusing k7 as the next k1 is a
   // copy of the column slice rather than a rebinding. It goes through the
-  // slab-aware copy: at second order a tangent element carries a pointer of
+  // slab-aware copy: at second order a tangent element holds a pointer of
   // its own, which a flat memcpy would alias into column 0 instead of copying.
     if (m_fsal_valid && m_k1.m_v.size() == n) {
       vec_copy_with_slab(m_k1.m_v, m_K.slab(0), m_k7.m_v, m_K.slab(6));
@@ -168,7 +168,7 @@ public:
     // Use TimeArg (not time_type) so AD derivative components propagate
     // through the deriv_func t arguments below.
     const TimeArg h    = dt;
-    // Stage AXPY alphas. The grid is frozen, so dt carries no tangent in any
+    // Stage AXPY alphas. The grid is frozen, so dt has no tangent in any
     // direction and these are plain doubles. See ad_traits::step_coef.
     using coef_type = ad_traits::step_coef_t<TimeArg>;
     const coef_type hc = ad_traits::step_coef_of(dt);
@@ -406,8 +406,8 @@ public:
   //  The tableau, for a written adjoint.
   //
   //  An explicit method's backward recursion is stated in these numbers and
-  //  in nothing else, so it reads them here rather than carrying a copy that
-  //  could drift. Stage 7 is FSAL and carries no weight in the solution, so
+  //  in nothing else, so it reads them here rather than keeping a copy that
+  //  could drift. Stage 7 is FSAL and has zero weight in the solution, so
   //  the recursion runs over six.
   // ====================================================================
   static constexpr int n_stages_used = 6;

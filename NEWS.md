@@ -1,3 +1,74 @@
+# cppDE 0.11.5
+
+* New `adjointControl()`, passed as `adjoint` to `solveODE()`,
+  `solveODEBatch()`, `prepareBatch()` and `solveBatch()`, controls what a
+  reverse solve does beyond its gradient. With `refine = TRUE` the sweep is
+  checked step by step against the local error test of the CVODES backward
+  problem: the cotangent of the states to `reltol` and `abstol`, and with
+  `gradtol` each step's share of the gradient to `reltol` and `gradtol`. A
+  tolerance thereby means the same as on a `cvode()` reverse model. A step
+  that fails is swept again in substeps. `bdf` and `adams` sweep the flow
+  between their grid points by extrapolated linearly implicit Euler instead
+  of the multistep scheme, so their gradient is that of the flow along the
+  computed trajectory. With `trace = TRUE` the solve returns `$adjoint`, the
+  grid and adjoint of the sweep and, under `refine`, the substeps each step
+  took.
+* Breaking: `solveODE()`, `solveODEBatch()` and `prepareBatch()` lose
+  `adjointGrid` and `errWeights`, and `solveBatch()` loses `errWeights`.
+  `adjoint = adjointControl(trace = TRUE)` returns the grid as `$adjoint` in
+  place of `$adjointGrid`; the step-size weights have no replacement.
+* Breaking: the value pass of a reverse solve takes the grid of a value run,
+  as the forward run of CVODES' adjoint analysis does. `sensErrCon` no longer
+  integrates a control tangent there and has no effect on a reverse model.
+  Where that grid misses the gradient, as on a trajectory at rest or under a
+  forcing the state does not see, use `adjointControl(refine = TRUE)`.
+* `cvode()` reverse models take events and `rootfunc`: the forward run is
+  split at the jumps, one CVODES memory per stretch, and the backward sweep
+  takes the adjoint and the gradient through each jump, including event times
+  that move with the parameters or the state. They also take
+  `adjointControl(gradtol =)`, which puts the gradient quadrature into the
+  backward problem's error test.
+* `cvode()` reverse models with a sparse Jacobian no longer crash in the
+  backward pass: every KLU setup factorises afresh, so the replay from a
+  checkpoint takes the steps the run stored.
+* `adams` solves its corrector by Newton's method, as CVODES does with a linear
+  solver attached, in place of the PECE fixed point. It no longer stalls on
+  stiff components; the step trace loses `pece_iters` and `pece_diverged`.
+* The Newton step on an iteration matrix factorised at an earlier gamma takes
+  the factor gamma / gammap, and the BDF scaling 2 / (1 + gamrat) only under
+  BDF. Under `adams` a stale matrix had locked the order at five and collapsed
+  the step.
+* The reverse sweep of `bdf` and `adams` no longer reuses a step's operators
+  for a later step of the same size whose history rescales by a different
+  factor. Where step sizes alternate, as at switching times, the gradient was
+  wrong by up to orders of magnitude.
+* `rb4` keeps its fourth order on a right-hand side that reads the time or a
+  forcing: the coefficient of df/dt in the fourth stage, taken over from
+  Boost.Odeint, had the wrong sign and reduced the method to first order there.
+* Faster reverse sweeps: the transposed solve refines against a held
+  factorisation where that is cheaper than factorising each step, generated
+  kernels keep their temporaries on the stack, the pullbacks of the
+  right-hand side and of the Jacobian take one pass each, and KLU skips its
+  check of the matrices the generated code assembles.
+* `solveBatch()` gains `store`, the checkpoint stores of a prepared reverse
+  batch.
+* `compile(output =)` builds the objects of the combined library `cores` at a
+  time.
+* `install_libs()` and `./configure` build SUNDIALS 7.9.0 and SuiteSparse
+  7.14.1 by default, with the CMake option names of SUNDIALS 7.7 and later;
+  older pins keep the old names. `./configure` prefers the cache prefix of the
+  pinned versions over the lexically last one.
+* `adjointControl(trace = TRUE)` returns `failures` in `$adjoint`, the checked
+  steps that met the test at no number of substeps; `eta` is `NA` where `bdf`
+  and `adams` sweep the flow.
+* The coloured Jacobian, which `CPPDE_JAC = "colour"` forces and large sparse
+  models choose, compiles: the reverse Jacobian-vector product no longer seeds
+  the parameters.
+* The checked sweep keeps the seeds before a step's start, and the
+  extrapolated flow takes intervals in either direction of time.
+* `cvode()` reverse models on KLU factorise afresh through
+  `SUNLinSol_KLUReInit()` rather than a SUNDIALS internal.
+
 # cppDE 0.11.4
 
 * `forcingValues()` builds with clang and libc++ (macOS): `R_NO_REMAP` before

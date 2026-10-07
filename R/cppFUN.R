@@ -59,7 +59,7 @@
 #'   `cotangentP` sums over observations because the parameters are shared
 #'   across them. Given `tangentX`, `tangentP` or `curvature`, the derivative
 #'   of the cotangent along the tangent, the same call runs forward-reverse and
-#'   adds `curvatureX` and `curvatureP`; this needs `"forward-reverse"`. Carries attributes `equations`,
+#'   adds `curvatureX` and `curvatureP`; this needs `"forward-reverse"`. Has attributes `equations`,
 #'   `variables`, `parameters`, `fixed`, `modelname`, `srcfile` and
 #'   `derivMode`.
 #'
@@ -106,7 +106,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
                            modelname = modelname, outdir = normalizePath(outdir, "/", FALSE), version = as.character(utils::packageVersion("cppDE")))
 
   # --- Instance state and thin wrappers ---
-  ## All the engine needs and nothing else. The returned closures carry only
+  ## All the engine needs and nothing else. The returned closures hold only
   ## this environment, so a per-condition instance costs data, not code.
   st <- list2env(list(innames = innames, parameters = parameters,
                       outnames = outnames, modelname = modelname,
@@ -124,7 +124,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   vjp_impl      <- if (use_vjp) function(...) .vjp_impl(st, ...)
 
   # --- Output ---
-  ## Installed with keep.source, cppFUN's body carries srcrefs, so the wrappers
+  ## Installed with keep.source, cppFUN's body has srcrefs, so the wrappers
   ## built here would hand the caller a copy each.
   .stripSource(environment())
   outfn <- list(
@@ -153,7 +153,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 # Runtime engine
 # ============================================================================
 
-# Package level, so a model with one instance per condition carries this code
+# Package level, so a model with one instance per condition keeps this code
 # once rather than once per condition; `st` holds the per-instance data.
 
 
@@ -585,7 +585,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
   n_out <- length(st$outnames)
   # The requests of one batch are the same function at different numbers: the
-  # `fixed` set and the theta basis are almost always shared. Carry the last
+  # `fixed` set and the theta basis are almost always shared. Keep the last
   # result forward instead of redoing the name algebra per request.
   fx_in <- NULL; fx_out <- character(0)
   th_key <- NULL; th_val <- NULL

@@ -100,16 +100,20 @@ forced <- cppODE(c(A = "-k1 * A * u + k2 * B",
                    B = "k1 * A * u - k2 * B"),
                  forcings = "u", modelname = "mth_forcing_in_jac", compile = FALSE)
 
-native <- c(decay, decay_fd, decay_d2, walls,
+# Explicit time in the right-hand side: the df/dt terms of a Rosenbrock stage.
+clocked <- per_method(methods_all, "mth_clocked_", c(x = "-x + cos(5 * time)"),
+                      deriv = FALSE)
+
+native <- c(decay, decay_fd, decay_d2, walls, clocked,
             list(robertson, dose_time, dose_root, ramp_root, ramp_fixed, ramp_sens,
                  jump_switch, reset_root, reset_time, decay_fixed, pow10,
                  cxx_tokens, cxx_ref, forced))
-do.call(compile, c(unname(native), list(output = "test_ode_methods", cores = 1)))
+do.call(compile, c(unname(native), list(output = "test_ode_methods", cores = test_cores())))
 
 if (isTRUE(cvodeConfig$available)) {
   ramp_root_cv <- cvode(eqns_ramp, events = evt_ramp_r, modelname = "mth_ramp_root_cv",
                         deriv = FALSE, compile = FALSE)
-  compile(ramp_root_cv, output = "test_ode_methods_cvode", cores = 1)
+  compile(ramp_root_cv, output = "test_ode_methods_cvode", cores = test_cores())
 }
 
 # -- Basic solver output structure --------------------------------------------
@@ -141,6 +145,18 @@ test_that("all methods match analytical solution (decay system)", {
 
     expect_equal(A_num, A_exact, tolerance = 1e-6, label = paste(m, "A"))
     expect_equal(B_num, B_exact, tolerance = 1e-6, label = paste(m, "B"))
+  }
+})
+
+test_that("all methods keep their order on an explicitly time-dependent system", {
+  # A wrong df/dt term costs a Rosenbrock method its order and inflates its
+  # step count.
+  exact <- function(t) (1 - 1/26) * exp(-t) + (cos(5 * t) + 5 * sin(5 * t)) / 26
+  for (m in methods_all) {
+    lo <- solveODE(clocked[[m]], c(0, 10), c(x = 1), abstol = 1e-6, reltol = 1e-6)
+    hi <- solveODE(clocked[[m]], c(0, 10), c(x = 1), abstol = 1e-9, reltol = 1e-9)
+    expect_lt(abs(hi$variable[2, "x"] - exact(10)), 1e-7, label = m)
+    expect_lt(hi$diagnostics$accepted, 15 * lo$diagnostics$accepted, label = m)
   }
 })
 
@@ -229,7 +245,7 @@ test_that("a root landing exactly on an output time still fires", {
   tt    <- seq(0, 20, by = 1)
   pars  <- c(S = 2, C = 4)
 
-  # The last row at a requested time carries the post-event state, whether or
+  # The last row at a requested time holds the post-event state, whether or
   # not the localised root inserted its own rows next to it.
   atTimes <- function(res, var)
     res$variable[vapply(tt, function(s) max(which(res$time == s)), 1L), var]
@@ -257,7 +273,7 @@ test_that("both backends localise a root at the same time", {
   expect_equal(fired(cvd), 11.5, tolerance = 1e-6)
 })
 
-test_that("a root event on the grid carries the firing time into the sensitivities", {
+test_that("a root event on the grid feeds the firing time into the sensitivities", {
   # S' = a fires the event at t* = (c - S0)/a = 12, again exactly on the grid.
   # Every sensitivity of C after the event picks up dt*/dtheta through the
   # saltation term, so a missed or misplaced root shows up here as well.
@@ -291,7 +307,7 @@ test_that("a fixed event switches on a root condition it steps over", {
 })
 
 test_that("a reset switched on by a jump transports like a fixed one", {
-  # The reset rides on the surface of the jump, so it has to carry the
+  # The reset rides on the surface of the jump, so it has to transport the
   # sensitivities exactly like the same reset written as a fixed event at that
   # time, the parameter dependence of the event time included.
   pars <- c(S = 2, C = 4, b = 0.15, d = 3, te = 4)
@@ -365,7 +381,7 @@ test_that("fixed parameters are excluded from sensitivities", {
 
 # A 10^x term differentiates to a math call whose arguments are all literals.
 # Codegen emits every math call as cppde::<fn>, so this compiles only because
-# cppde_dual_math.hpp carries arithmetic-type overloads next to the AD ones.
+# cppde_dual_math.hpp provides arithmetic-type overloads next to the AD ones.
 test_that("a 10^x term compiles and differentiates correctly", {
   t10  <- seq(0, 1, length.out = 25)
   p10  <- c(x = 0.3, k = 0.7)
@@ -385,7 +401,7 @@ test_that("a 10^x term compiles and differentiates correctly", {
 })
 
 # The generated right-hand side indexes x[] and params[] and calls std::pow, so
-# a state or parameter carrying one of those names has to be substituted before
+# a state or parameter with one of those names has to be substituted before
 # it can be read as part of the surrounding code.
 test_that("state and parameter names that are C++ tokens compile and solve", {
   tt <- seq(0, 2, 0.5)
@@ -411,7 +427,7 @@ test_that("a forcing that multiplies a state reaches the Jacobian", {
   # The Jacobian entries were printed without the forcing list, so a forcing
   # surviving differentiation came out as a bare identifier and the model did
   # not compile. Only additive forcings vanish from df/dx, which is why every
-  # example carried one.
+  # example had one.
   u <- data.frame(time = c(0, 0.5, 1, 2), value = c(0.4, 1.1, 0.7, 1.5))
   mod <- forced
 

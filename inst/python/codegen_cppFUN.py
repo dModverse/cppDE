@@ -133,6 +133,7 @@ def _generate_cpp_code(model, ad, deriv2, vjp, vjp_fr, modelname, version):
     buf.write("#include <cmath>\n")
     buf.write("#include <algorithm>\n")
     buf.write("#include <limits>\n")
+    buf.write("#include <array>\n")
     buf.write("#include <vector>\n")
     buf.write("#define R_NO_REMAP\n")
     buf.write("#include <R.h>\n")

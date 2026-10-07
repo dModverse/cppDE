@@ -8,7 +8,7 @@
  trajectory start and, summed over every step, that of the parameters.
 
  Observations sit at interpolated times, so a step's continuous extension
- carries them; one before the first step reaches the initial state directly.
+ holds them; one before the first step reaches the initial state directly.
 
  The step grid is not differentiated: a step reads the state from the one
  before it, and its size is a constant read off its checkpoint. See

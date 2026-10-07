@@ -68,7 +68,7 @@ struct RootEvent {
 
   // Partials of g provided by the codegen: dg_dx writes the gradient with
   // respect to the state, dg_dt returns the explicit time derivative. Both
-  // carry the model's value_type, so an AD model gets AD partials.
+  // use the model's value_type, so an AD model gets AD partials.
   std::function<void(const state_type&, const time_type&, state_type&)> dg_dx;
   std::function<value_t(const state_type&, const time_type&)> dg_dt;
 

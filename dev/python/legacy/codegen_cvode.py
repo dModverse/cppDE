@@ -191,7 +191,7 @@ def generate_cvode_cpp(
 
     # --- Events (time- and root-triggered) ---
 
-    # Every event carries the post-event value g of the affected state, with the
+    # Every event has the post-event value g of the affected state, with the
     # method already folded in, plus its partials in x, p and t. A time event adds
     # the event time and its dt/dp, a root event the condition and its partials.
     time_events = []
@@ -221,7 +221,7 @@ def generate_cvode_cpp(
             # in an event table would never be meaningful as time/value/root.
             if isinstance(val, bool):
                 return False
-            # pandas NaN / R NA-carrying floats come through as NaN
+            # pandas NaN / R NA floats come through as NaN
             try:
                 if isinstance(val, float) and val != val:
                     return False
@@ -445,7 +445,7 @@ def generate_cvode_cpp(
     # Events are refused rather than approximated. CVODES integrates the adjoint
     # as its own ODE over checkpointed forward states, and a jump in the state
     # is a jump in the adjoint that ASA has no way to be told about. The native
-    # reverse mode replays the jump instead, which is why it carries events and
+    # reverse mode replays the jump instead, which is why it handles events and
     # this does not.
     if reverse:
         if events or rootfunc is not None:
@@ -457,7 +457,7 @@ def generate_cvode_cpp(
     adj_rhs_lines = [f"    lamdot[{j}] = 0.0;" for j in range(n_states)]
     for i, j, e in jac_nnz:
         # lamdot_j -= (df_i/dx_j) * lam_i: the transpose of the forward
-        # multiply, with the sign the adjoint equation carries.
+        # multiply, with the sign the adjoint equation has.
         adj_rhs_lines.append(f"    lamdot[{j}] -= ({cpp_of(e)}) * lam[{i}];")
     adj_rhs_body = "\n".join(adj_rhs_lines)
 
@@ -588,7 +588,7 @@ def _render_source(
         "  int              maxroot = 1;          // cap from solveODE(maxroot=)\n"
     )
 
-    # UserData carries Phi_prime (the auto-extended Phi'(theta) flat,
+    # UserData holds Phi_prime (the auto-extended Phi'(theta) flat,
     # column-major) so the sens rhs and event saltation lambdas can apply
     # the chain rule. R always supplies a full-shape sens1ini at solve time.
     if deriv:
@@ -1194,7 +1194,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
     # --- do_cvode_step: single step with CV_ROOT_RETURN dispatch ---
 
     # Returns 0 for the target reached, 1 for a user rootfunc stop, 2 for a terminal
-    # root event, -1 for an error, with return_code carrying the raw CVODE flag.
+    # root event, -1 for an error, with return_code holding the raw CVODE flag.
     # On 1 and 2 the caller pushes the final output row.
     if has_events:
         time_check = "has_time_events = true; (void)has_time_events;"  # placeholder
@@ -1309,7 +1309,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
     # --- Zero-copy sink: the batch entry can size the results before the solve
     # when nothing dynamic adds points. A time event adds a row unless its time is
     # already requested, and those times are per-condition; roots stay dynamic.
-    # Under ASA the result carries an adjoint the pre-allocated skeleton has no
+    # Under ASA the result contains an adjoint the pre-allocated skeleton has no
     # slot for, and the skeleton is fixed before the solve runs. The native
     # emitter declines the sink for the same reason.
     cv_fixed_grid = (len(root_events) == 0 and rootfunc_mode == "none"
@@ -1402,7 +1402,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
 {event_sens_reinit}      if (hard_fail) {{ stop = true; break; }}
       cv_rebase();
       // An event time that is not itself a requested output time still gets a
-      // row, carrying the post-event state, same contract as the native
+      // row, holding the post-event state, same contract as the native
       // backend. When it coincides with times[k] the branch below emits it.
       if (t_e < times[k]) {{
         out_t.push_back(t_e);
@@ -1674,7 +1674,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
             solver_msg = "adjoint quadrature failed";
             break;
           }
-          // The quadrature carries the whole parameter half of the answer, so
+          // The quadrature holds the whole parameter half of the answer, so
           // it belongs in the error test rather than riding along uncontrolled.
           CVodeSetQuadErrConB(cvode_mem, indexB, SUNTRUE);
         }
@@ -1998,7 +1998,7 @@ namespace {{
 
 constexpr int NEQ    = {n_states};
 constexpr int NPARMS = {n_global};           // n_states + n_params (flat layout)
-// Rows the adjoint quadrature carries: the dynamic parameters. The state half
+// Rows the adjoint quadrature covers: the dynamic parameters. The state half
 // of the answer is lambda(t0) and needs no quadrature.
 constexpr int NPAR_ADJ = NPARMS - NEQ;
 // Accepted forward steps between checkpoints. The adjoint reads the forward

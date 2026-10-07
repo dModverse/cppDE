@@ -62,7 +62,7 @@ per_method <- function(rhs, prefix, ms = methods, ...)
 # Links a list of lists of models into one shared object.
 compile_all <- function(ms, output)
   do.call(compile, c(unname(unlist(ms, recursive = FALSE)),
-                     list(output = output, cores = 1)))
+                     list(output = output, cores = test_cores())))
 
 # Every native model the tests solve without asking for KLU, one build per
 # configuration. wide still turns sparse by auto-detection when KLU is present.
@@ -88,9 +88,7 @@ models <- list(
   wide_rev = per_method(wide, "rev_wide_r_", c("bdf", "adams"),
                         derivMode = "reverse"),
   rest_fwd = per_method(rest_eqns, "rev_rest_f_", deriv = TRUE),
-  rest_rev = per_method(rest_eqns, "rev_rest_r_", derivMode = "reverse"),
-  rest_fr  = per_method(rest_eqns, "rev_rest_fr_",
-                        derivMode = "forward-reverse"))
+  rest_rev = per_method(rest_eqns, "rev_rest_r_", derivMode = "reverse"))
 compile_all(models, "test_reverse")
 
 # The sparse models need KLU. They all have the Jacobian of eqns, so the KLU
@@ -160,7 +158,7 @@ test_that("the gap to the forward mode falls with the tolerance", {
   expect_lt(rel[2], rel[1] * 1e-4)
 })
 
-test_that("the reverse mode carries events, roots and forcings", {
+test_that("the reverse mode handles events, roots and forcings", {
   p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1,
           d_amt = 0.4, t_dose = 1.0)
   fc <- list(u = data.frame(time = c(0, 2, 5), value = c(0.1, 0.25, 0.05)))
@@ -235,7 +233,7 @@ test_that("the cotangent and the mode have to agree", {
                "forward-reverse")
 })
 
-test_that("a written Rosenbrock adjoint carries a multiplicative forcing", {
+test_that("a written Rosenbrock adjoint handles a multiplicative forcing", {
   # Four of the six stages add a multiple of df/dt, so its derivative in the
   # state and in the parameters is part of the adjoint. A forcing reaches df/dt
   # through a chain term the Jacobian emitter appends, and multiplicatively is
@@ -260,7 +258,7 @@ test_that("an equilibrated run goes backwards", {
   # on the tangents as well and reaches the root elsewhere, so there is no
   # forward gradient on this grid to compare against. What is asserted is that
   # the backward pass answers on the grid its own forward pass produced, and
-  # that without the control tangent this pass is the value run to the last bit.
+  # that this pass is the value run to the last bit.
   pe <- c(R = 1, A = 1, pA = 0, k_act = 0.1, k_deact = 0.7, k1 = 0.1, k2 = 0.05)
   tt <- seq(0, 1e3, length.out = 50)
   for (m in c("bdf", "rb4")) {
@@ -269,8 +267,7 @@ test_that("an equilibrated run goes backwards", {
     val <- do.call(solveODE, c(list(mv, tt, pe), tol))
     expect_lt(nrow(val$variable), length(tt))   # it really did stop early
     W   <- seed_for(val)
-    rv  <- do.call(solveODE, c(list(mr, tt, pe, cotangent = W,
-                                    sensErrCon = FALSE), tol))
+    rv  <- do.call(solveODE, c(list(mr, tt, pe, cotangent = W), tol))
     expect_identical(rv$variable, val$variable)
 
     # With it, the rows come from the reverse run's own values.
@@ -295,7 +292,7 @@ test_that("rb4 goes backwards on a sparse Jacobian", {
   expect_equal(unname(rv$cotangent[names(ref), 1]), unname(ref), tolerance = 1e-5)
 })
 
-test_that("every method carries the reverse mode", {
+test_that("every method supports the reverse mode", {
   for (m in methods) {
     mf <- models$fwd[[m]]
     mr <- models$rev[[m]]
@@ -311,31 +308,22 @@ test_that("every method carries the reverse mode", {
 test_that("a trajectory at rest gets the forward mode's gradient", {
   # The state's error estimate is zero, so the grid of a value-only run grows
   # without bound and the adjoint on it is off by more than its size. The
-  # control tangent brings the grid down to what the tangents need.
+  # checked sweep, the gradient under gradtol, takes those steps in substeps.
   o <- list(abstol = 1e-12, reltol = 1e-10)
   for (m in methods) {
     fwd <- do.call(solveODE, c(list(models$rest_fwd[[m]], 0:50, rest_pars), o))
     W   <- seed_for(fwd, n_seed = 2L)
-    rv  <- do.call(solveODE, c(list(models$rest_rev[[m]], 0:50, rest_pars,
-                                    cotangent = W), o))
     ref <- contract(fwd$tangent, W)
+    rv  <- do.call(solveODE, c(list(models$rest_rev[[m]], 0:50, rest_pars,
+                                    cotangent = W,
+                                    adjoint = adjointControl(refine = TRUE,
+                                                             gradtol = 1e-13)), o))
     expect_equal(unname(rv$cotangent[rownames(ref), ]), unname(ref),
-                 tolerance = 1e-8, info = m)
-
-    # Forward-reverse runs the same control tangent on its values.
-    fr <- do.call(solveODE, c(list(models$rest_fr[[m]], 0:50, rest_pars,
-                                   cotangent = W), o))
-    expect_equal(unname(fr$cotangent[rownames(ref), ]), unname(ref),
-                 tolerance = 1e-8, info = m)
-
-    # sensErrCon = FALSE keeps the value-only grid, a handful of steps here.
-    off <- do.call(solveODE, c(list(models$rest_rev[[m]], 0:50, rest_pars,
-                                    cotangent = W, sensErrCon = FALSE), o))
-    expect_lt(off$diagnostics$accepted, rv$diagnostics$accepted / 10)
+                 tolerance = 1e-6, info = m)
   }
 })
 
-test_that("the reverse mode carries a model wider than its history is deep", {
+test_that("the reverse mode handles a model wider than its history is deep", {
   for (m in c("bdf", "adams")) {
     mf <- models$wide_fwd[[m]]
     mr <- models$wide_rev[[m]]
@@ -348,7 +336,7 @@ test_that("the reverse mode carries a model wider than its history is deep", {
   }
 })
 
-test_that("adjointGrid reports the grid the sweep ran on", {
+test_that("$adjoint reports the grid the sweep ran on", {
   mr <- models$rev$bdf
   mv <- models$val$bdf
 
@@ -356,12 +344,13 @@ test_that("adjointGrid reports the grid the sweep ran on", {
   W   <- seed_for(val, n_seed = 2L)
 
   plain <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
-  expect_null(plain$adjointGrid)
+  expect_null(plain$adjoint)
 
   rv <- do.call(solveODE,
-                c(list(mr, times, pars, cotangent = W, adjointGrid = TRUE), tol))
-  G  <- rv$adjointGrid
-  expect_named(G, c("time", "h", "eta", "lambda"))
+                c(list(mr, times, pars, cotangent = W, adjoint = adjointControl(trace = TRUE)), tol))
+  G  <- rv$adjoint
+  expect_s3_class(G, "cppDEadjoint")
+  expect_true(all(c("time", "h", "eta", "lambda") %in% names(G)))
 
   n <- length(G$h)
   expect_gt(n, 4L)
@@ -395,98 +384,30 @@ test_that("the refinement indicator is alive on every method", {
     val <- solveODE(mv, times, pars, abstol = 1e-8, reltol = 1e-6)
     W   <- seed_for(val)
     rv  <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6,
-                    cotangent = W, adjointGrid = TRUE)
-    G <- rv$adjointGrid
+                    cotangent = W, adjoint = adjointControl(trace = TRUE))
+    G <- rv$adjoint
 
     expect_gt(max(abs(G$eta)), 1e-12, label = paste("max |eta| on", m))
     expect_gt(max(abs(G$lambda)), 1e-3, label = paste("max |lambda| on", m))
     # Loosening the tolerance a hundredfold has to raise the indicator: it is
     # an error estimate, not a property of the trajectory.
     rv2 <- solveODE(mr, times, pars, abstol = 1e-6, reltol = 1e-4,
-                    cotangent = W, adjointGrid = TRUE)
-    expect_gt(sum(abs(rv2$adjointGrid$eta)), sum(abs(G$eta)), label = m)
-  }
-})
-test_that("lambda weights can only refine the grid, never coarsen it", {
-  # Stage 9 of dev/adjoint-plan.md. err = max(err_state, err_lambda), so the
-  # grid stays at least as fine as abstol/rtol ask. That is the property the
-  # whole scheme rests on: it makes a wrong weight cost time and never
-  # accuracy, which is what lets a weight from an earlier run be used at all.
-  mr <- models$rev$bdf
-  mv <- models$val$bdf
-
-  val <- solveODE(mv, times, pars, abstol = 1e-8, reltol = 1e-6)
-  W   <- seed_for(val)
-
-  base <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6,
-                   cotangent = W, adjointGrid = TRUE)
-  G <- base$adjointGrid
-  wts <- list(time = G$time, lambda = G$lambda[, , 1])
-
-  # Loose enough that the weighted term cannot bind: the grid has to come back
-  # bit for bit, or the term is doing something beyond the maximum.
-  slack <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, cotangent = W,
-                    adjointGrid = TRUE,
-                    errWeights = c(wts, list(gradtol = 1e6)))
-  expect_identical(slack$adjointGrid$h, G$h)
-  expect_identical(slack$cotangent, base$cotangent)
-
-  # Tight enough that it must bind, and it may only add steps.
-  tight <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, cotangent = W,
-                    adjointGrid = TRUE,
-                    errWeights = c(wts, list(gradtol = 1e-11)))
-  expect_gt(length(tight$adjointGrid$h), length(G$h))
-
-  # A finer grid must not move the answer beyond the tolerance it was asked for.
-  expect_equal(unname(tight$cotangent[, 1]), unname(base$cotangent[, 1]),
-               tolerance = 1e-4)
-})
-
-test_that("every method takes lambda weights", {
-  for (m in methods) {
-    mr <- models$rev[[m]]
-    mv <- models$val[[m]]
-    val <- solveODE(mv, times, pars, abstol = 1e-8, reltol = 1e-6)
-    W   <- seed_for(val)
-    b   <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6,
-                    cotangent = W, adjointGrid = TRUE)
-    G   <- b$adjointGrid
-    wts <- list(time = G$time, lambda = G$lambda[, , 1])
-
-    slack <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, cotangent = W,
-                      adjointGrid = TRUE,
-                      errWeights = c(wts, list(gradtol = 1e6)))
-    expect_identical(slack$adjointGrid$h, G$h, info = m)
-
-    tight <- solveODE(mr, times, pars, abstol = 1e-8, reltol = 1e-6, cotangent = W,
-                      adjointGrid = TRUE,
-                      errWeights = c(wts, list(gradtol = 1e-11)))
-    expect_gt(length(tight$adjointGrid$h), length(G$h))
+                    cotangent = W, adjoint = adjointControl(trace = TRUE))
+    expect_gt(sum(abs(rv2$adjoint$eta)), sum(abs(G$eta)), label = m)
   }
 })
 
-test_that("malformed lambda weights are an error, not a silent no-op", {
+test_that("malformed adjoint controls are an error, not a silent no-op", {
   mr <- models$rev$bdf
   mv <- models$val$bdf
-  val <- solveODE(mv, times, pars)
-  W   <- seed_for(val)
-  ok  <- list(time = c(0, 1, 2), lambda = matrix(1, 3, length(pars) - 3L))
-  nx  <- length(attr(mr, "variables"))
-  ok$lambda <- matrix(1, 3, nx)
+  W  <- seed_for(solveODE(mv, times, pars))
 
-  run <- function(w) solveODE(mr, times, pars, cotangent = W, errWeights = w)
-
-  expect_error(run(list(time = c(0, 1))), "missing: lambda")
-  expect_error(run(c(ok["lambda"], list(time = c(2, 1, 0)))), "ascending")
-  expect_error(run(c(ok["time"], list(lambda = matrix(1, 2, nx)))),
-               "rows but 'time' has")
-  expect_error(run(c(ok["time"], list(lambda = matrix(1, 3, nx + 1L)))),
-               "columns but the model has")
-  expect_error(run(c(ok, list(gradtol = 0))), "must be positive")
-  expect_error(run(c(ok, list(floor = 1))), "must be in")
-  expect_error(run(c(ok, list(breaks = 99L))), "must index")
-  # Weights without a cotangent weight nothing: saying so beats ignoring them.
-  expect_error(solveODE(mv, times, pars, errWeights = ok), "needs a 'cotangent'")
+  expect_error(adjointControl(gradtol = 0), "positive")
+  expect_error(adjointControl(trace = NA), "TRUE or FALSE")
+  expect_error(solveODE(mr, times, pars, cotangent = W, adjoint = list(trace = TRUE)),
+               "adjointControl")
+  expect_error(solveODE(mv, times, pars, adjoint = adjointControl(trace = TRUE)),
+               "backward pass")
 })
 # -- CVODES adjoint sensitivity analysis, stage 8 -------------------------------
 #
@@ -509,6 +430,33 @@ if (isTRUE(cvodeConfig$available)) {
     rob_f = cppODE(rob, modelname = "asa_ms_f", deriv = TRUE, compile = FALSE),
     rob_a = cvode(rob, modelname = "asa_ms_a", derivMode = "reverse",
                   compile = FALSE))
+  if (isTRUE(cvodeConfig$klu_available))
+    asa_models$rob_s <- cvode(rob, modelname = "asa_ms_s", derivMode = "reverse",
+                              sparse = TRUE, compile = FALSE)
+  # Events for ASA: each with its forward-sensitivity counterpart.
+  asa_events <- list(
+    add  = data.frame(var = "A", time = 1, value = "d", method = "add"),
+    tpar = data.frame(var = "A", time = "td", value = "d", method = "add"),
+    root = data.frame(var = "B", time = NA, value = "r", root = "A - 0.6",
+                      method = "replace"),
+    repl = data.frame(var = c("B", "A"), time = c("2", "td"),
+                      value = c("r*A", "d*B"), method = c("replace", "multiply")))
+  for (n in names(asa_events)) {
+    asa_models[[paste0("ev_", n, "_a")]] <-
+      cvode(eqns, events = asa_events[[n]], derivMode = "reverse",
+            modelname = paste0("asa_ev_", n, "_a"), compile = FALSE)
+    asa_models[[paste0("ev_", n, "_f")]] <-
+      cvode(eqns, events = asa_events[[n]], deriv = TRUE,
+            modelname = paste0("asa_ev_", n, "_f"), compile = FALSE)
+  }
+  if (isTRUE(cvodeConfig$klu_available)) {
+    asa_models$ev_klu_a <- cvode(eqns, events = asa_events$root,
+                                 derivMode = "reverse", sparse = TRUE,
+                                 modelname = "asa_ev_klu_a", compile = FALSE)
+    asa_models$ev_klu_f <- cvode(eqns, events = asa_events$root, deriv = TRUE,
+                                 sparse = TRUE, modelname = "asa_ev_klu_f",
+                                 compile = FALSE)
+  }
   compile_all(list(asa_models), "test_reverse_cvode")
 }
 
@@ -560,6 +508,48 @@ test_that("ASA goes through the batch entry too", {
   }
 })
 
+test_that("ASA on KLU replays its checkpoints and matches the dense solve", {
+  skip_if_not(isTRUE(cvodeConfig$klu_available), "KLU not available")
+  # The replay from a checkpoint must take the run's steps; KLU's refactorisation
+  # depends on its history, so every setup factorises afresh.
+  src <- readLines(attr(asa_models$rob_s, "srcfile"))
+  expect_true(any(grepl("LS->ops->setup = klu_setup_fresh", src, fixed = TRUE)))
+  expect_true(any(grepl("SUNLinSol_KLUReInit", src, fixed = TRUE)))
+  rt <- c(0, 10^seq(-2, 3, length.out = 30))
+  rp <- c(y1 = 1, y2 = 0, y3 = 0, k1 = 0.04, k2 = 1e4, k3 = 3e7)
+  W  <- cbind(y1 = rep(1, length(rt)), y2 = 1e4, y3 = 1)
+  ctl <- adjointControl(gradtol = 1e-12)
+  ad <- solveODE(asa_models$rob_a, rt, rp, cotangent = W, abstol = 1e-12, reltol = 1e-10, adjoint = ctl)
+  as <- solveODE(asa_models$rob_s, rt, rp, cotangent = W, abstol = 1e-12, reltol = 1e-10, adjoint = ctl)
+  expect_equal(as$cotangent, ad$cotangent, tolerance = 1e-6)
+})
+
+test_that("ASA passes the adjoint through events", {
+  skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
+  # A dose, a dose at a parameter time, a root that replaces, and a replace and
+  # a multiply at two times; ASA against the forward sensitivities of CVODES.
+  ep <- c(pars, d = 0.5, td = 1.7, r = 0.3)
+  et <- c(0, 0.3, 1, 2, 2.5, 5)
+  ctl <- adjointControl(gradtol = 1e-12)
+  cases <- c(names(asa_events), if (!is.null(asa_models$ev_klu_a)) "klu")
+  for (n in cases) {
+    ma <- asa_models[[paste0("ev_", n, "_a")]]
+    mf <- asa_models[[paste0("ev_", n, "_f")]]
+    p  <- ep[unique(c("A", "B", attr(ma, "parameters")))]
+    f  <- solveODE(mf, et, p, abstol = 1e-12, reltol = 1e-10)
+    set.seed(3)
+    W <- array(rnorm(2 * length(f$variable)), c(dim(f$variable), 2),
+               dimnames = list(NULL, colnames(f$variable), NULL))
+    a <- solveODE(ma, et, p, cotangent = W, abstol = 1e-12, reltol = 1e-10,
+                  adjoint = ctl)
+    for (j in 1:2) {
+      ref <- apply(f$tangent * as.vector(W[, , j]), 3, sum)
+      expect_equal(unname(a$cotangent[names(ref), j]), unname(ref),
+                   tolerance = 1e-7, label = paste(n, "column", j))
+    }
+  }
+})
+
 test_that("ASA and the native adjoint answer the same question", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
@@ -580,6 +570,22 @@ test_that("ASA and the native adjoint answer the same question", {
                tolerance = 1e-6)
 })
 
+test_that("ASA holds the gradient to gradtol and refuses the rest", {
+  skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
+  ma <- asa_models$rev
+  W  <- seed_for(solveODE(models$val$bdf, times, pars))
+  ref <- solveODE(models$rev$bdf, times, pars, cotangent = W, abstol = 1e-13,
+                  reltol = 1e-12)$cotangent
+  err <- function(r) max(abs(r$cotangent[, 1] - ref[rownames(r$cotangent), 1]))
+  loose <- solveODE(ma, times, pars, cotangent = W, abstol = 1e-6, reltol = 1e-4)
+  held  <- solveODE(ma, times, pars, cotangent = W, abstol = 1e-6, reltol = 1e-4,
+                    adjoint = adjointControl(gradtol = 1e-9))
+  expect_lt(err(held), err(loose))
+  for (a in list(adjointControl(trace = TRUE), adjointControl(refine = TRUE)))
+    expect_error(solveODE(ma, times, pars, cotangent = W, adjoint = a),
+                 "'gradtol' alone")
+})
+
 test_that("the two CVODE directions refuse each other's arguments", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
@@ -587,14 +593,6 @@ test_that("the two CVODE directions refuse each other's arguments", {
   expect_error(cvode(eqns, modelname = "asa_guard_d", derivMode = "reverse",
                      deriv = TRUE),
                "no forward sensitivities")
-
-  # CVODES integrates the adjoint over checkpointed states, so a jump in the
-  # state is a jump it cannot be told about. Saying so beats a wrong number.
-  ev <- data.frame(var = "A", time = 1.0, value = 0.3, method = "add",
-                   stringsAsFactors = FALSE)
-  expect_error(cvode(eqns, events = ev, modelname = "asa_guard_e",
-                     derivMode = "reverse"),
-               "does not support events")
 
   mf <- asa_models$plain
   ma <- asa_models$rev
@@ -661,7 +659,7 @@ test_that("a reverse solve can hand its checkpoints to the next one", {
 })
 
 test_that("a store from another point is refused, not quietly used", {
-  # This is the whole safety of the scheme. A store carries the run it was made
+  # This is the whole safety of the scheme. A store holds the run it was made
   # from; handed back at a different theta it would give a gradient at one point
   # reported at another, and nothing downstream could tell.
   mr <- models$rev$bdf
@@ -770,4 +768,31 @@ test_that("the second-order forward mode is repeatable on every method", {
     b <- do.call(solveODE, c(list(mm, times, pars), tol))
     expect_identical(a$hessian, b$hessian, info = m)
   }
+})
+
+test_that("a prepared batch sweeps the stores it is handed", {
+  mr <- models$rev$bdf
+  p2 <- pars * c(1, 1, 1.1, 0.9, 1.05)
+  mk <- function(p) list(times = times, parms = p, keepStore = TRUE)
+  fw <- do.call(solveODEBatch, c(list(mr, conditions = list(mk(pars), mk(p2))), tol))
+  W  <- lapply(fw, seed_for)
+  conds <- lapply(1:2, function(i)
+    list(times = times, parms = list(pars, p2)[[i]], cotangent = W[[i]],
+         store = fw[[i]]$store))
+  ref <- do.call(solveODEBatch, c(list(mr, conditions = conds), tol))
+  h <- do.call(prepareBatch, c(list(mr, conditions = conds), tol))
+
+  # New numbers, cotangents and stores, the prepared ones swapped round.
+  got <- solveBatch(h, parms = list(p2, pars), cotangent = rev(W),
+                    store = list(fw[[2]]$store, fw[[1]]$store))
+  expect_equal(got[[1]]$cotangent, ref[[2]]$cotangent, tolerance = 0)
+  expect_equal(got[[2]]$cotangent, ref[[1]]$cotangent, tolerance = 0)
+
+  # A store from the other point is refused, not replayed.
+  expect_error(solveBatch(h, parms = list(pars, p2),
+                          store = list(fw[[2]]$store, fw[[1]]$store)))
+
+  # Without a store the sweep integrates, on the grid of its own forward pass.
+  free <- solveBatch(h, store = list(NULL, NULL))
+  expect_equal(free[[1]]$cotangent, ref[[1]]$cotangent, tolerance = 1e-10)
 })

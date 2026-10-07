@@ -51,7 +51,8 @@ and exported C symbols. A random identifier is used when \code{NULL}.}
 \item{derivMode}{Direction the derivatives are taken in. \code{"forward"} (default)
 is the CVODES forward sensitivity solver, driven by \code{deriv}. \code{"reverse"}
 is CVODES adjoint sensitivity analysis, one backward solve per cotangent
-column. It needs \code{deriv = FALSE} and refuses \code{events} and \code{rootfunc}.}
+column. It needs \code{deriv = FALSE}. With \code{events} the forward run is split
+at the jumps and the adjoint is passed through each of them.}
 
 \item{asaCheckpoints}{Accepted forward steps between checkpoints under
 \code{derivMode = "reverse"}. The adjoint interpolates the forward state between

@@ -1,7 +1,7 @@
 // The sparse solve and its transpose against a dense reference.
 //
 // The reverse mode uses one factorisation in both directions: forward to
-// recover a value a stage solved for, transposed to carry a cotangent back
+// recover a value a stage solved for, transposed to pass a cotangent back
 // through it. The forward half has been exercised by every stiff solve the
 // package has ever run; the transposed half had not been, and the first stiff
 // model to lean on it disagreed with the dense path by four orders of

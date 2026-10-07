@@ -538,7 +538,7 @@ private:
     if constexpr (!is_ad<Inner>::value) {
     // =============================================================
     //  BLAS-2 path: m_dW_block is (n * n_derivs_cached) x n, column-major. A
-    //  right-hand side carrying more directions than W has dW = 0 for those, so
+    //  right-hand side with more directions than W has dW = 0 for those, so
     //  dgemv covers the cached range and the rest stays untouched.
     // =============================================================
 

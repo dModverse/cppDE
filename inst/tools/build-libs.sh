@@ -32,8 +32,8 @@ esac
 
 # Upstream releases. SUNDIALS compiles its KLU wrappers against whichever
 # SuiteSparse it is pointed at, so the two pins are chosen as a pair.
-SUNDIALS_VERSION="${CPPDE_SUNDIALS_VERSION:-7.4.0}"
-SUITESPARSE_VERSION="${CPPDE_SUITESPARSE_VERSION:-7.10.0}"
+SUNDIALS_VERSION="${CPPDE_SUNDIALS_VERSION:-7.9.0}"
+SUITESPARSE_VERSION="${CPPDE_SUITESPARSE_VERSION:-7.14.1}"
 
 # Additional CMake options, appended to the respective configure step and
 # therefore overriding the defaults set below. Word-split on whitespace.
@@ -214,6 +214,24 @@ fi
 # <sundials/sundials_types.h> include <mpi.h>, which would then have to
 # resolve on every machine that compiles a model.
 # ---------------------------------------------------------------------
+# From SUNDIALS 7.7 on the component switches are SUNDIALS_ENABLE_*; sopt maps a
+# switch to the name the pinned release expects.
+sundials_new_opts=0
+case "$SUNDIALS_VERSION" in
+  [0-6].*|7.[0-6]|7.[0-6].*) ;;
+  *) sundials_new_opts=1 ;;
+esac
+sopt() {
+  [ "$sundials_new_opts" = 1 ] || { printf '%s' "$1"; return; }
+  case "$1" in
+    BUILD_*)             printf '%s' "SUNDIALS_ENABLE_${1#BUILD_}" ;;
+    EXAMPLES_ENABLE_C)   printf '%s' "SUNDIALS_ENABLE_C_EXAMPLES" ;;
+    EXAMPLES_ENABLE_CXX) printf '%s' "SUNDIALS_ENABLE_CXX_EXAMPLES" ;;
+    EXAMPLES_INSTALL)    printf '%s' "SUNDIALS_ENABLE_EXAMPLES_INSTALL" ;;
+    *)                   printf '%s' "SUNDIALS_${1}" ;;
+  esac
+}
+
 configure_sundials() {
   # "$@": extra options for this attempt. Passed through unsplit, a
   # -DLAPACK_LIBRARIES holding several linker flags is one argument, and
@@ -226,17 +244,17 @@ configure_sundials() {
         -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
         -DBUILD_SHARED_LIBS=ON \
         -DBUILD_STATIC_LIBS=OFF \
-        -DBUILD_CVODES=ON \
-        -DBUILD_ARKODE=OFF \
-        -DBUILD_IDA=OFF \
-        -DBUILD_IDAS=OFF \
-        -DBUILD_KINSOL=OFF \
-        -DENABLE_MPI=OFF \
-        -DENABLE_OPENMP=OFF \
-        -DEXAMPLES_ENABLE_C=OFF \
-        -DEXAMPLES_ENABLE_CXX=OFF \
-        -DEXAMPLES_INSTALL=OFF \
-        -DENABLE_KLU=ON \
+        -D"$(sopt BUILD_CVODES)"=ON \
+        -D"$(sopt BUILD_ARKODE)"=OFF \
+        -D"$(sopt BUILD_IDA)"=OFF \
+        -D"$(sopt BUILD_IDAS)"=OFF \
+        -D"$(sopt BUILD_KINSOL)"=OFF \
+        -D"$(sopt ENABLE_MPI)"=OFF \
+        -D"$(sopt ENABLE_OPENMP)"=OFF \
+        -D"$(sopt EXAMPLES_ENABLE_C)"=OFF \
+        -D"$(sopt EXAMPLES_ENABLE_CXX)"=OFF \
+        -D"$(sopt EXAMPLES_INSTALL)"=OFF \
+        -D"$(sopt ENABLE_KLU)"=ON \
         -DKLU_INCLUDE_DIR="$PREFIX/include/suitesparse" \
         -DKLU_LIBRARY_DIR="$PREFIX/lib" \
         "$@" \
@@ -307,7 +325,7 @@ if [ "$build_sundials" = "1" ]; then
     log "trying LAPACK-backed dense solver against R's BLAS ($lapack_link)"
     write_lapack_shim "$lapack_link"
     if configure_sundials \
-         -DENABLE_LAPACK=ON \
+         -D"$(sopt ENABLE_LAPACK)"=ON \
          -DSUNDIALS_INDEX_SIZE=32 \
          -DSUNDIALS_LAPACK_CASE=lower \
          -DSUNDIALS_LAPACK_UNDERSCORES=one \

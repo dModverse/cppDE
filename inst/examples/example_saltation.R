@@ -97,14 +97,14 @@ crossing <- function(conditions, at, after = 0) {
 ## Comparison and figures
 ## -----------------------------------------------------------------
 
-## Panel labels carry the partial derivative sign, U+2202.
+## Panel labels use the partial derivative sign, U+2202.
 lab1 <- function(var, a) sprintf("\u2202%s / \u2202%s", var, a)
 lab2 <- function(var, a, b) {
   if (a == b) return(sprintf("\u2202²%s / \u2202%s²", var, a))
   sprintf("\u2202²%s / \u2202%s\u2202%s", var, a, b)
 }
 
-## The last row at a requested time carries the post-event state, whether
+## The last row at a requested time holds the post-event state, whether
 ## or not a localised root inserted rows of its own.
 rowsAt <- function(res, times)
   vapply(times, function(s) max(which(abs(res$time - s) < 1e-9)), 1L)
@@ -153,7 +153,7 @@ report <- function(df, title) {
 
 ## One sweep answers one scalar functional, however many parameters there are.
 ## Seeding a single output row makes that functional the state at that row, so
-## the answer is the quantity the forward panels already carry. Only requested
+## the answer is the quantity the forward panels already show. Only requested
 ## times are seeded: a row a root inserts moves with theta.
 
 ## Verification, not advice. A trajectory has one output per row and state, so
@@ -221,7 +221,7 @@ comparisonPlot <- function(df, orders, title, rev = NULL) {
 ## =================================================================
 
 ## The firing time depends on three parameters, so every sensitivity after the
-## event carries a saltation term, and the crossing lands exactly on a
+## event contains a saltation term, and the crossing lands exactly on a
 ## requested output time.
 events_pair <- data.frame(var = "C", time = NA, value = "d", method = "add",
                           root = "S - c", stringsAsFactors = FALSE)
@@ -530,7 +530,7 @@ plot_expr_2
 ## 7. A root nonlinear in the state and explicit in time
 ## =================================================================
 
-## ds/dx carries grad g_dot, which is grad g_t + (hess g) f + J' grad g. A root
+## ds/dx contains grad g_dot, which is grad g_t + (hess g) f + J' grad g. A root
 ## linear in the state and blind to the clock leaves the first two at zero, so
 ## this is the case that tests them. Quadratic in t, so the crossing stays
 ## closed form.

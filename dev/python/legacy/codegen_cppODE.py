@@ -182,7 +182,7 @@ class ScalarType(str):
 
 
 def _ad_level(num_type):
-    """How many derivative layers the scalar carries.
+    """How many derivative layers the scalar has.
 
     A plain string still answers, so a caller that has not been updated keeps
     working -- but it answers 0, which is the safe direction: it emits std::
@@ -254,7 +254,7 @@ class _ModelSymbols:
         # time
         mapping["time"] = "t"
         # Slots this generator invents for quantities the model has no name
-        # for: an argument a contraction carries beside the state, a forcing's
+        # for: an argument a contraction takes beside the state, a forcing's
         # time derivative. Last, so nothing of the model's can shadow them.
         for name, slot in vectors:
             mapping[name] = slot
@@ -1055,7 +1055,7 @@ def _emit_contraction_pair(jac_matrix, dfdp_nnz, states_list, params_list,
                            state_name, param_name, extra_arg, vectors, prefix):
     """One contraction pair: over the states, and over the flat parameters.
 
-    `extra_arg` says whether both of them carry a vector argument ahead of
+    `extra_arg` says whether both of them take a vector argument ahead of
     lambda, and `vectors` maps the symbols this generator invented to the slots
     they print as.
     """
@@ -1153,7 +1153,7 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
     `dfdp_t_vec_axpy` is (df/dp)' lambda over the flat parameter vector, scaled
     and added into what the caller already has. Every caller accumulates, and
     the first n_states slots belong to the initial values and never move, so the
-    added form touches only the slots that carry a term: no buffer to clear, no
+    added form touches only the slots that hold a term: no buffer to clear, no
     second pass to add.
 
     `jvp_x_t_vec` and `jvp_p_t_vec_axpy` are the same two over J(x, p, t) v,
@@ -1385,7 +1385,7 @@ def _generate_jac_code_plain(jac_matrix, time_derivs, exprs, forcing_syms, forci
     # appears multiplicatively survives differentiation and lands in an entry
     # of df/dx, where an empty list prints it as a bare identifier that no
     # generated file declares. Only additive forcings vanish from df/dx, which
-    # is why every example carried one.
+    # is why every example had one.
     jac_cpp_lines += _emit_cse_temps(
         jac_temps, states_list, params_list, n_states, num_type, forcings_list
     )
@@ -2023,7 +2023,7 @@ def _event_time_grad_case(expr, states_list, params_list, n_states, num_type,
                           forcings_list, local_symbols):
     """One event expression's explicit time derivative, as a switch case body.
 
-    A forcing inside h carries its own rate, which SymPy cannot take in t.
+    A forcing inside h has its own rate, which SymPy cannot take in t.
     """
     if expr is None or expr == sp.Integer(0):
         return []
@@ -2391,7 +2391,7 @@ def generate_event_code(events_df, states_list, params_list, n_states,
                     root_sym,
                     states_list, params_list, n_states, num_type, forcings_list,
                     local_symbols)
-                # ds/dx carries grad g_dot whole, so it is one derivative of
+                # ds/dx contains grad g_dot whole, so it is one derivative of
                 # g_dot and not three assembled terms.
                 g_dot_sym, gd_vec = _root_gdot_sym(
                     root_sym, states_list, forcings_list, local_symbols,

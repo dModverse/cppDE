@@ -1,7 +1,7 @@
 // One Rosenbrock step backwards: stage 3b of dev/adjoint-plan.md.
 //
-// The oracle is the forward mode on the same step. Forward carries the full
-// sensitivity S of (x, theta) -> x_out, reverse carries w' S for one w. Both
+// The oracle is the forward mode on the same step. Forward propagates the full
+// sensitivity S of (x, theta) -> x_out, reverse only w' S for one w. Both
 // differentiate the same discrete step, so they agree to rounding.
 //
 // Six linear solves against one shared W = -J + I/(gamma*dt), and the reverse
@@ -176,8 +176,7 @@ struct adjoint_terms {
                          + (x[1] * x[1] * std::cos(t)) * lam[2]);
   }
 
-  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v,
-                   const std::vector<double>& lam, const double& t,
+  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v, const std::vector<double>& lam, const double& t,
                    std::vector<double>& out) const {
     out.assign(NX, 0.0);
     out[0] = 0.0;
@@ -188,8 +187,7 @@ struct adjoint_terms {
   }
 
   void jvp_p_t_vec_axpy(const std::vector<double>& x,
-                        const std::vector<double>& v,
-                        const std::vector<double>& lam, const double& t,
+                        const std::vector<double>& v, const std::vector<double>& lam, const double& t,
                         const double& sc, double* out) const {
     const double q = x[2] * v[1] + x[1] * v[2];
     out[NX + 0] += sc * ((-v[0]) * lam[0] + (v[0]) * lam[1]);

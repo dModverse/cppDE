@@ -10,7 +10,7 @@
 // The oracle is the forward mode over the same recorded step sequence, as in
 // test_reverse_trajectory_methods.cpp, and the same model with one forcing
 // added: multiplicatively in two equations, additively in a third. A forcing
-// carries no parameter sensitivity by construction, so what is asserted is
+// has no parameter sensitivity by construction, so what is asserted is
 // twofold: that it contributes nothing to the parameter cotangent, and that it
 // contributes the right thing to the state one.
 //
@@ -148,8 +148,7 @@ struct adjoint_terms {
                          + (x[1] * x[1] * std::cos(t)) * lam[2]);
   }
 
-  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v,
-                   const std::vector<double>& lam, const double& t,
+  void jvp_x_t_vec(const std::vector<double>& x, const std::vector<double>& v, const std::vector<double>& lam, const double& t,
                    std::vector<double>& out) const {
     out.assign(NX, 0.0);
     out[0] = 0.0;
@@ -160,8 +159,7 @@ struct adjoint_terms {
   }
 
   void jvp_p_t_vec_axpy(const std::vector<double>& x,
-                        const std::vector<double>& v,
-                        const std::vector<double>& lam, const double& t,
+                        const std::vector<double>& v, const std::vector<double>& lam, const double& t,
                         const double& sc, double* out) const {
     const double u = forcing<double>()(t);
     const double q = x[2] * v[1] + x[1] * v[2];

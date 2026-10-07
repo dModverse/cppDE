@@ -19,13 +19,13 @@ fun_d2   <- cppFUN(c(y = "x^2 + 3*x"), compile = FALSE,
                    modelname = "noparm_fun_dual_d2",
                    derivMode = "forward", deriv2 = TRUE)
 compile(mod_nd, mod_d, fun_lit, fun_dual, fun_d2,
-        output = "test_no_parameters", cores = 1)
+        output = "test_no_parameters", cores = test_cores())
 
 if (isTRUE(cvodeConfig$available)) {
   cv_nd <- cvode(c(x = "-x"), modelname = "noparm_cv_nd", compile = FALSE)
   cv_d  <- cvode(c(x = "-x"), modelname = "noparm_cv_d", deriv = TRUE,
                  compile = FALSE)
-  compile(cv_nd, cv_d, output = "test_no_parameters_cvode", cores = 1)
+  compile(cv_nd, cv_d, output = "test_no_parameters_cvode", cores = test_cores())
 }
 
 # -- cppDE: pure decay, no parameters ----------------------------------------

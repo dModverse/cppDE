@@ -87,7 +87,7 @@ def normalise_logic(expr_str):
     """
     if not _LOGIC_RE.search(expr_str):
         return expr_str
-    # The word forms carry a leading space, which would read as an indent.
+    # The word forms have a leading space, which would read as an indent.
     src = _LOGIC_RE.sub(lambda m: _LOGIC_WORDS[m.group(0)], expr_str).strip()
     tree = _BoolOpsToCalls().visit(ast.parse(src, mode='eval'))
     return ast.unparse(ast.fix_missing_locations(tree))

@@ -14,7 +14,7 @@
 
 ##  Array tasks land on whatever nodes SLURM has free, so ratios stay valid,
 ##  both solvers of a cell running in one task, while absolute milliseconds are
-##  comparable within a shard only. Every row carries the node name and CPU.
+##  comparable within a shard only. Every row records the node name and CPU.
 
 ##  Request whole nodes (`--cores` = the core count) if the absolute numbers
 ##  matter; otherwise a co-tenant job shows up in them.
@@ -289,7 +289,7 @@ job <- dMod2::distributedComputing(
     ## Runs on a compute node. `var_1` is this task's shard index; the benchmark
     ## functions and `shards` arrive in the workspace.
 
-    ## The workspace carries function objects, not attached packages, so cppDE has
+    ## The workspace holds function objects, not attached packages, so cppDE has
     ## to be loaded here or every model fails and the shard returns nothing.
     library(cppDE)
     stopifnot(isTRUE(cppDE:::cvodeConfig$available))

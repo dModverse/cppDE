@@ -1,13 +1,13 @@
 // One integration step backwards on tsit5: stage 3a of dev/adjoint-plan.md.
 //
-// The oracle is the forward mode on the same step. Forward carries the full
-// sensitivity S of (x, theta, t, h) -> x_out, reverse carries w' S for one w.
+// The oracle is the forward mode on the same step. Forward propagates the
+// full sensitivity S of (x, theta, t, h) -> x_out, reverse only w' S for one w.
 // Both differentiate the same discrete step, so they agree to rounding and not
 // to a solver tolerance.
 //
 // The step size is an independent, not a constant: the adjoint runs through the
 // step-size control, so dy/dh has to come out of the sweep. The forward
-// reference only carries h symbolically under CPPDE_SYMBOLIC_STEPSIZE, which is
+// reference only treats h symbolically under CPPDE_SYMBOLIC_STEPSIZE, which is
 // why this file defines it; a shipped build never does.
 //
 // Covered: w' S against S' w for the unit seeds and for a mixed one; the frozen

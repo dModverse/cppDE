@@ -129,7 +129,7 @@ def generate_cvode_cpp(
                 rootfunc_nodes.append(model.parse(s))
 
     # --- events ---
-    # Each event carries the post-event value g of its state, the method
+    # Each event has the post-event value g of its state, the method
     # folded in, with its partials in x, p and t; a time event adds the time
     # and its dt/dp, a root event the condition r and its partials.
     ev = cppde_model.CvodeEvent(model)
@@ -220,13 +220,6 @@ def generate_cvode_cpp(
                           + [cppde_model.block(g, root_stores, "_r")], "  ")
 
     # --- adjoint ---
-    # Events and root functions are refused under reverse.
-    if reverse and (events or rootfunc is not None):
-        raise ValueError(
-            "derivMode = 'reverse' on the CVODE backend does not support events "
-            "or a rootfunc: CVODES integrates the adjoint over checkpointed "
-            "states and cannot be told about a jump. Use the native backend, "
-            "which replays the jump.")
     adj_rhs_body = adj_quad_body = ""
     if reverse:
         xb, qb = cppde_model.cvode_adjoint_statements(model)
@@ -292,6 +285,16 @@ def generate_cvode_cpp(
 # C++ source template
 # =====================================================================
 
+def _fail_main(code, msg):
+    """Failure statement of the entry point's setup."""
+    return '{ cleanup(); return res.fail(cppde::%s, "%s"); }' % (code, msg)
+
+
+def _fail_seg(code, msg):
+    """Failure statement of the ASA restart, which returns -1 to its caller."""
+    return '{ asa_msg = "%s"; return -1; }' % msg
+
+
 def _switch_lambda(cases, var):
     """Lambda (x, t, var) -> double over index cases [(index, body)]."""
     out = ["[params, &F](const double* x, double t, int %s) -> double {" % var,
@@ -340,6 +343,13 @@ def _render_source(
     has_time_events = len(time_events) > 0
     has_root_events = len(root_events) > 0
     has_events      = has_time_events or has_root_events
+    # ASA over events: one CVODES memory per stretch between jumps.
+    asa_seg = reverse and has_events
+
+    def reinit(t):
+        if asa_seg:
+            return f"asa_restart({t}) < 0"
+        return f"CVodeReInit(cvode_mem, {t}, y) < 0"
 
     # UserData holds the PchipForcing storage and F whenever forcings or event
     # lambdas read it; the event lambdas capture F even without forcings.
@@ -366,7 +376,7 @@ def _render_source(
         "  int              maxroot = 1;          // cap from solveODE(maxroot=)\n"
     )
 
-    # UserData carries Phi_prime (the auto-extended Phi'(theta) flat,
+    # UserData holds Phi_prime (the auto-extended Phi'(theta) flat,
     # column-major) so the sens rhs and event saltation lambdas can apply
     # the chain rule. R always supplies a full-shape sens1ini at solve time.
     if deriv:
@@ -437,17 +447,22 @@ static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
             str(e["direction"]) for e in root_events
         ]
         direction_list = ", ".join(direction_entries)
-        rootfunc_init_block = (
-            f"  {{ int rd[{n_total_roots}] = {{ {direction_list} }};\n"
-            f"    if (CVodeRootInit(cvode_mem, {n_total_roots}, root_fn) < 0) "
-            "{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, \"CVodeRootInit failed\"); }\n"
-            f"    if (CVodeSetRootDirection(cvode_mem, rd) < 0) "
-            "{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, \"CVodeSetRootDirection failed\"); } }\n"
-        )
+
+        def rootfunc_init(fail):
+            return (
+                f"  {{ int rd[{n_total_roots}] = {{ {direction_list} }};\n"
+                f"    if (CVodeRootInit(cvode_mem, {n_total_roots}, root_fn) < 0) "
+                + fail("RC_LINIT_FAIL", "CVodeRootInit failed") + "\n"
+                f"    if (CVodeSetRootDirection(cvode_mem, rd) < 0) "
+                + fail("RC_LINIT_FAIL", "CVodeSetRootDirection failed") + " }\n"
+            )
     else:
         rootfunc_decl = ""
         rootfunc_impl = ""
-        rootfunc_init_block = ""
+
+        def rootfunc_init(fail):
+            return ""
+    rootfunc_init_block = rootfunc_init(_fail_main)
 
     # --- Events (time and root) ---
 
@@ -718,6 +733,24 @@ static std::vector<RootEvent> build_root_events(const double* params,
     }}
   }};
 """
+        elif reverse:
+            # Under ASA the jump is applied as without derivatives and recorded
+            # for the backward sweep, with f on both sides of it.
+            time_event_apply_lambda = """  auto apply_time_event = [&](const TimeEvent& ev) {
+    double* y_arr = N_VGetArrayPointer(y);
+    AsaJump J;
+    J.kind = 0;
+    J.ev = (int)(&ev - time_events.data());
+    J.t = ev.time;
+    J.x_old.assign(y_arr, y_arr + NEQ);
+    rhs_fn(J.t, y, f_buf, &ud);
+    { const double* fb = N_VGetArrayPointer(f_buf); J.f_old.assign(fb, fb + NEQ); }
+    y_arr[ev.var_idx] = ev.g_fn(J.x_old.data(), J.t);
+    rhs_fn(J.t, y, f_buf, &ud);
+    { const double* fb = N_VGetArrayPointer(f_buf); J.f_new.assign(fb, fb + NEQ); }
+    asa_jumps.push_back(std::move(J));
+  };
+"""
         else:
             time_event_apply_lambda = """  auto apply_time_event = [&](const TimeEvent& ev) {
     double* y_arr = N_VGetArrayPointer(y);
@@ -731,7 +764,10 @@ static std::vector<RootEvent> build_root_events(const double* params,
         # cppde_event_window.hpp that the native backend applies: one before t0
         # is skipped, one at t0 is applied before the solve starts, and the t0
         # row is written again with the state after it, as every row at an
-        # event time carries. The main loop stops short of the last time.
+        # event time has. The main loop stops short of the last time.
+        # Under ASA the t0 row written below belongs to the stretch after them.
+        asa_t0_rows = ("      for (auto& s_ : asa_segs) s_.row0 = s_.row1 = 0;\n"
+                       if asa_seg else "")
         event_pre_t0_block = f"""  const double t_last = times[n_times - 1];
   size_t ev_idx = 0;
   while (ev_idx < time_events.size() && time_events[ev_idx].time < t0 &&
@@ -746,9 +782,9 @@ static std::vector<RootEvent> build_root_events(const double* params,
     }}
     if (applied_pre > 0) {{
       cv_harvest();
-      if (CVodeReInit(cvode_mem, t0, y) < 0)
+      if ({reinit("t0")})
         {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeReInit failed (events at t0)"); }}
-{event_sens_reinit}      cv_rebase();
+{asa_t0_rows}{event_sens_reinit}      cv_rebase();
       out_y.clear();
       out_s.clear();
       {{
@@ -864,6 +900,29 @@ static std::vector<RootEvent> build_root_events(const double* params,
     return any_terminal;
   }};
 """
+        elif reverse:
+            root_event_apply_lambda = """  auto apply_root_events_batch = [&](const std::vector<int>& triggered_idx,
+                                     double t_e) -> bool {
+    double* y_arr = N_VGetArrayPointer(y);
+    AsaJump J;
+    J.kind = 1;
+    J.trig = triggered_idx;
+    J.t = t_e;
+    J.x_old.assign(y_arr, y_arr + NEQ);
+    rhs_fn(t_e, y, f_buf, &ud);
+    { const double* fb = N_VGetArrayPointer(f_buf); J.f_old.assign(fb, fb + NEQ); }
+    bool any_terminal = false;
+    for (int j : triggered_idx) {
+      const auto& ev = event_roots[j];
+      if (ev.terminal) { any_terminal = true; continue; }
+      y_arr[ev.var_idx] = ev.g_fn(J.x_old.data(), t_e);
+    }
+    rhs_fn(t_e, y, f_buf, &ud);
+    { const double* fb = N_VGetArrayPointer(f_buf); J.f_new.assign(fb, fb + NEQ); }
+    asa_jumps.push_back(std::move(J));
+    return any_terminal;
+  };
+"""
         else:
             root_event_apply_lambda = """  auto apply_root_events_batch = [&](const std::vector<int>& triggered_idx,
                                      double t_e) -> bool {
@@ -906,7 +965,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
     # --- do_cvode_step: single step with CV_ROOT_RETURN dispatch ---
 
     # Returns 0 for the target reached, 1 for a user rootfunc stop, 2 for a terminal
-    # root event, -1 for an error, with return_code carrying the raw CVODE flag.
+    # root event, -1 for an error, with return_code holding the raw CVODE flag.
     # On 1 and 2 the caller pushes the final output row.
     if has_events:
         if deriv:
@@ -968,7 +1027,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
         }}
 #endif
         cv_harvest();
-        if (CVodeReInit(cvode_mem, tret, y) < 0) {{
+        if ({reinit("tret")}) {{
           return_code = cppde::RC_ILL_INPUT;
           solver_msg = "CVodeReInit after root event failed";
           return -1;   // no cleanup: the caller still reads y
@@ -996,11 +1055,16 @@ static std::vector<RootEvent> build_root_events(const double* params,
             root_dispatch_block = ("      solver_msg = \"unexpected CV_ROOT_RETURN\";\n"
                                    "      return_code = CV_UNRECOGNIZED_ERR; return -1;\n")
 
+        if asa_seg:
+            step_call = ("      int ncheck_ = 0;\n"
+                         "      int flag = CVodeF(cvode_mem, target, y, &tret, CV_NORMAL, &ncheck_);\n"
+                         "      asa_segs.back().used = true;\n")
+        else:
+            step_call = "      int flag = CVode(cvode_mem, target, y, &tret, CV_NORMAL);\n"
         do_cvode_step_lambda = f"""  auto do_cvode_step = [&](double target, double& tret_out) -> int {{
     while (true) {{
       sunrealtype tret;
-      int flag = CVode(cvode_mem, target, y, &tret, CV_NORMAL);
-      if (flag < 0) {{
+{step_call}      if (flag < 0) {{
         return_code = flag;
         char buf[160];
         std::snprintf(buf, sizeof(buf),
@@ -1103,7 +1167,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
                            cvc.nje - cvc.b_nje, cvc.nsetups - cvc.b_nsetups);
 #endif
       cv_harvest();
-      if (CVodeReInit(cvode_mem, t_e, y) < 0) {{
+      if ({reinit("t_e")}) {{
         char _m[128];
         snprintf(_m, sizeof(_m), "CVodeReInit failed at t=%.6e", t_e);
         return_code = cppde::RC_ILL_INPUT; solver_msg = _m;
@@ -1112,7 +1176,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
 {event_sens_reinit}      if (hard_fail) {{ stop = true; break; }}
       cv_rebase();
       // An event time that is not itself a requested output time still gets a
-      // row, carrying the post-event state, same contract as the native
+      // row, holding the post-event state, same contract as the native
       // backend. When it coincides with times[k] the branch below emits it.
       if (t_e < times[k]) {{
         out_t.push_back(t_e);
@@ -1310,7 +1374,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
     res.n_adj_cols = n_seed;
     res.adjoint.assign((size_t)n_phi_rows * n_seed, 0.0);
 
-    int indexB = -1;
+@ROOT_OFF@    int indexB = -1;
     N_Vector yB = N_VNew_Serial(NEQ, ctx);
     N_Vector qB = N_VNew_Serial(NPAR_ADJ > 0 ? NPAR_ADJ : 1, ctx);
     SUNMatrix       AB  = nullptr;
@@ -1360,15 +1424,18 @@ static std::vector<RootEvent> build_root_events(const double* params,
           break;
         }
         if (NPAR_ADJ > 0) {
+          const double qatol = args.gradtol > 0.0 ? args.gradtol : abstol;
           if (CVodeQuadInitB(cvode_mem, indexB, adj_quad_fn, qB) < 0 ||
-              CVodeQuadSStolerancesB(cvode_mem, indexB, reltol, abstol) < 0) {
+              CVodeQuadSStolerancesB(cvode_mem, indexB, reltol, qatol) < 0) {
             return_code = cppde::RC_LINIT_FAIL;
             solver_msg = "adjoint quadrature failed";
             break;
           }
-          // The quadrature stays out of the error test, the SUNDIALS default:
-          // gradient entries of very different scale would stall the step.
-          CVodeSetQuadErrConB(cvode_mem, indexB, SUNFALSE);
+          // The quadrature, the gradient, enters the error test only under a
+          // gradient tolerance: entries of very different scale would stall
+          // the step against reltol alone.
+          CVodeSetQuadErrConB(cvode_mem, indexB,
+                              args.gradtol > 0.0 ? SUNTRUE : SUNFALSE);
         }
       } else {
         // Later columns re-initialise the one backward problem: CVodeB advances
@@ -1441,7 +1508,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
         for (int i = 0; i < NEQ; ++i)
           res.adjoint[i + (size_t)n_phi_rows * c] = lam[i];
         // CVODES integrates the quadrature from T down to t0 with xi(T) = 0, so
-        // xi(t0) = -int_{t0}^{T} fQB dt; fQB carries the adjoint's minus sign,
+        // xi(t0) = -int_{t0}^{T} fQB dt; fQB includes the adjoint's minus sign,
         // and the two cancel to int lambda' (df/dp) dt.
         for (int k = 0; k < NPAR_ADJ; ++k)
           res.adjoint[(NEQ + k) + (size_t)n_phi_rows * c] = q[k];
@@ -1454,6 +1521,308 @@ static std::vector<RootEvent> build_root_events(const double* params,
     else:
         asa_init_block = ""
         asa_sweep_block = ""
+
+    # --- ASA over events ---
+    # The forward run is cut at every jump into stretches, each on its own
+    # CVODES memory and checkpoints. The backward sweep runs them last to first
+    # and passes lambda and the quadrature through each jump's adjoint.
+    asa_structs = asa_decl = asa_cleanup = ""
+    if asa_seg:
+        asa_structs = """
+// One stretch of the forward run between jumps: its CVODES memory (null when
+// nothing was integrated on it), its backward problem, and what it spans.
+struct AsaSeg {
+  void* mem = nullptr;
+  SUNMatrix A = nullptr;
+  SUNLinearSolver LS = nullptr;
+  SUNMatrix AB = nullptr;
+  SUNLinearSolver LSB = nullptr;
+  int indexB = -1;
+  bool used = false;
+  double t0 = 0.0, t1 = 0.0;
+  int row0 = 0, row1 = 0;     // output rows [row0, row1)
+  int jump0 = 0, jump1 = 0;   // jumps applied at its start [jump0, jump1)
+};
+
+// A jump of the forward run: one time event, or the root events of one crossing.
+struct AsaJump {
+  int kind = 0;               // 0 time event, 1 root events
+  int ev = -1;                // index into the sorted time events
+  std::vector<int> trig;      // triggered root events
+  double t = 0.0;
+  std::vector<double> x_old, f_old, f_new;
+};
+"""
+        asa_decl = """  std::vector<AsaSeg> asa_segs(1);
+  asa_segs[0].t0 = t0;
+  std::vector<AsaJump> asa_jumps;
+  int asa_jump_mark = 0;
+  std::string asa_msg;
+"""
+        asa_cleanup = """    for (auto& s_ : asa_segs) {
+      if (s_.mem) CVodeFree(&s_.mem);
+      if (s_.LSB) SUNLinSolFree(s_.LSB);
+      if (s_.AB)  SUNMatDestroy(s_.AB);
+      if (s_.LS)  SUNLinSolFree(s_.LS);
+      if (s_.A)   SUNMatDestroy(s_.A);
+      s_ = AsaSeg();
+    }
+"""
+
+        jump_parts = []
+        if has_time_events:
+            jump_parts.append("""      if (J.kind == 0) {
+        const TimeEvent& ev = time_events[J.ev];
+        const int v = ev.var_idx;
+        const double wv = w[v];
+        // W is the cotangent of the event time.
+        double W = wv * (ev.dg_dt_fn(xo, J.t) - fn[v]);
+        for (int i = 0; i < NEQ; ++i) {
+          const double gx = ev.dg_dx_fn(xo, J.t, i);
+          W += wv * gx * fo[i];
+          if (i != v) W += w[i] * (fo[i] - fn[i]);
+          lam[i] = (i == v ? 0.0 : w[i]) + wv * gx;
+        }
+        for (int k = 0; k < NPAR_ADJ; ++k)
+          q[k] += wv * ev.dg_dp_fn(xo, J.t, k) + W * ev.dt_dp_fn(xo, J.t, k);
+        return;
+      }
+""")
+        if has_root_events:
+            jump_parts.append("""      // The first non-terminal event defines the crossing time, as forward.
+      std::vector<int> writer(NEQ, -1);
+      int ref = -1;
+      for (int j : J.trig) {
+        const auto& e = event_roots[j];
+        if (e.terminal) continue;
+        writer[e.var_idx] = j;
+        if (ref < 0) ref = j;
+      }
+      if (ref < 0) return;
+      const auto& R = event_roots[ref];
+      std::vector<double> rx(NEQ);
+      double g_dot = R.dr_dt_fn(xo, J.t);
+      for (int i = 0; i < NEQ; ++i) {
+        rx[i] = R.dr_dx_fn(xo, J.t, i);
+        g_dot += rx[i] * fo[i];
+      }
+      double W = 0.0;
+      for (int i = 0; i < NEQ; ++i) lam[i] = (writer[i] < 0) ? w[i] : 0.0;
+      for (int i = 0; i < NEQ; ++i) {
+        if (writer[i] < 0) { W += w[i] * (fo[i] - fn[i]); continue; }
+        const auto& e = event_roots[writer[i]];
+        const double wi = w[i];
+        if (wi == 0.0) continue;
+        W += wi * (e.dg_dt_fn(xo, J.t) - fn[i]);
+        for (int m = 0; m < NEQ; ++m) {
+          const double gx = e.dg_dx_fn(xo, J.t, m);
+          W += wi * gx * fo[m];
+          lam[m] += wi * gx;
+        }
+        for (int k = 0; k < NPAR_ADJ; ++k) q[k] += wi * e.dg_dp_fn(xo, J.t, k);
+      }
+      // dt_e = -(r_x dx + r_p dp) / g_dot, zero on a tangential crossing.
+      if (g_dot != 0.0) {
+        const double c = -W / g_dot;
+        for (int m = 0; m < NEQ; ++m) lam[m] += c * rx[m];
+        for (int k = 0; k < NPAR_ADJ; ++k) q[k] += c * R.dr_dp_fn(xo, J.t, k);
+      }
+""")
+        jump_adjoint = ("""    // The adjoint of one jump x+ = h(x-, p, t_e): lam- = h_x' lam+ and
+    // q += h_p' lam+, plus the event time's cotangent W through dt_e/dp or,
+    // for a root, through dt_e/dx- and dt_e/dp.
+    auto asa_jump_adjoint = [&](const AsaJump& J, double* lam, double* q) {
+      const double* xo = J.x_old.data();
+      const double* fo = J.f_old.data();
+      const double* fn = J.f_new.data();
+      const std::vector<double> w(lam, lam + NEQ);
+""" + "".join(jump_parts) + "    };\n")
+
+        asa_sweep_block = """
+  // --- the backward sweep, stretch by stretch from the last ---
+  // The result is indexed like sens1ini: state rows from lambda(t0), then
+  // parameter rows from the quadrature.
+  if (return_code == 0) {
+    const int n_seed = args.n_seed_cols;
+    const int n_out_b = (int)out_t.size();
+    if (args.n_seed_rows != n_out_b) {
+      char m[192];
+      std::snprintf(m, sizeof(m),
+                    "cotangent has %d rows but the run produced %d output rows",
+                    args.n_seed_rows, n_out_b);
+      cleanup(); return res.fail(cppde::RC_ILL_INPUT, m);
+    }
+    if (args.n_seed_states != NEQ) {
+      cleanup(); return res.fail(cppde::RC_ILL_INPUT,
+                                 "cotangent has the wrong state count");
+    }
+
+    const int n_phi_rows = NEQ + NPAR_ADJ;
+    res.n_adj_rows = n_phi_rows;
+    res.n_adj_cols = n_seed;
+    res.adjoint.assign((size_t)n_phi_rows * n_seed, 0.0);
+
+    {
+      AsaSeg& L = asa_segs.back();
+      L.t1 = std::max(L.t0, out_t.back());
+      L.row1 = n_out_b;
+    }
+    // The replay from a checkpoint must not stop at the roots again.
+    if (cvode_mem) CVodeRootInit(cvode_mem, 0, nullptr);
+
+    const int n_q = NPAR_ADJ > 0 ? NPAR_ADJ : 1;
+    std::vector<double> lam_all((size_t)NEQ * n_seed, 0.0);
+    std::vector<double> q_all((size_t)n_q * n_seed, 0.0);
+    N_Vector yB = N_VNew_Serial(NEQ, ctx);
+    N_Vector qB = N_VNew_Serial(n_q, ctx);
+    ud.Jscratch = SUNMatClone(A);
+    auto cleanupB = [&]() {
+      if (ud.Jscratch) { SUNMatDestroy(ud.Jscratch); ud.Jscratch = nullptr; }
+      if (qB)  { N_VDestroy(qB); qB = nullptr; }
+      if (yB)  { N_VDestroy(yB); yB = nullptr; }
+    };
+    if (!yB || !qB || !ud.Jscratch) {
+      cleanupB(); cleanup();
+      return res.fail(cppde::RC_NO_MALLOC, "N_VNew_Serial (adjoint) failed");
+    }
+
+    // Rows at one time within rounding, such as the row before a root and the
+    // root time itself, are added together.
+    auto near = [](double a, double b) {
+      return std::abs(a - b) <= 1e-13 * std::max(1.0, std::abs(b));
+    };
+    auto add_seed = [&](int k, int c, double* lam) -> bool {
+      bool any = false;
+      for (int i = 0; i < NEQ; ++i) {
+        const double w = args.seed[k + (size_t)n_out_b * i +
+                                   (size_t)n_out_b * NEQ * c];
+        if (w != 0.0) { lam[i] += w; any = true; }
+      }
+      return any;
+    };
+@JUMP_ADJOINT@
+    const int n_seg = (int)asa_segs.size();
+    for (int s = n_seg - 1; s >= 0 && return_code == 0; --s) {
+      AsaSeg& S = asa_segs[s];
+      void* mem = (s == n_seg - 1) ? cvode_mem : S.mem;
+      const bool flows = mem != nullptr && S.used && S.t1 > S.t0 && !near(S.t0, S.t1);
+      SUNMatrix&       AB  = S.AB;
+      SUNLinearSolver& LSB = S.LSB;
+      for (int c = 0; c < n_seed && return_code == 0; ++c) {
+        double* lam_c = lam_all.data() + (size_t)NEQ * c;
+        double* q_c   = q_all.data() + (size_t)n_q * c;
+        int k = S.row1 - 1;
+        double tB = S.t1;
+        while (k >= S.row0 && near(out_t[k], tB)) { add_seed(k, c, lam_c); --k; }
+
+        if (!flows) {
+          // Nothing to integrate: every row here is at the stretch's one time.
+          for (; k >= S.row0; --k) add_seed(k, c, lam_c);
+        } else {
+          double* lam = N_VGetArrayPointer(yB);
+          double* q   = N_VGetArrayPointer(qB);
+          for (int i = 0; i < NEQ; ++i) lam[i] = lam_c[i];
+          for (int i = 0; i < n_q; ++i) q[i] = q_c[i];
+          if (S.indexB < 0) {
+            if (CVodeCreateB(mem, CV_BDF, &S.indexB) < 0 ||
+                CVodeInitB(mem, S.indexB, adj_rhs_fn, tB, yB) < 0 ||
+                CVodeSStolerancesB(mem, S.indexB, reltol, abstol) < 0 ||
+                CVodeSetUserDataB(mem, S.indexB, &ud) < 0) {
+              return_code = cppde::RC_LINIT_FAIL;
+              solver_msg = "adjoint initialisation failed";
+              break;
+            }
+            CVodeSetMaxNumStepsB(mem, S.indexB, maxsteps);
+@LSB_SETUP@            if (!AB || !LSB ||
+                CVodeSetLinearSolverB(mem, S.indexB, LSB, AB) < 0 ||
+                CVodeSetJacFnB(mem, S.indexB, jacB_fn) < 0) {
+              return_code = cppde::RC_LINIT_FAIL;
+              solver_msg = "adjoint linear solver failed";
+              break;
+            }
+            if (NPAR_ADJ > 0) {
+              const double qatol = args.gradtol > 0.0 ? args.gradtol : abstol;
+              if (CVodeQuadInitB(mem, S.indexB, adj_quad_fn, qB) < 0 ||
+                  CVodeQuadSStolerancesB(mem, S.indexB, reltol, qatol) < 0) {
+                return_code = cppde::RC_LINIT_FAIL;
+                solver_msg = "adjoint quadrature failed";
+                break;
+              }
+              CVodeSetQuadErrConB(mem, S.indexB,
+                                  args.gradtol > 0.0 ? SUNTRUE : SUNFALSE);
+            }
+          } else {
+            if (CVodeReInitB(mem, S.indexB, tB, yB) < 0 ||
+                (NPAR_ADJ > 0 && CVodeQuadReInitB(mem, S.indexB, qB) < 0)) {
+              return_code = cppde::RC_UNRECOGNIZED_ERR;
+              solver_msg = "CVodeReInitB failed between seed columns"; break;
+            }
+          }
+
+          // Backwards to each earlier row and on to the stretch's start; a
+          // seeded row re-initialises the backward problem, as without events.
+          while (return_code == 0) {
+            const double tk = (k >= S.row0) ? std::max(out_t[k], S.t0) : S.t0;
+            if (tk < tB && !near(tk, tB)) {
+              int fb = CVodeB(mem, tk, CV_NORMAL);
+              if (fb < 0) { return_code = fb; solver_msg = "CVodeB failed"; break; }
+              sunrealtype tret_b;
+              if (CVodeGetB(mem, S.indexB, &tret_b, yB) < 0) {
+                return_code = cppde::RC_UNRECOGNIZED_ERR;
+                solver_msg = "CVodeGetB failed"; break;
+              }
+              tB = tk;
+            }
+            if (k < S.row0) break;
+            bool jumped = false;
+            while (k >= S.row0 && near(std::max(out_t[k], S.t0), tB)) {
+              jumped = add_seed(k, c, lam) || jumped;
+              --k;
+            }
+            if (jumped && !near(tB, S.t0)) {
+              sunrealtype tq_;
+              if ((NPAR_ADJ > 0 && CVodeGetQuadB(mem, S.indexB, &tq_, qB) < 0) ||
+                  CVodeReInitB(mem, S.indexB, tB, yB) < 0 ||
+                  (NPAR_ADJ > 0 && CVodeQuadReInitB(mem, S.indexB, qB) < 0)) {
+                return_code = cppde::RC_UNRECOGNIZED_ERR;
+                solver_msg = "CVodeReInitB failed"; break;
+              }
+            }
+          }
+          if (return_code != 0) break;
+          if (NPAR_ADJ > 0) {
+            sunrealtype tq;
+            if (CVodeGetQuadB(mem, S.indexB, &tq, qB) < 0) {
+              return_code = cppde::RC_UNRECOGNIZED_ERR;
+              solver_msg = "CVodeGetQuadB failed"; break;
+            }
+          }
+          for (int i = 0; i < NEQ; ++i) lam_c[i] = lam[i];
+          for (int i = 0; i < n_q; ++i) q_c[i] = q[i];
+        }
+
+        for (int j = S.jump1 - 1; j >= S.jump0; --j)
+          asa_jump_adjoint(asa_jumps[j], lam_c, q_c);
+      }
+    }
+
+    if (return_code == 0) {
+      for (int c = 0; c < n_seed; ++c) {
+        for (int i = 0; i < NEQ; ++i)
+          res.adjoint[i + (size_t)n_phi_rows * c] = lam_all[i + (size_t)NEQ * c];
+        for (int k = 0; k < NPAR_ADJ; ++k)
+          res.adjoint[(NEQ + k) + (size_t)n_phi_rows * c] = q_all[k + (size_t)n_q * c];
+      }
+    }
+    cleanupB();
+  }
+""".replace("@JUMP_ADJOINT@", jump_adjoint)
+    else:
+        # A user rootfunc stops the run; the replay from a checkpoint must not
+        # stop at it again.
+        root_off = ("    CVodeRootInit(cvode_mem, 0, nullptr);\n"
+                    if reverse and need_cvode_root else "")
+        asa_sweep_block = asa_sweep_block.replace("@ROOT_OFF@", root_off)
 
     # A seed reaches the adjoint under reverse and means nothing otherwise, so
     # each direction refuses the other rather than ignoring the argument.
@@ -1495,18 +1864,31 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
   }}
 }}
 """
+        # CVODES assumes the replay from a checkpoint takes the steps the run
+        # took. KLU's refactorisation depends on earlier pivots, a full
+        # factorisation at every setup on the matrix alone.
+        if reverse:
+            jac_impl += """
+static int klu_setup_fresh(SUNLinearSolver S, SUNMatrix A) {
+  int flag = SUNLinSol_KLUReInit(S, A, SUNSparseMatrix_NNZ(A), SUNKLU_REINIT_PARTIAL);
+  if (flag != 0) return flag;
+  return SUNLinSolSetup_KLU(S, A);
+}
+"""
+        klu_fresh = "  LS->ops->setup = klu_setup_fresh;\n" if reverse else ""
         klu_btf = 1 if klu_settings and klu_settings["use_btf"] else 0
         klu_ord = int(klu_settings["ordering"]) if klu_settings else 0
-        ls_setup = f"""  A = SUNSparseMatrix(NEQ, NEQ, {nnz_total}, CSC_MAT, ctx);
-  if (!A) {{ cleanup(); return res.fail(cppde::RC_NO_MALLOC, "SUNSparseMatrix failed"); }}
+        def ls_setup_for(fail):
+            return f"""  A = SUNSparseMatrix(NEQ, NEQ, {nnz_total}, CSC_MAT, ctx);
+  if (!A) {fail("RC_NO_MALLOC", "SUNSparseMatrix failed")}
   LS = SUNLinSol_KLU(y, A, ctx);
-  if (!LS) {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "SUNLinSol_KLU failed"); }}
+  if (!LS) {fail("RC_LINIT_FAIL", "SUNLinSol_KLU failed")}
   {{
     sun_klu_common* klu_c = SUNLinSol_KLUGetCommon(LS);
     if (klu_c) {{ klu_c->btf = {klu_btf}; klu_c->ordering = {klu_ord}; }}
   }}
-  if (CVodeSetLinearSolver(cvode_mem, LS, A) < 0) {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeSetLinearSolver failed"); }}
-  if (CVodeSetJacFn(cvode_mem, jac_fn) < 0) {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeSetJacFn failed"); }}
+{klu_fresh}  if (CVodeSetLinearSolver(cvode_mem, LS, A) < 0) {fail("RC_LINIT_FAIL", "CVodeSetLinearSolver failed")}
+  if (CVodeSetJacFn(cvode_mem, jac_fn) < 0) {fail("RC_LINIT_FAIL", "CVodeSetJacFn failed")}
 """
     else:
         ls_includes = ("#include <sunlinsol/sunlinsol_lapackdense.h>\n"
@@ -1535,12 +1917,52 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
 }}
 """
         ls_ctor = "SUNLinSol_LapackDense" if use_lapack else "SUNLinSol_Dense"
-        ls_setup = f"""  A = SUNDenseMatrix(NEQ, NEQ, ctx);
-  if (!A) {{ cleanup(); return res.fail(cppde::RC_NO_MALLOC, "SUNDenseMatrix failed"); }}
+        def ls_setup_for(fail):
+            return f"""  A = SUNDenseMatrix(NEQ, NEQ, ctx);
+  if (!A) {fail("RC_NO_MALLOC", "SUNDenseMatrix failed")}
   LS = {ls_ctor}(y, A, ctx);
-  if (!LS) {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "{ls_ctor} failed"); }}
-  if (CVodeSetLinearSolver(cvode_mem, LS, A) < 0) {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeSetLinearSolver failed"); }}
-  if (CVodeSetJacFn(cvode_mem, jac_fn) < 0) {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeSetJacFn failed"); }}
+  if (!LS) {fail("RC_LINIT_FAIL", ls_ctor + " failed")}
+  if (CVodeSetLinearSolver(cvode_mem, LS, A) < 0) {fail("RC_LINIT_FAIL", "CVodeSetLinearSolver failed")}
+  if (CVodeSetJacFn(cvode_mem, jac_fn) < 0) {fail("RC_LINIT_FAIL", "CVodeSetJacFn failed")}
+"""
+
+    ls_setup = ls_setup_for(_fail_main)
+
+    # A jump closes the stretch on the current memory; the next one starts on a
+    # fresh memory, or on the same one when nothing was integrated on it yet.
+    asa_restart_lambda = ""
+    if asa_seg:
+        asa_restart_lambda = f"""  auto asa_restart = [&](double t_r) -> int {{
+    const size_t cur = asa_segs.size() - 1;
+    asa_segs[cur].t1 = t_r;
+    asa_segs[cur].row1 = (int)out_t.size();
+    AsaSeg nxt;
+    nxt.t0 = t_r;
+    nxt.row0 = (int)out_t.size();
+    nxt.jump0 = asa_jump_mark;
+    nxt.jump1 = (int)asa_jumps.size();
+    asa_jump_mark = nxt.jump1;
+    if (!asa_segs[cur].used) {{
+      asa_segs.push_back(nxt);
+      return CVodeReInit(cvode_mem, t_r, y);
+    }}
+    // The replay from a checkpoint must not stop at the roots again.
+    CVodeRootInit(cvode_mem, 0, nullptr);
+    asa_segs[cur].mem = cvode_mem;
+    asa_segs[cur].A = A;
+    asa_segs[cur].LS = LS;
+    cvode_mem = nullptr; A = nullptr; LS = nullptr;
+    asa_segs.push_back(nxt);
+    cvode_mem = CVodeCreate({cv_method}, ctx);
+    if (!cvode_mem) {_fail_seg("", "CVodeCreate failed")}
+    if (CVodeInit(cvode_mem, rhs_fn, t_r, y) < 0) {_fail_seg("", "CVodeInit failed")}
+    if (CVodeSStolerances(cvode_mem, reltol, abstol) < 0) {_fail_seg("", "CVodeSStolerances failed")}
+    if (CVodeSetUserData(cvode_mem, &ud) < 0) {_fail_seg("", "CVodeSetUserData failed")}
+    CVodeSetMaxNumSteps(cvode_mem, maxsteps);
+    if (hini > 0.0) CVodeSetInitStep(cvode_mem, hini);
+{ls_setup_for(_fail_seg)}{rootfunc_init(_fail_seg)}    if (CVodeAdjInit(cvode_mem, ASA_CHECKPOINTS, CV_POLYNOMIAL) < 0) {_fail_seg("", "CVodeAdjInit failed")}
+    return 0;
+  }};
 """
 
     # The backward problem lambda' = -J' lambda gets the forward solver kind and
@@ -1700,6 +2122,7 @@ static int adj_quad_fn(sunrealtype t, N_Vector y, N_Vector yB,
 #include <Rinternals.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -1721,7 +2144,7 @@ namespace {{
 {data_block}
 constexpr int NEQ    = {n_states};
 constexpr int NPARMS = {n_global};           // n_states + n_params (flat layout)
-// Rows the adjoint quadrature carries: the dynamic parameters. The state half
+// Rows the adjoint quadrature covers: the dynamic parameters. The state half
 // of the answer is lambda(t0) and needs no quadrature.
 constexpr int NPAR_ADJ = NPARMS - NEQ;
 // Accepted forward steps between checkpoints (Nd of CVodeAdjInit).
@@ -1761,7 +2184,7 @@ static int rhs_fn(sunrealtype t, N_Vector y, N_Vector ydot, void* ud_vp) {{
 {adj_impl}
 {jacB_impl}
 {rootfunc_impl}
-{event_struct}
+{event_struct}{asa_structs}
 
 // ---- Step trace (CVODE_STEP_TRACE) ----
 // Appends trace rows to the buffer of cppde_step_trace.hpp, which reaches R as
@@ -1825,8 +2248,6 @@ static void cvode_emit_trace_row(void* cvode_mem,
   tb.njev.push_back(static_cast<int>(n_je));
   tb.nsetups.push_back(static_cast<int>(n_setups));
   tb.setup_reason.emplace_back("");
-  tb.pece_iters.push_back(0);
-  tb.pece_diverged.push_back(0);
 }}
 #endif  // CVODE_STEP_TRACE
 
@@ -1898,8 +2319,8 @@ try {{
   SUNLinearSolver LS = nullptr;
   int Ns_alloc = 0;
 
-  auto cleanup = [&]() {{
-    if (yS) {{ N_VDestroyVectorArray(yS, Ns_alloc); yS = nullptr; }}
+{asa_decl}  auto cleanup = [&]() {{
+{asa_cleanup}    if (yS) {{ N_VDestroyVectorArray(yS, Ns_alloc); yS = nullptr; }}
     if (f_buf) {{ N_VDestroy(f_buf); f_buf = nullptr; }}
     if (cvode_mem) {{ CVodeFree(&cvode_mem); cvode_mem = nullptr; }}
     if (LS) {{ SUNLinSolFree(LS); LS = nullptr; }}
@@ -1983,7 +2404,7 @@ try {{
   }};
   (void)cv_harvest; (void)cv_rebase;
 
-{event_builder_block}{event_apply_lambda}{do_cvode_step_lambda}{event_pre_t0_block}{main_loop_body}
+{asa_restart_lambda}{event_builder_block}{event_apply_lambda}{do_cvode_step_lambda}{event_pre_t0_block}{main_loop_body}
 
 {asa_sweep_block}
   // --- diagnostics ---

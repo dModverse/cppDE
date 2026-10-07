@@ -15,7 +15,7 @@ Statements are tuples:
   ('loop', var, lo, hi, [statements])         var in [lo, hi), bounds as text
   ('assign', target, value)                   value text, or {'cpp', 'py'}
   ('table', name, [int, ...])                 static const int table
-  ('array', name, size)                       vector of the scalar type
+  ('array', name, size)                       array of the scalar type
   ('local', name)                             scalar variable, initially 0
   ('block', names, [statements])              statements printed with names
 A target is ('vec', name, index), ('mat', name, i, j), ('var', name or
@@ -505,7 +505,12 @@ def render_cpp(stmts, printer, scalar, indent="    "):
             lines.append("%sstatic const int %s[] = {%s};"
                          % (indent, name, ",".join(str(int(x)) for x in values) or "0"))
         elif k == "array":
-            lines.append("%sstd::vector<%s> %s(%d);" % (indent, scalar, st[1], st[2]))
+            # On the stack: a kernel is called per stage and step. A very wide
+            # one stays on the heap.
+            if st[2] <= 4096:
+                lines.append("%sstd::array<%s, %d> %s{};" % (indent, scalar, st[2], st[1]))
+            else:
+                lines.append("%sstd::vector<%s> %s(%d);" % (indent, scalar, st[1], st[2]))
         elif k == "local":
             lines.append("%s%s %s(0.0);" % (indent, scalar, st[1]))
         elif k == "comment":

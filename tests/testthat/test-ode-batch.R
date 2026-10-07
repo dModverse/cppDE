@@ -56,7 +56,7 @@ if (isTRUE(cvodeConfig$klu_available)) {
                      sparse = TRUE, compile = FALSE)
   native <- c(native, list(m_sparse))
 }
-do.call(compile, c(native, list(output = "test_ode_batch", cores = 1)))
+do.call(compile, c(native, list(output = "test_ode_batch", cores = test_cores())))
 
 if (isTRUE(cvodeConfig$available)) {
   mc_sens     <- cvode(decay, modelname = "batch_cv", deriv = TRUE, compile = FALSE)
@@ -71,7 +71,7 @@ if (isTRUE(cvodeConfig$available)) {
   mc_tz0      <- cvode(c(A = "-k1 * A"), modelname = "tz_cv0", deriv = FALSE,
                        includeTimeZero = FALSE, compile = FALSE)
   compile(mc_sens, mc_grid, mc_prealloc, mc_root, mc_tz, mc_tz0,
-          output = "test_ode_batch_cvode", cores = 1)
+          output = "test_ode_batch_cvode", cores = test_cores())
 }
 
 # -- Bit-identical against the serial path ------------------------------------
@@ -265,7 +265,7 @@ test_that("solveODEBatch reports the thread count it used", {
 
 ## ---- per-condition inputs -------------------------------------------------
 
-test_that("conditions may carry their own tangent labels", {
+test_that("conditions may have their own tangent labels", {
   # dMod's normal case: each condition depends on a different outer parameter
   # set, so the batch cannot hand one shared dimnames pair to the C++ side.
   m <- m_sens
@@ -303,7 +303,7 @@ test_that("conditions may fix different parameters", {
 })
 
 
-test_that("conditions may carry their own forcings", {
+test_that("conditions may have their own forcings", {
   m <- m_forc
   mkf <- function(a) list(u = data.frame(time = c(0, 1, 2, 3),
                                          value = a * c(0, 1, 1, 0)))
@@ -320,7 +320,7 @@ test_that("conditions may carry their own forcings", {
 })
 
 
-test_that("conditions may carry their own solver options", {
+test_that("conditions may set their own solver options", {
   m <- m_plain
   cs <- list(loose = list(parms = c(A = 1, B = 0, k = 0.5), abstol = 1e-3,
                           reltol = 1e-3),
@@ -433,7 +433,7 @@ test_that("the reported thread count is the one actually used", {
 test_that("both backends put an event time into the output", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
   # An event fires whether or not its time was requested, and that time becomes
-  # an output row carrying the post-event state. Both backends have to agree on
+  # an output row holding the post-event state. Both backends have to agree on
   # the grid, or the same model returns different rows per `backend`.
   mn <- mn_grid
   mc <- mc_grid

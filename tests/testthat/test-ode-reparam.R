@@ -19,7 +19,7 @@ mod_AB_d2 <- cppODE(rhs_AB, modelname = "rep_AB_d2", deriv = TRUE, deriv2 = TRUE
 mod_A_d2  <- cppODE(c(A = "-k*A"), modelname = "rep_A_d2", deriv = TRUE,
                     deriv2 = TRUE, compile = FALSE)
 compile(mod_x, mod_x_d2, mod_AB, mod_AB_d2, mod_A_d2,
-        output = "test_ode_reparam", cores = 1)
+        output = "test_ode_reparam", cores = test_cores())
 
 if (isTRUE(cvodeConfig$available)) {
   evt_x <- data.frame(var = "x", time = "t_e", value = "dose",
@@ -28,7 +28,7 @@ if (isTRUE(cvodeConfig$available)) {
   cv_x    <- cvode(rhs_x, modelname = "rep_x_cv", deriv = TRUE, compile = FALSE)
   cv_x_ev <- cvode(rhs_x, events = evt_x, modelname = "rep_x_ev_cv", deriv = TRUE,
                    compile = FALSE)
-  compile(cv_AB, cv_x, cv_x_ev, output = "test_ode_reparam_cvode", cores = 1)
+  compile(cv_AB, cv_x, cv_x_ev, output = "test_ode_reparam_cvode", cores = test_cores())
 }
 
 # -- Simple scalar log-transform -----------------------------------------------

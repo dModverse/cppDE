@@ -118,7 +118,7 @@ solve_mod <- list(
                      verbose = FALSE)
 )
 do.call(compile, c(unname(solve_mod),
-                   list(output = "test_sparse_autodetect", cores = 1)))
+                   list(output = "test_sparse_autodetect", cores = test_cores())))
 
 # BLAS stays single-threaded through a solve: a threaded MKL brings libiomp5
 # alongside libgomp and corrupts the AD tangent blocks. The pin holds

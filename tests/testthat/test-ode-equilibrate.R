@@ -37,7 +37,7 @@ rhs_scale <- c(small = "ks - d * small", big = "kb - d * big")
 eq_scale  <- cppODE(rhs_scale, rootfunc = "equilibrate", deriv = FALSE,
                     modelname = "eq_scale", compile = FALSE)
 do.call(compile, c(unname(eq_mod), list(eq_nosens, eq_scale),
-                   output = "test_ode_equilibrate", cores = 1))
+                   output = "test_ode_equilibrate", cores = test_cores()))
 
 # -- Basic equilibrate: reaches correct steady state ---------------------------
 

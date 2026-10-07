@@ -254,7 +254,8 @@ newton_result ndf_newton_solve(
     double gamrat,
     cppde::profiler& prof,
     const std::vector<double>& ewt = {},
-    bool sens_err_con = true)
+    bool sens_err_con = true,
+    bool scale_solution = true)
 {
   using newton_detail::wrms_norm_correction;
   using newton_detail::wrms_norm;
@@ -312,9 +313,11 @@ newton_result ndf_newton_solve(
     { auto _t = prof.timer(prof_cat::lu_solve);
       lu.solve(tempv); }
 
-    // Linear solution scaling for gamma drift
+    // W was factorised at gammap and the residual is scaled by the current
+    // gamma, so gamrat = gamma / gammap restores the step CVODES takes on
+    // I - gammap J; under BDF CVODES then scales by 2 / (1 + gamrat).
     if (std::abs(gamrat - 1.0) > 1e-14) {
-      double scale = 2.0 / (1.0 + gamrat);
+      double scale = gamrat * (scale_solution ? 2.0 / (1.0 + gamrat) : 1.0);
       if constexpr (ad_lu::is_ad<Value>::value) {
         vec_scale_with_slab(tempv, tempv_slab, scale);
       } else {

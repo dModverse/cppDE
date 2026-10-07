@@ -48,7 +48,7 @@ template<class T, unsigned N>     struct is_dual2nd<cppde::dual2nd<T, N>> : std:
 // ============================================================================
 //  inner_type<T>: strip one layer of AD wrapping.
 //
-//  dual2nd peels to dual<T,N>, which carries value and gradient; the LU IFT
+//  dual2nd peels to dual<T,N>, which holds value and gradient; the LU IFT
 //  recursion runs dual2nd<T,N> -> dual<T,N> -> T.
 // ============================================================================
 
@@ -111,7 +111,7 @@ inline void arm_tangents(cppde::dual<S, N>& v) { v.arm(); }
 
 // ============================================================================
 //  arm_outputs(a, b, x, p): binds the tangent storage of a and b, as wide as x
-//  and p carry. An entry that already has storage is left unchanged.
+//  and p are. An entry that already has storage is left unchanged.
 // ============================================================================
 
 template<class T>
@@ -155,7 +155,7 @@ inline T store_as(const V& v) {
 //  step_coef<TimeArg>: the type the steppers combine their stages in.
 //
 //  The step size is a constant of the map being differentiated, the grid being
-//  frozen, so it carries no tangent and the stage weights are plain doubles
+//  frozen, so it has no tangent and the stage weights are plain doubles
 //  whatever the state is integrated in.
 // ============================================================================
 
@@ -266,7 +266,7 @@ inline unsigned max_deriv_size(const csc_matrix<AD>& M)
   return mx;
 }
 
-// Whether any element carries active derivative directions, returning on the
+// Whether any element has active derivative directions, returning on the
 // first hit unlike max_deriv_size(). A static width needs only that
 // distinction: a reparametrisation without sensitivity columns seeds nothing.
 template<class AD,

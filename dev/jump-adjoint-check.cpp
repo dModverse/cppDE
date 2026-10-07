@@ -260,7 +260,7 @@ int main() {
     cppde::detail::saltation_root_analytical_batch(xo, xb, te, sys, ev, trig);
 
     // What the sweep returns is g_a = sum_i w_i dx_i/dtheta_a with w an input,
-    // so its tangent in direction b carries dw/dtheta_b against dx/dtheta_a and
+    // so its tangent in direction b holds dw/dtheta_b against dx/dtheta_a and
     // w against the second derivative. a is the route, b the direction.
     for (unsigned a = 0; a < ND; ++a) {
       for (std::size_t i = 0; i < NS; ++i) grad_ff[a] += W[i] * xo[i].d1_at(a);

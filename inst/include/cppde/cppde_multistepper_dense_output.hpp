@@ -152,7 +152,7 @@ public:
   }
   // ====================================================================
   //  calc_state: Nordsieck polynomial evaluation, valid on
-  //  [previous_time(), current_time()]. Pure arithmetic, so an AD type carries
+  //  [previous_time(), current_time()]. Pure arithmetic, so an AD type takes
   //  its derivatives through it.
   // ====================================================================
 
