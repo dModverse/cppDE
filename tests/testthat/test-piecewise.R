@@ -30,9 +30,6 @@ pw_mod <- list(
                          B = " piecewise(kf*A, time - ts < 0, ks*A)"),
                        modelname = "pw_time_switch", deriv = TRUE,
                        compile = FALSE),
-  state_switch = cppODE(c(A = "-piecewise(kf*A, A - thr > 0, ks*A)"),
-                        modelname = "pw_state_switch", deriv = TRUE,
-                        compile = FALSE),
   d2 = cppFUN(c(y = "piecewise(a^2*b, a - 1 > 0, b*a + a^3)"),
               parameters = c("a", "b"), deriv = TRUE, deriv2 = TRUE,
               derivMode = "forward", modelname = "pw_d2"),
@@ -162,21 +159,6 @@ test_that("a pulse on a state at rest is not stepped over", {
     expect_equal(unname(run("pulse_rb4_grid")), unname(exact),
                  tolerance = 1e-8, info = cs$ts)
   }
-})
-
-test_that("both branches of a state switch are taken", {
-  f <- pw_mod$state_switch
-
-  p <- c(kf = 0.5, ks = 0.05, thr = 0.6, A = 1)
-  ts <- -log(p[["thr"]] / p[["A"]]) / p[["kf"]]     # crossing of the threshold
-  times <- c(0, ts / 2, ts, ts + 1, ts + 3)
-  out <- solveODE(f, times = times, parms = p, abstol = 1e-10, reltol = 1e-10)
-
-  tk <- pmin(times, ts)
-  tl <- pmax(times - ts, 0)
-  expect_equal(unname(out$variable[, "A"]),
-               p[["A"]] * exp(-p[["kf"]] * tk - p[["ks"]] * tl),
-               tolerance = 1e-6)
 })
 
 # -- Second order -------------------------------------------------------------

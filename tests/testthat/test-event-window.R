@@ -34,8 +34,6 @@ models <- list(
                     includeTimeZero = FALSE),
   rev  = per_method("ewin_rev_", c("bdf", "rb4"), events = ev_param,
                     derivMode = "reverse", includeTimeZero = FALSE),
-  rev0 = per_method("ewin_rev0_", c("bdf", "rb4"), derivMode = "reverse",
-                    includeTimeZero = FALSE),
   ff   = per_method("ewin_ff_", c("bdf", "rb4"), events = ev_param,
                     derivMode = "forward-forward", includeTimeZero = FALSE),
   fr   = per_method("ewin_fr_", c("bdf", "rb4"), events = ev_param,
@@ -234,7 +232,7 @@ test_that("a reverse solve over a single time answers what the forward one does"
   # off one and crash.
   W <- array(c(0.3, -0.2), c(1L, 2L, 1L))
   for (m in c("bdf", "rb4")) {
-    rv <- solve(models$rev0[[m]], 5, pars, cotangent = W)
+    rv <- solve(models$rev[[m]], 5, replace(ppar, "t_e", 100), cotangent = W)
     expect_identical(unname(rv$variable[1, ]), unname(pars[c("V", "R")]))
     expect_identical(unname(rv$cotangent[c("V", "R", "a", "b", "c"), 1]),
                      c(0.3, -0.2, 0, 0, 0), info = m)

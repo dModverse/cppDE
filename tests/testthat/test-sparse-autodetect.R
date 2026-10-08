@@ -112,10 +112,7 @@ solve_mod <- list(
                   verbose = FALSE),
   dense = cppODE(sens_rhs, modelname = "sens_dense", deriv = TRUE,
                  sparse = FALSE, compile = FALSE, outdir = tempdir(),
-                 verbose = FALSE),
-  onfailure = cppODE(c(A = "-k*A"), modelname = "sparse_onfailure",
-                     deriv = FALSE, compile = FALSE, outdir = tempdir(),
-                     verbose = FALSE)
+                 verbose = FALSE)
 )
 do.call(compile, c(unname(solve_mod),
                    list(output = "test_sparse_autodetect", cores = test_cores())))
@@ -141,16 +138,4 @@ test_that("sparse Jacobian and dense Jacobian agree on first-order sensitivities
   expect_identical(out_sp$diagnostics$return_code, 0L)
   expect_equal(out_sp$variable, out_dn$variable, tolerance = 1e-6)
   expect_equal(out_sp$tangent, out_dn$tangent, tolerance = 1e-6)
-})
-
-test_that("an incomplete integration is an error, not partial results", {
-  m <- solve_mod$onfailure
-  tt <- c(0, 1, 2)
-  p  <- c(A = 1, k = 1)
-
-  expect_error(solveODE(m, tt, p, maxsteps = 2L), "did not complete")
-  partial <- expect_warning(solveODE(m, tt, p, maxsteps = 2L, onFailure = "warn"),
-                            "did not complete")
-  expect_lt(length(partial$time), length(tt))
-  expect_silent(solveODE(m, tt, p, maxsteps = 2L, onFailure = "silent"))
 })

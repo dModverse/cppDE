@@ -37,7 +37,7 @@ adjointControl <- function(refine = FALSE, gradtol = NULL, trace = FALSE) {
   if (!is.logical(trace) || length(trace) != 1L || is.na(trace))
     stop("'trace' must be TRUE or FALSE", call. = FALSE)
   if (!is.null(gradtol) &&
-      (!is.numeric(gradtol) || length(gradtol) != 1L || !(gradtol > 0)))
+      (!is.numeric(gradtol) || length(gradtol) != 1L || !isTRUE(gradtol > 0)))
     stop("'gradtol' must be a positive number", call. = FALSE)
   structure(list(refine = refine, gradtol = gradtol, trace = trace),
             class = "cppDEadjointControl")

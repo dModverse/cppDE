@@ -16,9 +16,7 @@ mod_x_d2 <- cppODE(rhs_x, modelname = "rep_x_d2", deriv = TRUE, deriv2 = TRUE,
 mod_AB    <- cppODE(rhs_AB, modelname = "rep_AB", deriv = TRUE, compile = FALSE)
 mod_AB_d2 <- cppODE(rhs_AB, modelname = "rep_AB_d2", deriv = TRUE, deriv2 = TRUE,
                     compile = FALSE)
-mod_A_d2  <- cppODE(c(A = "-k*A"), modelname = "rep_A_d2", deriv = TRUE,
-                    deriv2 = TRUE, compile = FALSE)
-compile(mod_x, mod_x_d2, mod_AB, mod_AB_d2, mod_A_d2,
+compile(mod_x, mod_x_d2, mod_AB, mod_AB_d2,
         output = "test_ode_reparam", cores = test_cores())
 
 if (isTRUE(cvodeConfig$available)) {
@@ -534,8 +532,8 @@ test_that("partial-row tangent rejects 'fixed' argument", {
 })
 
 test_that("partial-row hessian matches zero-padded full Phi''", {
-  mod <- mod_A_d2
-  pars <- c(A = 1.0, k = 0.5)
+  mod <- mod_x_d2
+  pars <- c(x = 1.0, k = 0.5)
   tvec <- seq(0, 2, by = 0.5)
   tight <- list(abstol = 1e-10, reltol = 1e-10)
 
@@ -551,7 +549,7 @@ test_that("partial-row hessian matches zero-padded full Phi''", {
 
   # Equivalent full Phi''.
   Phi2_full <- array(0, dim = c(2, 1, 1),
-                     dimnames = list(c("A", "k"), "log_k", "log_k"))
+                     dimnames = list(c("x", "k"), "log_k", "log_k"))
   Phi2_full["k", "log_k", "log_k"] <- 0.5
   res_f <- solveODE(mod, tvec, pars,
                     tangent = Phi1, hessian = Phi2_full,

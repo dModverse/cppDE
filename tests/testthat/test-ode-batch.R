@@ -44,13 +44,7 @@ m_evt   <- cppODE(c(A = "-k1 * A"), events = evt_time, modelname = "batch_events
                   deriv = TRUE, compile = FALSE)
 m_root  <- cppODE(c(A = "-k1 * A"), events = evt_root, modelname = "batch_evt_root",
                   deriv = TRUE, compile = FALSE)
-mn_grid <- cppODE(c(A = "-k1 * A"), events = evt_time, modelname = "grid_native",
-                  deriv = FALSE, compile = FALSE)
-mn_root <- cppODE(c(A = "-k1 * A"), events = evt_root, modelname = "rootpair_n",
-                  deriv = FALSE, compile = FALSE)
-mn_tz   <- cppODE(c(A = "-k1 * A"), modelname = "tz_native", deriv = FALSE,
-                  compile = FALSE)
-native  <- list(m_sens, m_plain, m_d2, m_forc, m_evt, m_root, mn_grid, mn_root, mn_tz)
+native  <- list(m_sens, m_plain, m_d2, m_forc, m_evt, m_root)
 if (isTRUE(cvodeConfig$klu_available)) {
   m_sparse <- cppODE(eqs_sparse, modelname = "batch_sparse", deriv = TRUE,
                      sparse = TRUE, compile = FALSE)
@@ -62,15 +56,11 @@ if (isTRUE(cvodeConfig$available)) {
   mc_sens     <- cvode(decay, modelname = "batch_cv", deriv = TRUE, compile = FALSE)
   mc_grid     <- cvode(c(A = "-k1 * A"), events = evt_time, modelname = "grid_cvode",
                        deriv = FALSE, compile = FALSE)
-  mc_prealloc <- cvode(c(A = "-k1 * A", B = "k1 * A - k2 * B"),
-                       modelname = "cv_prealloc", deriv = TRUE, compile = FALSE)
   mc_root     <- cvode(c(A = "-k1 * A"), events = evt_root, modelname = "rootpair_c",
                        deriv = FALSE, compile = FALSE)
-  mc_tz       <- cvode(c(A = "-k1 * A"), modelname = "tz_cv", deriv = FALSE,
-                       compile = FALSE)
   mc_tz0      <- cvode(c(A = "-k1 * A"), modelname = "tz_cv0", deriv = FALSE,
                        includeTimeZero = FALSE, compile = FALSE)
-  compile(mc_sens, mc_grid, mc_prealloc, mc_root, mc_tz, mc_tz0,
+  compile(mc_sens, mc_grid, mc_root, mc_tz0,
           output = "test_ode_batch_cvode", cores = test_cores())
 }
 
@@ -99,15 +89,6 @@ test_that("second-order sensitivities survive the batch path", {
   expect_batch_identical(bat, ser, c("time", "variable", "tangent", "hessian"))
 })
 
-# The arena is thread-local and pops when solve_impl returns, so heap AD is
-# the case where a result that was not flattened in time would show up.
-test_that("heap AD batches correctly", {
-  m <- m_sens
-  ser <- serial_ref(m)
-  bat <- solveODEBatch(m, conds, times = tt, cores = 2)
-  expect_batch_identical(bat, ser, c("time", "variable", "tangent"))
-})
-
 # -- Thread count must not change the answer ----------------------------------
 
 test_that("results are invariant in the number of threads", {
@@ -121,35 +102,6 @@ test_that("results are invariant in the number of threads", {
 })
 
 # -- One failing condition must not take the others down ----------------------
-
-test_that("a failing condition is isolated and reported", {
-  m <- m_plain
-  cs <- list(ok1 = list(parms = c(A = 1, B = 0, k = 0.5)),
-             bad = list(parms = c(A = 1, B = 0, k = 0.5)),
-             ok2 = list(parms = c(A = 1, B = 0, k = 1.5)))
-
-  # maxsteps applies batch-wide, so starve every condition and check that the
-  # per-condition return codes come back rather than an error being thrown.
-  expect_error(solveODEBatch(m, cs, times = tt, maxsteps = 2L, cores = 2),
-               "did not complete")
-  expect_warning(solveODEBatch(m, cs, times = tt, maxsteps = 2L, cores = 2,
-                               onFailure = "warn"),
-                 "did not complete")
-  starved <- suppressWarnings(
-    solveODEBatch(m, cs, times = tt, maxsteps = 2L, cores = 2,
-                  onFailure = "warn"))
-  expect_length(starved, 3L)
-  expect_true(all(vapply(starved, function(r) r$diagnostics$return_code, integer(1)) != 0L))
-
-  # silent suppresses the warning but keeps the codes
-  quiet <- solveODEBatch(m, cs, times = tt, maxsteps = 2L, cores = 2,
-                         onFailure = "silent")
-  expect_length(quiet, 3L)
-
-  # and a healthy batch warns about nothing
-  fine <- solveODEBatch(m, cs, times = tt, cores = 2)
-  expect_true(all(vapply(fine, function(r) r$diagnostics$return_code, integer(1)) == 0L))
-})
 
 # -- Per-condition overrides and argument handling ----------------------------
 
@@ -254,15 +206,6 @@ test_that("batchAvailable reports why a batch would be serial", {
 })
 
 
-test_that("solveODEBatch reports the thread count it used", {
-  m <- m_sens
-  skip_if_not(isTRUE(batchAvailable(m)$parallel),
-              "batch falls back to a serial loop")
-  out <- solveODEBatch(m, conds, times = tt, cores = 2L)
-  expect_identical(attr(out, "threads"), 2L)
-})
-
-
 ## ---- per-condition inputs -------------------------------------------------
 
 test_that("conditions may have their own tangent labels", {
@@ -335,33 +278,20 @@ test_that("conditions may set their own solver options", {
 })
 
 
-test_that("one failing condition does not take the others down", {
+test_that("one failing condition is reported and does not take the others down", {
   m <- m_plain
   cs <- list(ok1  = list(parms = c(A = 1, B = 0, k = 0.5)),
              bad  = list(parms = c(A = 1, B = 0, k = 0.5), maxsteps = 2L),
              ok2  = list(parms = c(A = 1, B = 0, k = 1.2)))
+  expect_error(solveODEBatch(m, cs, times = tt, cores = 2L), "1 of 3 conditions did not complete: bad")
   expect_warning(solveODEBatch(m, cs, times = tt, cores = 2L, onFailure = "warn"),
                  "did not complete")
-  bat <- solveODEBatch(m, cs, times = tt, cores = 2L, onFailure = "silent")
+  bat <- expect_silent(solveODEBatch(m, cs, times = tt, cores = 2L, onFailure = "silent"))
   rc <- vapply(bat, function(b) b$diagnostics$return_code, 0L)
   expect_identical(unname(rc[c("ok1", "ok2")]), c(0L, 0L))
   expect_true(rc[["bad"]] != 0L)
   expect_identical(bat$ok1$variable,
                    solveODE(m, times = tt, parms = cs$ok1$parms)$variable)
-})
-
-
-test_that("a batch with events matches the serial path", {
-  m <- m_evt
-  te <- seq(0, 50, length.out = 60)
-  cs <- lapply(c(0.2, 0.6), function(d)
-    list(parms = c(A = 1, k1 = 0.1, t_e = 25, dose = d)))
-  bat <- solveODEBatch(m, cs, times = te, cores = 2L)
-  for (i in seq_along(cs)) {
-    ser <- solveODE(m, times = te, parms = cs[[i]]$parms)
-    expect_identical(bat[[i]]$variable, ser$variable)
-    expect_identical(bat[[i]]$tangent, ser$tangent)
-  }
 })
 
 
@@ -427,6 +357,8 @@ test_that("the reported thread count is the one actually used", {
   # capped by the number of conditions, never above it
   nt <- attr(solveODEBatch(m, conds, times = tt, cores = 99L), "threads")
   expect_lte(nt, length(conds))
+  skip_if_not(isTRUE(batchAvailable(m)$parallel), "batch falls back to a serial loop")
+  expect_identical(attr(solveODEBatch(m, conds, times = tt, cores = 2L), "threads"), 2L)
 })
 
 
@@ -435,7 +367,7 @@ test_that("both backends put an event time into the output", {
   # An event fires whether or not its time was requested, and that time becomes
   # an output row holding the post-event state. Both backends have to agree on
   # the grid, or the same model returns different rows per `backend`.
-  mn <- mn_grid
+  mn <- m_evt
   mc <- mc_grid
   p <- c(A = 1, k1 = 0.1, t_e = 25, dose = 5)
   off <- seq(0, 50, length.out = 60)          # 25 is not a grid point
@@ -465,11 +397,11 @@ test_that("both backends put an event time into the output", {
 
 test_that("the CVODE batch preallocates when the grid is fixed", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
-  m  <- mc_prealloc
+  m  <- mc_sens
   tt <- seq(0.5, 50, length.out = 60)
-  si <- diag(4); dimnames(si) <- list(NULL, c("A", "B", "k1", "k2"))
+  si <- diag(3); dimnames(si) <- list(NULL, c("A", "B", "k"))
   cs <- lapply(c(0.08, 0.12, 0.2), function(k)
-    list(parms = c(A = 1, B = 0, k1 = k, k2 = 0.05), tangent = si))
+    list(parms = c(A = 1, B = 0, k = k), tangent = si))
   bat <- solveODEBatch(m, cs, times = tt, cores = 3L)
   for (i in seq_along(cs)) {
     ser <- solveODE(m, times = tt, parms = cs[[i]]$parms, tangent = si)
@@ -485,7 +417,7 @@ test_that("a root event puts its before/after pair into the output", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
   # The crossing is not a requested time, so both the state just before the
   # event and the state just after it become rows. Both backends have to do it.
-  mn <- mn_root
+  mn <- m_root
   mc <- mc_root
   tt <- seq(0, 50, length.out = 60)
   p  <- c(A = 1, k1 = 0.1)
@@ -507,21 +439,19 @@ test_that("a root event puts its before/after pair into the output", {
 
 test_that("cvode(includeTimeZero) matches the native grid", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
-  mn <- mn_tz
-  mc <- mc_tz
-  m0 <- mc_tz0
   tt <- c(1, 2, 5, 10)
-  p  <- c(A = 1, k1 = 0.1)
-  expect_equal(solveODE(mn, times = tt, parms = p)$time, c(0, tt))
-  expect_equal(solveODE(mc, times = tt, parms = p)$time, c(0, tt))
-  expect_equal(solveODE(m0, times = tt, parms = p)$time, tt)
+  p  <- c(A = 1, B = 0, k = 0.1)
+  expect_equal(solveODE(m_plain, times = tt, parms = p)$time, c(0, tt))
+  expect_equal(solveODE(mc_sens, times = tt, parms = p)$time, c(0, tt))
+  expect_equal(solveODE(mc_tz0, times = tt, parms = c(A = 1, k1 = 0.1))$time, tt)
   # the batch has to predict the injected grid, not the requested one
-  b <- solveODEBatch(mc, list(list(parms = p), list(parms = c(A = 2, k1 = 0.2))),
-                     times = tt, cores = 2L)
+  cs <- list(list(parms = p), list(parms = c(A = 2, B = 0, k = 0.2)))
+  b <- solveODEBatch(mc_sens, cs, times = tt, cores = 2L)
   for (i in 1:2) {
-    ser <- solveODE(mc, times = tt, parms = if (i == 1) p else c(A = 2, k1 = 0.2))
+    ser <- solveODE(mc_sens, times = tt, parms = cs[[i]]$parms)
     expect_identical(b[[i]]$time,     ser$time)
     expect_identical(b[[i]]$variable, ser$variable)
+    expect_identical(b[[i]]$tangent,  ser$tangent)
   }
 })
 

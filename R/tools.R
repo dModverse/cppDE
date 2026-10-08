@@ -120,7 +120,7 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
                       "MAKEFLAGS"), unset = NA)
   on.exit({
     for (n in names(old))
-      if (is.na(old[n])) Sys.unsetenv(n) else Sys.setenv(structure(old[n], names = n))
+      if (is.na(old[n])) Sys.unsetenv(n) else do.call(Sys.setenv, as.list(old[n]))
   }, add = TRUE)
 
   objects <- list(...)
@@ -383,8 +383,9 @@ matchDerivMode <- function(x, choices) {
 codegenAvailable <- function(backend = c("native", "cvode")) {
   backend <- match.arg(backend)
   if (backend == "cvode" && !isTRUE(cvodeConfig$available)) return(FALSE)
-  cxx <- strsplit(trimws(tools::Rcmd(c("config", "CXX"), stdout = TRUE,
-                                     stderr = FALSE)[1]), " ")[[1]][1]
+  cfg <- tryCatch(tools::Rcmd(c("config", "CXX"), stdout = TRUE, stderr = FALSE),
+                  error = function(e) NA_character_)
+  cxx <- strsplit(trimws(cfg[1]), " ")[[1]][1]
   if (is.na(cxx) || !nzchar(Sys.which(cxx))) return(FALSE)
   if (reticulate::py_available(initialize = FALSE))
     return(reticulate::py_module_available("sympy"))

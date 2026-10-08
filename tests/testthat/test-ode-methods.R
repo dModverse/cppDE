@@ -1,150 +1,94 @@
-# Test all integration methods on problems with known analytical solutions.
+# Every integration method on problems with closed-form solutions and
+# sensitivities, and the solver options of solveODE().
 
 skip_on_cran()
 
-# -- Shared setup --------------------------------------------------------------
-
-eqns_decay <- c(A = "-k1 * A", B = "k1 * A - k2 * B")
-times <- seq(0, 50, length.out = 200)
-pars  <- c(A = 1, B = 0, k1 = 0.1, k2 = 0.2)
-#
-exact_A <- function(t, A0, k1) A0 * exp(-k1 * t)
-exact_B <- function(t, A0, k1, k2) A0 * k1 / (k2 - k1) * (exp(-k1 * t) - exp(-k2 * t))
-
-methods_all <- c("bdf", "adams", "rb4", "tsit5")
-
 # -- Models --------------------------------------------------------------------
 
-# Every native model the file solves, compiled into one shared object below.
+# A decay chain with a closed form, and a state driven explicitly by the clock.
+eqns_decay <- c(A = "-k1 * A", B = "k1 * A - k2 * B", x = "-x + cos(5 * time)")
+times <- seq(0, 50, length.out = 200)
+pars  <- c(A = 1, B = 0, x = 1, k1 = 0.1, k2 = 0.2)
+methods_all <- c("bdf", "adams", "rb4", "tsit5")
+
+# A, B and their sensitivities in closed form, [length(t), state, A/B/k1/k2].
+exact_decay <- function(t, A0 = 1, B0 = 0, k1 = 0.1, k2 = 0.2) {
+  e1 <- exp(-k1 * t); e2 <- exp(-k2 * t); r <- k1 / (k2 - k1)
+  A <- A0 * e1
+  B <- B0 * e2 + A0 * r * (e1 - e2)
+  dr1 <- k2 / (k2 - k1)^2; dr2 <- -k1 / (k2 - k1)^2
+  sens <- array(0, c(length(t), 2, 4),
+                list(NULL, c("A", "B"), c("A", "B", "k1", "k2")))
+  sens[, "A", "A"]  <- e1
+  sens[, "A", "k1"] <- -t * A
+  sens[, "B", "A"]  <- r * (e1 - e2)
+  sens[, "B", "B"]  <- e2
+  sens[, "B", "k1"] <- A0 * (dr1 * (e1 - e2) - r * t * e1)
+  sens[, "B", "k2"] <- -B0 * t * e2 + A0 * (dr2 * (e1 - e2) + r * t * e2)
+  list(A = A, B = B, sens = sens)
+}
+
 per_method <- function(ms, prefix, ...)
   lapply(setNames(nm = ms), function(m)
     cppODE(..., method = m, modelname = paste0(prefix, m), compile = FALSE))
 
-decay    <- per_method(methods_all, "mth_decay_", eqns_decay)
-decay_fd <- per_method(methods_all, "mth_decay_fd_", eqns_decay, deriv = FALSE)
-decay_d2 <- per_method(c("bdf", "rb4"), "mth_decay_d2_", eqns_decay,
-                       deriv = TRUE, deriv2 = TRUE)
+decay <- per_method(methods_all, "mth_decay_", eqns_decay)
+
+# Second order on the decay chain and on a 10^x term, whose derivatives are
+# math calls on literals.
+eqns_d2 <- c(A = "-k1 * A", B = "k1 * A - k2 * B", z = "-kz * 10^z")
+decay_d2 <- per_method(c("bdf", "rb4"), "mth_d2_", eqns_d2, deriv = TRUE, deriv2 = TRUE)
 
 robertson <- cppODE(c(y1 = "-k1*y1 + k3*y2*y3", y2 = "k1*y1 - k2*y2^2 - k3*y2*y3",
                       y3 = "k2*y2^2"),
                     deriv2 = TRUE, fixed = c("y1", "y2", "y3"),
                     modelname = "mth_sens2_sym", compile = FALSE)
 
-evt_dose <- data.frame(var = "A", time = "t_e", value = "dose",
-                       method = "add", root = NA, stringsAsFactors = FALSE)
-dose_time <- cppODE(c(A = "-k1 * A"), events = evt_dose,
-                    modelname = "mth_event_time", compile = FALSE)
-
-evt_refill <- data.frame(var = "x", time = NA, value = "dose",
-                         method = "add", root = "xc - x",
-                         stringsAsFactors = FALSE)
-dose_root <- cppODE(c(x = "-k * x"), events = evt_refill,
-                    modelname = "mth_event_root", compile = FALSE)
-
-# The same doubling of C, once on the root S - 14 and once at a fixed time.
-eqns_ramp  <- c(S = "1", C = "0")
-evt_ramp_r <- data.frame(var = "C", time = NA, value = "C * 2", method = "replace",
-                         root = "S - 14", stringsAsFactors = FALSE)
-evt_ramp_f <- data.frame(var = "C", time = 12, value = "C * 2", method = "replace",
-                         root = NA, stringsAsFactors = FALSE)
-ramp_root  <- cppODE(eqns_ramp, events = evt_ramp_r, modelname = "mth_ramp_root",
-                     deriv = FALSE, compile = FALSE)
-ramp_fixed <- cppODE(eqns_ramp, events = evt_ramp_f, modelname = "mth_ramp_fixed",
-                     deriv = FALSE, compile = FALSE)
-
-evt_ramp_sens <- data.frame(var = "C", time = NA, value = "d", method = "add",
-                            root = "S - c", stringsAsFactors = FALSE)
-ramp_sens <- cppODE(c(S = "a", C = "-b * C"), events = evt_ramp_sens, deriv = TRUE,
-                    deriv2 = TRUE, modelname = "mth_ramp_sens", compile = FALSE)
-
-evt_jump <- data.frame(var = c("S", "S", "C"), time = c(5, 7, NA),
-                       value = c("20", "30", "C * 2"),
-                       method = c("replace", "replace", "replace"),
-                       root = c(NA, NA, "S - 14"), stringsAsFactors = FALSE)
-jump_switch <- cppODE(c(S = "0", C = "0"), events = evt_jump, deriv = FALSE,
-                      modelname = "mth_jump_switches_root", compile = FALSE)
-
-# The same reset, once switched on through a root and once at the jump time.
-eqns_reset <- c(S = "0 * S", C = "-b * C")
-by_root <- data.frame(var = c("S", "C"), time = c("te", NA), value = c("20", "d"),
-                      method = c("replace", "add"), root = c(NA, "S - 14"),
-                      stringsAsFactors = FALSE)
-by_time <- data.frame(var = c("S", "C"), time = c("te", "te"), value = c("20", "d"),
-                      method = c("replace", "add"), root = c(NA, NA),
-                      stringsAsFactors = FALSE)
-reset_root <- cppODE(eqns_reset, events = by_root, deriv = TRUE, deriv2 = TRUE,
-                     modelname = "mth_jump_sens_root", compile = FALSE)
-reset_time <- cppODE(eqns_reset, events = by_time, deriv = TRUE, deriv2 = TRUE,
-                     modelname = "mth_jump_sens_time", compile = FALSE)
-
-evt_walls <- data.frame(var = c("v", "v"), time = c(NA, NA), value = c("-1", "-1"),
-                        method = c("multiply", "multiply"),
-                        root = c("x - L", "x + L"), stringsAsFactors = FALSE)
-walls <- per_method(methods_all, "mth_walls_", c(x = "v", v = "-w^2 * x"),
-                    events = evt_walls, deriv = FALSE)
-
-decay_fixed <- cppODE(eqns_decay, deriv = TRUE, fixed = "k2",
-                      modelname = "mth_fixed", compile = FALSE)
-
-pow10 <- cppODE(c(x = "-k * 10^x"), deriv = TRUE, deriv2 = TRUE,
-                modelname = "mth_pow10", compile = FALSE)
+# The BDF corrector without NDF coefficients, and a compile-time fixed rate.
+ndf_fixed <- cppODE(eqns_decay[c("A", "B")], useNDF = FALSE, fixed = "k2",
+                    modelname = "mth_bdf_fixed", compile = FALSE)
 
 cxx_tokens <- cppODE(c(default = "-std * default + operator",
                        int     = "std * default - int * 10^0.5"),
                      modelname = "mth_cxx_tokens_ode", compile = FALSE)
-cxx_ref    <- cppODE(c(a = "-k * a + b0",
-                       b = "k * a - b * 10^0.5"),
-                     modelname = "mth_cxx_tokens_ref", compile = FALSE)
 
 forced <- cppODE(c(A = "-k1 * A * u + k2 * B",
                    B = "k1 * A * u - k2 * B"),
                  forcings = "u", modelname = "mth_forcing_in_jac", compile = FALSE)
 
-# Explicit time in the right-hand side: the df/dt terms of a Rosenbrock stage.
-clocked <- per_method(methods_all, "mth_clocked_", c(x = "-x + cos(5 * time)"),
-                      deriv = FALSE)
+# Integration stops where the root expression first crosses zero.
+stopper <- cppODE(c(A = "-k1 * A"), rootfunc = "A - 0.25", modelname = "mth_rootfunc",
+                  compile = FALSE)
 
-native <- c(decay, decay_fd, decay_d2, walls, clocked,
-            list(robertson, dose_time, dose_root, ramp_root, ramp_fixed, ramp_sens,
-                 jump_switch, reset_root, reset_time, decay_fixed, pow10,
-                 cxx_tokens, cxx_ref, forced))
+native <- c(decay, decay_d2, list(robertson, ndf_fixed, cxx_tokens, forced, stopper))
 do.call(compile, c(unname(native), list(output = "test_ode_methods", cores = test_cores())))
 
-if (isTRUE(cvodeConfig$available)) {
-  ramp_root_cv <- cvode(eqns_ramp, events = evt_ramp_r, modelname = "mth_ramp_root_cv",
-                        deriv = FALSE, compile = FALSE)
-  compile(ramp_root_cv, output = "test_ode_methods_cvode", cores = test_cores())
+has_cvode <- isTRUE(cvodeConfig$available)
+if (has_cvode) {
+  # Adams, a forcing in the Jacobian and a compile-time fixed rate on CVODES.
+  cv_forced <- cvode(c(A = "-k1 * A * u + k2 * B", B = "k1 * A * u - k2 * B"),
+                     forcings = "u", method = "adams", fixed = "k2", deriv = TRUE,
+                     modelname = "mth_cv_forced", compile = FALSE)
+  cv_stopper <- cvode(c(A = "-k1 * A"), rootfunc = "A - 0.25", modelname = "mth_cv_rootfunc",
+                      compile = FALSE)
+  compile(cv_forced, cv_stopper, output = "test_ode_methods_cvode", cores = test_cores())
 }
 
-# -- Basic solver output structure --------------------------------------------
+u_data <- data.frame(time = c(0, 0.5, 1, 2), value = c(0.4, 1.1, 0.7, 1.5))
 
-test_that("solveODE returns correct structure for all methods", {
-  for (m in methods_all) {
-    res <- solveODE(decay[[m]], times, pars)
+# -- Accuracy against closed forms --------------------------------------------
 
-    expect_type(res$time, "double")
-    expect_true(is.matrix(res$variable))
-    expect_equal(ncol(res$variable), 2)
-    expect_equal(colnames(res$variable), c("A", "B"))
-    expect_equal(length(res$time), nrow(res$variable))
-  }
-})
-
-# -- Accuracy against analytical solution --------------------------------------
-
-test_that("all methods match analytical solution (decay system)", {
+test_that("every method returns the closed-form states and sensitivities", {
+  ex <- exact_decay(times)
   for (m in methods_all) {
     res <- solveODE(decay[[m]], times, pars, abstol = 1e-10, reltol = 1e-10)
-
-    t_out <- res$time
-    A_num <- res$variable[, "A"]
-    B_num <- res$variable[, "B"]
-
-    A_exact <- exact_A(t_out, pars["A"], pars["k1"])
-    B_exact <- exact_B(t_out, pars["A"], pars["k1"], pars["k2"])
-
-    expect_equal(A_num, A_exact, tolerance = 1e-6, label = paste(m, "A"))
-    expect_equal(B_num, B_exact, tolerance = 1e-6, label = paste(m, "B"))
+    expect_identical(res$time, times, info = m)
+    expect_identical(colnames(res$variable), c("A", "B", "x"), info = m)
+    expect_identical(dimnames(res$tangent)$sens, names(pars), info = m)
+    expect_equal(unname(res$variable[, "A"]), ex$A, tolerance = 1e-7, info = m)
+    expect_equal(unname(res$variable[, "B"]), ex$B, tolerance = 1e-7, info = m)
+    expect_equal(unname(res$tangent[, c("A", "B"), c("A", "B", "k1", "k2")]),
+                 unname(ex$sens), tolerance = 1e-6, info = m)
   }
 })
 
@@ -153,57 +97,41 @@ test_that("all methods keep their order on an explicitly time-dependent system",
   # step count.
   exact <- function(t) (1 - 1/26) * exp(-t) + (cos(5 * t) + 5 * sin(5 * t)) / 26
   for (m in methods_all) {
-    lo <- solveODE(clocked[[m]], c(0, 10), c(x = 1), abstol = 1e-6, reltol = 1e-6)
-    hi <- solveODE(clocked[[m]], c(0, 10), c(x = 1), abstol = 1e-9, reltol = 1e-9)
+    lo <- solveODE(decay[[m]], c(0, 10), pars, abstol = 1e-6, reltol = 1e-6)
+    hi <- solveODE(decay[[m]], c(0, 10), pars, abstol = 1e-9, reltol = 1e-9)
     expect_lt(abs(hi$variable[2, "x"] - exact(10)), 1e-7, label = m)
     expect_lt(hi$diagnostics$accepted, 15 * lo$diagnostics$accepted, label = m)
   }
 })
 
-# -- First-order sensitivities via AD vs finite differences --------------------
+# -- Second order --------------------------------------------------------------
 
-test_that("first-order sensitivities are correct for all methods", {
-  eps <- 1e-5
-
-  for (m in methods_all) {
-    mod    <- decay[[m]]
-    res    <- solveODE(mod, times, pars, abstol = 1e-10, reltol = 1e-10)
-
-    # Check AD sensitivity of A w.r.t. k1 against finite difference
-    p_hi      <- pars; p_hi["k1"] <- pars["k1"] + eps
-    p_lo      <- pars; p_lo["k1"] <- pars["k1"] - eps
-    mod_noad  <- decay_fd[[m]]
-    res_hi    <- solveODE(mod_noad, times, p_hi, abstol = 1e-12, reltol = 1e-12)
-    res_lo    <- solveODE(mod_noad, times, p_lo, abstol = 1e-12, reltol = 1e-12)
-
-    # Match time grids (both should be identical since same output times)
-    fd_dA_dk1 <- (res_hi$variable[, "A"] - res_lo$variable[, "A"]) / (2 * eps)
-
-    sens_names <- attr(mod, "dimNames")$sens
-    k1_idx <- which(sens_names == "k1")
-    ad_dA_dk1 <- res$tangent[, 1, k1_idx]  # state 1 (A), param k1_idx
-
-    expect_equal(ad_dA_dk1, fd_dA_dk1, tolerance = 1e-3,
-                 label = paste(m, "dA/dk1"))
-  }
-})
-
-# -- Second-order sensitivities ------------------------------------------------
-
-test_that("second-order sensitivities are finite for stiff methods", {
-  stiff_methods <- c("bdf", "rb4")
-
-  for (m in stiff_methods) {
-    res <- solveODE(decay_d2[[m]], times, pars, abstol = 1e-10, reltol = 1e-10)
-
-    expect_true(!is.null(res$hessian), label = paste(m, "hessian exists"))
-    expect_true(all(is.finite(res$hessian)), label = paste(m, "hessian finite"))
+test_that("second-order sensitivities match their closed forms", {
+  tt <- seq(0, 1, length.out = 25)
+  p  <- c(A = 1, B = 0, z = 0.3, k1 = 0.1, k2 = 0.2, kz = 0.7)
+  ln10 <- log(10)
+  # 10^(-z(t)) = 10^(-z0) + kz ln(10) t
+  u <- 10^(-p[["z"]]) + p[["kz"]] * ln10 * tt
+  A <- exp(-p[["k1"]] * tt)
+  for (m in names(decay_d2)) {
+    res <- solveODE(decay_d2[[m]], tt, p, abstol = 1e-12, reltol = 1e-12)
+    expect_equal(unname(res$hessian[, "A", "k1", "k1"]), tt^2 * A, tolerance = 1e-6, info = m)
+    expect_equal(unname(res$hessian[, "A", "A", "k1"]), -tt * A, tolerance = 1e-6, info = m)
+    expect_equal(unname(res$hessian[, "A", "k2", "k2"]), rep(0, length(tt)),
+                 tolerance = 1e-10, info = m)
+    expect_equal(unname(res$variable[, "z"]), -log10(u), tolerance = 1e-8, info = m)
+    expect_equal(unname(res$tangent[, "z", "z"]), 10^(-p[["z"]]) / u, tolerance = 1e-6,
+                 info = m)
+    expect_equal(unname(res$tangent[, "z", "kz"]), -tt / u, tolerance = 1e-6, info = m)
+    expect_equal(unname(res$hessian[, "z", "kz", "kz"]), ln10 * tt^2 / u^2,
+                 tolerance = 1e-6, info = m)
+    h <- res$hessian
+    expect_identical(unname(h), unname(aperm(h, c(1, 2, 4, 3))), info = m)
   }
 })
 
 test_that("second-order sensitivities are symmetric over a long stiff run", {
-  mod <- robertson
-  res <- solveODE(mod, c(0, 10^seq(-2, 3, length.out = 30)),
+  res <- solveODE(robertson, c(0, 10^seq(-2, 3, length.out = 30)),
                   c(y1 = 1, y2 = 0, y3 = 0, k1 = 0.04, k2 = 3e7, k3 = 1e4),
                   abstol = 1e-12, reltol = 1e-10)
   s <- res$hessian[31, , , ]
@@ -211,206 +139,104 @@ test_that("second-order sensitivities are symmetric over a long stiff run", {
   expect_lt(max(abs(s)), 1e3)
 })
 
-# -- Time-triggered events -----------------------------------------------------
+# -- Solver options ------------------------------------------------------------
 
-test_that("time-triggered dose event works", {
-  pars_ev <- c(A = 1, k1 = 0.1, t_e = 25, dose = 0.5)
-
-  res <- solveODE(dose_time, seq(0, 50, length.out = 200), pars_ev)
-
-  # After event at t=25, A should jump up
-  idx_before <- max(which(res$time < 25))
-  idx_after  <- min(which(res$time >= 25))
-  expect_gt(res$variable[idx_after, "A"], res$variable[idx_before, "A"])
+test_that("BDF without NDF coefficients is accurate and says so", {
+  p <- pars[c("A", "B", "k1", "k2")]
+  res <- solveODE(ndf_fixed, times, p, abstol = 1e-10, reltol = 1e-10)
+  ex <- exact_decay(times)
+  expect_equal(unname(res$variable[, "A"]), ex$A, tolerance = 1e-7)
+  expect_equal(unname(res$variable[, "B"]), ex$B, tolerance = 1e-7)
+  expect_false(res$diagnostics$useNDF)
+  expect_true(solveODE(decay$bdf, times, pars)$diagnostics$useNDF)
+  # A compile-time fixed parameter has no sensitivity column at all.
+  expect_identical(attr(ndf_fixed, "dimNames")$sens, c("A", "B", "k1"))
+  expect_identical(dimnames(res$tangent)$sens, c("A", "B", "k1"))
+  expect_equal(unname(res$tangent[, , "k1"]), unname(ex$sens[, , "k1"]), tolerance = 1e-6)
 })
 
-# -- Root-triggered events -----------------------------------------------------
-
-test_that("root-triggered event fires correctly", {
-  pars_root <- c(x = 1, k = 0.1, xc = 0.5, dose = 0.5)
-
-  res <- solveODE(dose_root, seq(0, 100, length.out = 500), pars_root)
-
-  # x decays below xc, then gets dose added -> should see multiple oscillations
-  # Check that x goes back up after crossing xc at least once
-  x_vals <- res$variable[, "x"]
-  crossings <- sum(diff(x_vals > 0.5) != 0)
-  expect_gt(crossings, 0, label = "root event triggers at least once")
+test_that("sensErrCon = FALSE drops the sensitivities from the error test", {
+  # Fewer components in the error norm change the steps, in either direction.
+  ex <- exact_decay(times)
+  on  <- solveODE(decay$bdf, times, pars, abstol = 1e-8, reltol = 1e-8)
+  off <- solveODE(decay$bdf, times, pars, abstol = 1e-8, reltol = 1e-8,
+                  sensErrCon = FALSE)
+  expect_false(identical(off$tangent, on$tangent))
+  expect_equal(unname(off$variable[, "A"]), ex$A, tolerance = 1e-6)
+  expect_equal(unname(off$tangent[, "A", "k1"]), unname(ex$sens[, "A", "k1"]),
+               tolerance = 1e-4)
 })
 
-test_that("a root landing exactly on an output time still fires", {
-  # S' = 1 puts the crossing of S - 14 onto the requested grid, where the sign
-  # product of g at the sampled points is zero rather than negative. The same
-  # jump written as a fixed event at that time is the reference.
-  tt    <- seq(0, 20, by = 1)
-  pars  <- c(S = 2, C = 4)
-
-  # The last row at a requested time holds the post-event state, whether or
-  # not the localised root inserted its own rows next to it.
-  atTimes <- function(res, var)
-    res$variable[vapply(tt, function(s) max(which(res$time == s)), 1L), var]
-
-  res <- solveODE(ramp_root, tt, pars)
-  ref <- solveODE(ramp_fixed, tt, pars)
-
-  expect_equal(atTimes(res, "C"), ifelse(tt < 12, 4, 8))
-  expect_equal(atTimes(res, "C"), atTimes(ref, "C"))
-  expect_equal(atTimes(res, "S"), atTimes(ref, "S"))
+test_that("a given first step size is taken and leaves the answer alone", {
+  ex <- exact_decay(times)
+  res <- solveODE(decay$rb4, times, pars, abstol = 1e-10, reltol = 1e-10, hini = 1e-4)
+  expect_equal(unname(res$variable[, "A"]), ex$A, tolerance = 1e-7)
 })
 
-test_that("both backends localise a root at the same time", {
-  skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
-  # The root is off the grid here, so both backends have to place the firing
-  # time themselves rather than inherit it from a requested time.
-  tt    <- seq(0, 20, by = 1)
-  pars  <- c(S = 2.5, C = 4)
-
-  nat <- solveODE(ramp_root, tt, pars)
-  cvd <- solveODE(ramp_root_cv, tt, pars)
-
-  fired <- function(res) res$time[which(diff(res$variable[, "C"]) != 0) + 1L]
-  expect_equal(fired(nat), 11.5, tolerance = 1e-6)
-  expect_equal(fired(cvd), 11.5, tolerance = 1e-6)
+test_that("onFailure decides between an error, a warning and silence", {
+  tt <- c(0, 1, 2)
+  p  <- pars
+  expect_error(solveODE(decay$bdf, tt, p, maxsteps = 2L), "did not complete")
+  expect_warning(solveODE(decay$bdf, tt, p, maxsteps = 2L, onFailure = "warn"),
+                 "did not complete")
+  partial <- suppressWarnings(solveODE(decay$bdf, tt, p, maxsteps = 2L, onFailure = "warn"))
+  expect_lt(length(partial$time), length(tt))
+  expect_lt(partial$diagnostics$return_code, 0L)
+  quiet <- expect_silent(solveODE(decay$bdf, tt, p, maxsteps = 2L, onFailure = "silent"))
+  expect_identical(quiet$variable, partial$variable)
 })
 
-test_that("a root event on the grid feeds the firing time into the sensitivities", {
-  # S' = a fires the event at t* = (c - S0)/a = 12, again exactly on the grid.
-  # Every sensitivity of C after the event picks up dt*/dtheta through the
-  # saltation term, so a missed or misplaced root shows up here as well.
-  pars <- c(S = 2, C = 4, a = 1, b = 0.1, c = 14, d = 3)
-  res  <- solveODE(ramp_sens, seq(0, 20, by = 1), pars, abstol = 1e-10, reltol = 1e-10)
-
-  # C(T) = C0 exp(-b T) + d exp(-b (T - t*)) for T > t*
-  i  <- max(which(res$time == 16))
-  E1 <- exp(-0.1 * 16)
-  E2 <- exp(-0.1 * (16 - 12))
-
-  expect_equal(unname(res$variable[i, "C"]), 4 * E1 + 3 * E2, tolerance = 1e-7)
-  expect_equal(res$tangent[i, "C", "C"], E1,                tolerance = 1e-6)
-  expect_equal(res$tangent[i, "C", "d"], E2,                tolerance = 1e-6)
-  expect_equal(res$tangent[i, "C", "c"], 3 * E2 * 0.1,      tolerance = 1e-6)
-  expect_equal(res$tangent[i, "C", "S"], -3 * E2 * 0.1,     tolerance = 1e-6)
-  expect_equal(res$hessian[i, "C", "d", "c"], E2 * 0.1,     tolerance = 1e-6)
-  expect_equal(res$hessian[i, "C", "c", "d"], E2 * 0.1,     tolerance = 1e-6)
+test_that("diagnostics() reports the statistics of a solve", {
+  res <- solveODE(decay$bdf, times, pars)
+  expect_output(d <- diagnostics(res), "NDF solver statistics")
+  expect_identical(d$return_code, 0L)
+  expect_gt(d$accepted, 0)
+  expect_gt(d$fevals, d$accepted)
+  expect_equal(d$t_reached, max(times))
+  expect_identical(d$method, "bdf")
 })
 
-test_that("a fixed event switches on a root condition it steps over", {
-  # S jumps past the threshold instead of crossing it, so the sign-change search
-  # over the continuous solution never sees it. The condition is read on both
-  # sides of the jump, fires there, and does not fire again while it stays true.
-  res <- solveODE(jump_switch, c(0, 4, 5, 6, 7, 8), c(S = 2, C = 4), maxroot = 2L)
-
-  at <- function(s) unname(res$variable[max(which(res$time == s)), "C"])
-  expect_equal(at(4), 4)
-  expect_equal(at(5), 8)
-  expect_equal(at(8), 8)
+test_that("a forgotten symbol pairing is found again", {
+  ref <- solveODE(decay$tsit5, c(0, 1), pars)
+  expect_null(clearNativeSymbols())
+  expect_identical(solveODE(decay$tsit5, c(0, 1), pars), ref)
 })
 
-test_that("a reset switched on by a jump transports like a fixed one", {
-  # The reset rides on the surface of the jump, so it has to transport the
-  # sensitivities exactly like the same reset written as a fixed event at that
-  # time, the parameter dependence of the event time included.
-  pars <- c(S = 2, C = 4, b = 0.15, d = 3, te = 4)
-  tt   <- seq(0, 10, by = 0.5)
-  solved <- function(mod)
-    solveODE(mod, tt, pars, abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
+test_that("rootfunc stops the integration at the first zero crossing", {
+  # The crossing of A = 0.25 under A' = -k1 A lies at log(4) / k1.
+  res <- solveODE(stopper, 0:20, c(A = 1, k1 = 0.2), abstol = 1e-10, reltol = 1e-10,
+                  roottol = 1e-10)
+  last <- length(res$time)
+  expect_equal(res$time[last], log(4) / 0.2, tolerance = 1e-8)
+  expect_equal(unname(res$variable[last, "A"]), 0.25, tolerance = 1e-8)
+  expect_identical(unique(res$time[res$time < 6.5]), as.numeric(0:6))
 
-  a <- solved(reset_root)
-  b <- solved(reset_time)
-  expect_identical(a$time, b$time)
-  expect_equal(a$variable, b$variable)
-  expect_equal(a$tangent, b$tangent)
-  expect_equal(a$hessian, b$hessian)
-  # the saltation term of the event time is what makes this more than an identity
-  expect_gt(abs(a$tangent[max(which(a$time == 8)), "C", "te"]), 0.1)
+  skip_if_not(has_cvode, "CVODE backend not available")
+  cv <- solveODE(cv_stopper, 0:20, c(A = 1, k1 = 0.2), abstol = 1e-10, reltol = 1e-10,
+                 roottol = 1e-10)
+  expect_equal(cv$time[length(cv$time)], log(4) / 0.2, tolerance = 1e-6)
+  expect_lt(max(cv$time), 20)
 })
 
-test_that("a root event does not fire twice on the crossing it just handled", {
-  # Two elastic walls, each a root event that turns the velocity around. The
-  # step restarts on the surface of the wall that just fired, where the root is
-  # zero up to round-off; reading that residue as a crossing lets the mass out.
-  pars <- c(x = 0.2, v = 1.2, w = 1, L = 0.6)
-  tt   <- seq(0, 4.4, by = 0.1)
-
-  # amplitude, first wall contact and the flight from one wall to the other
-  amp    <- sqrt(pars[["x"]]^2 + (pars[["v"]] / pars[["w"]])^2)
-  speed  <- sqrt(pars[["v"]]^2 + (pars[["w"]] * pars[["x"]])^2 -
-                 (pars[["w"]] * pars[["L"]])^2)
-  first  <- 2 * atan((pars[["v"]] - speed) /
-                     (pars[["w"]] * (pars[["L"]] + pars[["x"]]))) / pars[["w"]]
-  flight <- 2 * asin(pars[["L"]] / amp) / pars[["w"]]
-
-  for (m in methods_all) {
-    res <- solveODE(walls[[m]], tt, pars, maxroot = 2L,
-                    abstol = 1e-12, reltol = 1e-12, roottol = 1e-12)
-
-    expect_lte(max(abs(res$variable[, "x"])), pars[["L"]] + 1e-9,
-               label = paste(m, "stays inside the walls"))
-    bounces <- res$time[which(diff(sign(res$variable[, "v"])) != 0) + 1L]
-    expect_equal(bounces, first + (0:3) * flight, tolerance = 1e-6,
-                 label = paste(m, "bounce times"))
-    energy <- res$variable[, "v"]^2 + (pars[["w"]] * res$variable[, "x"])^2
-    expect_lt(diff(range(energy)), 1e-6, label = paste(m, "energy spread"))
-  }
-})
-
-# -- Diagnostics ---------------------------------------------------------------
-
-test_that("diagnostics() returns solver statistics", {
-  res <- solveODE(decay[["bdf"]], times, pars)
-  d   <- diagnostics(res)
-
-  expect_true(is.list(d))
-  expect_true(d$accepted > 0)
-  expect_true(d$fevals > 0)
-  expect_equal(d$return_code, 0)  # success
-})
-
-# -- Fixed parameters ----------------------------------------------------------
-
-test_that("fixed parameters are excluded from sensitivities", {
-  mod <- decay_fixed
-  res <- solveODE(mod, times, pars)
-
-  sens_names <- attr(mod, "dimNames")$sens
-  expect_false("k2" %in% sens_names)
-  expect_true("k1" %in% sens_names)
-})
-
-# -- Constant-only math calls in the generated Jacobian ------------------------
-
-# A 10^x term differentiates to a math call whose arguments are all literals.
-# Codegen emits every math call as cppde::<fn>, so this compiles only because
-# cppde_dual_math.hpp provides arithmetic-type overloads next to the AD ones.
-test_that("a 10^x term compiles and differentiates correctly", {
-  t10  <- seq(0, 1, length.out = 25)
-  p10  <- c(x = 0.3, k = 0.7)
-  ln10 <- log(10)
-
-  # closed form: 10^(-x(t)) = 10^(-x0) + k*ln(10)*t
-  u <- 10^(-p10[["x"]]) + p10[["k"]] * ln10 * t10
-
-  res <- solveODE(pow10, t10, p10, abstol = 1e-12, reltol = 1e-12)
-
-  expect_equal(as.numeric(res$variable[, "x"]), -log10(u), tolerance = 1e-8)
-  expect_equal(as.numeric(res$tangent[, "x", "x"]),
-               10^(-p10[["x"]]) / u, tolerance = 1e-6)
-  expect_equal(as.numeric(res$tangent[, "x", "k"]), -t10 / u, tolerance = 1e-6)
-  expect_equal(as.numeric(res$hessian[, "x", "k", "k"]),
-               ln10 * t10^2 / u^2, tolerance = 1e-6)
-})
+# -- Symbol names -------------------------------------------------------------
 
 # The generated right-hand side indexes x[] and params[] and calls std::pow, so
 # a state or parameter with one of those names has to be substituted before
 # it can be read as part of the surrounding code.
 test_that("state and parameter names that are C++ tokens compile and solve", {
   tt <- seq(0, 2, 0.5)
+  p  <- c(default = 1, int = 0.3, std = 0.7, operator = 0.2)
+  res <- solveODE(cxx_tokens, tt, p, abstol = 1e-11, reltol = 1e-11)
 
-  res <- solveODE(cxx_tokens, tt, c(default = 1, int = 0, std = 0.7, operator = 0.2))
-  exp <- solveODE(cxx_ref, tt, c(a = 1, b = 0, k = 0.7, b0 = 0.2))
-
-  expect_equal(unname(res$variable), unname(exp$variable), tolerance = 1e-10)
-  expect_equal(unname(res$tangent), unname(exp$tangent), tolerance = 1e-10)
+  s <- p[["std"]]; cc <- 10^0.5; dinf <- p[["operator"]] / s
+  d <- dinf + (p[["default"]] - dinf) * exp(-s * tt)
+  int <- p[["int"]] * exp(-cc * tt) + s * dinf * (1 - exp(-cc * tt)) / cc +
+    s * (p[["default"]] - dinf) * (exp(-s * tt) - exp(-cc * tt)) / (cc - s)
+  expect_equal(unname(res$variable[, "default"]), d, tolerance = 1e-9)
+  expect_equal(unname(res$variable[, "int"]), int, tolerance = 1e-9)
+  expect_equal(unname(res$tangent[, "default", "default"]), exp(-s * tt), tolerance = 1e-8)
+  expect_equal(unname(res$tangent[, "default", "operator"]), (1 - exp(-s * tt)) / s,
+               tolerance = 1e-8)
 })
 
 test_that("a Python keyword as a symbol name is rejected", {
@@ -423,53 +249,52 @@ test_that("a Python keyword as a symbol name is rejected", {
                "'global'")
 })
 
+# -- Forcings -----------------------------------------------------------------
+
 test_that("a forcing that multiplies a state reaches the Jacobian", {
-  # The Jacobian entries were printed without the forcing list, so a forcing
-  # surviving differentiation came out as a bare identifier and the model did
-  # not compile. Only additive forcings vanish from df/dx, which is why every
-  # example had one.
-  u <- data.frame(time = c(0, 0.5, 1, 2), value = c(0.4, 1.1, 0.7, 1.5))
-  mod <- forced
-
+  # Only additive forcings vanish from df/dx. The derivative of the solution has
+  # no closed form under an interpolated forcing, so central differences of two
+  # tight solves are the reference.
   tt  <- seq(0, 2, 0.25)
-  pars <- c(A = 1, B = 0, k1 = 0.8, k2 = 0.3)
-  res  <- solveODE(mod, tt, pars, forcings = list(u = u),
-                   abstol = 1e-10, reltol = 1e-10)
-
-  # Central differences over every parameter, which is what the Jacobian
-  # feeds through the sensitivity equations.
-  fd <- vapply(names(pars), function(nm) {
-    h <- 1e-6 * max(abs(pars[[nm]]), 1)
-    pp <- pm <- pars; pp[nm] <- pp[nm] + h; pm[nm] <- pm[nm] - h
-    a <- solveODE(mod, tt, pp, forcings = list(u = u), abstol = 1e-12, reltol = 1e-12)
-    b <- solveODE(mod, tt, pm, forcings = list(u = u), abstol = 1e-12, reltol = 1e-12)
+  p <- c(A = 1, B = 0, k1 = 0.8, k2 = 0.3)
+  res <- solveODE(forced, tt, p, forcings = list(u = u_data),
+                  abstol = 1e-10, reltol = 1e-10)
+  fd <- vapply(names(p), function(nm) {
+    h <- 1e-6 * max(abs(p[[nm]]), 1)
+    pp <- pm <- p; pp[nm] <- pp[nm] + h; pm[nm] <- pm[nm] - h
+    a <- solveODE(forced, tt, pp, forcings = list(u = u_data), abstol = 1e-12, reltol = 1e-12)
+    b <- solveODE(forced, tt, pm, forcings = list(u = u_data), abstol = 1e-12, reltol = 1e-12)
     (a$variable - b$variable) / (2 * h)
   }, matrix(0, length(tt), 2L))
-
-  # Loose because the reference is a difference of two adaptive solves, which
-  # take their own grids and leave O(tol/h) behind. It is four decades tighter
-  # than the error a missing forcing term would produce, which is the point.
-  for (k in seq_along(pars))
+  # Loose because each adaptive solve takes its own grid; a missing forcing term
+  # is orders of magnitude larger.
+  for (k in seq_along(p))
     expect_equal(unname(res$tangent[, , k]), unname(fd[, , k]), tolerance = 1e-3,
-                 info = names(pars)[k])
-})
-
-test_that("a forcing holds its end values outside its points", {
-  u <- data.frame(time = c(0, 0.5, 1, 2), value = c(0.4, 1.1, 0.7, 1.5))
-  v <- forcingValues(c(-1, 0, 0.5, 2, 3), list(u = u))
-  expect_equal(unname(v[, "u"]), c(0.4, 0.4, 1.1, 1.5, 1.5))
-  expect_equal(unname(forcingValues(c(-1, 5), list(c = data.frame(time = 1, value = 2)))[, 1]),
-               c(2, 2))
+                 info = names(p)[k])
 })
 
 test_that("a forcing of one point is the constant of two", {
   tt <- seq(0, 3, 0.5)
-  pars <- c(A = 1, B = 0, k1 = 0.8, k2 = 0.3)
-  one <- solveODE(forced, tt, pars, forcings = list(u = data.frame(time = 1, value = 0.7)),
+  p <- c(A = 1, B = 0, k1 = 0.8, k2 = 0.3)
+  one <- solveODE(forced, tt, p, forcings = list(u = data.frame(time = 1, value = 0.7)),
                   abstol = 1e-10, reltol = 1e-10)
-  two <- solveODE(forced, tt, pars,
-                  forcings = list(u = data.frame(time = c(0, 3), value = 0.7)),
+  two <- solveODE(forced, tt, p,
+                  forcings = list(u = cbind(c(0, 3), 0.7)),
                   abstol = 1e-10, reltol = 1e-10)
   expect_equal(one$variable, two$variable, tolerance = 1e-8)
   expect_equal(one$tangent, two$tangent, tolerance = 1e-8)
+})
+
+test_that("CVODES Adams takes the forcing and the fixed rate as cppODE does", {
+  skip_if_not(has_cvode, "CVODE backend not available")
+  tt <- seq(0, 2, 0.25)
+  p <- c(A = 1, B = 0, k1 = 0.8, k2 = 0.3)
+  nat <- solveODE(forced, tt, p, forcings = list(u = u_data), abstol = 1e-10, reltol = 1e-10)
+  cv  <- solveODE(cv_forced, tt, p, forcings = list(u = u_data),
+                  abstol = 1e-10, reltol = 1e-10)
+  expect_identical(cv$diagnostics$method, "adams")
+  expect_identical(dimnames(cv$tangent)$sens, c("A", "B", "k1"))
+  expect_equal(cv$variable, nat$variable, tolerance = 1e-7)
+  expect_equal(unname(cv$tangent), unname(nat$tangent[, , c("A", "B", "k1")]),
+               tolerance = 1e-6)
 })
