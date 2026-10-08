@@ -103,20 +103,30 @@ inline typename state_type::value_type compute_dt_star(
   return dt_star + value_type(c2) * dt_star * dt_star;
 }
 
+// Resets that ride along on an event surface. The default adds none.
+struct no_extra_reset {
+  template<class state_type, class time_type>
+  void operator()(state_type&, const time_type&) const {}
+};
+
 // --- Batch saltation: one Heun roundtrip, N event actions in the middle ---
 //
 // Events triggered together share one dt* and one surface, so the roundtrip is
 // paid once: four right-hand-side evaluations whatever their number. dt* is
 // taken from the first of them that has usable gradients.
 
-template<class state_type, class time_type, class System>
+// `at_surface` runs on the state the resets end on, before f is read on the far
+// side: where the modes of the triggered switches change.
+template<class state_type, class time_type, class System,
+         class AtSurface = no_extra_reset>
 inline void saltation_root_analytical_batch(
     state_type& x,
     const state_type& x_before,
     const time_type& t_event,
     System& sys,
     const std::vector<RootEvent<state_type, time_type>>& root_events,
-    const std::vector<TriggeredEvent>& triggered)
+    const std::vector<TriggeredEvent>& triggered,
+    const AtSurface& at_surface = AtSurface())
 {
   using value_type = typename state_type::value_type;
   const size_t n = x.size();
@@ -153,6 +163,7 @@ inline void saltation_root_analytical_batch(
         apply_event_action(x, x_before, t_event, root_events[te.index]);
       }
     }
+    at_surface(x, t_event);
     return;
   }
 
@@ -193,6 +204,8 @@ inline void saltation_root_analytical_batch(
     }
   }
 
+  at_surface(x_after, t_star);
+
   // --- 5. Backward Heun shift to grid time ---
   //     x_after lives at t* = t_event + dt_star.  We transport backward
   //     by -dt_star.  f_after at departure (t_star), f_back at arrival (t_event).
@@ -217,12 +230,6 @@ inline void saltation_root_analytical_batch(
 // holds dt_event/dp in its AD components. The sandwich around it is the one
 // the root path uses.
 // ============================================================================
-
-// Resets that ride along on an event surface. The default adds none.
-struct no_extra_reset {
-  template<class state_type, class time_type>
-  void operator()(state_type&, const time_type&) const {}
-};
 
 /// Steps 1 and 2 alone: from the grid time onto the event surface, which is
 /// where the forward run evaluates f_after. The state after the whole sandwich

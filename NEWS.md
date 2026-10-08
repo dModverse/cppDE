@@ -1,3 +1,11 @@
+# cppDE 0.11.8
+
+* `cvode()` reverse models with root events interpolate the forward state by
+  Hermite: the polynomial interpolation read a wrong state at the start of
+  every stretch after a root, and the gradient was wrong from there on.
+* Root events that cross zero within one step fire each at its own time, the
+  earliest first, rather than all at the first of them.
+
 # cppDE 0.11.7
 
 * `maxattemps` is now spelled `maxattempts` in `solveODE()`,
@@ -15,9 +23,15 @@
 
 # cppDE 0.11.6
 
-* `cppODE()` warns when a condition of `piecewise()`, `Heaviside()` or `sign()`
-  reads a state and derivatives are built: such a switch is not located, so
-  the sensitivities are right only where the right-hand side is continuous.
+* A comparison in the right-hand side whose sides differ by an amount that
+  reads a state, in `piecewise()` or a logical operator, and `Heaviside()` or
+  `sign()` of such an amount switch where that amount crosses zero, on both
+  backends. The solve holds each switch as a mode, locates the root and sets
+  the mode there, so forward tangents of first and second order, the reverse
+  gradient and its curvature, and `cvode()`'s forward and adjoint
+  sensitivities take the jump of f. A switch adds no output row and is not
+  limited by `maxroot`. A solution that slides along a switching surface stops
+  with an error.
 
 # cppDE 0.11.5
 

@@ -206,10 +206,27 @@ def generate_cvode_cpp(
             })
             root_events.append(item)
 
+    # The state switches follow the root events of the table: no reset, no
+    # limit on how often they fire, and the mode they set (see
+    # cppde_model.hold_switches).
+    n_table_roots = len(root_events)
+    for k, (rn, closed) in enumerate(model.switches):
+        root_events.append({
+            "var_idx": -1, "mode": k, "closed": closed, "r": rn,
+            "r_val": lines(ev.value(rn), " " * 6),
+            "dr_dx": [(j, lines(b, " " * 10)) for j, b in ev.cases_x(rn)],
+            "dr_dp": [(q, lines(b, " " * 10)) for q, b in ev.cases_p(rn)],
+            "dr_dt": lines(ev.partial_t(rn), " " * 6),
+            "direction": 0, "terminal": False,
+        })
+
     # root_fn: user roots, then event roots; an exhausted event root reads +1.
     root_stores = [(("vec", "gout", k), n, "=") for k, n in enumerate(rootfunc_nodes)]
     n_user = len(rootfunc_nodes)
     for j, e in enumerate(root_events):
+        if "mode" in e:
+            root_stores.append((("vec", "gout", n_user + j), e["r"], "="))
+            continue
         root_stores.append((("call", {
             "cpp": "gout[{0}] = (ud->root_fired[{1}] >= ud->maxroot) ? 1.0 : (%s);",
             "py": "gout[{0}] = 1.0 if ud.root_fired[{1}] >= ud.maxroot else (%s)"},
@@ -250,6 +267,8 @@ def generate_cvode_cpp(
         root_body=root_body,
         time_events=time_events,
         root_events=root_events,
+        n_table_roots=n_table_roots,
+        n_modes=len(model.switches),
         n_params=n_params,
         states_list=states_list,
         params_list=params_list,
@@ -325,6 +344,8 @@ def _render_source(
     root_body="",
     time_events=None,
     root_events=None,
+    n_table_roots=None,
+    n_modes=0,
     n_params=0,
     states_list=None,
     params_list=None,
@@ -333,6 +354,11 @@ def _render_source(
     data_code="",
 ):
     deriv_flag = "true" if deriv else "false"
+    # The modes of the state switches live as long as the solve and its sweep.
+    mode_scope = ((
+        "  signed char _switch_mode[%d] = {0};\n"
+        "  cppde::switch_mode_scope _cppde_mode_scope(_switch_mode, %d);\n")
+        % (n_modes, n_modes)) if n_modes else ""
     linmap_include = "#include <cppde/cppde_linmap.hpp>\n" if data_code else ""
     data_block = "\n" + data_code + "\n" if data_code else ""
     has_forcings = n_forcings > 0
@@ -340,6 +366,8 @@ def _render_source(
         time_events = []
     if root_events is None:
         root_events = []
+    if n_table_roots is None:
+        n_table_roots = len(root_events)
     has_time_events = len(time_events) > 0
     has_root_events = len(root_events) > 0
     has_events      = has_time_events or has_root_events
@@ -448,13 +476,18 @@ static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
         ]
         direction_list = ", ".join(direction_entries)
 
+        # A state switch whose new branch holds the state on its surface leaves
+        # its root at zero, which is no reason for a warning.
+        quiet = "    CVodeSetNoInactiveRootWarn(cvode_mem);\n" if n_modes else ""
+
         def rootfunc_init(fail):
             return (
                 f"  {{ int rd[{n_total_roots}] = {{ {direction_list} }};\n"
                 f"    if (CVodeRootInit(cvode_mem, {n_total_roots}, root_fn) < 0) "
                 + fail("RC_LINIT_FAIL", "CVodeRootInit failed") + "\n"
                 f"    if (CVodeSetRootDirection(cvode_mem, rd) < 0) "
-                + fail("RC_LINIT_FAIL", "CVodeSetRootDirection failed") + " }\n"
+                + fail("RC_LINIT_FAIL", "CVodeSetRootDirection failed") + "\n"
+                + quiet + "  }\n"
             )
     else:
         rootfunc_decl = ""
@@ -469,6 +502,8 @@ static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
     # Time events land in a sorted std::vector<TimeEvent> traversed in the main
     # loop, root events in std::vector<RootEvent> dispatched from CV_ROOT_RETURN.
     event_block_includes = "#include <functional>\n" if has_events else ""
+    if n_modes:
+        event_block_includes += "#include <cppde/cppde_switch_modes.hpp>\n"
     if has_time_events:
         event_block_includes += "#include <cppde/cppde_event_window.hpp>\n"
     event_struct = ""
@@ -537,6 +572,11 @@ struct RootEvent {{
   std::function<double(const double* x, double t, int i)> dr_dx_fn;
   std::function<double(const double* x, double t, int k)> dr_dp_fn;
   std::function<double(const double* x, double t)> dr_dt_fn;
+  // A state switch: the mode its root sets, which holds where r > 0 (r >= 0
+  // when closed); var_idx is -1 and the event map unset. -1 for an event.
+  int  mode = -1;
+  bool closed = false;
+  std::function<double(const double* x, double t)> r_fn;
 }};
 
 static std::vector<RootEvent> build_root_events(const double* params,
@@ -547,6 +587,27 @@ static std::vector<RootEvent> build_root_events(const double* params,
         re_body = []
         for i, e in enumerate(root_events):
             terminal = "true" if e["terminal"] else "false"
+            if "mode" in e:
+                re_body.append(f"""  {{
+    RootEvent e;
+    e.var_idx   = -1;
+    e.direction = 0;
+    e.terminal  = false;
+    e.mode      = {e['mode']};
+    e.closed    = {'true' if e['closed'] else 'false'};
+    e.r_fn    = [params, &F](const double* x, double t) -> double {{
+      (void)x; (void)t;
+{e['r_val']}
+    }};
+    e.dr_dx_fn = {_switch_lambda(e['dr_dx'], 'i')};
+    e.dr_dp_fn = {_switch_lambda(e['dr_dp'], 'k')};
+    e.dr_dt_fn = [params, &F](const double* x, double t) -> double {{
+      (void)x; (void)t;
+{e['dr_dt']}
+    }};
+    ev.push_back(std::move(e));
+  }}""")
+                continue
             re_body.append(f"""  {{
     RootEvent e;
     e.var_idx   = {e['var_idx']};
@@ -660,6 +721,39 @@ static std::vector<RootEvent> build_root_events(const double* params,
             event_builder_block += (
                 "  auto event_roots = build_root_events(ud.params.data(), ud.F);\n"
             )
+        if n_modes:
+            event_builder_block += (
+                "  // The modes of the state switches: read off the state, or set by\n"
+                "  // the crossing of their root, after which a reset among the events\n"
+                "  // reads every other mode afresh.\n"
+                "  auto cv_read_modes = [&](const double* x, double t) {\n"
+                "    for (const auto& e : event_roots)\n"
+                "      if (e.mode >= 0)\n"
+                "        cppde::detail::set_switch_mode(\n"
+                "            e.mode, cppde::detail::mode_holds(e.r_fn(x, t), e.closed));\n"
+                "  };\n"
+                "  auto cv_switch_after = [&](const std::vector<int>& trig,\n"
+                "                             const std::vector<int>& dir,\n"
+                "                             const double* x, double t) {\n"
+                "    bool jumped = false;\n"
+                "    for (size_t q = 0; q < trig.size(); ++q) {\n"
+                "      const auto& e = event_roots[trig[q]];\n"
+                "      if (e.mode >= 0) cppde::detail::set_switch_mode(e.mode, dir[q] > 0);\n"
+                "      else if (!e.terminal) jumped = true;\n"
+                "    }\n"
+                "    if (!jumped) return;\n"
+                "    for (size_t j = 0; j < event_roots.size(); ++j) {\n"
+                "      const auto& e = event_roots[j];\n"
+                "      if (e.mode < 0 ||\n"
+                "          std::find(trig.begin(), trig.end(), (int)j) != trig.end()) continue;\n"
+                "      cppde::detail::set_switch_mode(\n"
+                "          e.mode, cppde::detail::mode_holds(e.r_fn(x, t), e.closed));\n"
+                "    }\n"
+                "  };\n"
+                "  cv_read_modes(N_VGetArrayPointer(y), t0);\n"
+                + ("  asa_segs[0].modes = cppde::detail::switch_mode_snapshot();\n"
+                   if asa_seg else "")
+            )
         if deriv:
             event_sens_reinit = ("      if (Ns_active > 0 && CVodeSensReInit(cvode_mem, CV_STAGGERED, yS) < 0) "
                                  "{ hard_fail = true; return_code = cppde::RC_LSETUP_FAIL; "
@@ -690,7 +784,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
 
     double new_v = ev.g_fn(x_old.data(), t_e);
     y_arr[ev.var_idx] = new_v;
-
+@READ_MODES@
     rhs_fn(t_e, y, f_buf, &ud);
     std::vector<double> f_new(NEQ);
     {{ const double* fb = N_VGetArrayPointer(f_buf);
@@ -746,7 +840,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
     rhs_fn(J.t, y, f_buf, &ud);
     { const double* fb = N_VGetArrayPointer(f_buf); J.f_old.assign(fb, fb + NEQ); }
     y_arr[ev.var_idx] = ev.g_fn(J.x_old.data(), J.t);
-    rhs_fn(J.t, y, f_buf, &ud);
+@READ_MODES_J@    rhs_fn(J.t, y, f_buf, &ud);
     { const double* fb = N_VGetArrayPointer(f_buf); J.f_new.assign(fb, fb + NEQ); }
     asa_jumps.push_back(std::move(J));
   };
@@ -758,8 +852,13 @@ static std::vector<RootEvent> build_root_events(const double* params,
     std::vector<double> x_old(NEQ);
     for (int i = 0; i < NEQ; ++i) x_old[i] = y_arr[i];
     y_arr[ev.var_idx] = ev.g_fn(x_old.data(), t_e);
+@READ_MODES@
   };
 """
+        time_event_apply_lambda = (
+            time_event_apply_lambda
+            .replace("@READ_MODES@\n", "    cv_read_modes(y_arr, t_e);\n" if n_modes else "")
+            .replace("@READ_MODES_J@", "    cv_read_modes(y_arr, J.t);\n" if n_modes else ""))
         # A time event fires inside the grid's window only, the rule of
         # cppde_event_window.hpp that the native backend applies: one before t0
         # is skipped, one at t0 is applied before the solve starts, and the t0
@@ -808,7 +907,9 @@ static std::vector<RootEvent> build_root_events(const double* params,
         if deriv:
             phi_rows_r = n_states + n_params
             root_event_apply_lambda = f"""  auto apply_root_events_batch = [&](const std::vector<int>& triggered_idx,
+                                     const std::vector<int>& trig_dir,
                                      double t_e) -> bool {{
+    (void)trig_dir;
     double* y_arr = N_VGetArrayPointer(y);
     std::vector<double> x_old(NEQ);
     for (int i = 0; i < NEQ; ++i) x_old[i] = y_arr[i];
@@ -823,10 +924,11 @@ static std::vector<RootEvent> build_root_events(const double* params,
     for (int j : triggered_idx) {{
       const auto& ev = event_roots[j];
       if (ev.terminal) {{ any_terminal = true; continue; }}
+      if (ev.var_idx < 0) continue;
       y_arr[ev.var_idx] = ev.g_fn(x_old.data(), t_e);
       is_modified[ev.var_idx] = 1;
     }}
-
+@SWITCH_AFTER@
     rhs_fn(t_e, y, f_buf, &ud);
     std::vector<double> f_new(NEQ);
     {{ const double* fb = N_VGetArrayPointer(f_buf);
@@ -875,7 +977,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
 
       for (int j : triggered_idx) {{
         const auto& ev = event_roots[j];
-        if (ev.terminal) continue;
+        if (ev.terminal || ev.var_idx < 0) continue;
         int v = ev.var_idx;
 
         double sum_gx_S = 0.0, sum_gx_f = 0.0;
@@ -902,7 +1004,9 @@ static std::vector<RootEvent> build_root_events(const double* params,
 """
         elif reverse:
             root_event_apply_lambda = """  auto apply_root_events_batch = [&](const std::vector<int>& triggered_idx,
+                                     const std::vector<int>& trig_dir,
                                      double t_e) -> bool {
+    (void)trig_dir;
     double* y_arr = N_VGetArrayPointer(y);
     AsaJump J;
     J.kind = 1;
@@ -915,8 +1019,10 @@ static std::vector<RootEvent> build_root_events(const double* params,
     for (int j : triggered_idx) {
       const auto& ev = event_roots[j];
       if (ev.terminal) { any_terminal = true; continue; }
+      if (ev.var_idx < 0) continue;
       y_arr[ev.var_idx] = ev.g_fn(J.x_old.data(), t_e);
     }
+@SWITCH_AFTER@
     rhs_fn(t_e, y, f_buf, &ud);
     { const double* fb = N_VGetArrayPointer(f_buf); J.f_new.assign(fb, fb + NEQ); }
     asa_jumps.push_back(std::move(J));
@@ -925,7 +1031,9 @@ static std::vector<RootEvent> build_root_events(const double* params,
 """
         else:
             root_event_apply_lambda = """  auto apply_root_events_batch = [&](const std::vector<int>& triggered_idx,
+                                     const std::vector<int>& trig_dir,
                                      double t_e) -> bool {
+    (void)trig_dir;
     double* y_arr = N_VGetArrayPointer(y);
     std::vector<double> x_old(NEQ);
     for (int i = 0; i < NEQ; ++i) x_old[i] = y_arr[i];
@@ -933,11 +1041,16 @@ static std::vector<RootEvent> build_root_events(const double* params,
     for (int j : triggered_idx) {
       const auto& ev = event_roots[j];
       if (ev.terminal) { any_terminal = true; continue; }
+      if (ev.var_idx < 0) continue;
       y_arr[ev.var_idx] = ev.g_fn(x_old.data(), t_e);
     }
+@SWITCH_AFTER@
     return any_terminal;
   };
 """
+        root_event_apply_lambda = root_event_apply_lambda.replace(
+            "@SWITCH_AFTER@\n",
+            "    cv_switch_after(triggered_idx, trig_dir, y_arr, t_e);\n" if n_modes else "")
 
     event_apply_lambda = time_event_apply_lambda + root_event_apply_lambda
 
@@ -995,11 +1108,14 @@ static std::vector<RootEvent> build_root_events(const double* params,
 """
             event_apply_sec = ""
             if has_root_events:
-                event_apply_sec = f"""      std::vector<int> triggered_idx;
+                event_apply_sec = f"""      std::vector<int> triggered_idx, trig_dir;
+      bool rows = false;   // a state switch alone writes no row
       for (int j = 0; j < {n_event_roots}; ++j) {{
         if (rinfo[{n_user_rootfunc} + j] != 0 &&
-            ud.root_fired[j] < ud.maxroot) {{
+            (ud.root_fired[j] < ud.maxroot || event_roots[j].mode >= 0)) {{
           triggered_idx.push_back(j);
+          trig_dir.push_back(rinfo[{n_user_rootfunc} + j]);
+          rows = rows || event_roots[j].mode < 0;
         }}
       }}
       bool any_terminal = false;
@@ -1007,13 +1123,13 @@ static std::vector<RootEvent> build_root_events(const double* params,
         // The native backend emits the state just before the event and the
         // state just after it, both at the root time. Skip a row that the
         // requested-times loop is about to write anyway.
-        if (std::abs(target - ((double)tret - 1e-15)) >= 1e-14) {{
+        if (rows && std::abs(target - ((double)tret - 1e-15)) >= 1e-14) {{
           out_t.push_back((double)tret - 1e-15);
           {{ const double* y_arr = N_VGetArrayPointer(y);
             for (int i = 0; i < NEQ; ++i) out_y.push_back(y_arr[i]); }}
 {sens_store_block}
         }}
-        any_terminal = apply_root_events_batch(triggered_idx, (double)tret);
+        any_terminal = apply_root_events_batch(triggered_idx, trig_dir, (double)tret);
         for (int j : triggered_idx) ud.root_fired[j]++;
 #ifdef CVODE_STEP_TRACE
         {{
@@ -1035,7 +1151,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
 {event_sens_reinit}        if (hard_fail) return -1;
         cv_rebase();
         // A terminal event stops here and the caller writes the closing row.
-        if (!any_terminal && std::abs(target - (double)tret) >= 1e-14) {{
+        if (rows && !any_terminal && std::abs(target - (double)tret) >= 1e-14) {{
           out_t.push_back((double)tret);
           {{ const double* y_arr = N_VGetArrayPointer(y);
             for (int i = 0; i < NEQ; ++i) out_y.push_back(y_arr[i]); }}
@@ -1084,7 +1200,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
     # --- Zero-copy sink: the batch entry sizes the results before the solve when
     # the grid is fixed (no root event, no rootfunc, no ASA adjoint). Time-event
     # rows are counted per condition through <model>_fixed_event_times.
-    cv_fixed_grid = (len(root_events) == 0 and rootfunc_mode == "none"
+    cv_fixed_grid = (n_table_roots == 0 and rootfunc_mode == "none"
                      and not reverse)
     n_cv_ev = len(time_events) if cv_fixed_grid else 0
     if cv_fixed_grid:
@@ -1337,19 +1453,23 @@ static std::vector<RootEvent> build_root_events(const double* params,
     # --- ASA: checkpoint allocation before the forward pass, sweep after it ---
     # Per seed column, lambda' = -J'lambda and q' = -(df/dp)'lambda run from T
     # to t0, and lambda jumps by the seed row W_o at each output time.
+    # A run cut into stretches interpolates the forward state by Hermite: the
+    # polynomial one reads a wrong state at the very start of a stretch that a
+    # root opened, where the backward problem ends.
+    asa_interp = "CV_HERMITE" if asa_seg else "CV_POLYNOMIAL"
     if reverse:
         asa_init_block = """
   // --- adjoint sensitivity analysis: checkpoint allocation ---
-  // CV_POLYNOMIAL interpolation of the forward state between checkpoints.
+  // @INTERP@ interpolation of the forward state between checkpoints.
   if (args.seed == nullptr) {
     cleanup();
     return res.fail(cppde::RC_ILL_INPUT,
                     "a model compiled with derivMode = reverse needs a cotangent");
   }
-  if (CVodeAdjInit(cvode_mem, ASA_CHECKPOINTS, CV_POLYNOMIAL) < 0) {
+  if (CVodeAdjInit(cvode_mem, ASA_CHECKPOINTS, @INTERP@) < 0) {
     cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeAdjInit failed");
   }
-"""
+""".replace("@INTERP@", asa_interp)
         asa_sweep_block = """
   // --- the backward sweep ---
   // The result is indexed like sens1ini: state rows from lambda(t0), then
@@ -1542,6 +1662,7 @@ struct AsaSeg {
   double t0 = 0.0, t1 = 0.0;
   int row0 = 0, row1 = 0;     // output rows [row0, row1)
   int jump0 = 0, jump1 = 0;   // jumps applied at its start [jump0, jump1)
+  std::vector<signed char> modes;   // of the state switches, none without
 };
 
 // A jump of the forward run: one time event, or the root events of one crossing.
@@ -1595,7 +1716,7 @@ struct AsaJump {
       for (int j : J.trig) {
         const auto& e = event_roots[j];
         if (e.terminal) continue;
-        writer[e.var_idx] = j;
+        if (e.var_idx >= 0) writer[e.var_idx] = j;
         if (ref < 0) ref = j;
       }
       if (ref < 0) return;
@@ -1704,6 +1825,7 @@ struct AsaJump {
     const int n_seg = (int)asa_segs.size();
     for (int s = n_seg - 1; s >= 0 && return_code == 0; --s) {
       AsaSeg& S = asa_segs[s];
+@USE_MODES@
       void* mem = (s == n_seg - 1) ? cvode_mem : S.mem;
       const bool flows = mem != nullptr && S.used && S.t1 > S.t0 && !near(S.t0, S.t1);
       SUNMatrix&       AB  = S.AB;
@@ -1816,7 +1938,10 @@ struct AsaJump {
     }
     cleanupB();
   }
-""".replace("@JUMP_ADJOINT@", jump_adjoint)
+""".replace("@JUMP_ADJOINT@", jump_adjoint).replace(
+            "@USE_MODES@\n",
+            "      // The backward problem reads f as the stretch ran it.\n"
+            "      cppde::detail::use_switch_modes(S.modes);\n" if n_modes else "")
     else:
         # A user rootfunc stops the run; the replay from a checkpoint must not
         # stop at it again.
@@ -1942,7 +2067,7 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
     nxt.jump0 = asa_jump_mark;
     nxt.jump1 = (int)asa_jumps.size();
     asa_jump_mark = nxt.jump1;
-    if (!asa_segs[cur].used) {{
+@SNAP_MODES@    if (!asa_segs[cur].used) {{
       asa_segs.push_back(nxt);
       return CVodeReInit(cvode_mem, t_r, y);
     }}
@@ -1960,10 +2085,11 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
     if (CVodeSetUserData(cvode_mem, &ud) < 0) {_fail_seg("", "CVodeSetUserData failed")}
     CVodeSetMaxNumSteps(cvode_mem, maxsteps);
     if (hini > 0.0) CVodeSetInitStep(cvode_mem, hini);
-{ls_setup_for(_fail_seg)}{rootfunc_init(_fail_seg)}    if (CVodeAdjInit(cvode_mem, ASA_CHECKPOINTS, CV_POLYNOMIAL) < 0) {_fail_seg("", "CVodeAdjInit failed")}
+{ls_setup_for(_fail_seg)}{rootfunc_init(_fail_seg)}    if (CVodeAdjInit(cvode_mem, ASA_CHECKPOINTS, {asa_interp}) < 0) {_fail_seg("", "CVodeAdjInit failed")}
     return 0;
   }};
-"""
+""".replace("@SNAP_MODES@", "    nxt.modes = cppde::detail::switch_mode_snapshot();\n"
+                    if n_modes else "")
 
     # The backward problem lambda' = -J' lambda gets the forward solver kind and
     # its Jacobian -J', formed from jac_fn into a scratch matrix of the forward
@@ -2279,6 +2405,7 @@ try {{
 
   UserData ud;
   ud.params.assign(args.params, args.params + NPARMS);
+{mode_scope}
   {{
     const int mr = args.maxroot;
     ud.maxroot = (mr > 0) ? mr : 1;

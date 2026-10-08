@@ -464,7 +464,8 @@ void reset_transpose(int k, cppde::detail::EventMethod method, const T& h,
   dh_dt_axpy(idx, y, t, wk * c, &w_time);
 }
 
-/// A batch of root events, which share one surface and one dt*.
+/// A batch of root events, which share one surface and one dt*. f reads the
+/// modes `mb` on the near side of the surface and `ma` on the far side.
 template<class System, class RootEvents, class EvAdj, class AdjTerms, class T>
 void apply_root_jump_adjoint(const std::vector<T>& x_before,
                              const std::vector<T>& x_after,
@@ -473,8 +474,12 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
                              System& sys, const EvAdj& eadj,
                              const AdjTerms& adj, std::size_t n,
                              const T* w_out, T* w_in, T* w_theta,
-                             jump_workspace<T>& ws)
+                             jump_workspace<T>& ws,
+                             const std::vector<signed char>& mb = {},
+                             const std::vector<signed char>& ma = {})
 {
+  using cppde::detail::use_switch_modes;
+  use_switch_modes(mb);
   zero_armed(ws.fb, n);
   sys.first(x_before, ws.fb, t);
 
@@ -513,8 +518,10 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   // Forward: x_e = x_b + f_b s, x_* = x_b + (f_b + f_e) s / 2, x_a = R(x_*),
   // x_k = x_a - f_a s = the stored state, x_out = x_a - (f_a + f_k) s / 2.
   // Transposed below; see vignette("Methods"), "Transposing the root sandwich".
+  use_switch_modes(ma);
   zero_armed(ws.fa, n);
   sys.first(x_after, ws.fa, t);
+  use_switch_modes(mb);
   std::vector<T> xe, xst, xa, xk, fe, fa, fk;
   std::vector<T> wfa, wfk, wfb, wfe, wxb, wv, wa;
   for (auto* v : {&xe, &xst, &xa, &xk, &fe, &fa, &fk,
@@ -535,6 +542,7 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
     if (!evt.terminal)
       cppde::detail::apply_event_action(xa, xa, t_s, evt);
   }
+  use_switch_modes(ma);
   sys.first(xa, fa, t_s);
   for (std::size_t i = 0; i < n; ++i) xk[i] = xa[i] - fa[i] * s;
   sys.first(xk, fk, t_ad);
@@ -588,6 +596,7 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   }
 
   //  x_* = x_b + (f_b + f_e) s / 2
+  use_switch_modes(mb);
   for (std::size_t i = 0; i < n; ++i) {
     wxb[i] = w_in[i];
     wfb[i] = T(0.5) * s * w_in[i];
@@ -671,8 +680,11 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
                               System& sys, const EvAdj& eadj,
                               const AdjTerms& adj, std::size_t n,
                               const T* w_out, T* w_in, T* w_theta,
-                              jump_workspace<T>& ws)
+                              jump_workspace<T>& ws,
+                              const std::vector<signed char>& mb = {},
+                              const std::vector<signed char>& ma = {})
 {
+  using cppde::detail::use_switch_modes;
   // Which of them fire here, and which is last: the same test the engine makes.
   std::vector<int> fired;
   for (std::size_t j = 0; j < fixed_events.size(); ++j)
@@ -685,15 +697,18 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
   const std::size_t nf = fired.size();
   std::vector<T> tmp;
   zero_armed(tmp, n);
+  // The modes change on the surface of the last of them, as in the forward run.
   auto at_surface = [&](std::vector<T>& xs, const T& te) {
     for (std::size_t q = 0; q < switched.size(); ++q) {
       tmp = xs;
       cppde::detail::apply_event_action(xs, tmp, te, root_events[switched[q]]);
     }
+    use_switch_modes(ma);
   };
   ws.path.assign(nf + 1, std::vector<T>());
   ws.path[0] = x_before;
   for (std::size_t j = 0; j < nf; ++j) {
+    use_switch_modes(mb);
     zero_armed(ws.path[j + 1], n);
     ws.path[j + 1] = ws.path[j];
     const auto& evt = fixed_events[fired[j]];
@@ -727,6 +742,7 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
 
     // The half that reaches the surface, replayed so the resets are
     // transposed where the forward applied them.
+    use_switch_modes(mb);
     sys.first(y, f1, t);
     for (std::size_t i = 0; i < n; ++i) xe[i] = y[i] + f1[i] * tau;
     sys.first(xe, f2, evt.time);
@@ -748,6 +764,7 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
 
     // Leaving the surface: x_out = x_a - (g1 + g2) tau / 2, g1 at the event
     // time and g2 at the grid time.
+    if (j + 1 == nf) use_switch_modes(ma);
     sys.first(xa, g1, evt.time);
     for (std::size_t i = 0; i < n; ++i) xk[i] = xa[i] - g1[i] * tau;
     sys.first(xk, g2, t);
@@ -802,6 +819,7 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
     }
 
     // Entering it: x_* = x_b + (f1 + f2) tau / 2, the same pair the other way.
+    use_switch_modes(mb);
     for (std::size_t i = 0; i < n; ++i) ws.wy[i] = w[i];
     adj.jac_t_vec(y, ws.wy, t, jv);
     adj.dfdp_t_vec_axpy(xe, ws.wy, t, tau, w_theta);
@@ -903,11 +921,13 @@ void event_adjoint(const Store& store, std::size_t ei, const T* seeds, std::size
   else if (e.root)
     apply_root_jump_adjoint(e.x_before, e.x_after, e.t, jumps.root,
                             e.triggered, jumps.sys, jumps.eadj, adj, n,
-                            w_after.data(), w_before.data(), wp, ws);
+                            w_after.data(), w_before.data(), wp, ws,
+                            e.modes_before, e.modes_after);
   else
     apply_fixed_jump_adjoint(e.x_before, e.t, jumps.fixed, jumps.root,
                              e.switched, jumps.sys, jumps.eadj, adj, n,
-                             w_after.data(), w_before.data(), wp, ws);
+                             w_after.data(), w_before.data(), wp, ws,
+                             e.modes_before, e.modes_after);
 }
 
 // ---------------------------------------------------------------------------
@@ -986,6 +1006,7 @@ public:
 
     for (std::size_t k = n_steps; k-- > 0;) {
       const auto& cp = store.step(k);
+      store.use_step_modes(k);
 
       // Does anything observe inside this step? Then the probe has to hold
       // this step's own interpolant, not the one it kept from another.
@@ -1028,6 +1049,7 @@ public:
     // The trajectory start, which is the same restart with no jump under it.
     if (!w_carry.empty()) {
       const auto& cp0 = store.step(0);
+      store.use_step_modes(0);
       w_after.assign(n, T(0.0));
       m_ws.x.assign(cp0.start_state(), cp0.start_state() + n);
       collapse_restart(w_carry, n, m_ws.x, cp0.t,
@@ -1067,6 +1089,7 @@ public:
     jump_handover<T> handover;
     for (std::size_t k = n_steps; k-- > 0;) {
       const auto& cp = store.step(k);
+      store.use_step_modes(k);
       step_seeds(store, k, seeds, n, next_obs, handover, m_obs);
       x0.assign(cp.start_state(), cp.start_state() + n);
       const int mk = flow.flow_interval(sys, adj, n, n_phi, x0, cp.t, cp.dt,
@@ -1583,6 +1606,7 @@ public:
 
     for (std::size_t k = n_steps; k-- > 0;) {
       const auto& cp = store.step(k);
+      store.use_step_modes(k);
       x0.assign(cp.start_state(), cp.start_state() + n);
       step_seeds(store, k, seeds, n, next_obs, handover, m_obs);
 

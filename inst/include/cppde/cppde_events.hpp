@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cppde/cppde_ad_traits.hpp>
 #include <cppde/cppde_utils.hpp>
+#include <cppde/cppde_switch_modes.hpp>
 
 namespace cppde {
 namespace detail {
@@ -76,7 +77,21 @@ struct RootEvent {
   // because it only scales the second-order correction of dt*. A null callback
   // falls back to a finite difference of g_dot.
   std::function<double(const state_type&, const time_type&)> g_dot_dot;
+
+  // A state switch of the right-hand side: the index of the mode its root sets,
+  // -1 for an event. The mode holds where func > 0, or >= 0 when closed.
+  int mode = -1;
+  bool closed = false;
 };
+
+// Every mode from the comparisons at (x, t).
+template<class Roots, class State, class Time>
+void init_switch_modes(const Roots& root, const State& x, const Time& t) {
+  if (switch_mode_sink().n == 0) return;
+  for (const auto& e : root)
+    if (e.mode >= 0)
+      set_switch_mode(e.mode, mode_holds(scalar_value(e.func(x, t)), e.closed));
+}
 
 // ============================================================================
 // Event tracking

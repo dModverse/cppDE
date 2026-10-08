@@ -29,13 +29,15 @@ OP_NAMES = ("NUM", "NAMED", "BOOL", "LEAF", "ADD", "MUL", "POW", "CALL",
             "SELECT", "CMP", "AND", "OR", "NOT")
 
 # Leaf kinds. A leaf's attr is a tuple whose first entry is the kind.
-STATE, PARAM, INIT, TIME, FORCING, FRATE, VEC, LINROW, TABLE, LOOPVAR = range(10)
+# A MODE leaf is the held value of a comparison that reads a state, a boolean.
+STATE, PARAM, INIT, TIME, FORCING, FRATE, VEC, LINROW, TABLE, LOOPVAR, \
+    MODE = range(11)
 KIND_NAMES = ("STATE", "PARAM", "INIT", "TIME", "FORCING", "FRATE", "VEC",
-              "LINROW", "TABLE", "LOOPVAR")
+              "LINROW", "TABLE", "LOOPVAR", "MODE")
 
 # Dependency flags, one bit per leaf kind.
 F_STATE, F_PARAM, F_INIT, F_TIME, F_FORCING, F_FRATE, F_VEC, F_LINROW, \
-    F_TABLE, F_LOOPVAR = (1 << k for k in range(10))
+    F_TABLE, F_LOOPVAR, F_MODE = (1 << k for k in range(11))
 
 BOOL_OPS = frozenset((BOOL, CMP, AND, OR, NOT))
 CMP_OPS = ("<", "<=", ">", ">=", "==", "!=")
@@ -244,7 +246,8 @@ class Graph:
         return self.op[n] == NUM and self.attr[n] == 1
 
     def is_bool(self, n):
-        return self.op[n] in BOOL_OPS
+        o = self.op[n]
+        return o in BOOL_OPS or (o == LEAF and self.attr[n][0] == MODE)
 
     def kind(self, n):
         return self.attr[n][0] if self.op[n] == LEAF else None
@@ -354,6 +357,9 @@ class Graph:
 
     def vec(self, name, i):
         return self.leaf(VEC, name, i)
+
+    def mode(self, k):
+        return self.leaf(MODE, k)
 
     def numval(self, n):
         """Value of a NUM or NAMED node, else None."""

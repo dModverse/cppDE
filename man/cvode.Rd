@@ -92,7 +92,8 @@ described in \code{vignette("Methods", package = "cppDE")}.
 \details{
 Available methods are \code{"bdf"} (default) and \code{"adams"}. Forward
 sensitivities are of first order only; \code{deriv2} is not supported. Events,
-forcings, \code{rootfunc}, and \code{fixed} behave as in \code{\link[=cppODE]{cppODE()}}.
+forcings, \code{rootfunc}, \code{fixed} and a switch on a state behave as in
+\code{\link[=cppODE]{cppODE()}}; the switch is located by CVODES' root finding.
 
 Needs SUNDIALS (>= 6.0) at install time, see \code{\link[=installLibs]{installLibs()}}; otherwise
 \code{cvode()} errors at the first call with platform-specific install hints.

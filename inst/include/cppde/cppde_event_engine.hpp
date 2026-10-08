@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <type_traits>
 #include <memory>
+#include <stdexcept>
 #include <cppde/cppde_step_checker.hpp>
 #include <cppde/cppde_stepper_traits.hpp>
 #include <cppde/cppde_profiler.hpp>
@@ -141,6 +142,10 @@ struct event_note {
   // Root conditions a fixed jump switched on, in the order they were applied on
   // the event surface. Non-null only where a model has both kinds.
   const std::vector<size_t>* switched = nullptr;
+  // The modes of the state switches on both sides of the jump. Null for a model
+  // without switches and for a crossing, which leaves them alone.
+  const std::vector<signed char>* modes_before = nullptr;
+  const std::vector<signed char>* modes_after  = nullptr;
 };
 
 // ============================================================================
@@ -164,7 +169,10 @@ public:
              const std::vector<RootEvent<State, Time>>& root,
              DtEstimator dt_est = DtEstimator())
    : m_st(st), m_sys(sys), m_fixed(fixed), m_root(root),
-     m_dt_estimator(std::move(dt_est)) {}
+     m_dt_estimator(std::move(dt_est)) {
+   for (const auto& e : m_root) m_has_modes = m_has_modes || e.mode >= 0;
+   m_off_surface.assign(m_root.size(), false);
+ }
 
  void set_termination(TerminationFunc f) { m_termination = std::move(f); }
 
@@ -197,16 +205,55 @@ private:
      const std::vector<double>& last_val,
      const std::vector<double>& curr_val,
      const std::vector<size_t>& fired,
-     size_t max_trigger)
+     size_t max_trigger,
+     const std::vector<State>& last_state, const std::vector<Time>& last_time)
  {
    triggered.clear();
    for (size_t i = 0; i < m_root.size(); ++i) {
-     if (fired[i] < max_trigger &&
+     if (m_root[i].mode >= 0 && last_val[i] == 0.0) {
+       leave_surface(i, curr_val[i], last_state[i], last_time[i], triggered);
+       continue;
+     }
+     if ((fired[i] < max_trigger || m_root[i].mode >= 0) &&
          !std::isnan(last_val[i]) &&
          root_crossed(last_val[i], curr_val[i]) &&
-         direction_matches(last_val[i], m_root[i].direction))
+         direction_matches(last_val[i], m_root[i].direction)) {
        triggered.push_back({i, last_val[i], curr_val[i]});
+       if (m_root[i].mode >= 0) m_off_surface[i] = false;
+     }
    }
+ }
+
+ // A switch leaving its surface shows no sign change; it counts as left once
+ // |g| exceeds the root's residual and rounding. Two such flips in a row mean
+ // the solution slides along the surface.
+ void leave_surface(size_t i, double g, const State& x_lo, const Time& t_lo,
+                    std::vector<TriggeredEvent>& triggered) {
+   const auto& e = m_root[i];
+   const bool on = switch_mode(e.mode);
+   if (g == 0.0 || mode_holds(g, e.closed) == on) return;
+   if (!(std::abs(g) > 4.0 * surface_noise(e, x_lo, t_lo))) return;
+   if (m_off_surface[i])
+     throw std::runtime_error(
+         "a state switch chatters: the solution slides along its switching "
+         "surface, which is not supported");
+   m_off_surface[i] = true;
+   triggered.push_back({i, on ? 1e-300 : -1e-300, g});
+ }
+
+ // What a root reads on its surface at (x, t): its residual there plus the
+ // rounding of its terms, |g_x| |x| + |g_t| |t| a few doubles deep.
+ double surface_noise(const RootEvent<State, Time>& e, const State& x, const Time& t) {
+   double r = std::abs(scalar_value(e.func(x, t)));
+   double m = 0.0;
+   if (e.dg_dx) {
+     State gx(x.size());
+     e.dg_dx(x, t, gx);
+     for (size_t j = 0; j < x.size(); ++j)
+       m += std::abs(scalar_value(gx[j]) * scalar_value(x[j]));
+   }
+   if (e.dg_dt) m += std::abs(scalar_value(e.dg_dt(x, t)) * scalar_value(t));
+   return r + 16.0 * std::numeric_limits<double>::epsilon() * m;
  }
 
  // --------------------------------------------------------------------------
@@ -222,6 +269,9 @@ private:
    for (const auto& te : triggered)
      if (m_root[te.index].terminal) { has_terminal = true; break; }
 
+   auto at_surface = [this, &triggered](const State& xs, const auto& ts) {
+     switch_after_roots(triggered, xs, Time(ts));
+   };
    if constexpr (std::is_arithmetic_v<value_type>) {
      for (const auto& te : triggered) {
        size_t i = te.index;
@@ -229,6 +279,7 @@ private:
        apply_event_action(x_root, x_before, t_root, m_root[i]);
        fired[i]++;
      }
+     at_surface(x_root, t_root);
    } else {
      bool has_gradients = false;
      bool has_non_terminal = false;
@@ -243,13 +294,14 @@ private:
 
      if (has_non_terminal && has_gradients) {
        saltation_root_analytical_batch(x_root, x_before, t_root, m_sys,
-                                       m_root, triggered);
+                                       m_root, triggered, at_surface);
      } else if (has_non_terminal) {
        for (const auto& te : triggered) {
          if (!m_root[te.index].terminal) {
            apply_event_action(x_root, x_before, t_root, m_root[te.index]);
          }
        }
+       at_surface(x_root, t_root);
      }
 
      for (const auto& te : triggered) {
@@ -257,6 +309,45 @@ private:
      }
    }
    return has_terminal;
+ }
+
+ // The modes after a crossing: a triggered switch takes the side its root
+ // crossed to, and a reset among the events reads every other mode afresh.
+ void switch_after_roots(const std::vector<TriggeredEvent>& triggered,
+                         const State& xs, const Time& ts) {
+   if (!m_has_modes) return;
+   bool jumped = false;
+   for (const auto& te : triggered) {
+     const auto& e = m_root[te.index];
+     if (e.mode >= 0) set_switch_mode(e.mode, te.last_val < 0.0);
+     else if (!e.terminal && e.state_index >= 0) jumped = true;
+   }
+   if (!jumped) return;
+   for (size_t i = 0; i < m_root.size(); ++i) {
+     const auto& e = m_root[i];
+     if (e.mode < 0) continue;
+     bool hit = false;
+     for (const auto& te : triggered) hit = hit || te.index == i;
+     if (!hit) set_switch_mode(e.mode, mode_holds(scalar_value(e.func(xs, ts)), e.closed));
+   }
+ }
+
+ // Whether a crossing produces output rows: a switch alone does not.
+ bool observes(const std::vector<TriggeredEvent>& triggered) const {
+   for (const auto& te : triggered)
+     if (m_root[te.index].mode < 0) return true;
+   return false;
+ }
+
+ void snapshot_modes(std::vector<signed char>& out) {
+   if (m_has_modes && m_event_obs) out = switch_mode_snapshot();
+ }
+
+ // The note's view of the two snapshots, none for a model without switches.
+ void attach_modes(event_note<State>& e) const {
+   if (!m_has_modes) return;
+   e.modes_before = &m_modes_before;
+   e.modes_after = &m_modes_after;
  }
 
  // An event puts the state on a different trajectory, so the step size is
@@ -314,6 +405,7 @@ private:
      e.dt_restart = scalar_value(dt);
      e.x_before = x_before; e.x_after = &x;
      e.triggered = &triggered;
+     attach_modes(e);
      note_event(e);
    }
    // The restarted step is interpolated at t_start below.
@@ -388,7 +480,7 @@ private:
      eval_root_funcs(after, probe, t);
      size_t pick = m_root.size();
      for (size_t i = 0; i < m_root.size(); ++i)
-       if (!m_root[i].terminal && count[i] < max_trigger &&
+       if (!m_root[i].terminal && m_root[i].mode < 0 && count[i] < max_trigger &&
            !std::isnan(before[i]) && root_crossed(before[i], after[i]) &&
            direction_matches(before[i], m_root[i].direction)) { pick = i; break; }
      before = after;
@@ -398,9 +490,12 @@ private:
      apply_event_action(probe, probe, t, m_root[pick]);
    }
 
+   // The jump can move the state across a switch, so the modes are read off
+   // the state it ends on, before f is read on the far side.
    auto at_surface = [&](State& xs, const auto& ts) {
      const Time t_surface(ts);
      for (size_t i : order) apply_event_action(xs, xs, t_surface, m_root[i]);
+     if (m_has_modes) init_switch_modes(m_root, xs, t_surface);
    };
    apply_fixed_events_at_time(x, t, m_fixed, m_sys, at_surface);
    for (size_t i : order) fired[i]++;
@@ -430,6 +525,7 @@ public:
    m_t_final = scalar_value(times.back());
 
    std::vector<size_t> fired(m_root.size(), 0);
+   init_switch_modes(m_root, x, t);
    if (apply_fixed_events(x, t, fired, max_trigger)) {
      recalibrate_dt(x, t, dt);
      reset_stepper_unified(m_st, x, t, dt);
@@ -444,6 +540,7 @@ public:
    std::vector<TriggeredEvent> triggered;
    triggered.reserve(m_root.size());
    std::vector<double> curr_val(m_root.size());
+   read_mode_roots(last_val, x, t);
    prepare_switches(scalar_value(times.front()), m_t_final, false);
 
    while (it != end) {
@@ -486,31 +583,35 @@ public:
          }
 
          eval_root_funcs(curr_val, x, t);
-         check_root_triggers(triggered, last_val, curr_val, fired, max_trigger);
+         check_root_triggers(triggered, last_val, curr_val, fired, max_trigger,
+                             last_state, last_time);
 
          if (!triggered.empty()) {
-           localize_root_controlled(
-             triggered[0].index,
-             last_state[triggered[0].index], last_time[triggered[0].index],
-                                                      x, t, triggered[0].last_val, triggered[0].curr_val,
-                                                      root_tol, checker);
+           localize_cluster_controlled(triggered, last_state, last_time, x, t,
+                                       root_tol, checker);
 
+           const bool rows = observes(triggered);
            State x_before = x;
            Time t_before = t - Time(1e-15);
-           obs(x_before, t_before);
+           if (rows) obs(x_before, t_before);
 
            State x_after = x;
            if (apply_root_events(x_after, x, t, triggered, fired)) {
              obs(x_after, t); x = x_after; return steps;
            }
-           obs(x_after, t); x = x_after;
+           if (rows) obs(x_after, t);
+           x = x_after;
            recalibrate_dt(x, t, dt);
            reset_stepper_unified(m_st, x, t, dt);
 
+           // As in the dense loop: every root read where the step restarts, and
+           // those that just fired on their surface, so a root of the same step
+           // that crosses later is still found.
            for (size_t j = 0; j < m_root.size(); ++j) {
-             last_val[j] = std::numeric_limits<double>::quiet_NaN();
+             last_val[j] = scalar_value(m_root[j].func(x, t));
              last_state[j] = x; last_time[j] = t;
            }
+           for (const auto& te : triggered) last_val[te.index] = 0.0;
          } else {
            for (size_t i = 0; i < m_root.size(); ++i) {
              last_val[i] = curr_val[i]; last_state[i] = x; last_time[i] = t;
@@ -531,6 +632,7 @@ public:
          last_val[j] = std::numeric_limits<double>::quiet_NaN();
          last_state[j] = x; last_time[j] = t; fired[j] = 0;
        }
+       read_mode_roots(last_val, x, t);
      } else { obs(x, t_target); }
      ++it;
    }
@@ -556,10 +658,13 @@ public:
    m_t_final = scalar_value(times.back());
 
    std::vector<size_t> fired(m_root.size(), 0);
+   init_switch_modes(m_root, x, *it);
    {
      State x_pre;
      if (m_event_obs) x_pre = x;
+     snapshot_modes(m_modes_before);
      if (apply_fixed_events(x, *it, fired, max_trigger)) {
+       snapshot_modes(m_modes_after);
        recalibrate_dt(x, *it, dt);
        m_st.initialize(x, *it, dt);
        // No restart note: the trajectory's own start is initialised below, and
@@ -568,6 +673,7 @@ public:
        e.t = e.t_before = scalar_value(*it);
        e.x_before = &x_pre; e.x_after = &x;
        e.switched = &m_switched;
+       attach_modes(e);
        note_event(e);
      }
    }
@@ -616,19 +722,23 @@ public:
      while (!less_eq_with_sign(*it, t_end, dt)) {
        if (track_bracket) m_st.calc_state(t_end, x);
        eval_root_funcs(curr_val, x, t_end);
-       check_root_triggers(triggered, last_val, curr_val, fired, max_trigger);
+       check_root_triggers(triggered, last_val, curr_val, fired, max_trigger,
+                             last_state, last_time);
 
        if (!triggered.empty()) {
          State x_root = x_at_start; Time t_root = t_start;
-         localize_root_dense(triggered[0].index, x_root, t_root, t_end,
-                             triggered[0].last_val, triggered[0].curr_val, root_tol);
+         localize_cluster_dense(triggered, last_time, t_end, root_tol, x_root, t_root);
+         const bool rows = observes(triggered);
          State x_before = x_root;
          Time t_before = t_root - Time(1e-15);
-         obs(x_before, t_before);
+         if (rows) obs(x_before, t_before);
+         snapshot_modes(m_modes_before);
          if (apply_root_events(x_root, x_before, t_root, triggered, fired)) {
            obs(x_root, t_root); x = x_root; return steps;
          }
-         obs(x_root, t_root); x = x_root;
+         snapshot_modes(m_modes_after);
+         if (rows) obs(x_root, t_root);
+         x = x_root;
          reinit_after_event(x, t_root, dt, t_start, t_end, x_at_start,
                             last_val, last_state, last_time, triggered,
                             steps, checker, &x_before, scalar_value(t_root));
@@ -666,23 +776,26 @@ public:
        Time t_eval_s = Time(scalar_value(t_eval));
        m_st.calc_state(t_eval_s, x);
        eval_root_funcs(curr_val, x, t_eval);
-       check_root_triggers(triggered, last_val, curr_val, fired, max_trigger);
+       check_root_triggers(triggered, last_val, curr_val, fired, max_trigger,
+                             last_state, last_time);
 
        if (!triggered.empty()) {
          State x_root = last_state[triggered[0].index];
          Time t_root = last_time[triggered[0].index];
-         localize_root_dense(triggered[0].index, x_root, t_root, t_eval,
-                             triggered[0].last_val, triggered[0].curr_val, root_tol);
+         localize_cluster_dense(triggered, last_time, t_eval, root_tol, x_root, t_root);
+         const bool rows = observes(triggered);
          State x_before = x_root;
          Time t_before = t_root - Time(1e-15);
-         if (std::abs(scalar_value(t_eval) - scalar_value(t_before)) >= 1e-14)
+         if (rows && std::abs(scalar_value(t_eval) - scalar_value(t_before)) >= 1e-14)
            obs(x_before, t_before);
+         snapshot_modes(m_modes_before);
          if (apply_root_events(x_root, x_before, t_root, triggered, fired)) {
            if (std::abs(scalar_value(t_eval) - scalar_value(t_root)) >= 1e-14)
              obs(x_root, t_root);
            x = x_root; return steps;
          }
-         if (std::abs(scalar_value(t_eval) - scalar_value(t_root)) >= 1e-14)
+         snapshot_modes(m_modes_after);
+         if (rows && std::abs(scalar_value(t_eval) - scalar_value(t_root)) >= 1e-14)
            obs(x_root, t_root);
          x = x_root;
          reinit_after_event(x, t_root, dt, t_start, t_end, x_at_start,
@@ -693,7 +806,9 @@ public:
 
        State x_pre;
        if (m_event_obs) x_pre = x;
+       snapshot_modes(m_modes_before);
        bool fef = apply_fixed_events(x, t_eval, fired, max_trigger);
+       if (fef) snapshot_modes(m_modes_after);
        obs(x, t_eval); ++it;
 
        if (fef) {
@@ -705,6 +820,7 @@ public:
            e.dt_restart = scalar_value(dt);
            e.x_before = &x_pre; e.x_after = &x;
            e.switched = &m_switched;
+           attach_modes(e);
            note_event(e);
          }
          // The restarted step is interpolated at t_start below.
@@ -933,6 +1049,76 @@ private:
    }
  }
 
+ // How closely a root is localised. A switch is not an event the caller times,
+ // and its time enters the state through the jump of f, so it gets the bracket
+ // of a few doubles whatever root_tol says.
+ double root_tol_for(size_t idx, double tol, double t) const {
+   if (m_root[idx].mode < 0) return tol;
+   return std::min(tol, 1e-13 * std::max(1.0, std::abs(t)));
+ }
+
+ // The roots of `triggered` localised on the dense output, each from where its
+ // bracket opens. Those at the earliest of them, within the root tolerance,
+ // stay; a later one crosses after the restart and is found again there.
+ void localize_cluster_dense(std::vector<TriggeredEvent>& triggered,
+                             const std::vector<Time>& lo_time, Time t_hi,
+                             double tol, State& x_root, Time& t_root) {
+   std::vector<double> at(triggered.size());
+   double best = 0.0;
+   for (size_t k = 0; k < triggered.size(); ++k) {
+     const auto& te = triggered[k];
+     State xk = x_root;
+     Time tk = lo_time[te.index];
+     localize_root_dense(te.index, xk, tk, t_hi, te.last_val, te.curr_val,
+                         root_tol_for(te.index, tol, scalar_value(t_hi)));
+     at[k] = scalar_value(tk);
+     if (k > 0 && m_switch_dir * (at[k] - best) >= 0.0) continue;
+     best = at[k]; x_root = xk; t_root = tk;
+   }
+   keep_cluster(triggered, at, best, tol);
+ }
+
+ // The same for the controlled loop, which localises by stepping again from
+ // the lower end of each bracket; x and t end on the earliest root.
+ template<class Checker>
+ void localize_cluster_controlled(std::vector<TriggeredEvent>& triggered,
+                                  const std::vector<State>& lo_state,
+                                  const std::vector<Time>& lo_time,
+                                  State& x, Time& t, double tol, Checker& checker) {
+   std::vector<double> at(triggered.size());
+   double best = 0.0;
+   const State x_hi = x;
+   const Time t_hi = t;
+   for (size_t k = 0; k < triggered.size(); ++k) {
+     const auto& te = triggered[k];
+     State xl = lo_state[te.index], xh = x_hi;
+     Time tl = lo_time[te.index], th = t_hi;
+     localize_root_controlled(te.index, xl, tl, xh, th, te.last_val, te.curr_val,
+                              root_tol_for(te.index, tol, scalar_value(t_hi)),
+                              checker);
+     at[k] = scalar_value(th);
+     if (k > 0 && m_switch_dir * (at[k] - best) >= 0.0) continue;
+     best = at[k]; x = xh; t = th;
+   }
+   keep_cluster(triggered, at, best, tol);
+ }
+
+ void keep_cluster(std::vector<TriggeredEvent>& triggered,
+                   const std::vector<double>& at, double best, double tol) {
+   if (triggered.size() < 2) return;
+   std::vector<TriggeredEvent> kept;
+   for (size_t k = 0; k < triggered.size(); ++k)
+     if (std::abs(at[k] - best) <= root_tol_for(triggered[k].index, tol, best))
+       kept.push_back(triggered[k]);
+   triggered.swap(kept);
+ }
+
+ // The switch roots read afresh at (x, t), where the loop restarts.
+ void read_mode_roots(std::vector<double>& last_val, const State& x, const Time& t) {
+   for (size_t i = 0; i < m_root.size(); ++i)
+     if (m_root[i].mode >= 0) last_val[i] = scalar_value(m_root[i].func(x, t));
+ }
+
  template<class Checker>
  void localize_root_controlled(
      size_t idx, State& x_lo, Time& t_lo, State& x_hi, Time& t_hi,
@@ -956,7 +1142,7 @@ private:
      // An exact zero is the root itself. Moving the lower end onto it and
      // continuing would step past it and lose the bracket.
      if (g_mid == 0.0) { x_lo = x_mid; t_lo = t_mid; break; }
-     if (g_lo * g_mid < 0.0) { x_hi = x_mid; t_hi = t_mid; g_hi = g_mid; }
+     if ((g_lo < 0.0) != (g_mid < 0.0)) { x_hi = x_mid; t_hi = t_mid; g_hi = g_mid; }
      else { x_lo = x_mid; t_lo = t_mid; g_lo = g_mid; }
    }
    x_hi = x_lo; t_hi = t_lo;
@@ -978,7 +1164,7 @@ private:
      // An exact zero is the root itself. Moving the lower end onto it and
      // continuing would step past it and lose the bracket.
      if (g_mid == 0.0) { t_lo = t_mid; break; }
-     if (g_lo * g_mid < 0.0) { t_hi = t_mid; g_hi = g_mid; }
+     if ((g_lo < 0.0) != (g_mid < 0.0)) { t_hi = t_mid; g_hi = g_mid; }
      else { t_lo = t_mid; g_lo = g_mid; x_root = x_mid; t_root = t_mid; }
    }
    m_st.calc_state(t_lo, x_root); t_root = t_lo;
@@ -993,6 +1179,12 @@ private:
  EventObserver m_event_obs;
  // What the last fixed jump switched on, read by the event note.
  std::vector<size_t> m_switched;
+ // Whether any root is a state switch, and the modes around the last jump.
+ bool m_has_modes = false;
+ std::vector<signed char> m_modes_before, m_modes_after;
+ // Per switch: whether its mode was last set on leaving the surface, see
+ // leave_surface().
+ std::vector<bool> m_off_surface;
 
  // A bridge over a jump in t whose restart is still due, and where it began.
  bool   m_bridge_pending = false;

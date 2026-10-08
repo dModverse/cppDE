@@ -606,7 +606,8 @@ def model_slots(n_states, params_base=None, style="cpp", params="params",
     State i -> x[i], initial value i -> params[i], parameter k ->
     params[params_base + k], forcing j -> (*F[j])(t), its rate ->
     F[j]->derivative(t), VEC (name, i) -> vectors.get(name, name)[i],
-    map row r -> _lin[r]. An index may be index text. A LOOPVAR leaf
+    map row r -> _lin[r], mode k -> cppde::switch_mode(k). An index may be
+    index text. A LOOPVAR leaf
     (LOOPVAR, kind, ...) is the leaf (kind, ...) with index text, or with
     kind 'ref' the text itself.
     """
@@ -638,6 +639,8 @@ def model_slots(n_states, params_base=None, style="cpp", params="params",
             return "%s[%s]->derivative(%s)" % (forcing, at[1], time)
         if k == cg.LINROW:
             return "_lin[%s]" % at[1]
+        if k == cg.MODE:
+            return ("R.switch_mode(%s)" if py else "cppde::switch_mode(%s)") % at[1]
         if k == cg.VEC:
             name = vectors.get(at[1], at[1])
             if len(at) < 3 or at[2] is None:

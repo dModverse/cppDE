@@ -2,7 +2,7 @@
 
 Public API: generate_ode_cpp, generate_event_code, generate_rootfunc_code,
 generate_forcing_init_code, fixed_event_time_exprs, switch_time_exprs,
-state_switch_states, decide_sparse and analyze_klu_settings. Expressions and derivatives
+state_switch_count, decide_sparse and analyze_klu_settings. Expressions and derivatives
 come from cppde_graph via cppde_model.
 """
 
@@ -166,18 +166,19 @@ def switch_time_exprs(rhs_dict, params_list, forcings_list=None):
     return cppde_model.switch_times(model)
 
 
-def state_switch_states(rhs_dict, params_list, forcings_list=None):
-    """States whose right-hand side switches on a condition of a state, see
-    cppde_model.state_switches."""
+def state_switch_count(rhs_dict, params_list, forcings_list=None):
+    """Number of modes of the switches on a state, see
+    cppde_model.hold_switches."""
     model = cppde_model.model_for(rhs_dict, params_list, forcings_list)
-    return cppde_model.state_switches(model)
+    return cppde_model.n_switches(model)
 
 
 def generate_event_code(events_df, states_list, params_list, n_states,
                         num_type="double", forcings_list=None, rhs_dict=None,
                         ad_level=0, arena=False, emit_adjoint=False):
     """C++ lines filling `fixed_events` and `root_events`, or with
-    `emit_adjoint` the struct `event_adjoint_terms`.
+    `emit_adjoint` the struct `event_adjoint_terms`. The root events of the
+    state switches of `rhs_dict` follow those of the table.
 
     Args:
         events_df: table with var, value, time or root, method, terminal,
@@ -190,12 +191,14 @@ def generate_event_code(events_df, states_list, params_list, n_states,
     """
     scalar = cppde_model.Scalar(num_type, ad_level, arena)
     rows = cppde_model.event_rows(events_df)
-    if not rows:
+    model = None
+    if rows or rhs_dict is not None:
+        model = _event_model(states_list, params_list, forcings_list, rhs_dict)
+    if not rows and not (model and model.switches):
         if emit_adjoint:
             return cppde_model.empty_event_adjoint_terms(
                 n_states, len(cppde_model.as_list(params_list)), scalar.name)
         return []
-    model = _event_model(states_list, params_list, forcings_list, rhs_dict)
     code = cppde_model.EventCode(model, scalar, has_rhs=rhs_dict is not None)
     return code.adjoint(rows) if emit_adjoint else code.forward(rows)
 

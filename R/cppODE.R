@@ -28,9 +28,17 @@
 #' the parameters determine. The solver stops in front of each such time
 #' inside the window and restarts past it, without an output row, so a pulse
 #' such as `piecewise(1, time > ts && time <= t2, 0)` is not stepped over.
-#' A condition that reads a state is not located: the solve is right, the
-#' sensitivities only where the right-hand side is continuous across the switch,
-#' and the constructor warns.
+#'
+#' A comparison `<`, `<=`, `>`, `>=` whose sides differ by an amount that reads
+#' a state, in `piecewise()` or a logical operator, and `Heaviside()` or
+#' `sign()` of such an amount, switch the right-hand side where that amount
+#' crosses zero. The solver locates the crossing as a root, to a few doubles
+#' whatever `roottol` says, and continues on the other branch; every method
+#' and derivative mode takes the jump of f there, second order included. A
+#' switch adds no output row and is not limited by `maxroot`. Each branch is
+#' evaluated a step beyond the switch, so it has to be defined there. A
+#' solution that slides along a switching surface, both branches pointing at
+#' it, stops with an error. `==` and `!=` are evaluated as written.
 #'
 #' @param rhs Named character vector of ODE right-hand sides. Names are
 #'   the state variables.
@@ -299,15 +307,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     params_list = params, forcings_list = forcings)))
   n_switch <- length(switch_exprs)
 
-  # A switch on a state is not located, so derivatives across a jump of f miss it
-  sw_states <- as.character(unlist(codegen$state_switch_states(
+  # Modes of the switches on a state, which the solve locates as roots. Their
+  # root events come with the event code.
+  n_modes <- as.integer(codegen$state_switch_count(
     rhs_dict = as.list(setNames(rhs, variables)),
-    params_list = params, forcings_list = forcings)))
-  if (length(sw_states) && (deriv || deriv2 || is_reverse))
-    warning("The right-hand side of ", paste(sw_states, collapse = ", "),
-            " switches on a condition of a state. The solver does not locate ",
-            "the switch; derivatives are correct only where f is continuous ",
-            "across it.", call. = FALSE)
+    params_list = params, forcings_list = forcings))
   switch_code <- if (n_switch > 0L) c(
     "static void rhs_switch_times(const double* params, double* out) {",
     sprintf("  out[%d] = %s;", seq_len(n_switch) - 1L, switch_exprs),
@@ -326,7 +330,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   # --- Generate event code if needed ---
   event_code <- event_adj_code <- ""
-  if (!is.null(events)) {
+  if (!is.null(events) || n_modes > 0L) {
     if (verbose) message("Generating event code...")
 
     event_lines <- codegen$generate_event_code(
@@ -346,9 +350,10 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     ## Fixed-event times as plain-double expressions over the flat [states, params]
     ## vector, so the batch entry can size its output exactly. NULL means it cannot:
     ## a root event, or a time built from a forcing.
-    event_time_exprs <- codegen$fixed_event_time_exprs(
-      events_df = events, states_list = variables, params_list = params,
-      n_states = n_variables, forcings_list = forcings)
+    if (!is.null(events))
+      event_time_exprs <- codegen$fixed_event_time_exprs(
+        events_df = events, states_list = variables, params_list = params,
+        n_states = n_variables, forcings_list = forcings)
   }
 
   # The terms the event-jump adjoint needs. Emitted for every reverse model, since
@@ -831,6 +836,15 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     externC <- c(externC,
                  if (is_reverse) "  build_events(full_params, F, fixed_events, root_events);"
                  else event_code)
+  }
+  # The modes of the state switches live as long as the solve and its sweep.
+  if (n_modes > 0L) {
+    externC <- c(externC,
+                 "",
+                 "  // Modes of the state switches, read by every function of the model.",
+                 sprintf("  signed char _switch_mode[%d] = {0};", n_modes),
+                 sprintf("  cppde::switch_mode_scope _cppde_mode_scope(_switch_mode, %d);", n_modes),
+                 "  cppde::detail::init_switch_modes(root_events, x, times.front());")
   }
 
   # Note: rootfunc_code is inserted later, after sys is defined

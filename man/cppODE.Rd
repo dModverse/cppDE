@@ -135,9 +135,17 @@ parameters alone and affine in time switches the right-hand side at a time
 the parameters determine. The solver stops in front of each such time
 inside the window and restarts past it, without an output row, so a pulse
 such as \code{piecewise(1, time > ts && time <= t2, 0)} is not stepped over.
-A condition that reads a state is not located: the solve is right, the
-sensitivities only where the right-hand side is continuous across the switch,
-and the constructor warns.
+
+A comparison \code{<}, \code{<=}, \code{>}, \code{>=} whose sides differ by an amount that reads
+a state, in \code{piecewise()} or a logical operator, and \code{Heaviside()} or
+\code{sign()} of such an amount, switch the right-hand side where that amount
+crosses zero. The solver locates the crossing as a root, to a few doubles
+whatever \code{roottol} says, and continues on the other branch; every method
+and derivative mode takes the jump of f there, second order included. A
+switch adds no output row and is not limited by \code{maxroot}. Each branch is
+evaluated a step beyond the switch, so it has to be defined there. A
+solution that slides along a switching surface, both branches pointing at
+it, stops with an error. \code{==} and \code{!=} are evaluated as written.
 }
 \examples{
 \donttest{

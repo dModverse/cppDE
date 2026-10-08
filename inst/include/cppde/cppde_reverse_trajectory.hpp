@@ -64,6 +64,8 @@ struct event_record {
   // Root conditions a fixed jump switched on, in the order the engine applied
   // them on the event surface. Empty unless a model has both kinds.
   std::vector<std::size_t> switched;
+  // The modes of the state switches on both sides; empty where none changed.
+  std::vector<signed char> modes_before, modes_after;
 };
 
 // ============================================================================
@@ -95,6 +97,7 @@ public:
 
   void clear() {
     m_steps.clear(); m_obs.clear(); m_events.clear(); m_n = 0;
+    m_modes.clear(); m_n_modes = 0;
   }
 
   void reserve(std::size_t n_steps, std::size_t n_obs) {
@@ -109,6 +112,24 @@ public:
     auto _tp = m_prof.timer(cppde::prof_cat::rev_checkpoint);
     m_steps.emplace_back();
     m_steps.back().capture(st, x, t, dt);
+  }
+
+  // The modes of the state switches the step just accepted ran under. Nothing
+  // for a model without switches.
+  void note_modes() {
+    const switch_modes& sw = switch_mode_sink();
+    if (sw.n == 0) return;
+    m_n_modes = sw.n;
+    m_modes.insert(m_modes.end(), sw.m, sw.m + sw.n);
+  }
+
+  // Sets the modes step k ran under, which every evaluation of f in its sweep
+  // reads.
+  void use_step_modes(std::size_t k) const {
+    if (m_n_modes == 0 || (k + 1) * m_n_modes > m_modes.size()) return;
+    const switch_modes& sw = switch_mode_sink();
+    for (std::size_t i = 0; i < m_n_modes && i < sw.n; ++i)
+      sw.m[i] = m_modes[k * m_n_modes + i];
   }
 
   // Where the store's own time went. Empty and free unless CPPDE_PROFILE.
@@ -183,6 +204,8 @@ private:
   std::size_t                  m_open_event = event_record<T>::npos;
   double                       m_open_t     = 0.0;
   std::size_t                  m_n          = 0;   // from observe(t, n)
+  std::vector<signed char>     m_modes;           // per step, see note_modes()
+  std::size_t                  m_n_modes    = 0;
   cppde::profiler              m_prof;
 };
 
@@ -228,6 +251,7 @@ public:
       m_pending.eta    = static_cast<double>(ctl.stepper().hscale()) / m_pending.dt;
       hand_over_history();
       m_store.push(m_pending);
+      m_store.note_modes();
       return;
     } else {
       // dt_old() and not current_time() - previous_time(): the controller
@@ -238,6 +262,7 @@ public:
       m_store.capture(ctl.stepper(), m_st.previous_state(),
                       ad_traits::scalar_value(m_st.previous_time()),
                       ad_traits::scalar_value(ctl.dt_old()));
+      m_store.note_modes();
     }
   }
 
@@ -281,6 +306,8 @@ public:
     if (e.x_after)  copy_state(*e.x_after,  r.x_after);
     if (e.triggered) r.triggered = *e.triggered;
     if (e.switched)  r.switched  = *e.switched;
+    if (e.modes_before) r.modes_before = *e.modes_before;
+    if (e.modes_after)  r.modes_after  = *e.modes_after;
     m_store.push_event(r);
   }
 

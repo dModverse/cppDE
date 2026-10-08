@@ -1005,6 +1005,74 @@ time-triggered event at that time.
 Terminal conditions are excluded: they stop the integration instead of
 resetting the state.
 
+### State switches
+
+A comparison in the right-hand side whose sides differ by an amount
+$g(x, t)$ that reads a state, and $\mathrm{Heaviside}(g)$ or
+$\mathrm{sign}(g)$, switch $f$ on the set where $g$ changes sign. Read
+as written, such a condition makes $f$ discontinuous in $x$: a step
+across the switch fails the error test until it is short enough, and
+the sensitivities miss the dependence of the switching time on
+$\theta$ altogether.
+
+The code generator therefore holds each such condition as a *mode*
+$m \in \{0, 1\}$, which holds where $g > 0$ (or $g \ge 0$ for a
+non-strict comparison); $a < b$ becomes the mode of $g = b - a$. The
+right-hand side, its Jacobian and every derivative code read the mode
+in place of the comparison, so between two switches $f(x, t; m)$ is as
+smooth as its branches. $\mathrm{Heaviside}(g)$ and $\mathrm{sign}(g)$
+take two modes, on $g$ and on $-g$, so that they keep their value at
+$g = 0$. Equality and inequality are evaluated as written, since they
+switch on a set of measure zero.
+
+A switch is then a root event with $g$ as its condition and no reset.
+The step that crosses $g = 0$ integrates the branch it started on, which
+is smooth there, and the crossing is localised on the dense output of
+that step as in the root-event case, to a few doubles in $t$ rather than
+to the root tolerance, since the switching time enters the state through
+the jump of $f$. The mode is set on the event surface, between the
+forward and the backward Heun shift, so the transport
+\eqref{eq:fixed-heun} reads $f^{-} = f(\,\cdot\,; m^{-})$ on the near side
+and $f^{+} = f(\,\cdot\,; m^{+})$ on the far side, and the reset is the
+identity. To first order this is the saltation matrix of Section
+\ref{sec:saltation} with $\partial g/\partial x = I$,
+\[
+  S_\theta^{+} = S_\theta^{-} + (f^{-} - f^{+})\,
+    \frac{\partial t^{*}}{\partial \theta},
+  \qquad
+  \frac{\partial t^{*}}{\partial \theta}
+    = -\frac{\nabla_x g \cdot S_\theta^{-} + \partial g/\partial \theta}
+            {\nabla_x g \cdot f^{-} + \partial g/\partial t},
+\]
+and the second-order components follow from the same dual arithmetic,
+with the $G_{tt}$ correction \eqref{eq:dt-star-second} taken along
+$f^{-}$. Where $f$ is continuous across the switch, a kink, the
+first-order jump vanishes and the transport still supplies the
+second-order term, which comes from the jump of $\partial f/\partial x$
+over the shifts.
+
+The modes are read off the state at the start of the solve and after
+every reset, since a jump can move the state across a switch; a switch
+crossed by its root takes the side its root crossed to. A switch adds
+no output row and is not limited by \texttt{maxroot}. A root that is
+zero at the start of a step sits on its surface and shows no sign
+change when the state leaves it to the side its mode does not describe;
+such a departure is taken as a crossing once $|g|$ exceeds its residual
+and rounding there. When that happens twice in a row the solution slides
+along the surface, both branches pointing at it, and the solve stops
+with an error: a sliding motion is not a solution of either branch.
+
+The reverse mode keeps the modes each step ran under with its
+checkpoint, sets them before the step's adjoint, and transposes the
+switch's sandwich as that of a root event (Section
+\ref{sec:event-adjoint}), with $f^{-}$ and its derivatives read in the
+old mode and $f^{+}$ in the new one. \texttt{cvode()} hands $g$ to
+CVODES' root finding, sets the mode at the root it returns, adds
+$(f^{-} - f^{+})\,\partial t^{*}/\partial \theta$ to the sensitivities
+before \texttt{CVodeSensReInit()}, and under adjoint sensitivity
+analysis starts a new stretch there, whose backward problem reads the
+modes the stretch ran under.
+
 ### Connection to the saltation matrix \label{sec:saltation}
 
 The classical \emph{saltation matrix} adds to the reset Jacobian

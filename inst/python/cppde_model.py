@@ -29,6 +29,54 @@ def as_list(x):
     return list(x)
 
 
+def hold_switches(g, roots):
+    """`roots` with every switch that reads a state read from a mode.
+
+    A comparison <, <=, >, >= whose sides differ by a state-dependent amount
+    becomes MODE leaf k, which holds where its argument g is positive (or
+    zero, for <= and >=). Heaviside(g) and sign(g) take two modes, on g and
+    on -g, so that they keep their value at g = 0. == and != stay as they
+    are: they switch on a set of measure zero.
+
+    Returns:
+        (new roots, [(g, closed)] per mode).
+    """
+    modes = {}
+    out = []
+
+    def mode(d, closed):
+        key = (d, closed)
+        if key not in modes:
+            modes[key] = len(out)
+            out.append(key)
+        return g.mode(modes[key])
+
+    mapping = {}
+    for n in g.topo(roots):
+        o = g.op[n]
+        if o == cg.CMP and g.attr[n] in ("<", "<=", ">", ">="):
+            a, b = g.args[n]
+            if not (g.flags[a] | g.flags[b]) & cg.F_STATE:
+                continue
+            op = g.attr[n]
+            d = g.sub(a, b) if op in (">", ">=") else g.sub(b, a)
+            if not g.flags[d] & cg.F_STATE:
+                continue
+            mapping[n] = mode(d, op in ("<=", ">="))
+        elif o == cg.CALL and g.attr[n] in ("Heaviside", "sign"):
+            d = g.args[n][0]
+            if not g.flags[d] & cg.F_STATE:
+                continue
+            up, down = mode(d, False), mode(g.neg(d), False)
+            if g.attr[n] == "Heaviside":
+                mapping[n] = g.select(up, g.ONE, g.select(down, g.ZERO, g.HALF))
+            else:
+                mapping[n] = g.select(up, g.ONE, g.select(down, g.MINUS_ONE, g.ZERO))
+    if not mapping:
+        return list(roots), []
+    return g.substitute(roots, mapping), out
+
+
 class OdeModel:
     """Parsed right-hand side of an ODE model.
 
@@ -40,7 +88,10 @@ class OdeModel:
 
     Attributes:
         g: cppde_graph.Graph; ad: cppde_graph.AD.
-        rhs_plain: root node per state as parsed.
+        rhs_plain: root node per state as parsed, with every switch on a state
+            read from its mode (see hold_switches).
+        switches: (g, closed) per mode k: mode k holds where g > 0, or g >= 0
+            when closed.
         rhs: the same with long linear sums as map rows.
         linmap: cppde_struct.LinMap or None; nlin its number of rows.
     """
@@ -66,7 +117,8 @@ class OdeModel:
         self.sym = sym
         self.parser = cg.Parser(g, sym)
         self.ad = cg.AD(g)
-        self.rhs_plain = [self.parser.parse(str(rhs[s]), label=s) for s in self.states]
+        parsed = [self.parser.parse(str(rhs[s]), label=s) for s in self.states]
+        self.rhs_plain, self.switches = hold_switches(g, parsed)
         self.rhs, self.linmap, self.lin_expand = cs.linear_rows(
             g, self.rhs_plain, self.n, cs.linear_min_terms(linear))
         self.nlin = len(self.linmap) if self.linmap is not None else 0
@@ -339,7 +391,7 @@ class OdeModel:
 # ---------------------------------------------------------------------------
 
 _CLOCKED = (cg.F_STATE | cg.F_TIME | cg.F_FORCING | cg.F_FRATE | cg.F_VEC
-            | cg.F_LINROW)
+            | cg.F_LINROW | cg.F_MODE)
 
 
 _AXPY_VEC = {"cpp": "cppde::axpy_row_dense(linmap_, {0}, %s, out);",
@@ -1080,7 +1132,7 @@ class EventCode:
     # -- C++ ---------------------------------------------------------------
 
     def dg_dx(self, g_node, i, indent="    "):
-        lines = ["%s// dg/dx for root event %d" % (indent, i),
+        lines = ["%s// dg/dx for root event %s" % (indent, i),
                  "%s[full_params, &F](const %s& x, const %s& t, %s& out) {"
                  % (indent, self.V, self.T, self.V),
                  indent + "  (void)x; (void)t;"]
@@ -1089,14 +1141,14 @@ class EventCode:
         return lines
 
     def dg_dt(self, g_node, i, indent="    "):
-        lines = ["%s// dg/dt for root event %d" % (indent, i)]
+        lines = ["%s// dg/dt for root event %s" % (indent, i)]
         return lines + self.value_lambda(self.dg_dt_node(g_node), "dg_dt", indent)
 
-    def g_dot_dot(self, g_node, i, indent="    "):
+    def g_dot_dot(self, g_node, i, indent="    ", tail=""):
         m = self.m
         g = m.g
         if m.forcings or not self.has_rhs:
-            return [indent + "nullptr  // g_dot_dot (FD fallback)"]
+            return [indent + "nullptr" + tail + "  // g_dot_dot (FD fallback)"]
         gtt = self.gtt_node(g_node)
         lvl = self.s.level
         peel = (lambda e: e) if lvl == 0 else (
@@ -1116,11 +1168,14 @@ class EventCode:
                 name, src = "_gi%d" % at[1], "full_params[%d]" % at[1]
             elif k == cg.TIME:
                 name, src = "_gt", "t"
+            elif k == cg.MODE:
+                local[at] = "cppde::switch_mode(%s)" % at[1]
+                continue
             else:
                 raise em.EmitError("G_tt reads an unsupported leaf")
             local[at] = name
             decl.append((name, src))
-        lines = ["%s// G_tt for root event %d" % (indent, i),
+        lines = ["%s// G_tt for root event %s" % (indent, i),
                  "%s[full_params, &F](const %s& x, const %s& t) -> double {"
                  % (indent, self.V, self.T),
                  indent + "  (void)x; (void)t;"]
@@ -1129,7 +1184,7 @@ class EventCode:
         lines += self.body([(("ret",), gtt, "=")], indent + "  ", prefix="_g",
                            slot=lambda at: local[at], style="double",
                            scalar="double")
-        lines.append(indent + "}  // g_dot_dot")
+        lines.append(indent + "}" + tail + "  // g_dot_dot")
         return lines
 
     # -- forward event code ----------------------------------------------
@@ -1182,6 +1237,32 @@ class EventCode:
                 out += ["  });", ""]
             else:
                 raise ValueError("Event %d: must specify either 'time' or 'root'" % i)
+        return out + self.switch_events()
+
+    def switch_events(self):
+        """Root events of the state switches, after those of the table: no
+        reset, no limit on how often they fire, and the mode they set."""
+        out = []
+        for k, (gnode, closed) in enumerate(self.m.switches):
+            i = "switch %d" % k
+            text = _flat(self.inline(gnode, style="double"))
+            if len(text) > 60:
+                text = text[:57] + "..."
+            out += ["  // State switch %d: mode %d holds where %s %s 0"
+                    % (k, k, text, ">=" if closed else ">"),
+                    "  root_events.push_back(RootEvent<%s, %s>{" % (self.V, self.T)]
+            out += self.value_lambda(gnode, "func (root condition g)")
+            out += ["    -1,  // state_index (none)",
+                    "    nullptr,  // value_func",
+                    "    EventMethod::Replace,  // method",
+                    "    false,  // terminal",
+                    "    0,  // direction"]
+            out += self.dg_dx(gnode, i)
+            out += self.dg_dt(gnode, i)
+            out += self.g_dot_dot(gnode, i, tail=",")
+            out += ["    %d,  // mode" % k,
+                    "    %s  // closed" % ("true" if closed else "false"),
+                    "  });", ""]
         return out
 
     # -- event_adjoint_terms ---------------------------------------------
@@ -1223,6 +1304,13 @@ class EventCode:
                 rgdp.append((nr, self._case_p(gdot)))
                 rht.append((nr, self._case_t(h)))
                 nr += 1
+        # The switches follow the table's root events, as in forward().
+        for gnode, _ in m.switches:
+            gdot = self.gdot_node(gnode)
+            rgp.append((nr, self._case_p(gnode)))
+            rgdx.append((nr, self._case_x(gdot)))
+            rgdp.append((nr, self._case_p(gdot)))
+            nr += 1
         xargs = "int ev, const %s& x, const %s& t, %s& out" % (V, T, V)
         pargs = "int ev, const %s& x, const %s& t, const %s& sc, %s* out" % (V, T, T, T)
         xhead = ["    (void)x; (void)t;", "    out.assign(%du, %s(0.0));" % (m.n, T)]
@@ -1374,25 +1462,10 @@ def switch_times(model):
     return out
 
 
-def state_switches(model):
-    """Names of the states whose right-hand side switches on a condition that
-    reads a state: a comparison of piecewise or a logical operator, or the
-    argument of Heaviside or sign. The solver does not locate such a switch."""
-    g = model.g
-    out = []
-    for s, root in zip(model.states, model.rhs_plain):
-        for n in g.topo([root]):
-            o = g.op[n]
-            if o == cg.CMP and g.attr[n] in ("<", "<=", ">", ">="):
-                d = g.sub(*g.args[n])
-            elif o == cg.CALL and g.attr[n] in ("Heaviside", "sign"):
-                d = g.args[n][0]
-            else:
-                continue
-            if g.flags[d] & cg.F_STATE:
-                out.append(s)
-                break
-    return out
+def n_switches(model):
+    """Number of modes the state switches of the right-hand side hold, see
+    hold_switches."""
+    return len(model.switches)
 
 
 _MODELS = {}
