@@ -1,3 +1,10 @@
+# cppDE 0.11.3
+
+* A forcing holds the value of its first and last point outside them, where
+  it was 0 before, and a single point gives a constant. Both apply to
+  `cppODE()` and `cvode()` models.
+* New `forcingValues()` evaluates forcings as the models see them.
+
 # cppDE 0.11.2
 
 * `ptc()` builds with clang and libc++ (macOS): `R_NO_REMAP` before the R

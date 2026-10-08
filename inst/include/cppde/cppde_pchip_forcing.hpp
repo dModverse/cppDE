@@ -6,7 +6,7 @@
  * - Fritsch-Carlson monotonicity-preserving slope computation
  * - C1 continuous interpolation with analytical derivatives
  * - Support for forward-mode AD types (cppde::dual / cppde::dual2nd)
- * - Zero extrapolation outside defined time range (safe default)
+ * - Constant extrapolation by the values of the first and last knot
  *
  * Copyright (C) 2026 Simon Beyer
  */
@@ -27,9 +27,8 @@ namespace cppde {
  * Computes cubic spline coefficients from raw (time, value) data using the
  * Fritsch-Carlson method, which guarantees monotonicity preservation.
  *
- * Behavior outside the defined time range:
- * - Returns zero for times before the first knot or after the last knot
- * - No extrapolation (safe default to prevent numerical blow-up)
+ * Outside the knots the forcing holds the value of the nearest knot, with
+ * zero time derivative. A single knot gives a constant.
  *
  * Template parameter T is the numeric type (double, AD, or AD2).
  */
@@ -37,6 +36,8 @@ template<typename T>
 struct PchipForcing {
   std::vector<double> t;           // Knot times
   std::vector<double> a, b, c, d;  // Cubic coefficients per interval
+  double y_first = 0.0;            // Value at the first knot
+  double y_last = 0.0;             // Value at the last knot
 
   PchipForcing() = default;
 
@@ -56,15 +57,15 @@ struct PchipForcing {
    * @param values Vector of forcing values corresponding to times
    *
    * @throws std::invalid_argument if:
-   *   - fewer than 2 data points
+   *   - no data point
    *   - times and values have different lengths
    *   - duplicate time points exist
    */
   void initialize(const std::vector<double>& times,
                   const std::vector<double>& values) {
     size_t n = times.size();
-    if (n < 2) {
-      throw std::invalid_argument("PchipForcing: need at least 2 data points");
+    if (n < 1) {
+      throw std::invalid_argument("PchipForcing: need at least 1 data point");
     }
     if (values.size() != n) {
       throw std::invalid_argument("PchipForcing: times and values must have same length");
@@ -89,6 +90,11 @@ struct PchipForcing {
         throw std::invalid_argument("PchipForcing: duplicate time points not allowed");
       }
     }
+
+    y_first = y.front();
+    y_last = y.back();
+    a.clear(); b.clear(); c.clear(); d.clear();
+    if (n == 1) return;
 
     size_t n_intervals = n - 1;
 
@@ -155,19 +161,17 @@ struct PchipForcing {
 
   /**
    * Evaluate forcing at given time.
-   * Returns zero outside the defined time range (no extrapolation).
-   * Uses Horner's method for numerical stability within range.
+   * Holds the value of the nearest knot outside [t.front(), t.back()].
+   * Uses Horner's method within range.
    *
    * @param time Time at which to evaluate the forcing
-   * @return Forcing value (zero if outside [t.front(), t.back()])
+   * @return Forcing value
    */
   T operator()(const T& time) const {
     double td = extract_double(time);
 
-    // Return zero outside defined range (safe default)
-    if (td < t.front() || td > t.back()) {
-      return T(0.0);
-    }
+    if (td <= t.front()) return T(y_first);
+    if (td >= t.back()) return T(y_last);
 
     int i = find_interval(td);
     T dt = time - t[i];
@@ -177,20 +181,17 @@ struct PchipForcing {
 
   /**
    * Time derivative of forcing (for Jacobian df/dt computation).
-   * Returns zero outside the defined time range.
+   * Zero outside [t.front(), t.back()], where the forcing is constant.
    * p(t) = a + b*dt + c*dt^2 + d*dt^3
    * p'(t) = b + 2*c*dt + 3*d*dt^2
    *
    * @param time Time at which to evaluate the derivative
-   * @return Derivative value (zero if outside [t.front(), t.back()])
+   * @return Derivative value
    */
   T derivative(const T& time) const {
     double td = extract_double(time);
 
-    // Return zero outside defined range (safe default)
-    if (td < t.front() || td > t.back()) {
-      return T(0.0);
-    }
+    if (td < t.front() || td > t.back() || t.size() < 2) return T(0.0);
 
     int i = find_interval(td);
     T dt = time - t[i];
@@ -234,7 +235,7 @@ private:
    * Find interval index i such that t[i] <= td < t[i+1].
    * Uses binary search, returns clamped index for boundary cases.
    *
-   * @pre td is within [t.front(), t.back()] (caller must check)
+   * @pre td is within [t.front(), t.back()] and there are at least 2 knots
    */
   int find_interval(double td) const {
     auto it = std::upper_bound(t.begin(), t.end(), td);

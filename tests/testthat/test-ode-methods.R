@@ -437,3 +437,23 @@ test_that("a forcing that multiplies a state reaches the Jacobian", {
     expect_equal(unname(res$tangent[, , k]), unname(fd[, , k]), tolerance = 1e-3,
                  info = names(pars)[k])
 })
+
+test_that("a forcing holds its end values outside its points", {
+  u <- data.frame(time = c(0, 0.5, 1, 2), value = c(0.4, 1.1, 0.7, 1.5))
+  v <- forcingValues(c(-1, 0, 0.5, 2, 3), list(u = u))
+  expect_equal(unname(v[, "u"]), c(0.4, 0.4, 1.1, 1.5, 1.5))
+  expect_equal(unname(forcingValues(c(-1, 5), list(c = data.frame(time = 1, value = 2)))[, 1]),
+               c(2, 2))
+})
+
+test_that("a forcing of one point is the constant of two", {
+  tt <- seq(0, 3, 0.5)
+  pars <- c(A = 1, B = 0, k1 = 0.8, k2 = 0.3)
+  one <- solveODE(forced, tt, pars, forcings = list(u = data.frame(time = 1, value = 0.7)),
+                  abstol = 1e-10, reltol = 1e-10)
+  two <- solveODE(forced, tt, pars,
+                  forcings = list(u = data.frame(time = c(0, 3), value = 0.7)),
+                  abstol = 1e-10, reltol = 1e-10)
+  expect_equal(one$variable, two$variable, tolerance = 1e-8)
+  expect_equal(one$tangent, two$tangent, tolerance = 1e-8)
+})

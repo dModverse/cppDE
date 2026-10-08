@@ -41,10 +41,12 @@ extern "C" SEXP cppde_blas_info(void) {
 }
 
 extern "C" SEXP cppde_ptc(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern "C" SEXP cppde_forcing_values(SEXP, SEXP, SEXP);
 
 static const R_CallMethodDef callMethods[] = {
   {"cppde_blas_info", (DL_FUNC) &cppde_blas_info, 0},
   {"cppde_ptc",       (DL_FUNC) &cppde_ptc,       9},
+  {"cppde_forcing_values", (DL_FUNC) &cppde_forcing_values, 3},
   {NULL, NULL, 0}
 };
 

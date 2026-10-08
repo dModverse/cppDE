@@ -77,7 +77,10 @@ Default \code{NULL} (all parameters active).}
 \item{forcings}{Optional named list of forcing-function data. Each
 element must be a \code{data.frame} (or coercible object) with columns
 \code{time} and \code{value}, or a two-column matrix. Names must match
-\code{attr(model, "forcings")}. Default \code{NULL}.}
+\code{attr(model, "forcings")}. Default \code{NULL}. A forcing is the monotone
+cubic Hermite interpolant (PCHIP) of its points and holds the value of
+the first and the last point outside them; a single point gives a
+constant.}
 
 \item{abstol}{Absolute error tolerance. Default \code{1e-6}.}
 

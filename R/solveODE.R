@@ -40,6 +40,22 @@
   list(time = tt, lambda = lam, breaks = br, gradtol = g, floor = f)
 }
 
+# The points of one forcing as times and values, from a data.frame with
+# columns time and value or a two-column matrix.
+.parseForcing <- function(f, nm) {
+  if (is.matrix(f)) f <- data.frame(time = f[,1L], value = f[,2L])
+  else if (!is.data.frame(f)) f <- as.data.frame(f)
+  if (!all(c("time","value") %in% names(f)))
+    stop("Forcing '", nm, "' needs columns 'time' and 'value'")
+  ft <- as.double(f$time); fv <- as.double(f$value)
+  if (length(ft) < 1L) stop("Forcing '", nm, "' needs a time point")
+  if (length(ft) != length(fv)) stop("Forcing '", nm, "': length mismatch")
+  if (anyNA(ft) || any(!is.finite(ft))) stop("Forcing '", nm, "': non-finite time")
+  if (anyNA(fv) || any(!is.finite(fv))) stop("Forcing '", nm, "': non-finite value")
+  if (anyDuplicated(ft)) stop("Forcing '", nm, "': duplicate times")
+  list(times = ft, values = fv)
+}
+
 # Marshal one condition into the 15 positional .Call arguments.  Shared by
 # solveODE() and solveODEBatch() so both see identical validation.
 .odeCallArgs <- function(model, times, parms,
@@ -442,21 +458,6 @@
   if (n_forcings && is.null(forcings))
     stop("Model requires forcings: ", paste(forcing_names, collapse = ", "))
 
-  parse_forcing <- function(nm) {
-    f <- forcings[[nm]]
-    if (is.matrix(f)) f <- data.frame(time = f[,1L], value = f[,2L])
-    else if (!is.data.frame(f)) f <- as.data.frame(f)
-    if (!all(c("time","value") %in% names(f)))
-      stop("Forcing '", nm, "' needs columns 'time' and 'value'")
-    ft <- as.double(f$time); fv <- as.double(f$value)
-    if (length(ft) < 2L) stop("Forcing '", nm, "' needs >= 2 time points")
-    if (length(ft) != length(fv)) stop("Forcing '", nm, "': length mismatch")
-    if (anyNA(ft) || any(!is.finite(ft))) stop("Forcing '", nm, "': non-finite time")
-    if (anyNA(fv) || any(!is.finite(fv))) stop("Forcing '", nm, "': non-finite value")
-    if (anyDuplicated(ft)) stop("Forcing '", nm, "': duplicate times")
-    list(times = ft, values = fv)
-  }
-
   if (!n_forcings) {
     forcing_times_list <- forcing_values_list <- list()
   } else {
@@ -464,7 +465,7 @@
       stop("'forcings' must be a named list")
     miss_f <- setdiff(forcing_names, names(forcings))
     if (length(miss_f)) stop("Missing forcings: ", paste(miss_f, collapse = ", "))
-    parsed <- lapply(forcing_names, parse_forcing)
+    parsed <- lapply(forcing_names, function(nm) .parseForcing(forcings[[nm]], nm))
     forcing_times_list  <- lapply(parsed, `[[`, "times")
     forcing_values_list <- lapply(parsed, `[[`, "values")
   }
@@ -643,7 +644,10 @@
 #' @param forcings Optional named list of forcing-function data. Each
 #'   element must be a `data.frame` (or coercible object) with columns
 #'   `time` and `value`, or a two-column matrix. Names must match
-#'   `attr(model, "forcings")`. Default `NULL`.
+#'   `attr(model, "forcings")`. Default `NULL`. A forcing is the monotone
+#'   cubic Hermite interpolant (PCHIP) of its points and holds the value of
+#'   the first and the last point outside them; a single point gives a
+#'   constant.
 #' @param abstol Absolute error tolerance. Default `1e-6`.
 #' @param reltol Relative error tolerance. Default `1e-6`.
 #' @param maxattemps Maximum number of consecutive integration steps
