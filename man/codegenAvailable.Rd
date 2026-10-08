@@ -7,17 +7,20 @@
 codegenAvailable(backend = c("native", "cvode"))
 }
 \arguments{
-\item{backend}{\code{"native"} for \code{\link[=cppODE]{cppODE()}} and \code{\link[=cppFUN]{cppFUN()}}, \code{"cvode"} to also
-require the SUNDIALS libraries of the \code{\link[=cvode]{cvode()}} backend.}
+\item{backend}{\code{"native"} (default) for \code{\link[=cppODE]{cppODE()}} and \code{\link[=cppFUN]{cppFUN()}},
+\code{"cvode"} to also require the SUNDIALS libraries of the \code{\link[=cvode]{cvode()}} backend.}
 }
 \value{
-\code{TRUE} when a C++ compiler is found and SymPy is importable from an
-initialised Python session, from \code{RETICULATE_PYTHON} or the system Python,
-or reticulate already holds a managed environment; \code{FALSE} otherwise.
+\code{TRUE} when a C++ compiler and SymPy are found without installing
+anything, \code{FALSE} otherwise.
 }
 \description{
 Reports whether \code{\link[=cppODE]{cppODE()}}, \code{\link[=cvode]{cvode()}} and \code{\link[=cppFUN]{cppFUN()}} can generate and
 compile a model without installing anything first. Code generation needs
 Python with SymPy, which reticulate provisions on first use and may download;
 this check never triggers that.
+}
+\examples{
+codegenAvailable()
+codegenAvailable("cvode")
 }

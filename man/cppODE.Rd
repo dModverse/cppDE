@@ -30,18 +30,19 @@ cppODE(
 \item{rhs}{Named character vector of ODE right-hand sides. Names are
 the state variables.}
 
-\item{events}{Optional event \code{data.frame}. See Details.}
+\item{events}{Optional event \code{data.frame}, see Details. Default \code{NULL}.}
 
 \item{rootfunc}{Optional integration-termination root: \code{"equilibrate"}
-or a character vector of expressions.}
+or a character vector of expressions. Default \code{NULL}.}
 
 \item{fixed}{Optional character vector of state or parameter names
-excluded from sensitivities at compile time.}
+excluded from sensitivities at compile time. Default \code{NULL}.}
 
-\item{forcings}{Optional character vector of forcing-function names
-referenced by \code{rhs}.}
+\item{forcings}{Optional character vector, the names of the forcings in
+\code{rhs}. Their data go to \code{forcings} of \code{\link[=solveODE]{solveODE()}}. Default \code{NULL}.}
 
-\item{compile}{Logical. Compile and load the generated C++ code.}
+\item{compile}{Logical. Compile and load the generated C++ code. Default
+\code{TRUE}; with \code{FALSE}, compile several models together with \code{\link[=compile]{compile()}}.}
 
 \item{modelname}{Optional base name for the generated source file
 and exported C symbols. A random identifier is used when \code{NULL}.}
@@ -49,29 +50,33 @@ and exported C symbols. A random identifier is used when \code{NULL}.}
 \item{outdir}{Directory for the generated C++ source. Default
 \code{tempdir()}.}
 
-\item{deriv}{Logical. Compute first-order parameter sensitivities.}
+\item{deriv}{Logical. Compute first-order parameter sensitivities. Default
+\code{TRUE}. Ignored under \code{derivMode = "reverse"} and \code{"forward-reverse"}.}
 
 \item{deriv2}{Logical. Compute second-order parameter sensitivities;
-implies \code{deriv = TRUE}.}
+implies \code{deriv = TRUE}. Default \code{FALSE}. \code{derivMode = "forward-forward"}
+is the preferred spelling.}
 
 \item{includeTimeZero}{Logical. Ensure that \code{0} is part of the
-integration times.}
+integration times. Default \code{TRUE}.}
 
 \item{useDenseOutput}{Logical. Use Hermite dense output for
-user-requested time points. Applies to \code{method = "rb4"} and
-\code{"tsit5"}, whose interpolant is of lower order than the method;
-\code{FALSE} makes the solver land on each requested time exactly.
-Ignored with a warning for \code{"bdf"} and \code{"adams"}.}
+user-requested time points. Default \code{TRUE}. Applies to \code{method = "rb4"}
+and \code{"tsit5"}, whose interpolant is of lower order than the method;
+\code{FALSE} makes the solver land on each requested time exactly. \code{FALSE} is
+ignored with a warning for \code{"bdf"} and \code{"adams"} and under the reverse
+modes.}
 
-\item{sparse}{Logical or \code{NULL}. \code{NULL} auto-selects sparse vs.
+\item{sparse}{Logical or \code{NULL}. \code{NULL} (default) selects sparse or
 dense LU from the Jacobian sparsity; \code{TRUE} forces sparse, \code{FALSE}
-forces dense. Sparse LU requires KLU at install time.}
+forces dense. Sparse LU requires KLU at install time, see \code{\link[=installLibs]{installLibs()}}.}
 
 \item{method}{Integration method: \code{"bdf"} (default), \code{"adams"},
 \code{"rb4"}, or \code{"tsit5"}.}
 
 \item{useNDF}{Logical. Use Klopfenstein-Shampine NDF coefficients in
-the BDF corrector. Applies to \code{method = "bdf"}; ignored otherwise.}
+the BDF corrector. Default \code{TRUE}. Applies to \code{method = "bdf"}; ignored
+otherwise.}
 
 \item{derivMode}{Direction the derivatives are taken in.
 \itemize{
@@ -82,22 +87,22 @@ returned as \verb{$tangent}.
 \item \code{"forward-forward"}: the same as \code{deriv2 = TRUE}, returning \verb{$hessian}.
 \item \code{"forward-reverse"}: returns \verb{$tangent}, \verb{$cotangent} and \verb{$curvature},
 the derivatives of \verb{$cotangent} along each tangent direction.
-}
+}}
 
-The reverse modes force \code{useDenseOutput = TRUE}.}
+\item{profile}{Logical, default \code{FALSE}. Compile with timers that print a
+summary per category to the standard error stream after each solve.}
 
-\item{profile}{Logical. Compile with profiling counters.}
+\item{stepTrace}{Logical, default \code{FALSE}. Compile to record per-step
+diagnostics, returned as \verb{$trace} by \code{\link[=solveODE]{solveODE()}}.}
 
-\item{stepTrace}{Logical. Compile to record per-step diagnostics,
-returned as \verb{$trace} from \code{\link[=solveODE]{solveODE()}}.}
-
-\item{verbose}{Logical. Print progress messages.}
+\item{verbose}{Logical. Print progress messages. Default \code{FALSE}.}
 }
 \value{
 The compiled model name (character) with the attributes
 required by \code{\link[=solveODE]{solveODE()}}: \code{equations}, \code{srcfile}, \code{variables},
-\code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed}, \code{deriv},
-\code{deriv2}, \code{derivMode}, \code{sparse}, \code{method}, \code{useNDF}, \code{dimNames},
+\code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed} (the
+compile-time set), \code{deriv}, \code{deriv2}, \code{derivMode}, \code{sparse}, \code{method},
+\code{useNDF}, \code{dimNames} (with element \code{sens} only when \code{deriv} is \code{TRUE}),
 \code{compileArgs}, and \code{linkArgs} when OpenMP is available.
 }
 \description{
@@ -123,9 +128,7 @@ time is applied before the solve starts, and one inside the window adds its
 time to the output, with the state after the event in that row. An event
 before the first or at or after the last time is ignored and changes neither
 the output nor the span of the integration. A grid of a single time applies
-the events at that time. A solve over \verb{[t0, t1]} followed by one over
-\verb{[t1, t2]}, started from the state the first ends on, therefore reproduces a
-single solve over \verb{[t0, t2]}.
+the events at that time.
 
 A comparison in \code{rhs}, or a \code{Heaviside()} or \code{sign()}, on time and
 parameters alone and affine in time switches the right-hand side at a time

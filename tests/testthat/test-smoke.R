@@ -18,3 +18,8 @@ test_that("a decay model and an observation function compile and solve", {
   expect_equal(unname(ev$y[1, "y"]), 6)
   expect_equal(unname(ev$tangent[1, "y", ]), c(2, 3))
 })
+
+test_that("install_libs() is a deprecated alias of installLibs()", {
+  expect_warning(expect_error(install_libs(which = "none"), "should be one of"),
+                 "deprecated")
+})

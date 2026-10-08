@@ -60,17 +60,15 @@ unique_modelname <- function(modelname) {
 .cSym <- function(sym, ...)
   do.call(.C, c(list(sym$name), list(...), list(PACKAGE = sym$dll)))
 
-#' Forget which shared object exports which entry point
+#' Forget Which Shared Object Exports Which Entry Point
 #'
-#' [cppFUN] instances and [solveODE] remember the DLL that exports each
-#' generated entry point, so that a call does not have to search every loaded
-#' shared object. Recompiling a model into a differently named shared object
-#' makes that pairing stale. Call this to drop it; [compile] does it for you.
-#'
-#' Addresses are never cached, so this is not needed after loading or unloading
-#' a shared object.
+#' [cppFUN()] objects and [solveODE()] remember the shared object that exports
+#' each generated entry point. Recompiling a model into a shared object of
+#' another name makes that pairing stale; call this to drop it. [compile()]
+#' calls it itself, and loading or unloading a shared object does not need it.
 #'
 #' @return `NULL`, invisibly.
+#' @example inst/examples/clearNativeSymbols.R
 #' @export
 clearNativeSymbols <- function() {
   rm(list = ls(.symDLL, all.names = TRUE), envir = .symDLL)
@@ -100,14 +98,19 @@ clearNativeSymbols <- function() {
 #'
 #' @param ... One or more objects returned by [cppODE()], [cvode()] or
 #'   [cppFUN()] that have a `"srcfile"` attribute.
-#' @param output Optional base name for a combined shared library.
+#' @param output Base name of one shared library for all objects, in the
+#'   directory of the first source. Default `NULL`: one library per object.
 #' @param args Optional additional compiler or linker arguments appended
-#'   after the flags from `"compileArgs"`.
+#'   after the flags from `"compileArgs"`. Default `NULL`.
 #' @param cores Number of parallel compilation jobs (Unix only): separate
 #'   libraries are built side by side, a combined `output` with `make -j`.
-#' @param verbose Logical; if `TRUE`, show compiler commands.
+#'   Default `1`.
+#' @param verbose Logical; if `TRUE`, show compiler commands. Default `FALSE`.
 #'
 #' @return Invisibly returns `TRUE` on successful compilation.
+#' @note The compiler package exports a function of the same name,
+#'   `compiler::compile()`; where both are attached, qualify the call.
+#' @seealso [clearNativeSymbols()]
 #' @example inst/examples/compile.R
 #' @export
 compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE) {
@@ -184,7 +187,7 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
         "available at install time.\n",
         "  Build SuiteSparse/KLU from source into a per-user cache, no\n",
         "  administrator rights required:\n",
-        "      cppDE::install_libs(\"suitesparse\")\n",
+        "      cppDE::installLibs(\"suitesparse\")\n",
         "  then run the re-install command it prints. Alternatively install\n",
         "  the SuiteSparse development headers system-wide and re-install:\n",
         "    Debian/Ubuntu : sudo apt install libsuitesparse-dev\n",
@@ -371,11 +374,11 @@ matchDerivMode <- function(x, choices) {
 #' Python with SymPy, which reticulate provisions on first use and may download;
 #' this check never triggers that.
 #'
-#' @param backend `"native"` for [cppODE()] and [cppFUN()], `"cvode"` to also
-#'   require the SUNDIALS libraries of the [cvode()] backend.
-#' @return `TRUE` when a C++ compiler is found and SymPy is importable from an
-#'   initialised Python session, from `RETICULATE_PYTHON` or the system Python,
-#'   or reticulate already holds a managed environment; `FALSE` otherwise.
+#' @param backend `"native"` (default) for [cppODE()] and [cppFUN()],
+#'   `"cvode"` to also require the SUNDIALS libraries of the [cvode()] backend.
+#' @return `TRUE` when a C++ compiler and SymPy are found without installing
+#'   anything, `FALSE` otherwise.
+#' @example inst/examples/codegenAvailable.R
 #' @export
 codegenAvailable <- function(backend = c("native", "cvode")) {
   backend <- match.arg(backend)

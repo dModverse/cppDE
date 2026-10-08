@@ -82,3 +82,15 @@ test_that("ptc reports what it could not do", {
   expect_error(ptc(mods$pd, x = c(A = 1), parms = c(k_in = 1, k_out = 1),
                    controls = list(tol = 1)), "unknown controls: tol")
 })
+
+test_that("ptc takes reltol and abstol, and the old names with one warning", {
+  p <- c(k_in = 2, k_out = 0.5)
+  new <- ptc(mods$pd, x = c(A = 1), parms = p,
+             controls = list(reltol = 1e-8, abstol = 1e-12))
+  expect_warning(old <- ptc(mods$pd, x = c(A = 1), parms = p,
+                            controls = list(rtol = 1e-8, atol = 1e-12)),
+                 "deprecated control")
+  expect_identical(old, new)
+  expect_error(ptc(mods$pd, x = c(A = 1), parms = p,
+                   controls = list(rtol = 1e-8, reltol = 1e-8)), "only")
+})

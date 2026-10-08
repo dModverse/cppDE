@@ -27,18 +27,19 @@ cvode(
 \item{rhs}{Named character vector of ODE right-hand sides. Names are
 the state variables.}
 
-\item{events}{Optional event \code{data.frame}. See Details.}
+\item{events}{Optional event \code{data.frame}, see Details. Default \code{NULL}.}
 
 \item{rootfunc}{Optional integration-termination root: \code{"equilibrate"}
-or a character vector of expressions.}
+or a character vector of expressions. Default \code{NULL}.}
 
 \item{fixed}{Optional character vector of state or parameter names
-excluded from sensitivities at compile time.}
+excluded from sensitivities at compile time. Default \code{NULL}.}
 
-\item{forcings}{Optional character vector of forcing-function names
-referenced by \code{rhs}.}
+\item{forcings}{Optional character vector, the names of the forcings in
+\code{rhs}. Their data go to \code{forcings} of \code{\link[=solveODE]{solveODE()}}. Default \code{NULL}.}
 
-\item{compile}{Logical. Compile and load the generated C++ code.}
+\item{compile}{Logical. Compile and load the generated C++ code. Default
+\code{TRUE}; with \code{FALSE}, compile several models together with \code{\link[=compile]{compile()}}.}
 
 \item{modelname}{Optional base name for the generated source file
 and exported C symbols. A random identifier is used when \code{NULL}.}
@@ -46,70 +47,56 @@ and exported C symbols. A random identifier is used when \code{NULL}.}
 \item{outdir}{Directory for the generated C++ source. Default
 \code{tempdir()}.}
 
-\item{deriv}{Logical. Compute first-order parameter sensitivities.}
+\item{deriv}{Logical. Compute first-order forward sensitivities. Default
+\code{FALSE}.}
 
-\item{derivMode}{Direction the derivatives are taken in. \code{"forward"} (default)
-is the CVODES forward sensitivity solver, driven by \code{deriv}. \code{"reverse"}
-is CVODES adjoint sensitivity analysis, one backward solve per cotangent
-column. It needs \code{deriv = FALSE}. With \code{events} the forward run is split
-at the jumps and the adjoint is passed through each of them.}
+\item{derivMode}{Direction the derivatives are taken in. \code{"forward"}
+(default) is the CVODES forward sensitivity solver, driven by \code{deriv}.
+\code{"reverse"} is the CVODES adjoint, one backward solve per cotangent
+column; it needs \code{deriv = FALSE}.}
 
-\item{asaCheckpoints}{Accepted forward steps between checkpoints under
-\code{derivMode = "reverse"}. The adjoint interpolates the forward state between
-them, so fewer steps means less interpolation error and more memory.
-Ignored under \code{derivMode = "forward"}.}
+\item{asaCheckpoints}{Number of forward steps between two checkpoints of the
+adjoint, under \code{derivMode = "reverse"}. Fewer steps take more memory and
+interpolate the forward state more accurately. Default \code{200}.}
 
-\item{sparse}{Logical or \code{NULL}. \code{NULL} auto-selects sparse vs.
+\item{sparse}{Logical or \code{NULL}. \code{NULL} (default) selects sparse or
 dense LU from the Jacobian sparsity; \code{TRUE} forces sparse, \code{FALSE}
-forces dense. Sparse LU requires KLU at install time.}
+forces dense. Sparse LU requires KLU at install time, see \code{\link[=installLibs]{installLibs()}}.}
 
 \item{method}{One of \code{"bdf"} (default) or \code{"adams"}.}
 
 \item{includeTimeZero}{Logical. Ensure that \code{0} is part of the integration
-times, as \code{\link[=cppODE]{cppODE()}} does. Both backends then return the same output grid.}
+times, as \code{\link[=cppODE]{cppODE()}} does. Default \code{TRUE}.}
 
-\item{stepTrace}{Logical. Compile to record per-step diagnostics
-(returned as \verb{$trace} from \code{\link[=solveODE]{solveODE()}}). Without \code{events} or
-\code{rootfunc} the integrator is driven in \code{CV_ONE_STEP} mode and one row
-is written per accepted internal step. With either of them the loop
-must stay in \code{CV_NORMAL} mode, so one row is written per output point
-(\code{mode = "CVODE"}) plus one per applied event (\code{mode = "CVODE_event"});
-\code{nst} is cumulative, so differences between consecutive rows give the
-internal steps spent in each output interval.}
+\item{stepTrace}{Logical, default \code{FALSE}. Record per-step diagnostics,
+returned as \verb{$trace} by \code{\link[=solveODE]{solveODE()}}; with \code{events} or \code{rootfunc} one row
+per output time and event.}
 
-\item{verbose}{Logical. Print progress messages.}
+\item{verbose}{Logical. Print progress messages. Default \code{FALSE}.}
 }
 \value{
-The compiled model name (character) with the same attribute
-set as a model returned by \code{\link[=cppODE]{cppODE()}}; the \code{backend} attribute is
-\code{"cvode"}.
+The compiled model name (character) with the attributes of a
+model from \code{\link[=cppODE]{cppODE()}}, except that \code{deriv2} is \code{FALSE} and \code{useNDF} is
+\code{NA}, plus \code{backend = "cvode"} and \code{lapackDense}, whether dense Jacobians
+use \code{SUNLinSol_LapackDense} rather than \code{SUNLinSol_Dense}.
 }
 \description{
-Generates a C++ ODE solver linked against the system-installed
-SUNDIALS CVODE library (CVODES when \code{deriv = TRUE}), compiles it via
-\verb{R CMD SHLIB}, and returns a handle for use with \code{\link[=solveODE]{solveODE()}}. The
-compiled model exposes the same R interface as a model from
-\code{\link[=cppODE]{cppODE()}}. The differences between the two backends and the
-selection guidance are described in
-\code{vignette("Methods", package = "cppDE")}.
+Generates a C++ ODE solver linked against SUNDIALS CVODES, from the system
+or from \code{\link[=installLibs]{installLibs()}}, compiles it via \verb{R CMD SHLIB}, and returns a handle
+for use with \code{\link[=solveODE]{solveODE()}}. Sensitivities are computed by the CVODES forward
+sensitivity solver (\code{deriv = TRUE}) or by its adjoint
+(\code{derivMode = "reverse"}). The compiled model exposes the same R interface
+as a model from \code{\link[=cppODE]{cppODE()}}; the differences between the two backends are
+described in \code{vignette("Methods", package = "cppDE")}.
 }
 \details{
-Available methods are \code{"bdf"} (default) and \code{"adams"}. Sensitivities
-are first-order forward only; \code{deriv2} is not supported.
-\code{derivMode = "reverse"} compiles the CVODES adjoint instead, returning
-\verb{$cotangent} the way the native backend's reverse mode does. Events,
+Available methods are \code{"bdf"} (default) and \code{"adams"}. Forward
+sensitivities are of first order only; \code{deriv2} is not supported. Events,
 forcings, \code{rootfunc}, and \code{fixed} behave as in \code{\link[=cppODE]{cppODE()}}.
 
-SUNDIALS (>= 6.0) must be available at install time; otherwise
-\code{\link[=cvode]{cvode()}} errors at the first call with platform-specific install
-hints. KLU (used for sparse Jacobians) is detected the same way and
-is required when \code{sparse = TRUE}.
-
-For a dense Jacobian the linear solver is \code{SUNLinSol_LapackDense}
-when SUNDIALS was built with its LAPACK interface, and
-\code{SUNLinSol_Dense} otherwise. This is decided by \code{./configure} at
-install time, not per model; \code{\link[=install_libs]{install_libs()}} enables the LAPACK
-interface whenever R reports a BLAS. Sparse Jacobians use KLU.
+Needs SUNDIALS (>= 6.0) at install time, see \code{\link[=installLibs]{installLibs()}}; otherwise
+\code{cvode()} errors at the first call with platform-specific install hints.
+KLU, required when \code{sparse = TRUE}, is detected the same way.
 }
 \examples{
 \donttest{

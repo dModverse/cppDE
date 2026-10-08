@@ -21,9 +21,7 @@
 #' time to the output, with the state after the event in that row. An event
 #' before the first or at or after the last time is ignored and changes neither
 #' the output nor the span of the integration. A grid of a single time applies
-#' the events at that time. A solve over `[t0, t1]` followed by one over
-#' `[t1, t2]`, started from the state the first ends on, therefore reproduces a
-#' single solve over `[t0, t2]`.
+#' the events at that time.
 #'
 #' A comparison in `rhs`, or a `Heaviside()` or `sign()`, on time and
 #' parameters alone and affine in time switches the right-hand side at a time
@@ -36,35 +34,40 @@
 #'
 #' @param rhs Named character vector of ODE right-hand sides. Names are
 #'   the state variables.
-#' @param events Optional event `data.frame`. See Details.
+#' @param events Optional event `data.frame`, see Details. Default `NULL`.
 #' @param rootfunc Optional integration-termination root: `"equilibrate"`
-#'   or a character vector of expressions.
+#'   or a character vector of expressions. Default `NULL`.
 #' @param fixed Optional character vector of state or parameter names
-#'   excluded from sensitivities at compile time.
-#' @param forcings Optional character vector of forcing-function names
-#'   referenced by `rhs`.
-#' @param compile Logical. Compile and load the generated C++ code.
+#'   excluded from sensitivities at compile time. Default `NULL`.
+#' @param forcings Optional character vector, the names of the forcings in
+#'   `rhs`. Their data go to `forcings` of [solveODE()]. Default `NULL`.
+#' @param compile Logical. Compile and load the generated C++ code. Default
+#'   `TRUE`; with `FALSE`, compile several models together with [compile()].
 #' @param modelname Optional base name for the generated source file
 #'   and exported C symbols. A random identifier is used when `NULL`.
 #' @param outdir Directory for the generated C++ source. Default
 #'   `tempdir()`.
-#' @param deriv Logical. Compute first-order parameter sensitivities.
+#' @param deriv Logical. Compute first-order parameter sensitivities. Default
+#'   `TRUE`. Ignored under `derivMode = "reverse"` and `"forward-reverse"`.
 #' @param deriv2 Logical. Compute second-order parameter sensitivities;
-#'   implies `deriv = TRUE`.
+#'   implies `deriv = TRUE`. Default `FALSE`. `derivMode = "forward-forward"`
+#'   is the preferred spelling.
 #' @param includeTimeZero Logical. Ensure that `0` is part of the
-#'   integration times.
+#'   integration times. Default `TRUE`.
 #' @param useDenseOutput Logical. Use Hermite dense output for
-#'   user-requested time points. Applies to `method = "rb4"` and
-#'   `"tsit5"`, whose interpolant is of lower order than the method;
-#'   `FALSE` makes the solver land on each requested time exactly.
-#'   Ignored with a warning for `"bdf"` and `"adams"`.
-#' @param sparse Logical or `NULL`. `NULL` auto-selects sparse vs.
+#'   user-requested time points. Default `TRUE`. Applies to `method = "rb4"`
+#'   and `"tsit5"`, whose interpolant is of lower order than the method;
+#'   `FALSE` makes the solver land on each requested time exactly. `FALSE` is
+#'   ignored with a warning for `"bdf"` and `"adams"` and under the reverse
+#'   modes.
+#' @param sparse Logical or `NULL`. `NULL` (default) selects sparse or
 #'   dense LU from the Jacobian sparsity; `TRUE` forces sparse, `FALSE`
-#'   forces dense. Sparse LU requires KLU at install time.
+#'   forces dense. Sparse LU requires KLU at install time, see [installLibs()].
 #' @param method Integration method: `"bdf"` (default), `"adams"`,
 #'   `"rb4"`, or `"tsit5"`.
 #' @param useNDF Logical. Use Klopfenstein-Shampine NDF coefficients in
-#'   the BDF corrector. Applies to `method = "bdf"`; ignored otherwise.
+#'   the BDF corrector. Default `TRUE`. Applies to `method = "bdf"`; ignored
+#'   otherwise.
 #' @param derivMode Direction the derivatives are taken in.
 #'   * `"forward"` (default): forward sensitivities as built by `deriv`,
 #'     returned as `$tangent`.
@@ -73,17 +76,17 @@
 #'   * `"forward-forward"`: the same as `deriv2 = TRUE`, returning `$hessian`.
 #'   * `"forward-reverse"`: returns `$tangent`, `$cotangent` and `$curvature`,
 #'     the derivatives of `$cotangent` along each tangent direction.
-#'
-#'   The reverse modes force `useDenseOutput = TRUE`.
-#' @param profile Logical. Compile with profiling counters.
-#' @param stepTrace Logical. Compile to record per-step diagnostics,
-#'   returned as `$trace` from [solveODE()].
-#' @param verbose Logical. Print progress messages.
+#' @param profile Logical, default `FALSE`. Compile with timers that print a
+#'   summary per category to the standard error stream after each solve.
+#' @param stepTrace Logical, default `FALSE`. Compile to record per-step
+#'   diagnostics, returned as `$trace` by [solveODE()].
+#' @param verbose Logical. Print progress messages. Default `FALSE`.
 #'
 #' @return The compiled model name (character) with the attributes
 #'   required by [solveODE()]: `equations`, `srcfile`, `variables`,
-#'   `parameters`, `forcings`, `events`, `rootfunc`, `fixed`, `deriv`,
-#'   `deriv2`, `derivMode`, `sparse`, `method`, `useNDF`, `dimNames`,
+#'   `parameters`, `forcings`, `events`, `rootfunc`, `fixed` (the
+#'   compile-time set), `deriv`, `deriv2`, `derivMode`, `sparse`, `method`,
+#'   `useNDF`, `dimNames` (with element `sens` only when `deriv` is `TRUE`),
 #'   `compileArgs`, and `linkArgs` when OpenMP is available.
 #'
 #' @example inst/examples/cppODE.R

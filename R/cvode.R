@@ -1,55 +1,44 @@
 #' Generate and Compile an ODE Solver Linked Against SUNDIALS CVODE(S)
 #'
-#' Generates a C++ ODE solver linked against the system-installed
-#' SUNDIALS CVODE library (CVODES when `deriv = TRUE`), compiles it via
-#' `R CMD SHLIB`, and returns a handle for use with [solveODE()]. The
-#' compiled model exposes the same R interface as a model from
-#' [cppODE()]. The differences between the two backends and the
-#' selection guidance are described in
-#' `vignette("Methods", package = "cppDE")`.
+#' Generates a C++ ODE solver linked against SUNDIALS CVODES, from the system
+#' or from [installLibs()], compiles it via `R CMD SHLIB`, and returns a handle
+#' for use with [solveODE()]. Sensitivities are computed by the CVODES forward
+#' sensitivity solver (`deriv = TRUE`) or by its adjoint
+#' (`derivMode = "reverse"`). The compiled model exposes the same R interface
+#' as a model from [cppODE()]; the differences between the two backends are
+#' described in `vignette("Methods", package = "cppDE")`.
 #'
-#' Available methods are `"bdf"` (default) and `"adams"`. Sensitivities
-#' are first-order forward only; `deriv2` is not supported.
-#' `derivMode = "reverse"` compiles the CVODES adjoint instead, returning
-#' `$cotangent` the way the native backend's reverse mode does. Events,
+#' Available methods are `"bdf"` (default) and `"adams"`. Forward
+#' sensitivities are of first order only; `deriv2` is not supported. Events,
 #' forcings, `rootfunc`, and `fixed` behave as in [cppODE()].
 #'
-#' SUNDIALS (>= 6.0) must be available at install time; otherwise
-#' [cvode()] errors at the first call with platform-specific install
-#' hints. KLU (used for sparse Jacobians) is detected the same way and
-#' is required when `sparse = TRUE`.
-#'
-#' For a dense Jacobian the linear solver is `SUNLinSol_LapackDense`
-#' when SUNDIALS was built with its LAPACK interface, and
-#' `SUNLinSol_Dense` otherwise. This is decided by `./configure` at
-#' install time, not per model; [install_libs()] enables the LAPACK
-#' interface whenever R reports a BLAS. Sparse Jacobians use KLU.
+#' Needs SUNDIALS (>= 6.0) at install time, see [installLibs()]; otherwise
+#' `cvode()` errors at the first call with platform-specific install hints.
+#' KLU, required when `sparse = TRUE`, is detected the same way.
 #'
 #' @inheritParams cppODE
+#' @param deriv Logical. Compute first-order forward sensitivities. Default
+#'   `FALSE`.
+#' @param compile Logical. Compile and load the generated C++ code. Default
+#'   `TRUE`; with `FALSE`, compile several models together with [compile()].
 #' @param includeTimeZero Logical. Ensure that `0` is part of the integration
-#'   times, as [cppODE()] does. Both backends then return the same output grid.
+#'   times, as [cppODE()] does. Default `TRUE`.
 #' @param method One of `"bdf"` (default) or `"adams"`.
-#' @param asaCheckpoints Accepted forward steps between checkpoints under
-#'   `derivMode = "reverse"`. The adjoint interpolates the forward state between
-#'   them, so fewer steps means less interpolation error and more memory.
-#'   Ignored under `derivMode = "forward"`.
-#' @param derivMode Direction the derivatives are taken in. `"forward"` (default)
-#'   is the CVODES forward sensitivity solver, driven by `deriv`. `"reverse"`
-#'   is CVODES adjoint sensitivity analysis, one backward solve per cotangent
-#'   column. It needs `deriv = FALSE`. With `events` the forward run is split
-#'   at the jumps and the adjoint is passed through each of them.
-#' @param stepTrace Logical. Compile to record per-step diagnostics
-#'   (returned as `$trace` from [solveODE()]). Without `events` or
-#'   `rootfunc` the integrator is driven in `CV_ONE_STEP` mode and one row
-#'   is written per accepted internal step. With either of them the loop
-#'   must stay in `CV_NORMAL` mode, so one row is written per output point
-#'   (`mode = "CVODE"`) plus one per applied event (`mode = "CVODE_event"`);
-#'   `nst` is cumulative, so differences between consecutive rows give the
-#'   internal steps spent in each output interval.
+#' @param asaCheckpoints Number of forward steps between two checkpoints of the
+#'   adjoint, under `derivMode = "reverse"`. Fewer steps take more memory and
+#'   interpolate the forward state more accurately. Default `200`.
+#' @param derivMode Direction the derivatives are taken in. `"forward"`
+#'   (default) is the CVODES forward sensitivity solver, driven by `deriv`.
+#'   `"reverse"` is the CVODES adjoint, one backward solve per cotangent
+#'   column; it needs `deriv = FALSE`.
+#' @param stepTrace Logical, default `FALSE`. Record per-step diagnostics,
+#'   returned as `$trace` by [solveODE()]; with `events` or `rootfunc` one row
+#'   per output time and event.
 #'
-#' @return The compiled model name (character) with the same attribute
-#'   set as a model returned by [cppODE()]; the `backend` attribute is
-#'   `"cvode"`.
+#' @return The compiled model name (character) with the attributes of a
+#'   model from [cppODE()], except that `deriv2` is `FALSE` and `useNDF` is
+#'   `NA`, plus `backend = "cvode"` and `lapackDense`, whether dense Jacobians
+#'   use `SUNLinSol_LapackDense` rather than `SUNLinSol_Dense`.
 #'
 #' @references
 #' Hindmarsh, A. C., Brown, P. N., Grant, K. E., Lee, S. L., Serban, R.,
@@ -92,7 +81,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
       "  cppODE()'s own solvers are unaffected.\n",
       "  Build SUNDIALS (and SuiteSparse/KLU) from source into a per-user\n",
       "  cache, no administrator rights required:\n",
-      "      cppDE::install_libs(\"sundials\")\n",
+      "      cppDE::installLibs(\"sundials\")\n",
       "  then run the re-install command it prints. Alternatively install\n",
       "  the SUNDIALS development headers system-wide and re-install:\n",
       "    Debian/Ubuntu : sudo apt install libsundials-dev\n",
@@ -184,7 +173,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
       "at install time.\n",
       "  Build SuiteSparse/KLU from source into a per-user cache, no\n",
       "  administrator rights required:\n",
-      "      cppDE::install_libs(\"suitesparse\")\n",
+      "      cppDE::installLibs(\"suitesparse\")\n",
       "  then run the re-install command it prints. Alternatively install\n",
       "  the SuiteSparse development headers system-wide and re-install:\n",
       "    Debian/Ubuntu : sudo apt install libsuitesparse-dev\n",

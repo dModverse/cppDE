@@ -12,7 +12,7 @@
 # Usage: build-libs.sh [suitesparse|sundials]      (default: sundials)
 #
 # Invoked by ./configure for CPPDE_BUILD_SUITESPARSE / CPPDE_BUILD_SUNDIALS,
-# and by the R helper cppDE::install_libs(). Requires network access and
+# and by the R helper cppDE::installLibs(). Requires network access and
 # runs for several minutes, so it is never started implicitly.
 #
 # Both components install into one prefix keyed by the pinned version

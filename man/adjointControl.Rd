@@ -7,17 +7,16 @@
 adjointControl(refine = FALSE, gradtol = NULL, trace = FALSE)
 }
 \arguments{
-\item{refine}{Logical. Check each step of the sweep against \code{reltol} and
-\code{abstol}, and with \code{gradtol} its share of the gradient as well; a step that
-fails is swept again in substeps. \code{bdf} and \code{adams} sweep the flow between
-their grid points instead, so their gradient is that of the flow along the
-computed trajectory.}
+\item{refine}{Logical, default \code{FALSE}. Check each step of the sweep against
+\code{reltol} and \code{abstol}, and with \code{gradtol} its share of the gradient as
+well; a step that fails is swept again in substeps.}
 
-\item{gradtol}{Positive number, the absolute tolerance on the gradient. On a
-\code{\link[=cvode]{cvode()}} model the absolute tolerance of the gradient quadrature in the
-backward problem's error test.}
+\item{gradtol}{Positive number, the absolute tolerance on the gradient.
+Default \code{NULL}: no test on the gradient. On a \code{\link[=cppODE]{cppODE()}} model used only
+with \code{refine = TRUE}; on a \code{\link[=cvode]{cvode()}} model the absolute tolerance of the
+gradient quadrature in the backward problem's error test.}
 
-\item{trace}{Logical. Return \verb{$adjoint}.}
+\item{trace}{Logical, default \code{FALSE}. Return \verb{$adjoint}.}
 }
 \value{
 A list of class \code{cppDEadjointControl}.
@@ -26,20 +25,18 @@ A solve with \code{trace} returns \verb{$adjoint}, of class \code{cppDEadjoint}:
 and \code{h}, the start and length of each step the sweep ran on; \code{lambda},
 \verb{[n_steps, n_states, n_seed]}, the adjoint state at each step's start;
 \code{eta}, \verb{[n_steps, n_seed]}, lambda times each step's local error estimate,
-\code{NA} where \code{bdf} and \code{adams} sweep the flow; and under \code{refine} \code{substeps},
+\code{NA} for \code{bdf} and \code{adams} under \code{refine}. Under \code{refine} also \code{substeps},
 the substeps each step was swept in, and \code{failures}, the steps over all seed
-columns that met the test at no number of substeps.
+columns that failed the test at the largest substep count.
 }
 \description{
-What a solve of a model compiled with \code{derivMode = "reverse"} does beyond
-its gradient: check the sweep against the tolerances and report the grid it
-ran on. Handed to \code{\link[=solveODE]{solveODE()}}, \code{\link[=solveODEBatch]{solveODEBatch()}}, \code{\link[=prepareBatch]{prepareBatch()}} and
-\code{\link[=solveBatch]{solveBatch()}} as \code{adjoint}.
+Options for the backward sweep of a model compiled with
+\code{derivMode = "reverse"}: check the sweep against the tolerances and report
+the grid it ran on. Handed to \code{\link[=solveODE]{solveODE()}}, \code{\link[=solveODEBatch]{solveODEBatch()}},
+\code{\link[=prepareBatch]{prepareBatch()}} and \code{\link[=solveBatch]{solveBatch()}} as \code{adjoint}.
 }
 \details{
-On a \code{\link[=cvode]{cvode()}} model compiled with \code{derivMode = "reverse"} only \code{gradtol}
-applies: CVODES solves the continuous adjoint under its own step-size
-control, with no discrete steps to check or report.
+\code{refine} and \code{trace} are an error on a \code{\link[=cvode]{cvode()}} model.
 }
 \examples{
 \donttest{

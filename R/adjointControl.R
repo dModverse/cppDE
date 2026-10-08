@@ -1,24 +1,21 @@
 #' Controls of a Reverse Solve
 #'
 #' @description
-#' What a solve of a model compiled with `derivMode = "reverse"` does beyond
-#' its gradient: check the sweep against the tolerances and report the grid it
-#' ran on. Handed to [solveODE()], [solveODEBatch()], [prepareBatch()] and
-#' [solveBatch()] as `adjoint`.
+#' Options for the backward sweep of a model compiled with
+#' `derivMode = "reverse"`: check the sweep against the tolerances and report
+#' the grid it ran on. Handed to [solveODE()], [solveODEBatch()],
+#' [prepareBatch()] and [solveBatch()] as `adjoint`.
 #'
-#' @param refine Logical. Check each step of the sweep against `reltol` and
-#'   `abstol`, and with `gradtol` its share of the gradient as well; a step that
-#'   fails is swept again in substeps. `bdf` and `adams` sweep the flow between
-#'   their grid points instead, so their gradient is that of the flow along the
-#'   computed trajectory.
-#' @param gradtol Positive number, the absolute tolerance on the gradient. On a
-#'   [cvode()] model the absolute tolerance of the gradient quadrature in the
-#'   backward problem's error test.
-#' @param trace Logical. Return `$adjoint`.
+#' @param refine Logical, default `FALSE`. Check each step of the sweep against
+#'   `reltol` and `abstol`, and with `gradtol` its share of the gradient as
+#'   well; a step that fails is swept again in substeps.
+#' @param gradtol Positive number, the absolute tolerance on the gradient.
+#'   Default `NULL`: no test on the gradient. On a [cppODE()] model used only
+#'   with `refine = TRUE`; on a [cvode()] model the absolute tolerance of the
+#'   gradient quadrature in the backward problem's error test.
+#' @param trace Logical, default `FALSE`. Return `$adjoint`.
 #'
-#' @details On a [cvode()] model compiled with `derivMode = "reverse"` only `gradtol`
-#' applies: CVODES solves the continuous adjoint under its own step-size
-#' control, with no discrete steps to check or report.
+#' @details `refine` and `trace` are an error on a [cvode()] model.
 #'
 #' @return A list of class `cppDEadjointControl`.
 #'
@@ -26,9 +23,9 @@
 #' and `h`, the start and length of each step the sweep ran on; `lambda`,
 #' `[n_steps, n_states, n_seed]`, the adjoint state at each step's start;
 #' `eta`, `[n_steps, n_seed]`, lambda times each step's local error estimate,
-#' `NA` where `bdf` and `adams` sweep the flow; and under `refine` `substeps`,
+#' `NA` for `bdf` and `adams` under `refine`. Under `refine` also `substeps`,
 #' the substeps each step was swept in, and `failures`, the steps over all seed
-#' columns that met the test at no number of substeps.
+#' columns that failed the test at the largest substep count.
 #'
 #' @seealso [solveODE()]; `vignette("Methods", package = "cppDE")`, "Checking
 #'   the sweep".

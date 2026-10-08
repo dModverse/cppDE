@@ -21,19 +21,15 @@ solveBatch(
 \arguments{
 \item{handle}{A \code{"cppDEbatch"} object from \code{\link[=prepareBatch]{prepareBatch()}}.}
 
-\item{parms}{List of named numeric vectors, one per condition, or \code{NULL} to
-reuse the prepared values.}
+\item{parms}{List of named numeric vectors.}
 
-\item{tangent, hessian, cotangent, curvature}{Lists with one element per
-condition, each as the argument of the same name in \code{\link[=solveODE]{solveODE()}}, or
-\code{NULL} to reuse. Shapes must match the prepared ones.}
+\item{tangent, hessian, cotangent, curvature}{Lists of arrays, each as the
+argument of the same name in \code{\link[=solveODE]{solveODE()}} and of the prepared shape.}
 
-\item{adjoint}{List of \code{\link[=adjointControl]{adjointControl()}} objects, one per condition, or
-\code{NULL} to keep the prepared ones.}
+\item{adjoint}{List of \code{\link[=adjointControl]{adjointControl()}} objects.}
 
-\item{store}{List of checkpoint stores, one per condition, each the \verb{$store}
-of an earlier reverse solve or \code{NULL} to integrate; \code{NULL} for the whole
-argument keeps the prepared ones.}
+\item{store}{List of checkpoint stores, each the \verb{$store} of an earlier
+reverse solve. Here a \code{NULL} element integrates that condition afresh.}
 
 \item{cores, traceFile, onFailure}{As in \code{\link[=solveODEBatch]{solveODEBatch()}}.}
 }
@@ -44,6 +40,11 @@ A list of \code{\link[=solveODE]{solveODE()}} results, named as the prepared con
 Re-solves the conditions of a \code{\link[=prepareBatch]{prepareBatch()}} handle with new numbers.
 Only \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent}, \code{curvature}, \code{adjoint}
 and \code{store} may change; anything else needs a fresh handle.
+
+Each of these arguments is a list with one element per condition, matched
+to the prepared conditions by position; names are ignored. A \code{NULL} element
+keeps that condition's prepared value, and \code{NULL} (default) for the whole
+argument keeps all of them.
 }
 \examples{
 \donttest{
@@ -70,5 +71,5 @@ if (codegenAvailable()) {
 }
 }
 \seealso{
-\code{\link[=prepareBatch]{prepareBatch()}}
+\code{\link[=prepareBatch]{prepareBatch()}}, \code{\link[=solveODEBatch]{solveODEBatch()}}
 }

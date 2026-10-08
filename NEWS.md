@@ -1,3 +1,18 @@
+# cppDE 0.11.7
+
+* `maxattemps` is now spelled `maxattempts` in `solveODE()`,
+  `solveODEBatch()`, `prepareBatch()` and the per-condition lists of
+  `conditions`. The old spelling still works and warns once per call.
+* `install_libs()` is now `installLibs()`; the old name remains as a
+  deprecated alias.
+* `ptc()` takes the tolerances in `controls` as `reltol` and `abstol`, as the
+  solvers do. The old names `rtol` and `atol` still work and warn.
+* The help pages state every default, list the fields of `$diagnostics` and
+  the columns of `$trace` in `?solveODE`, and give the signatures and shapes
+  of the functions `cppFUN()` returns. `?solveODE` no longer calls a
+  `cotangent` required when `keepStore = TRUE` lets a reverse solve run
+  without one.
+
 # cppDE 0.11.6
 
 * `cppODE()` warns when a condition of `piecewise()`, `Heaviside()` or `sign()`
@@ -60,7 +75,7 @@
   batch.
 * `compile(output =)` builds the objects of the combined library `cores` at a
   time.
-* `install_libs()` and `./configure` build SUNDIALS 7.9.0 and SuiteSparse
+* `installLibs()` and `./configure` build SUNDIALS 7.9.0 and SuiteSparse
   7.14.1 by default, with the CMake option names of SUNDIALS 7.7 and later;
   older pins keep the old names. `./configure` prefers the cache prefix of the
   pinned versions over the lexically last one.

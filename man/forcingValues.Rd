@@ -2,7 +2,7 @@
 % Please edit documentation in R/forcings.R
 \name{forcingValues}
 \alias{forcingValues}
-\title{Values of forcings}
+\title{Values of Forcings}
 \usage{
 forcingValues(times, forcings)
 }

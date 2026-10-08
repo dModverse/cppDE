@@ -28,10 +28,10 @@ unnamed.}
 observation. Defaults to all symbols in \code{eqns} not in \code{parameters}.}
 
 \item{parameters}{Character vector of parameter names (constant
-across observations).}
+across observations). Default \code{NULL}.}
 
 \item{fixed}{Optional character vector of symbols excluded from
-derivative computation.}
+derivative computation. Default \code{NULL}.}
 
 \item{modelname}{Optional base name for generated C++ symbols and
 files.}
@@ -40,63 +40,115 @@ files.}
 \code{tempdir()}.}
 
 \item{compile}{Logical. Compile and load the generated C++ code.
-Default \code{FALSE}.}
+Default \code{FALSE}; compile several objects together with \code{\link[=compile]{compile()}}.}
 
-\item{verbose}{Logical. Print progress messages.}
+\item{verbose}{Logical. Print progress messages. Default \code{FALSE}.}
 
-\item{convenient}{Logical. Return wrappers that accept named
-arguments rather than the low-level \verb{(vars, params)} signature.}
+\item{convenient}{Logical, default \code{TRUE}. Return \code{func}, \code{jac}, \code{hess} and
+\code{evaluate} as functions of named arguments rather than of
+\verb{(vars, params)}. \code{evaluateBatch} and \code{vjp} always take \code{vars} and
+\code{params}.}
 
-\item{deriv}{Logical. Generate first-order derivative entry points.}
+\item{deriv}{Logical. Generate first-order derivative entry points. Default
+\code{TRUE}; \code{FALSE} generates \code{func} alone, whatever \code{derivMode} says.}
 
 \item{deriv2}{Logical. Generate Hessian entry points; implies
-\code{deriv = TRUE}.}
+\code{deriv = TRUE}. Default \code{FALSE}.}
 
 \item{derivMode}{Which derivative products to build, any of \code{"forward"}
 (default), \code{"reverse"} and \code{"forward-reverse"}.
 \itemize{
 \item \code{"forward"}: forward-mode AD on \code{cppde::dual}, delivering \code{jac},
 \code{hess}, \code{evaluate} and \code{evaluateBatch}.
-\item \code{"reverse"}: the vector-Jacobian product \code{vjp}, differentiated at
-code-generation time.
-\item \code{"forward-reverse"}: \code{vjp} and its derivative along a tangent, also
-differentiated at code-generation time.
-A mode not named is not generated and costs no compile time.
-}}
+\item \code{"reverse"}: the vector-Jacobian product \code{vjp}.
+\item \code{"forward-reverse"}: \code{vjp} and its derivative along a tangent.
+}
+
+A mode not named is not generated and costs no compile time.}
 }
 \value{
-A list with components \code{func}, \code{jac}, \code{hess}, \code{evaluate},
-\code{evaluateBatch} and \code{vjp}, each \code{NULL} when not generated.
-\code{jac}, \code{hess}, \code{evaluate} and \code{evaluateBatch} need \code{"forward"}.
-\code{evaluate(..., tangentX, tangentP, hessianX, hessianP, deriv2)} returns
-\code{y}, \code{tangent} and, with \code{deriv2 = TRUE}, \code{hessian}: the outputs' tangent
-and Hessian in \eqn{\theta}. \code{evaluateBatch(sets, cores, deriv2)} runs
-\code{evaluate} over a list of argument lists in one call.
+A list of functions, each \code{NULL} when not generated. \code{vars},
+\code{params}, the seeds, \code{attach.input} and \code{fixed} are described in Details.
+\itemize{
+\item \code{func(..., attach.input = FALSE, fixed = NULL)} returns the outputs,
+\verb{[n_obs, n_out]}.
+\item \code{jac(..., tangentX = NULL, tangentP = NULL, attach.input = FALSE, fixed = NULL)} returns their tangent, \verb{[n_obs, n_out, n_theta]}.
+\item \code{hess(..., tangentX = NULL, tangentP = NULL, hessianX = NULL, hessianP = NULL, attach.input = FALSE, fixed = NULL)} returns their
+second derivative, \verb{[n_obs, n_out, n_theta, n_theta]}. Needs
+\code{deriv2 = TRUE}.
+\item \code{evaluate(..., tangentX = NULL, tangentP = NULL, hessianX = NULL, hessianP = NULL, deriv2 = FALSE, attach.input = FALSE, fixed = NULL)}
+returns a list with \code{y}, \code{tangent} and, with \code{deriv2 = TRUE}, \code{hessian},
+shaped as the results of \code{func}, \code{jac} and \code{hess}.
+\item \code{evaluateBatch(sets, cores = 1, deriv2 = FALSE)} runs \code{evaluate} over
+\code{sets}, a list of argument lists with elements \code{vars}, \code{params} and
+optionally the seeds, \code{fixed} and \code{attach.input}, in one call and on
+\code{cores} threads. It returns the list of results.
+\item \code{vjp(vars, params, cotangent, tangentX = NULL, tangentP = NULL, curvature = NULL)} contracts the Jacobian with \code{cotangent}, the cotangent
+of the outputs, \verb{[n_obs, n_out]} or \verb{[n_obs, n_out, n_seed]}. It returns
+\code{y}, \code{cotangentX}, \verb{[n_obs, n_vars, n_seed]}, and \code{cotangentP},
+\verb{[n_params, n_seed]}, summed over the rows because the parameters are
+shared. Given \code{tangentX}, \verb{[n_obs, n_vars, n_dir]}, \code{tangentP},
+\verb{[n_params, n_dir]}, or \code{curvature}, \verb{[n_obs, n_out, n_seed, n_dir]}, the
+derivative of the cotangent along the tangent, it also returns
+\code{curvatureX}, \verb{[n_obs, n_vars, n_seed, n_dir]}, and \code{curvatureP},
+\verb{[n_params, n_seed, n_dir]}; this needs \code{"forward-reverse"}. These seeds
+are positional, without name matching.
+}
 
-\code{vjp} needs \code{"reverse"}. \code{vjp(vars, params, cotangent)} contracts the
-Jacobian with a cotangent of the outputs, \verb{[n_obs, n_out]} or
-\verb{[n_obs, n_out, n_seed]}, and returns \code{y}, \code{cotangentX} and \code{cotangentP};
-\code{cotangentP} sums over observations because the parameters are shared
-across them. Given \code{tangentX}, \code{tangentP} or \code{curvature}, the derivative
-of the cotangent along the tangent, the same call runs forward-reverse and
-adds \code{curvatureX} and \code{curvatureP}; this needs \code{"forward-reverse"}. Has attributes \code{equations},
-\code{variables}, \code{parameters}, \code{fixed}, \code{modelname}, \code{srcfile} and
-\code{derivMode}.
+\code{jac}, \code{hess}, \code{evaluate} and \code{evaluateBatch} need \code{"forward"}, \code{vjp} needs
+\code{"reverse"} or \code{"forward-reverse"}.
+
+The list has attributes \code{equations}, \code{variables}, \code{parameters}, \code{fixed},
+\code{modelname}, \code{srcfile} and \code{derivMode}.
 }
 \description{
 Generates and compiles C++ code that evaluates a system of algebraic
 expressions \eqn{y = g(x, p)} on one or more rows of input, with
 optional first- and second-order derivatives. There is no time
 integration; the principal use cases are observation maps for
-likelihood-based inference and reparametrisation Jacobians for
-\code{\link[=solveODE]{solveODE()}}. \code{derivMode} selects which derivative products are built.
-The chain rule is available through the optional arguments \code{tangentX},
-\code{tangentP}, \code{hessianX} and \code{hessianP}, the tangent and the Hessian in
-\eqn{\theta} of the variables and parameters. Every entry runs compiled
-code: an object built
-with \code{compile = FALSE} is evaluable only after \code{\link[=compile]{compile()}}. See
-\code{vignette("Methods", package = "cppDE")} for the computational paths and
-the pass-through convention for unmodelled inputs.
+likelihood-based inference and reparametrisations for \code{\link[=solveODE]{solveODE()}}.
+\code{derivMode} selects which derivative products are built. Every returned
+function runs compiled code: an object built with \code{compile = FALSE} is
+evaluable only after \code{\link[=compile]{compile()}}. See \code{vignette("Methods", package = "cppDE")}
+for the computational paths and the pass-through of unmodelled inputs.
+}
+\details{
+\subsection{Inputs}{
+
+\code{n_obs} is the number of rows of input, \code{n_vars} the number of variables,
+\code{n_params} the number of parameters, \code{n_out} the number of outputs and
+\code{n_theta} the number of directions \eqn{\theta}. The variables are a matrix
+\code{vars}, \verb{[n_obs, n_vars]} with columns named by the variables, the parameters
+a named numeric vector \code{params}. With \code{convenient = TRUE} the returned
+\code{func}, \code{jac}, \code{hess} and \code{evaluate} take them as named arguments instead,
+each variable a vector of length \code{n_obs} and each parameter a number.
+
+The returned \code{jac}, \code{hess} and \code{evaluate} take the chain rule through the
+seeds \code{tangentX} and \code{tangentP}, the tangent in \eqn{\theta} of the
+variables and parameters, and \code{hessianX} and \code{hessianP}, their second
+derivative:
+\itemize{
+\item \code{tangentX}: \verb{[n_obs, n_vars, n_theta]}, dimension names
+\code{list(NULL, variables, theta)}.
+\item \code{tangentP}: \verb{[n_params, n_theta]}, row names the parameters.
+\item \code{hessianX}: \verb{[n_obs, n_vars, n_theta, n_theta]}.
+\item \code{hessianP}: \verb{[n_params, n_theta, n_theta]}.
+}
+
+Rows missing from a seed are zero. A seed not given is taken from attribute
+\code{"deriv"} (tangent) or \code{"deriv2"} (Hessian) of \code{vars} or \code{params}. Without any
+seed, the derivatives are taken in the variables and in the parameters not in
+\code{fixed}.
+
+\code{\link[=solveODE]{solveODE()}} takes the inputs as one vector \code{parms} and the derivatives as
+\code{tangent}, \code{hessian}, \code{cotangent} and \code{curvature}. Here the inputs are
+\code{vars} and \code{params}, and each derivative is split into a variable part
+(suffix \code{X}) and a parameter part (suffix \code{P}).
+
+\code{attach.input = TRUE} passes inputs that are neither variables nor
+parameters through to the result. \code{fixed} at run time excludes further
+parameters from differentiation.
+}
 }
 \examples{
 \donttest{
@@ -112,5 +164,5 @@ if (codegenAvailable()) {
 }
 \seealso{
 \code{\link[=compile]{compile()}} for compilation; \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} for ODE
-integration; \code{vignette("Methods", package = "cppDE")}.
+integration; \code{\link[=ptc]{ptc()}} for steady states; \code{vignette("Methods", package = "cppDE")}.
 }

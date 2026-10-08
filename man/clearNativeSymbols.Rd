@@ -2,7 +2,7 @@
 % Please edit documentation in R/tools.R
 \name{clearNativeSymbols}
 \alias{clearNativeSymbols}
-\title{Forget which shared object exports which entry point}
+\title{Forget Which Shared Object Exports Which Entry Point}
 \usage{
 clearNativeSymbols()
 }
@@ -10,12 +10,12 @@ clearNativeSymbols()
 \code{NULL}, invisibly.
 }
 \description{
-\link{cppFUN} instances and \link{solveODE} remember the DLL that exports each
-generated entry point, so that a call does not have to search every loaded
-shared object. Recompiling a model into a differently named shared object
-makes that pairing stale. Call this to drop it; \link{compile} does it for you.
+\code{\link[=cppFUN]{cppFUN()}} objects and \code{\link[=solveODE]{solveODE()}} remember the shared object that exports
+each generated entry point. Recompiling a model into a shared object of
+another name makes that pairing stale; call this to drop it. \code{\link[=compile]{compile()}}
+calls it itself, and loading or unloading a shared object does not need it.
 }
-\details{
-Addresses are never cached, so this is not needed after loading or unloading
-a shared object.
+\examples{
+## After a model was recompiled into a shared object of another name
+clearNativeSymbols()
 }

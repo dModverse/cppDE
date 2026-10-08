@@ -14,7 +14,7 @@ solveODE(
   forcings = NULL,
   abstol = 1e-06,
   reltol = 1e-06,
-  maxattemps = 50L,
+  maxattempts = 50L,
   maxsteps = 1000000L,
   hini = 0,
   roottol = 1e-06,
@@ -26,65 +26,45 @@ solveODE(
   keepStore = FALSE,
   store = NULL,
   sensErrCon = TRUE,
-  adjoint = NULL
+  adjoint = NULL,
+  maxattemps = NULL
 )
 }
 \arguments{
 \item{model}{A compiled ODE model returned by \code{\link[=cppODE]{cppODE()}} or \code{\link[=cvode]{cvode()}}.}
 
-\item{times}{Numeric vector of time points at which to return the
-solution. Must be non-empty and contain only finite values.}
+\item{times}{Numeric vector of output times, non-empty and finite.}
 
 \item{parms}{Named numeric vector of initial conditions and parameters.
 Names must include all of
 \code{c(attr(model, "variables"), attr(model, "parameters"))}.}
 
-\item{tangent}{Optional numeric matrix, the tangent of the inputs: the
-Jacobian \eqn{\Phi'(\theta)} of the initial states and parameters.
-Accepts three shapes (see Details): state-only \verb{[n_states, n_active]}
-(auto-extended with identity on parameter rows), full
-\verb{[n_states + n_params, M]}, or partial \verb{[k, M]} with row names
-identifying a subset of \code{c(variables, parameters)} (missing rows
-are zero-padded, i.e. implicitly fixed). Column names label the
-directions of the returned derivatives. Default \code{NULL} uses identity
-seeding on the active sensitivity basis.}
+\item{tangent}{Optional numeric matrix, the tangent of the inputs; shapes in
+Details. Default \code{NULL}: the identity on the active sensitivities.}
 
-\item{hessian}{Optional numeric array, the Hessian tensor
-\eqn{\Phi''(\theta)} of the inputs. Shapes are analogous to those of
-\code{tangent}:
-\verb{[n_states, n_active, n_active]} (state-only),
-\verb{[n_states + n_params, M, M]} (full), or \verb{[k, M, M]} with dim-1
-names identifying a subset of \code{c(variables, parameters)} (partial,
-zero-padded). Allowed only when \code{attr(model, "deriv2")} is \code{TRUE}.
-Default \code{NULL} means the inputs are affine in \eqn{\theta}.}
+\item{hessian}{Optional numeric array, the second derivative of the inputs;
+shapes in Details. Needs a model with \code{attr(model, "deriv2")}. Default
+\code{NULL}: the inputs are affine in \eqn{\theta}.}
 
-\item{fixed}{Optional character vector of sensitivity-parameter names
-to treat as fixed at run time. The integrator then runs with a
-smaller AD state. Names must be a subset of
-\code{attr(model, "dimNames")$sens}. Unlike compile-time \code{fixed} in
-\code{\link[=cppODE]{cppODE()}}, the run-time \code{fixed} set can be changed between calls
-without recompilation. Incompatible with full / partial \code{tangent}
-(those encode fixedness through row values or row presence).
-Default \code{NULL} (all parameters active).}
+\item{fixed}{Optional character vector, sensitivity names held fixed in this
+call, a subset of \code{attr(model, "dimNames")$sens}. Unlike \code{fixed} of
+\code{\link[=cppODE]{cppODE()}} it changes without recompiling. Not with a full or partial
+\code{tangent}. Default \code{NULL}.}
 
-\item{forcings}{Optional named list of forcing-function data. Each
-element must be a \code{data.frame} (or coercible object) with columns
-\code{time} and \code{value}, or a two-column matrix. Names must match
-\code{attr(model, "forcings")}. Default \code{NULL}. A forcing is the monotone
-cubic Hermite interpolant (PCHIP) of its points and holds the value of
-the first and the last point outside them; a single point gives a
-constant.}
+\item{forcings}{Named list of forcing data, one element per name in
+\code{attr(model, "forcings")}: a \code{data.frame} with columns \code{time} and \code{value},
+or a two-column matrix. \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} take the forcing names,
+this argument the data. A forcing is the monotone cubic Hermite
+interpolant (PCHIP) of its points and constant beyond the first and the
+last point, see \code{\link[=forcingValues]{forcingValues()}}. Default \code{NULL}.}
 
 \item{abstol}{Absolute error tolerance. Default \code{1e-6}.}
 
 \item{reltol}{Relative error tolerance. Default \code{1e-6}.}
 
-\item{maxattemps}{Maximum number of consecutive integration steps
-without time advance (consecutive rejected steps) before the solver
-aborts with \code{CV_CONV_FAILURE} (\code{return_code = -4}). Default \code{50}.
-Lower values can be useful for fail-fast behaviour in optimisation
-pipelines; very stiff problems with sharp transients may legitimately
-reject several steps in a row when the controller first adapts.}
+\item{maxattempts}{Maximum number of consecutive step attempts without
+progress in time before the solve stops with \code{return_code = -4}. Default
+\code{50}.}
 
 \item{maxsteps}{Maximum total number of integration steps. Default
 \code{1e6}.}
@@ -92,12 +72,11 @@ reject several steps in a row when the controller first adapts.}
 \item{hini}{Initial step size; \code{0} (default) triggers automatic
 estimation.}
 
-\item{roottol}{Tolerance for root finding in root-triggered events.
-Default \code{1e-6}. An event \code{value} that depends on \code{time} evaluates the
-firing time directly, so its derivatives inherit this tolerance rather
-than \code{reltol}. With \code{rootfunc = "equilibrate"} the integration stops once
-every \verb{|dx/dt| <= roottol |x| + abstol}; the native backend includes the
-sensitivities.}
+\item{roottol}{Tolerance for locating root events. Default \code{1e-6}. Under
+\code{rootfunc = "equilibrate"} the solve stops once every
+\eqn{|\dot x_i| \le \mathrm{roottol}\, |x_i| + \mathrm{abstol}}{
+|dx_i/dt| <= roottol |x_i| + abstol}; on a \code{\link[=cppODE]{cppODE()}} model the test
+covers the sensitivities as well.}
 
 \item{maxroot}{Maximum number of triggers per root event. Default \code{1}.}
 
@@ -107,86 +86,99 @@ message and no partial results), \code{"warn"} (emit a warning and return
 partial results up to \code{t_reached}), or \code{"silent"} (return the partial
 result without any signal).}
 
-\item{traceFile}{Optional character giving a CSV file path. If the
-model was compiled with \code{stepTrace = TRUE} and a non-empty path is
-supplied, the per-step trace \code{data.frame} is written to that path.
-The trace is also attached to the returned list as \verb{$trace}. Ignored
-for models compiled without trace support (\verb{$trace} is \code{NULL} in
-that case).}
+\item{traceFile}{Optional path of a CSV file the step trace is written to.
+Needs a model compiled with \code{stepTrace = TRUE}, ignored otherwise. Default
+\code{NULL}.}
 
-\item{cotangent}{The cotangent of the outputs, required by a model compiled
-with \code{derivMode = "reverse"} or \code{"forward-reverse"} (\code{\link[=cppODE]{cppODE()}}) or with
-\code{derivMode = "reverse"} (\code{\link[=cvode]{cvode()}}). A \verb{[n_out, n_states]} matrix or an
-\verb{[n_out, n_states, n_seed]} array, whose first dimension is the solve's
-own output row count: a root event adds output times, so that count is
-not \code{length(times)} in general. What comes back is \verb{w' * dx/dtheta}
-summed over times and states, one column per cotangent column. Supplying
-it to a forward model is an error, as is leaving it out on a reverse one.}
+\item{cotangent}{The cotangent of the outputs, \verb{[n_t, n_x]} or
+\verb{[n_t, n_x, n_seed]}. Required by a model compiled with
+\code{derivMode = "reverse"} or \code{"forward-reverse"} unless \code{keepStore = TRUE};
+an error on any other model. \code{result$cotangent} is then
+\eqn{\sum_{t,i} w_{t,i}\, \partial x_i(t) / \partial \theta}{
+sum_{t,i} w_{t,i} dx_i(t)/dtheta}, one column per seed. Default \code{NULL}.}
 
 \item{curvature}{Optional, \code{"forward-reverse"} only: the derivative of
-\code{cotangent} along the tangent, \verb{[n_out, n_states, n_seed, n_sens]} on the
-cotangent's first three dimensions. For a cotangent that is the gradient
-of a functional of the outputs, this is that functional's Hessian applied
-to the output tangent. \code{NULL} treats the cotangent as constant in
-\eqn{\theta}.}
+\code{cotangent} along the tangent, \verb{[n_t, n_x, n_seed, n_s]}. For a cotangent
+that is the gradient of a functional of the outputs, this is that
+functional's Hessian applied to the output tangent. Default \code{NULL}: the
+cotangent is constant in \eqn{\theta}.}
 
-\item{keepStore}{Whether a reverse solve returns its checkpoints as
-\verb{$store}, for a later solve to reuse through \code{store}. The \code{cotangent} may then
-be omitted, which runs the model for its values alone. Native backend
-only: CVODES holds its checkpoints itself.}
+\item{keepStore}{Logical, default \code{FALSE}. Return the checkpoints of a
+reverse solve as \verb{$store}, for a later solve to reuse through \code{store}. The
+\code{cotangent} may then be omitted, and the solve returns the values alone.
+Only on a \code{\link[=cppODE]{cppODE()}} model compiled with \code{derivMode = "reverse"}.}
 
 \item{store}{The \verb{$store} of an earlier solve of the same model at the same
-\code{times} and \code{parms}. The solve integrates nothing and goes straight to the
-sweep. A store from a different point is an error, not a silent reuse. It
-may be reused any number of times and is freed with its last reference.}
+\code{times} and \code{parms}. The solve then integrates nothing and runs the
+backward sweep alone. A store from a different point is an error. A store
+may be reused any number of times. Default \code{NULL}.}
 
-\item{sensErrCon}{Whether the step size, the order and the corrector's
-convergence test see the sensitivities. \code{TRUE}, the default, takes the
-maximum over the state and each direction, so the worst-resolved direction
-sets the step. \code{FALSE} leaves every control decision to value arithmetic:
-the step sequence is then the one a value-only run takes, whatever the
-direction count, and the sensitivities come back on a coarser grid than
-\code{abstol} and \code{reltol} would give them. Cheaper and less accurate, and the
-convention SUNDIALS ships (\code{CVodeSetSensErrCon}). Needs a model with
-sensitivities. A model compiled with \code{derivMode = "reverse"} takes the
-grid of a value-only run either way.}
+\item{sensErrCon}{Logical. Include the sensitivities in the error test.
+Default \code{TRUE}; \code{FALSE} is cheaper and less accurate. Needs a model with
+sensitivities, has no effect under \code{derivMode = "reverse"}, and a
+\code{\link[=cvode]{cvode()}} model takes \code{TRUE} only.}
 
-\item{adjoint}{Optional \code{\link[=adjointControl]{adjointControl()}}, what a reverse solve does
-beyond its gradient: check the sweep against the tolerances, report its
-grid.}
+\item{adjoint}{Optional \code{\link[=adjointControl]{adjointControl()}} object for a model compiled with
+\code{derivMode = "reverse"}. Default \code{NULL}, the same as \code{adjointControl()}.}
+
+\item{maxattemps}{Deprecated spelling of \code{maxattempts}.}
 }
 \value{
-A named list with components \code{time}, \code{variable}, \code{diagnostics}, and,
-when \code{attr(model, "deriv")} is \code{TRUE}, \code{tangent}, plus \code{hessian} when
-\code{attr(model, "deriv2")} is \code{TRUE}. A model compiled with
-\code{derivMode = "reverse"} has neither, and returns \code{cotangent} instead:
-\verb{[n_states + n_params, n_seed]}, the cotangent of the inputs, indexed exactly
-as the argument \code{tangent}. One compiled with \code{derivMode = "forward-reverse"}
-returns \code{tangent} and \code{cotangent} and adds \code{curvature},
-\verb{[n_states + n_params, n_s, n_seed]}: the derivatives of each \code{cotangent}
-entry along the tangent, which under the identity tangent are the columns of
-the Hessian of the seeded functional. Output arrays are time-first:
-\code{variable} is \verb{[n_t, n_x]}, \code{tangent} is \verb{[n_t, n_x, n_s]}, and
-\code{hessian} is \verb{[n_t, n_x, n_s, n_s]}. The dimension names of \code{tangent}
-and \code{hessian} reflect the active (non-fixed) sensitivity parameters.
-The \code{diagnostics} element is a list of solver statistics (see
-\code{\link[=diagnostics]{diagnostics()}}). When the model was compiled with \code{stepTrace = TRUE},
-an additional \verb{$trace} \code{data.frame} with per-step diagnostics is
-attached.
-
-Under \code{adjoint = adjointControl(trace = TRUE)} a reverse solve also returns
-\verb{$adjoint}, the grid and adjoint of the sweep; see \code{\link[=adjointControl]{adjointControl()}}.
-
-With \code{keepStore = TRUE} a reverse solve also returns \verb{$store}, an external
-pointer to the checkpoints, for a later solve to take through \code{store}.
+A named list:
+\itemize{
+\item \code{time}: the output times, length \code{n_t}.
+\item \code{variable}: the states, \verb{[n_t, n_x]}.
+\item \code{tangent}: when \code{attr(model, "deriv")} is \code{TRUE}, \verb{[n_t, n_x, n_s]}. The
+third dimension is named by the active sensitivities or the columns of
+\code{tangent}.
+\item \code{hessian}: when \code{attr(model, "deriv2")} is \code{TRUE}, \verb{[n_t, n_x, n_s, n_s]}.
+\item \code{cotangent}: under \code{derivMode = "reverse"} or \code{"forward-reverse"}, the
+cotangent of the inputs, \verb{[n_x + n_p, n_seed]}, rows as in a full
+\code{tangent}.
+\item \code{curvature}: under \code{"forward-reverse"}, \verb{[n_x + n_p, n_s, n_seed]}, the
+derivative of each \code{cotangent} entry along the tangent. Under the identity
+tangent its columns are the Hessian of the seeded functional. The order of
+the last two dimensions is that of a Hessian, not that of the argument
+\code{curvature}.
+\item \code{diagnostics}: solver statistics, printed by \code{\link[=diagnostics]{diagnostics()}}:
+\code{return_code} (0 on success, negative codes as in SUNDIALS CVODE),
+\code{message}, \code{accepted} and \code{rejected} (step counts), \code{fevals}, \code{jevals}
+and \code{setups} (right-hand side evaluations, Jacobian evaluations, matrix
+factorisations), \code{last_dt} and \code{last_order} (size and order of the last
+successful step), \code{t_reached}, and the model's \code{method}, \code{useNDF} and,
+on a \code{\link[=cvode]{cvode()}} model, \code{backend}.
+\item \code{trace}: with \code{stepTrace = TRUE}, a \code{data.frame} with one row per step
+attempt: \code{nst} (accepted steps before the attempt), \code{t} (time at the end
+of the step), \code{h} (signed step size), \code{q} (order), \code{dsm} (error test
+value, the step passes below 1), \code{acnrm} and \code{acnrm_state} (weighted RMS
+norm of the local error over all components and over the states alone),
+\code{tq2} (error constant), \code{gamma} and \code{gamrat} (step size times the leading
+coefficient, and its ratio to the value at the last factorisation),
+\code{newton_conv} (1 when the corrector converged), \code{mode} (\code{"BDF"}, \code{"NDF"},
+\code{"ADAMS"}, \code{"ONESTEP"}, or \code{"CVODE"} and \code{"CVODE_event"} on a \code{\link[=cvode]{cvode()}}
+model), \code{nfe}, \code{njev} and \code{nsetups} (cumulative counters) and
+\code{setup_reason} (what triggered the last factorisation). A \code{\link[=cvode]{cvode()}} model
+reports \code{NaN} where CVODES exposes no value.
+\item \code{adjoint}: under \code{adjointControl(trace = TRUE)}, see \code{\link[=adjointControl]{adjointControl()}}.
+\item \code{store}: with \code{keepStore = TRUE}, an external pointer to the checkpoints.
+}
 }
 \description{
-Numerically integrates a compiled ODE model created by \code{\link[=cppODE]{cppODE()}} (or
-\code{\link[=cvode]{cvode()}}) over a specified time span. Returns the state trajectory and,
-when the model was compiled with derivatives, their tangent and Hessian
-(forward) or the cotangent and curvature of a seeded functional (reverse).
+Integrates a model compiled by \code{\link[=cppODE]{cppODE()}} or \code{\link[=cvode]{cvode()}} over the time points
+\code{times}. Returns the state trajectory and, when the model was compiled with
+derivatives, their tangent and Hessian (forward) or the cotangent and
+curvature of a seeded functional (reverse).
 }
 \details{
+\subsection{Dimensions}{
+
+\code{n_t} is the number of output rows, \code{nrow(result$variable)}: \code{length(times)},
+plus one row for each event inside the window and for the time 0 that
+\code{includeTimeZero} adds. \code{n_x} is the number of states, \code{n_p} the number of
+parameters, \code{n_s} the number of tangent directions and \code{n_seed} the number of
+cotangent columns.
+}
+
 \subsection{Derivative arguments and results}{
 
 A derivative argument and its result have the same name. \code{tangent} and
@@ -198,37 +190,30 @@ along the tangent: that functional's Hessian applied to the tangent, on the
 outputs going in and on the inputs coming out.
 }
 
-\subsection{Tangent and Hessian of the inputs}{
+\subsection{Shapes of \code{tangent} and \code{hessian}}{
 
-\code{tangent} and \code{hessian} are the Jacobian \eqn{\Phi'(\theta)} and the
-Hessian tensor \eqn{\Phi''(\theta)} of a reparametrisation
-\eqn{p = \Phi(\theta)} of the initial states and parameters; the returned
-derivatives are then taken with respect to \eqn{\theta}. Omitting them
-seeds the identity on the active (non-fixed) sensitivities. Three shapes
-are accepted, selected per call from the row count and row names:
+\code{tangent} is the Jacobian \eqn{\Phi'(\theta)} and \code{hessian} the second
+derivative \eqn{\Phi''(\theta)} of a reparametrisation
+\eqn{p = \Phi(\theta)} of the initial states and parameters; the results are
+then derivatives in \eqn{\theta}. \code{tangent} takes one of three shapes, told
+apart by its row count and row names. \code{hessian} has the rows of \code{tangent} and
+two dimensions of length \code{n_s}.
 \itemize{
-\item \strong{State-only shape} \verb{[n_states, n_active]}: identity seeding on the
-parameter block is implied. The active set equals the model's
-sensitivity names minus \code{fixed}. Detected when \code{nrow == n_states}
-and row names are absent or are a permutation of \code{variables}. This
-is the shape of \code{res$tangent[t, , ]}, so it can seed a following solve.
-\item \strong{Full shape} \verb{[n_states + n_params, M]}: \eqn{\Phi'(\theta)}
-directly. State rows seed state ICs; parameter rows seed the dynamic
-parameters. The column count \code{M} may change from call to call.
-\item \strong{Partial shape} \verb{[k, M]} with \code{k < n_states + n_params}: row
-names are required and must be a subset of
-\code{c(variables, parameters)}. The supplied rows are placed at the
-matching positions of \eqn{\Phi'(\theta)}; missing rows are zero-
-padded, i.e. those slots are treated as fixed. This is the
-row-name-driven equivalent of run-time \code{fixed}.
+\item State-only, \verb{[n_x, n_s]}, rows unnamed or named by the states. The
+parameter rows are the identity on the active sensitivities, the model's
+sensitivity names minus \code{fixed}. \code{result$tangent[t, , ]} has this shape and
+can seed a following solve.
+\item Full, \verb{[n_x + n_p, n_s]}, states first: \eqn{\Phi'(\theta)} itself. \code{n_s}
+may change from call to call.
+\item Partial, \verb{[k, n_s]} with \code{k < n_x + n_p}. The row names, a subset of
+\code{c(variables, parameters)}, place the rows; missing rows are zero, so
+those inputs are fixed.
 }
 
-Run-time \code{fixed} is incompatible with the full and partial shapes
-(those already encode fixedness via row presence / row values).
-
-Column names, when present, must match the relevant column basis
-(the active sensitivity names for the state-only shape, user-chosen theta
-names for the full / partial shapes).
+Run-time \code{fixed} takes the state-only shape only. Column names, when given,
+are the active sensitivity names (state-only) or name the directions
+\eqn{\theta} (full and partial); unnamed full or partial columns are named
+\code{theta1}, \code{theta2}, and so on.
 }
 }
 \examples{
@@ -268,5 +253,6 @@ if (codegenAvailable()) {
 }
 \seealso{
 \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} for model compilation;
-\code{\link[=diagnostics]{diagnostics()}} for printing solver statistics.
+\code{\link[=solveODEBatch]{solveODEBatch()}} for many conditions in one call; \code{\link[=adjointControl]{adjointControl()}};
+\code{\link[=forcingValues]{forcingValues()}}; \code{\link[=diagnostics]{diagnostics()}} for printing solver statistics.
 }

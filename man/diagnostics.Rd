@@ -11,7 +11,8 @@ diagnostics(result)
 \code{diagnostics} element.}
 }
 \value{
-Invisibly returns the \code{diagnostics} list.
+The \code{diagnostics} list, invisibly; its fields are listed under
+Value in \code{\link[=solveODE]{solveODE()}}. Without diagnostics, a message and \code{NULL}.
 }
 \description{
 Prints a summary of the solver diagnostics returned by \code{\link[=solveODE]{solveODE()}}.

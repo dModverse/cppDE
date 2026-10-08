@@ -1,6 +1,6 @@
 Package: cppDE
 Title: 'C++' Code Generation for ODEs with Sensitivity Propagation
-Version: 0.11.6
+Version: 0.11.7
 Authors@R: c(
     person("Simon", "Beyer", , "simon.beyer@fdm.uni-freiburg.de", role = c("aut", "cre")),
     person("Lawrence Livermore National Security", role = "cph",
@@ -40,7 +40,7 @@ SystemRequirements: C++17; Python (>= 3.9) with SymPy. Two further
     listed here for that reason: when one is absent, only the
     corresponding feature is disabled and reports how to enable it. The
     libraries can be installed as system packages or built from source
-    by cppDE itself; see ?cppDE::install_libs and the README.
+    by cppDE itself; see ?cppDE::installLibs and the README.
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 Depends:

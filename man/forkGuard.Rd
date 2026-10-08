@@ -12,27 +12,27 @@ no entry point resolved), \code{threads} (its current thread count, \code{NA} wi
 a getter) and \code{guard} (whether the \code{fork()} handler is installed).
 }
 \description{
-A threaded BLAS deadlocks in a forked child: its worker threads do not come
-along, and the first call large enough to thread waits forever on a lock they
-held. cppDE pins BLAS to one thread for the width of every \code{fork()} and
-restores the previous count in the parent, so \code{\link[parallel:mclapply]{parallel::mclapply()}} and
-anything built on it are safe without the caller wrapping them. This reports
-what the guard found.
+Reports the guard cppDE installs so that a threaded BLAS does not deadlock in
+a forked child, as under \code{\link[parallel:mclapply]{parallel::mclapply()}}. The guard sets BLAS to one
+thread for the width of every \code{fork()} and restores the previous count in
+the parent.
 }
 \details{
-Nothing is pinned at load time: outside a \code{fork()} the thread count is the
-caller's own. A child keeps the single thread it inherited, so BLAS inside a
-forked worker is serial.
+BLAS also runs on one thread during each solve. Outside a solve and a
+\code{fork()} the thread count is the caller's own; a forked child keeps the
+single thread it inherited.
 
 \code{api} is \code{NA} on a BLAS with no runtime thread-control entry point, and the
 deadlock is then still reachable; the fallback is \code{OMP_NUM_THREADS=1} in the
-environment that starts R, because setting it from R is too late. \code{guard} is
-\code{FALSE} on Windows, which has no \code{fork()}.
+environment that starts R. \code{guard} is \code{FALSE} on Windows, which has no
+\code{fork()}.
 
-Attaching the package prints this in one line. The guard itself is installed
-when the package DLL loads, so it is in place either way. Set
+Attaching the package prints this in one line. Set
 \code{options(cppDE.quiet = TRUE)} beforehand to suppress the line, or attach with
 \code{\link[=suppressPackageStartupMessages]{suppressPackageStartupMessages()}}.
+}
+\examples{
+forkGuard()
 }
 \seealso{
 \code{\link[=batchAvailable]{batchAvailable()}}

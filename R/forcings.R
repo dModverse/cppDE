@@ -1,4 +1,4 @@
-#' Values of forcings
+#' Values of Forcings
 #'
 #' Evaluates forcings the way a model from [cppODE()] or [cvode()] sees them:
 #' the monotone cubic Hermite interpolant (PCHIP) of each forcing's points,

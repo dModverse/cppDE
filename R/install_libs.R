@@ -1,4 +1,4 @@
-#' Build the optional solver libraries from source
+#' Build the Optional Solver Libraries from Source
 #'
 #' Downloads pinned upstream releases of
 #' [SuiteSparse](https://github.com/DrTimothyAldenDavis/SuiteSparse) and
@@ -84,24 +84,13 @@
 #' ```
 #'
 #' @section BLAS and LAPACK:
-#' There is no option for selecting a BLAS: everything follows R. The
-#' `cppODE()` backend calls `dgetrf`/`dgetrs` through R's own BLAS and
-#' LAPACK, and SUNDIALS is built against the same libraries R reports, so a
-#' compiled model links one implementation rather than two. Whatever R uses
-#' (reference LAPACK, OpenBLAS, MKL via FlexiBLAS) is what cppDE uses.
-#' cppDE sets that library to a single thread, because its factorisations
-#' are small and frequent and thread startup costs more than it saves.
+#' SUNDIALS is built against R's BLAS and LAPACK; there is no option to choose
+#' another. When R reports a BLAS, the build enables `SUNLinSol_LapackDense`,
+#' which [cvode()] then uses for dense Jacobians; otherwise `cvode()` uses
+#' `SUNLinSol_Dense`. During a solve and across `fork()` cppDE runs BLAS on one
+#' thread, see [forkGuard()].
 #'
-#' This enables SUNDIALS' `SUNLinSol_LapackDense`, which [cvode()] then
-#' uses for dense Jacobians. If R reports no BLAS, or the LAPACK-enabled
-#' configure step fails, the build continues without that solver and
-#' `cvode()` uses `SUNLinSol_Dense`. There is no per-model switch: the
-#' choice is fixed when cppDE is installed.
-#'
-#' The SuiteSparse modules built here (`klu`, `amd`, `colamd`, `btf`) do
-#' not use BLAS at all.
-#'
-#' @param which Which libraries to build. `"sundials"` (the default)
+#' @param which Which libraries to build. Default `"sundials"`, which
 #'   installs SUNDIALS and SuiteSparse; `"suitesparse"` installs
 #'   SuiteSparse/KLU only.
 #' @param dir Directory to install into. Defaults to
@@ -109,27 +98,30 @@
 #'   subdirectory is created inside it.
 #' @param sundials_version,suitesparse_version Upstream release tags. The
 #'   defaults are a pair verified to build together.
-#' @param quiet If `TRUE`, suppress compiler and CMake output.
+#' @param quiet If `TRUE`, suppress compiler and CMake output. Default
+#'   `FALSE`.
 #' @param ask If `TRUE` (the default in an interactive session), ask for
 #'   confirmation before downloading and writing to `dir`.
+#' @param ... For `install_libs()`, the arguments of `installLibs()`.
 #'
 #' @return The install prefix, invisibly.
 #'
 #' @seealso [cvode()] and the `sparse` argument of [cppODE()], which report
 #'   the relevant option when a library is unavailable.
 #'
+#' @example inst/examples/installLibs.R
 #' @export
-install_libs <- function(which = c("sundials", "suitesparse"),
-                         dir = NULL,
-                         sundials_version = "7.9.0",
-                         suitesparse_version = "7.14.1",
-                         quiet = FALSE,
-                         ask = interactive()) {
+installLibs <- function(which = c("sundials", "suitesparse"),
+                        dir = NULL,
+                        sundials_version = "7.9.0",
+                        suitesparse_version = "7.14.1",
+                        quiet = FALSE,
+                        ask = interactive()) {
 
   which <- match.arg(which)
 
   if (.Platform$OS.type == "windows")
-    stop("install_libs() is not supported on Windows.\n",
+    stop("installLibs() is not supported on Windows.\n",
          "  Use Rtools' package manager instead, substituting your Rtools\n",
          "  version for <ver>:\n",
          "    C:/rtools<ver>/usr/bin/pacman.exe -Sy --noconfirm \\\n",
@@ -220,4 +212,14 @@ install_libs <- function(which = c("sundials", "suitesparse"),
           "\n\nTo remove it again:\n  unlink(\"", prefix, "\", recursive = TRUE)")
 
   invisible(prefix)
+}
+
+
+#' @rdname installLibs
+#' @description `install_libs()` is the deprecated former name of
+#'   `installLibs()`.
+#' @export
+install_libs <- function(...) {
+  warning("'install_libs()' is deprecated; use 'installLibs()'", call. = FALSE)
+  installLibs(...)
 }

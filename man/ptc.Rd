@@ -2,7 +2,7 @@
 % Please edit documentation in R/ptc.R
 \name{ptc}
 \alias{ptc}
-\title{Steady state by pseudo-transient continuation}
+\title{Steady State by Pseudo-Transient Continuation}
 \usage{
 ptc(
   fun,
@@ -33,34 +33,36 @@ order. Default \code{solve}.}
 \item{C, total}{Constraint matrix with columns named by \code{solve}, and its
 right-hand side: \verb{C x = total}. Default none.}
 
-\item{flow}{\code{TRUE} if the outputs are the right-hand side of an ODE,
-\code{FALSE} for plain equations.}
+\item{flow}{Logical, default \code{TRUE}: the outputs are the right-hand side of
+an ODE. \code{FALSE} for plain equations.}
 
-\item{positive}{Keep the solved variables positive: the step is taken
-multiplicatively and the constraints are restored by \verb{x exp(C' lambda)}.}
+\item{positive}{Logical, default \code{TRUE}. Keep the solved variables positive;
+they must start positive.}
 
-\item{controls}{Named list: \code{rtol} (default \code{1e-10}) and \code{atol} (\code{1e-14}),
-every row within \code{rtol} of its turnover \verb{sum_k |df_i/dx_k| |x_k|} plus
-\code{atol} times its diagonal; \code{flowTol} (\code{1}), relative local error of a
-pseudo-time step; \code{maxit} (\code{400}); \code{dtInit} (\code{1e-2}), the first
-pseudo-time step, relative to the fastest rate if \code{flow = TRUE}; \code{zmax}
-(\code{5}), the largest log change of a variable per step.}
+\item{controls}{Named list:
+\itemize{
+\item \code{reltol} (default \code{1e-10}) and \code{abstol} (\code{1e-14}): each residual is
+measured against \code{reltol} times its turnover
+\eqn{\sum_k |\partial f_i / \partial x_k|\, |x_k|}{
+  sum_k |df_i/dx_k| |x_k|} plus \code{abstol} times its largest Jacobian
+entry. The old names \code{rtol} and \code{atol} are
+deprecated.
+\item \code{flowTol} (\code{1}): relative local error of a pseudo-time step.
+\item \code{maxit} (\code{400}): maximum number of iterations.
+\item \code{dtInit} (\code{1e-2}): the first pseudo-time step, relative to the fastest
+rate if \code{flow = TRUE}.
+\item \code{zmax} (\code{5}): the largest change of the logarithm of a variable per step.
+}}
 }
 \value{
 A list with the named solution \code{x} (all variables), \code{converged},
 \code{iterations} and \code{message}.
 }
 \description{
-Solves \code{f(x, p) = 0} for variables of a \code{\link[=cppFUN]{cppFUN()}} model, one output per
-solved variable, optionally under linear constraints \verb{C x = total}.
-}
-\details{
-Each step solves \verb{(I/dt - J) d = f} together with the constraint rows in the
-least-squares sense. Small \code{dt} gives implicit Euler steps along
-\code{dx/dt = f}, large \code{dt} Newton steps; \code{dt} follows the local error of the
-pseudo-time step, so the iteration follows the flow to a stable steady
-state and converges quadratically near it. With \code{flow = FALSE} the steps
-follow the Newton flow and any regular root of plain equations is returned.
+Solves \eqn{f(x, p) = 0} for variables of a \code{\link[=cppFUN]{cppFUN()}} model, one output per
+solved variable, optionally under linear constraints \eqn{C x = total}.
+\code{flow = TRUE} follows the ODE flow to a stable steady state; \code{flow = FALSE}
+returns any regular root.
 }
 \examples{
 \donttest{
@@ -87,4 +89,7 @@ if (codegenAvailable()) {
 \references{
 Kelley CT, Keyes DE (1998). Convergence analysis of
 pseudo-transient continuation. SIAM J Numer Anal 35(2):508-523.
+}
+\seealso{
+\code{\link[=cppFUN]{cppFUN()}}
 }

@@ -20,7 +20,7 @@
                          tangent = NULL, hessian = NULL,
                          fixed = NULL, forcings = NULL,
                          abstol = 1e-6, reltol = 1e-6,
-                         maxattemps = 50L, maxsteps = 1e6L,
+                         maxattempts = 50L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
                          cotangent = NULL, curvature = NULL,
                          keepStore = FALSE, store = NULL,
@@ -422,15 +422,15 @@
   if (!is.numeric(reltol)  || reltol  <= 0) stop("'reltol' must be positive")
   if (!is.numeric(hini)    || hini    <  0) stop("'hini' must be non-negative")
   if (!is.numeric(roottol) || roottol <= 0) stop("'roottol' must be positive")
-  maxattemps <- as.integer(maxattemps); maxsteps <- as.integer(maxsteps); maxroot <- as.integer(maxroot)
-  if (maxattemps <= 0L) stop("'maxattemps' must be positive")
+  maxattempts <- as.integer(maxattempts); maxsteps <- as.integer(maxsteps); maxroot <- as.integer(maxroot)
+  if (maxattempts <= 0L) stop("'maxattempts' must be positive")
   if (maxsteps    <= 0L) stop("'maxsteps' must be positive")
   if (maxroot     <= 0L) stop("'maxroot' must be positive")
 
   cotangent <- .adjointApply(adjoint, model, cotangent, is_cvode)
 
   list(call_args = list(times, parms_ordered, tangent, hessian, fixed_indices,
-                        as.double(abstol), as.double(reltol), maxattemps, maxsteps,
+                        as.double(abstol), as.double(reltol), maxattempts, maxsteps,
                         as.double(hini), as.double(roottol), maxroot,
                         forcing_times_list, forcing_values_list, cotangent),
        times = times, variables = variables, sens_col_names = sens_col_names,
@@ -505,12 +505,20 @@
 #' Run a Compiled ODE Model
 #'
 #' @description
-#' Numerically integrates a compiled ODE model created by [cppODE()] (or
-#' [cvode()]) over a specified time span. Returns the state trajectory and,
-#' when the model was compiled with derivatives, their tangent and Hessian
-#' (forward) or the cotangent and curvature of a seeded functional (reverse).
+#' Integrates a model compiled by [cppODE()] or [cvode()] over the time points
+#' `times`. Returns the state trajectory and, when the model was compiled with
+#' derivatives, their tangent and Hessian (forward) or the cotangent and
+#' curvature of a seeded functional (reverse).
 #'
 #' @details
+#' ## Dimensions
+#'
+#' `n_t` is the number of output rows, `nrow(result$variable)`: `length(times)`,
+#' plus one row for each event inside the window and for the time 0 that
+#' `includeTimeZero` adds. `n_x` is the number of states, `n_p` the number of
+#' parameters, `n_s` the number of tangent directions and `n_seed` the number of
+#' cotangent columns.
+#'
 #' ## Derivative arguments and results
 #'
 #' A derivative argument and its result have the same name. `tangent` and
@@ -521,169 +529,140 @@
 #' along the tangent: that functional's Hessian applied to the tangent, on the
 #' outputs going in and on the inputs coming out.
 #'
-#' ## Tangent and Hessian of the inputs
+#' ## Shapes of `tangent` and `hessian`
 #'
-#' `tangent` and `hessian` are the Jacobian \eqn{\Phi'(\theta)} and the
-#' Hessian tensor \eqn{\Phi''(\theta)} of a reparametrisation
-#' \eqn{p = \Phi(\theta)} of the initial states and parameters; the returned
-#' derivatives are then taken with respect to \eqn{\theta}. Omitting them
-#' seeds the identity on the active (non-fixed) sensitivities. Three shapes
-#' are accepted, selected per call from the row count and row names:
+#' `tangent` is the Jacobian \eqn{\Phi'(\theta)} and `hessian` the second
+#' derivative \eqn{\Phi''(\theta)} of a reparametrisation
+#' \eqn{p = \Phi(\theta)} of the initial states and parameters; the results are
+#' then derivatives in \eqn{\theta}. `tangent` takes one of three shapes, told
+#' apart by its row count and row names. `hessian` has the rows of `tangent` and
+#' two dimensions of length `n_s`.
 #'
-#' - **State-only shape** `[n_states, n_active]`: identity seeding on the
-#'   parameter block is implied. The active set equals the model's
-#'   sensitivity names minus `fixed`. Detected when `nrow == n_states`
-#'   and row names are absent or are a permutation of `variables`. This
-#'   is the shape of `res$tangent[t, , ]`, so it can seed a following solve.
-#' - **Full shape** `[n_states + n_params, M]`: \eqn{\Phi'(\theta)}
-#'   directly. State rows seed state ICs; parameter rows seed the dynamic
-#'   parameters. The column count `M` may change from call to call.
-#' - **Partial shape** `[k, M]` with `k < n_states + n_params`: row
-#'   names are required and must be a subset of
-#'   `c(variables, parameters)`. The supplied rows are placed at the
-#'   matching positions of \eqn{\Phi'(\theta)}; missing rows are zero-
-#'   padded, i.e. those slots are treated as fixed. This is the
-#'   row-name-driven equivalent of run-time `fixed`.
+#' - State-only, `[n_x, n_s]`, rows unnamed or named by the states. The
+#'   parameter rows are the identity on the active sensitivities, the model's
+#'   sensitivity names minus `fixed`. `result$tangent[t, , ]` has this shape and
+#'   can seed a following solve.
+#' - Full, `[n_x + n_p, n_s]`, states first: \eqn{\Phi'(\theta)} itself. `n_s`
+#'   may change from call to call.
+#' - Partial, `[k, n_s]` with `k < n_x + n_p`. The row names, a subset of
+#'   `c(variables, parameters)`, place the rows; missing rows are zero, so
+#'   those inputs are fixed.
 #'
-#' Run-time `fixed` is incompatible with the full and partial shapes
-#' (those already encode fixedness via row presence / row values).
-#'
-#' Column names, when present, must match the relevant column basis
-#' (the active sensitivity names for the state-only shape, user-chosen theta
-#' names for the full / partial shapes).
+#' Run-time `fixed` takes the state-only shape only. Column names, when given,
+#' are the active sensitivity names (state-only) or name the directions
+#' \eqn{\theta} (full and partial); unnamed full or partial columns are named
+#' `theta1`, `theta2`, and so on.
 #'
 #' @param model A compiled ODE model returned by [cppODE()] or [cvode()].
-#' @param times Numeric vector of time points at which to return the
-#'   solution. Must be non-empty and contain only finite values.
+#' @param times Numeric vector of output times, non-empty and finite.
 #' @param parms Named numeric vector of initial conditions and parameters.
 #'   Names must include all of
 #'   `c(attr(model, "variables"), attr(model, "parameters"))`.
-#' @param tangent Optional numeric matrix, the tangent of the inputs: the
-#'   Jacobian \eqn{\Phi'(\theta)} of the initial states and parameters.
-#'   Accepts three shapes (see Details): state-only `[n_states, n_active]`
-#'   (auto-extended with identity on parameter rows), full
-#'   `[n_states + n_params, M]`, or partial `[k, M]` with row names
-#'   identifying a subset of `c(variables, parameters)` (missing rows
-#'   are zero-padded, i.e. implicitly fixed). Column names label the
-#'   directions of the returned derivatives. Default `NULL` uses identity
-#'   seeding on the active sensitivity basis.
-#' @param hessian Optional numeric array, the Hessian tensor
-#'   \eqn{\Phi''(\theta)} of the inputs. Shapes are analogous to those of
-#'   `tangent`:
-#'   `[n_states, n_active, n_active]` (state-only),
-#'   `[n_states + n_params, M, M]` (full), or `[k, M, M]` with dim-1
-#'   names identifying a subset of `c(variables, parameters)` (partial,
-#'   zero-padded). Allowed only when `attr(model, "deriv2")` is `TRUE`.
-#'   Default `NULL` means the inputs are affine in \eqn{\theta}.
-#' @param fixed Optional character vector of sensitivity-parameter names
-#'   to treat as fixed at run time. The integrator then runs with a
-#'   smaller AD state. Names must be a subset of
-#'   `attr(model, "dimNames")$sens`. Unlike compile-time `fixed` in
-#'   [cppODE()], the run-time `fixed` set can be changed between calls
-#'   without recompilation. Incompatible with full / partial `tangent`
-#'   (those encode fixedness through row values or row presence).
-#'   Default `NULL` (all parameters active).
-#' @param forcings Optional named list of forcing-function data. Each
-#'   element must be a `data.frame` (or coercible object) with columns
-#'   `time` and `value`, or a two-column matrix. Names must match
-#'   `attr(model, "forcings")`. Default `NULL`. A forcing is the monotone
-#'   cubic Hermite interpolant (PCHIP) of its points and holds the value of
-#'   the first and the last point outside them; a single point gives a
-#'   constant.
+#' @param tangent Optional numeric matrix, the tangent of the inputs; shapes in
+#'   Details. Default `NULL`: the identity on the active sensitivities.
+#' @param hessian Optional numeric array, the second derivative of the inputs;
+#'   shapes in Details. Needs a model with `attr(model, "deriv2")`. Default
+#'   `NULL`: the inputs are affine in \eqn{\theta}.
+#' @param fixed Optional character vector, sensitivity names held fixed in this
+#'   call, a subset of `attr(model, "dimNames")$sens`. Unlike `fixed` of
+#'   [cppODE()] it changes without recompiling. Not with a full or partial
+#'   `tangent`. Default `NULL`.
+#' @param forcings Named list of forcing data, one element per name in
+#'   `attr(model, "forcings")`: a `data.frame` with columns `time` and `value`,
+#'   or a two-column matrix. [cppODE()] and [cvode()] take the forcing names,
+#'   this argument the data. A forcing is the monotone cubic Hermite
+#'   interpolant (PCHIP) of its points and constant beyond the first and the
+#'   last point, see [forcingValues()]. Default `NULL`.
 #' @param abstol Absolute error tolerance. Default `1e-6`.
 #' @param reltol Relative error tolerance. Default `1e-6`.
-#' @param maxattemps Maximum number of consecutive integration steps
-#'   without time advance (consecutive rejected steps) before the solver
-#'   aborts with `CV_CONV_FAILURE` (`return_code = -4`). Default `50`.
-#'   Lower values can be useful for fail-fast behaviour in optimisation
-#'   pipelines; very stiff problems with sharp transients may legitimately
-#'   reject several steps in a row when the controller first adapts.
+#' @param maxattempts Maximum number of consecutive step attempts without
+#'   progress in time before the solve stops with `return_code = -4`. Default
+#'   `50`.
 #' @param maxsteps Maximum total number of integration steps. Default
 #'   `1e6`.
 #' @param hini Initial step size; `0` (default) triggers automatic
 #'   estimation.
-#' @param roottol Tolerance for root finding in root-triggered events.
-#'   Default `1e-6`. An event `value` that depends on `time` evaluates the
-#'   firing time directly, so its derivatives inherit this tolerance rather
-#'   than `reltol`. With `rootfunc = "equilibrate"` the integration stops once
-#'   every `|dx/dt| <= roottol |x| + abstol`; the native backend includes the
-#'   sensitivities.
+#' @param roottol Tolerance for locating root events. Default `1e-6`. Under
+#'   `rootfunc = "equilibrate"` the solve stops once every
+#'   \eqn{|\dot x_i| \le \mathrm{roottol}\, |x_i| + \mathrm{abstol}}{
+#'   |dx_i/dt| <= roottol |x_i| + abstol}; on a [cppODE()] model the test
+#'   covers the sensitivities as well.
 #' @param maxroot Maximum number of triggers per root event. Default `1`.
 #' @param onFailure How to react when the solver returns a non-zero
 #'   return code. One of `"stop"` (default; raise an error with the solver
 #'   message and no partial results), `"warn"` (emit a warning and return
 #'   partial results up to `t_reached`), or `"silent"` (return the partial
 #'   result without any signal).
-#' @param traceFile Optional character giving a CSV file path. If the
-#'   model was compiled with `stepTrace = TRUE` and a non-empty path is
-#'   supplied, the per-step trace `data.frame` is written to that path.
-#'   The trace is also attached to the returned list as `$trace`. Ignored
-#'   for models compiled without trace support (`$trace` is `NULL` in
-#'   that case).
-#'
-#' @param cotangent The cotangent of the outputs, required by a model compiled
-#'   with `derivMode = "reverse"` or `"forward-reverse"` ([cppODE()]) or with
-#'   `derivMode = "reverse"` ([cvode()]). A `[n_out, n_states]` matrix or an
-#'   `[n_out, n_states, n_seed]` array, whose first dimension is the solve's
-#'   own output row count: a root event adds output times, so that count is
-#'   not `length(times)` in general. What comes back is `w' * dx/dtheta`
-#'   summed over times and states, one column per cotangent column. Supplying
-#'   it to a forward model is an error, as is leaving it out on a reverse one.
+#' @param traceFile Optional path of a CSV file the step trace is written to.
+#'   Needs a model compiled with `stepTrace = TRUE`, ignored otherwise. Default
+#'   `NULL`.
+#' @param cotangent The cotangent of the outputs, `[n_t, n_x]` or
+#'   `[n_t, n_x, n_seed]`. Required by a model compiled with
+#'   `derivMode = "reverse"` or `"forward-reverse"` unless `keepStore = TRUE`;
+#'   an error on any other model. `result$cotangent` is then
+#'   \eqn{\sum_{t,i} w_{t,i}\, \partial x_i(t) / \partial \theta}{
+#'   sum_{t,i} w_{t,i} dx_i(t)/dtheta}, one column per seed. Default `NULL`.
 #' @param curvature Optional, `"forward-reverse"` only: the derivative of
-#'   `cotangent` along the tangent, `[n_out, n_states, n_seed, n_sens]` on the
-#'   cotangent's first three dimensions. For a cotangent that is the gradient
-#'   of a functional of the outputs, this is that functional's Hessian applied
-#'   to the output tangent. `NULL` treats the cotangent as constant in
-#'   \eqn{\theta}.
-#' @param keepStore Whether a reverse solve returns its checkpoints as
-#'   `$store`, for a later solve to reuse through `store`. The `cotangent` may then
-#'   be omitted, which runs the model for its values alone. Native backend
-#'   only: CVODES holds its checkpoints itself.
+#'   `cotangent` along the tangent, `[n_t, n_x, n_seed, n_s]`. For a cotangent
+#'   that is the gradient of a functional of the outputs, this is that
+#'   functional's Hessian applied to the output tangent. Default `NULL`: the
+#'   cotangent is constant in \eqn{\theta}.
+#' @param keepStore Logical, default `FALSE`. Return the checkpoints of a
+#'   reverse solve as `$store`, for a later solve to reuse through `store`. The
+#'   `cotangent` may then be omitted, and the solve returns the values alone.
+#'   Only on a [cppODE()] model compiled with `derivMode = "reverse"`.
 #' @param store The `$store` of an earlier solve of the same model at the same
-#'   `times` and `parms`. The solve integrates nothing and goes straight to the
-#'   sweep. A store from a different point is an error, not a silent reuse. It
-#'   may be reused any number of times and is freed with its last reference.
-#' @param sensErrCon Whether the step size, the order and the corrector's
-#'   convergence test see the sensitivities. `TRUE`, the default, takes the
-#'   maximum over the state and each direction, so the worst-resolved direction
-#'   sets the step. `FALSE` leaves every control decision to value arithmetic:
-#'   the step sequence is then the one a value-only run takes, whatever the
-#'   direction count, and the sensitivities come back on a coarser grid than
-#'   `abstol` and `reltol` would give them. Cheaper and less accurate, and the
-#'   convention SUNDIALS ships (`CVodeSetSensErrCon`). Needs a model with
-#'   sensitivities. A model compiled with `derivMode = "reverse"` takes the
-#'   grid of a value-only run either way.
-#' @param adjoint Optional [adjointControl()], what a reverse solve does
-#'   beyond its gradient: check the sweep against the tolerances, report its
-#'   grid.
+#'   `times` and `parms`. The solve then integrates nothing and runs the
+#'   backward sweep alone. A store from a different point is an error. A store
+#'   may be reused any number of times. Default `NULL`.
+#' @param sensErrCon Logical. Include the sensitivities in the error test.
+#'   Default `TRUE`; `FALSE` is cheaper and less accurate. Needs a model with
+#'   sensitivities, has no effect under `derivMode = "reverse"`, and a
+#'   [cvode()] model takes `TRUE` only.
+#' @param adjoint Optional [adjointControl()] object for a model compiled with
+#'   `derivMode = "reverse"`. Default `NULL`, the same as `adjointControl()`.
+#' @param maxattemps Deprecated spelling of `maxattempts`.
 #'
-#' @return
-#' A named list with components `time`, `variable`, `diagnostics`, and,
-#' when `attr(model, "deriv")` is `TRUE`, `tangent`, plus `hessian` when
-#' `attr(model, "deriv2")` is `TRUE`. A model compiled with
-#' `derivMode = "reverse"` has neither, and returns `cotangent` instead:
-#' `[n_states + n_params, n_seed]`, the cotangent of the inputs, indexed exactly
-#' as the argument `tangent`. One compiled with `derivMode = "forward-reverse"`
-#' returns `tangent` and `cotangent` and adds `curvature`,
-#' `[n_states + n_params, n_s, n_seed]`: the derivatives of each `cotangent`
-#' entry along the tangent, which under the identity tangent are the columns of
-#' the Hessian of the seeded functional. Output arrays are time-first:
-#' `variable` is `[n_t, n_x]`, `tangent` is `[n_t, n_x, n_s]`, and
-#' `hessian` is `[n_t, n_x, n_s, n_s]`. The dimension names of `tangent`
-#' and `hessian` reflect the active (non-fixed) sensitivity parameters.
-#' The `diagnostics` element is a list of solver statistics (see
-#' [diagnostics()]). When the model was compiled with `stepTrace = TRUE`,
-#' an additional `$trace` `data.frame` with per-step diagnostics is
-#' attached.
-#'
-#' Under `adjoint = adjointControl(trace = TRUE)` a reverse solve also returns
-#' `$adjoint`, the grid and adjoint of the sweep; see [adjointControl()].
-#'
-#' With `keepStore = TRUE` a reverse solve also returns `$store`, an external
-#' pointer to the checkpoints, for a later solve to take through `store`.
+#' @return A named list:
+#' - `time`: the output times, length `n_t`.
+#' - `variable`: the states, `[n_t, n_x]`.
+#' - `tangent`: when `attr(model, "deriv")` is `TRUE`, `[n_t, n_x, n_s]`. The
+#'   third dimension is named by the active sensitivities or the columns of
+#'   `tangent`.
+#' - `hessian`: when `attr(model, "deriv2")` is `TRUE`, `[n_t, n_x, n_s, n_s]`.
+#' - `cotangent`: under `derivMode = "reverse"` or `"forward-reverse"`, the
+#'   cotangent of the inputs, `[n_x + n_p, n_seed]`, rows as in a full
+#'   `tangent`.
+#' - `curvature`: under `"forward-reverse"`, `[n_x + n_p, n_s, n_seed]`, the
+#'   derivative of each `cotangent` entry along the tangent. Under the identity
+#'   tangent its columns are the Hessian of the seeded functional. The order of
+#'   the last two dimensions is that of a Hessian, not that of the argument
+#'   `curvature`.
+#' - `diagnostics`: solver statistics, printed by [diagnostics()]:
+#'   `return_code` (0 on success, negative codes as in SUNDIALS CVODE),
+#'   `message`, `accepted` and `rejected` (step counts), `fevals`, `jevals`
+#'   and `setups` (right-hand side evaluations, Jacobian evaluations, matrix
+#'   factorisations), `last_dt` and `last_order` (size and order of the last
+#'   successful step), `t_reached`, and the model's `method`, `useNDF` and,
+#'   on a [cvode()] model, `backend`.
+#' - `trace`: with `stepTrace = TRUE`, a `data.frame` with one row per step
+#'   attempt: `nst` (accepted steps before the attempt), `t` (time at the end
+#'   of the step), `h` (signed step size), `q` (order), `dsm` (error test
+#'   value, the step passes below 1), `acnrm` and `acnrm_state` (weighted RMS
+#'   norm of the local error over all components and over the states alone),
+#'   `tq2` (error constant), `gamma` and `gamrat` (step size times the leading
+#'   coefficient, and its ratio to the value at the last factorisation),
+#'   `newton_conv` (1 when the corrector converged), `mode` (`"BDF"`, `"NDF"`,
+#'   `"ADAMS"`, `"ONESTEP"`, or `"CVODE"` and `"CVODE_event"` on a [cvode()]
+#'   model), `nfe`, `njev` and `nsetups` (cumulative counters) and
+#'   `setup_reason` (what triggered the last factorisation). A [cvode()] model
+#'   reports `NaN` where CVODES exposes no value.
+#' - `adjoint`: under `adjointControl(trace = TRUE)`, see [adjointControl()].
+#' - `store`: with `keepStore = TRUE`, an external pointer to the checkpoints.
 #'
 #' @seealso [cppODE()] and [cvode()] for model compilation;
-#'   [diagnostics()] for printing solver statistics.
+#'   [solveODEBatch()] for many conditions in one call; [adjointControl()];
+#'   [forcingValues()]; [diagnostics()] for printing solver statistics.
 #'
 #' @example inst/examples/solveODE.R
 #' @export
@@ -691,17 +670,19 @@ solveODE <- function(model, times, parms,
                      tangent = NULL, hessian = NULL,
                      fixed = NULL, forcings = NULL,
                      abstol = 1e-6, reltol = 1e-6,
-                     maxattemps = 50L, maxsteps = 1e6L,
+                     maxattempts = 50L, maxsteps = 1e6L,
                      hini = 0, roottol = 1e-6, maxroot = 1L,
                      onFailure = c("stop", "warn", "silent"),
                      traceFile = NULL, cotangent = NULL, curvature = NULL,
                      keepStore = FALSE, store = NULL,
-                     sensErrCon = TRUE, adjoint = NULL) {
+                     sensErrCon = TRUE, adjoint = NULL, maxattemps = NULL) {
 
   onFailure <- match.arg(onFailure)
+  maxattempts <- .renamedArg(maxattempts, maxattemps, !missing(maxattempts),
+                             "maxattempts", "maxattemps")
 
   prep <- .odeCallArgs(model, times, parms, tangent, hessian, fixed, forcings,
-                       abstol, reltol, maxattemps, maxsteps, hini, roottol, maxroot,
+                       abstol, reltol, maxattempts, maxsteps, hini, roottol, maxroot,
                        cotangent, curvature, keepStore, store, sensErrCon,
                        adjoint)
 
@@ -727,48 +708,38 @@ solveODE <- function(model, times, parms,
 #' single `.Call`, using OpenMP where the toolchain provides it.
 #'
 #' @details
-#' Compared with looping [solveODE()] over conditions in R, or with
-#' `parallel::mclapply()`, this avoids both the per-call fork and the
-#' serialization of each result back through a pipe; with sensitivities that
-#' return trip is usually the dominant cost. Conditions are scheduled
-#' dynamically, so unequal solve times even out.
-#'
-#' Results are bit-identical to the serial path: each condition runs the same
-#' steps on its own thread-local state.
-#'
-#' Two situations fall back to a serial loop:
-#' inside a forked child (`mclapply()`), because the OpenMP thread pool does
-#' not survive `fork()`; and inside an existing OpenMP region, because the
-#' caller that spread the wider axis across threads already owns them.
-#' A model without a batch entry point, or a build without OpenMP, falls
-#' back to [solveODE()] per condition.
+#' Results are bit-identical to the serial path. The batch falls back to a
+#' serial loop in a forked child, inside an OpenMP region, or without OpenMP;
+#' see [batchAvailable()]. A model without a batch entry point is solved by
+#' [solveODE()] per condition.
 #'
 #' @param model A model handle from [cppODE()] or [cvode()].
-#' @param conditions A list of per-condition argument lists. Recognized names
-#'   are `times`, `parms`, `tangent`, `hessian`, `cotangent`, `curvature`,
-#'   `fixed`, `forcings`, the solver options `abstol`, `reltol`, `maxattemps`,
-#'   `maxsteps`, `hini`, `roottol`, `maxroot`, and
-#'   `keepStore`, `store`, `sensErrCon`, `adjoint`; anything given here
-#'   overrides the batch-wide value of the same name.
+#' @param conditions A named or unnamed list of per-condition argument lists.
+#'   Recognised names are `times`, `parms`, `tangent`, `hessian`, `cotangent`,
+#'   `curvature`, `fixed`, `forcings`, `abstol`, `reltol`, `maxattempts`,
+#'   `maxsteps`, `hini`, `roottol`, `maxroot`, `keepStore`, `store`,
+#'   `sensErrCon` and `adjoint`; each overrides the batch-wide argument of the
+#'   same name.
+#' @param times,parms Batch-wide `times` and `parms` as in [solveODE()], for
+#'   the conditions that do not give their own. Default `NULL`.
 #' @param traceFile Optional. Either one path per condition, or a single path
 #'   used as a template, in which case the condition's name (or its index) is
 #'   inserted before the extension. Needs a model built with `stepTrace = TRUE`.
-#'   The traces are collected by the workers and written afterwards, on the R
-#'   thread.
+#'   Default `NULL`.
 #' @param cores Number of threads, capped by `length(conditions)`. `NULL`
 #'   (default) takes the first of `getOption("cppDE.cores")`,
-#'   `getOption("Ncpus")` and `detectCores(logical = FALSE)` that is set.
-#'   `1` forces the serial loop.
-#' @param onFailure Applied once over all conditions after the batch
-#'   completes, naming the ones that failed. Unlike [solveODE()], `"stop"`
-#'   does not discard the results that did succeed until every condition has
-#'   been run.
+#'   `getOption("Ncpus")` and `parallel::detectCores(logical = FALSE)` that is
+#'   set. `1` forces the serial loop.
+#' @param onFailure Applied once after all conditions have run. `"stop"`
+#'   (default) runs every condition, then raises one error naming the failed
+#'   ones; `"warn"` and `"silent"` as in [solveODE()].
 #' @inheritParams solveODE
 #'
 #' @return A list of [solveODE()] results, one per condition, named after
-#'   `conditions`.
+#'   `conditions`, with attribute `threads`, the thread count used.
 #'
-#' @seealso [solveODE()]
+#' @seealso [solveODE()]; [prepareBatch()] and [solveBatch()] for repeated
+#'   solves of the same conditions; [batchAvailable()].
 #' @example inst/examples/solveODEBatch.R
 #' @export
 solveODEBatch <- function(model, conditions,
@@ -776,20 +747,24 @@ solveODEBatch <- function(model, conditions,
                           tangent = NULL, hessian = NULL,
                           fixed = NULL, forcings = NULL,
                           abstol = 1e-6, reltol = 1e-6,
-                          maxattemps = 50L, maxsteps = 1e6L,
+                          maxattempts = 50L, maxsteps = 1e6L,
                           hini = 0, roottol = 1e-6, maxroot = 1L,
                           cores = NULL,
                           traceFile = NULL,
                           onFailure = c("stop", "warn", "silent"),
                           cotangent = NULL, curvature = NULL,
                           keepStore = FALSE, store = NULL,
-                          sensErrCon = TRUE, adjoint = NULL) {
+                          sensErrCon = TRUE, adjoint = NULL,
+                          maxattemps = NULL) {
 
   onFailure <- match.arg(onFailure)
+  maxattempts <- .renamedArg(maxattempts, maxattemps, !missing(maxattempts),
+                             "maxattempts", "maxattemps")
   preps <- .batchPreps(model, conditions, times, parms, tangent, hessian,
-                       fixed, forcings, abstol, reltol, maxattemps, maxsteps,
+                       fixed, forcings, abstol, reltol, maxattempts, maxsteps,
                        hini, roottol, maxroot, cotangent, curvature,
-                       keepStore, store, sensErrCon, adjoint)
+                       keepStore, store, sensErrCon, adjoint,
+                       warned = !is.null(maxattemps))
 
   SYM <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   .batchRun(model, preps, SYM, .batchDimnames(preps, SYM), names(conditions),
@@ -810,20 +785,22 @@ solveODEBatch <- function(model, conditions,
 
 
 # Validate and marshal every condition. Serial R work, shared by solveODEBatch()
-# and prepareBatch().
+# and prepareBatch(). `warned` is TRUE when the caller has already warned about
+# the old spelling `maxattemps`.
 .batchPreps <- function(model, conditions, times, parms, tangent, hessian,
-                        fixed, forcings, abstol, reltol, maxattemps, maxsteps,
+                        fixed, forcings, abstol, reltol, maxattempts, maxsteps,
                         hini, roottol, maxroot, cotangent = NULL, curvature = NULL,
                         keepStore = FALSE, store = NULL, sensErrCon = TRUE,
-                        adjoint = NULL) {
+                        adjoint = NULL, warned = FALSE) {
 
   if (!is.list(conditions) || !length(conditions))
     stop("'conditions' must be a non-empty list", call. = FALSE)
   if (!all(vapply(conditions, is.list, logical(1))))
     stop("every element of 'conditions' must be a list of arguments", call. = FALSE)
+  conditions <- .renameInConditions(conditions, warned)
 
   known <- c("times", "parms", "tangent", "hessian", "fixed", "forcings",
-             "abstol", "reltol", "maxattemps", "maxsteps", "hini", "roottol",
+             "abstol", "reltol", "maxattempts", "maxsteps", "hini", "roottol",
              "maxroot", "cotangent", "curvature", "keepStore", "store",
              "sensErrCon", "adjoint")
   bad <- setdiff(unlist(lapply(conditions, names)), known)
@@ -834,7 +811,7 @@ solveODEBatch <- function(model, conditions,
 
   shared <- list(times = times, parms = parms, tangent = tangent,
                  hessian = hessian, fixed = fixed, forcings = forcings,
-                 abstol = abstol, reltol = reltol, maxattemps = maxattemps,
+                 abstol = abstol, reltol = reltol, maxattempts = maxattempts,
                  maxsteps = maxsteps, hini = hini, roottol = roottol,
                  maxroot = maxroot, cotangent = cotangent, curvature = curvature,
                  keepStore = keepStore, store = store, sensErrCon = sensErrCon,
@@ -846,10 +823,41 @@ solveODEBatch <- function(model, conditions,
       stop("condition ", i, " has no 'times' or no 'parms', and none was given ",
            "batch-wide", call. = FALSE)
     .odeCallArgs(model, a$times, a$parms, a$tangent, a$hessian, a$fixed,
-                 a$forcings, a$abstol, a$reltol, a$maxattemps, a$maxsteps,
+                 a$forcings, a$abstol, a$reltol, a$maxattempts, a$maxsteps,
                  a$hini, a$roottol, a$maxroot, a$cotangent, a$curvature,
                  a$keepStore, a$store, a$sensErrCon, a$adjoint)
   })
+}
+
+
+# The value of a renamed argument. The old name warns and is used when given;
+# giving both names is an error.
+.renamedArg <- function(new, old, newGiven, newName, oldName) {
+  if (is.null(old)) return(new)
+  if (newGiven)
+    stop("give '", newName, "' only; '", oldName, "' is its deprecated ",
+         "spelling", call. = FALSE)
+  warning("'", oldName, "' is deprecated; use '", newName, "'", call. = FALSE)
+  old
+}
+
+
+# Per-condition lists with `maxattemps` renamed to `maxattempts`, warning once
+# per call unless the caller has warned already.
+.renameInConditions <- function(conditions, warned = FALSE) {
+  old <- vapply(conditions, function(a) "maxattemps" %in% names(a), logical(1))
+  if (!any(old)) return(conditions)
+  both <- vapply(conditions, function(a) "maxattempts" %in% names(a), logical(1))
+  if (any(old & both))
+    stop("give 'maxattempts' only; 'maxattemps' is its deprecated spelling",
+         call. = FALSE)
+  if (!warned)
+    warning("'maxattemps' is deprecated; use 'maxattempts'", call. = FALSE)
+  conditions[old] <- lapply(conditions[old], function(a) {
+    names(a)[names(a) == "maxattemps"] <- "maxattempts"
+    a
+  })
+  conditions
 }
 
 
@@ -943,10 +951,10 @@ batchAvailable <- function(model) {
 #' Prepare a Batch for Repeated Solving
 #'
 #' @description
-#' Validates and marshals a set of conditions once, so that repeated solves
-#' (an optimiser evaluating the same model at new parameters) only pay for the
-#' numbers that changed. [solveODEBatch()] redoes the full argument
-#' marshalling on every call, which caps how well the batch scales.
+#' Validates and converts a set of conditions once, so that repeated solves
+#' with [solveBatch()], an optimiser evaluating the same model at new
+#' parameters, only pass the numbers that changed. [solveODEBatch()] repeats
+#' that work on every call.
 #'
 #' @inheritParams solveODEBatch
 #' @return An object of class `"cppDEbatch"` for [solveBatch()].
@@ -958,16 +966,20 @@ prepareBatch <- function(model, conditions,
                          tangent = NULL, hessian = NULL,
                          fixed = NULL, forcings = NULL,
                          abstol = 1e-6, reltol = 1e-6,
-                         maxattemps = 50L, maxsteps = 1e6L,
+                         maxattempts = 50L, maxsteps = 1e6L,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
                          cotangent = NULL, curvature = NULL,
                          keepStore = FALSE, store = NULL,
-                         sensErrCon = TRUE, adjoint = NULL) {
+                         sensErrCon = TRUE, adjoint = NULL,
+                         maxattemps = NULL) {
 
+  maxattempts <- .renamedArg(maxattempts, maxattemps, !missing(maxattempts),
+                             "maxattempts", "maxattemps")
   preps <- .batchPreps(model, conditions, times, parms, tangent, hessian,
-                       fixed, forcings, abstol, reltol, maxattemps, maxsteps,
+                       fixed, forcings, abstol, reltol, maxattempts, maxsteps,
                        hini, roottol, maxroot, cotangent, curvature,
-                       keepStore, store, sensErrCon, adjoint)
+                       keepStore, store, sensErrCon, adjoint,
+                       warned = !is.null(maxattemps))
 
   sym <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   structure(list(
@@ -989,20 +1001,21 @@ prepareBatch <- function(model, conditions,
 #' Only `parms`, `tangent`, `hessian`, `cotangent`, `curvature`, `adjoint`
 #' and `store` may change; anything else needs a fresh handle.
 #'
+#' Each of these arguments is a list with one element per condition, matched
+#' to the prepared conditions by position; names are ignored. A `NULL` element
+#' keeps that condition's prepared value, and `NULL` (default) for the whole
+#' argument keeps all of them.
+#'
 #' @param handle A `"cppDEbatch"` object from [prepareBatch()].
-#' @param parms List of named numeric vectors, one per condition, or `NULL` to
-#'   reuse the prepared values.
-#' @param tangent,hessian,cotangent,curvature Lists with one element per
-#'   condition, each as the argument of the same name in [solveODE()], or
-#'   `NULL` to reuse. Shapes must match the prepared ones.
-#' @param adjoint List of [adjointControl()] objects, one per condition, or
-#'   `NULL` to keep the prepared ones.
-#' @param store List of checkpoint stores, one per condition, each the `$store`
-#'   of an earlier reverse solve or `NULL` to integrate; `NULL` for the whole
-#'   argument keeps the prepared ones.
+#' @param parms List of named numeric vectors.
+#' @param tangent,hessian,cotangent,curvature Lists of arrays, each as the
+#'   argument of the same name in [solveODE()] and of the prepared shape.
+#' @param adjoint List of [adjointControl()] objects.
+#' @param store List of checkpoint stores, each the `$store` of an earlier
+#'   reverse solve. Here a `NULL` element integrates that condition afresh.
 #' @param cores,traceFile,onFailure As in [solveODEBatch()].
 #' @return A list of [solveODE()] results, named as the prepared conditions.
-#' @seealso [prepareBatch()]
+#' @seealso [prepareBatch()], [solveODEBatch()]
 #' @example inst/examples/solveBatch.R
 #' @export
 solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
@@ -1136,7 +1149,8 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
 #' @param result A list returned by [solveODE()], containing a
 #'   `diagnostics` element.
 #'
-#' @return Invisibly returns the `diagnostics` list.
+#' @return The `diagnostics` list, invisibly; its fields are listed under
+#'   Value in [solveODE()]. Without diagnostics, a message and `NULL`.
 #'
 #' @example inst/examples/diagnostics.R
 #'
