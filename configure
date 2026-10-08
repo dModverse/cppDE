@@ -354,18 +354,19 @@ int main() {
 
 # ---------------------------------------------------------------------
 # MPI dependency: Debian builds libsundials-dev with SUNDIALS_MPI_ENABLED=1,
-# so <sundials/sundials_types.h> unconditionally `#include <mpi.h>`. We
-# only need MPI's *include* path (no link flags: our generated code
-# never calls MPI_*; the SUNComm typedef is used as a value only).
+# so <sundials/sundials_types.h> unconditionally `#include <mpi.h>`, and
+# SUN_COMM_NULL is MPI_COMM_NULL, which OpenMPI defines as the address of
+# a libmpi symbol. Both the include path and the link flags are needed.
 #
 # Detection: gate on the SUNDIALS_MPI_ENABLED macro in sundials_config.h
 # (skips the MPI probe entirely on builds that don't need it), then try
 # pkg-config (mpi-cxx is Debian's implementation-agnostic alias), then
 # fall back to `mpicxx -showme:compile` / `-compile-info` for non-pkg-
-# config installs. Any empty result is harmless: it just means the
-# SUNDIALS compile probes below run without an `-I<mpi>` prepend.
+# config installs. An empty result means the SUNDIALS probes run
+# without MPI flags.
 # ---------------------------------------------------------------------
 sundials_mpi_cflags=""
+sundials_mpi_libs=""
 sundials_needs_mpi=0
 for hdr in /usr/include/sundials/sundials_config.h \
            /usr/local/include/sundials/sundials_config.h \
@@ -381,8 +382,10 @@ if [ "$sundials_needs_mpi" = "1" ]; then
     for pc in mpi-cxx ompi-cxx mpich mpi; do
       if "$PKG_CONFIG" --exists "$pc" 2>/dev/null; then
         sundials_mpi_cflags=$("$PKG_CONFIG" --cflags-only-I "$pc" 2>/dev/null || true)
+        sundials_mpi_libs=$("$PKG_CONFIG" --libs "$pc" 2>/dev/null || true)
         if [ -n "$sundials_mpi_cflags" ]; then
           log "MPI include flags from pkg-config ($pc): $sundials_mpi_cflags"
+          log "MPI link flags from pkg-config ($pc): $sundials_mpi_libs"
           break
         fi
       fi
@@ -392,7 +395,10 @@ if [ "$sundials_needs_mpi" = "1" ]; then
     raw=$(mpicxx -showme:compile 2>/dev/null || mpicxx -compile-info 2>/dev/null || true)
     sundials_mpi_cflags=$(printf '%s' "$raw" | tr ' ' '\n' | grep '^-I' | tr '\n' ' ')
     [ -n "$sundials_mpi_cflags" ] && log "MPI include flags from mpicxx: $sundials_mpi_cflags"
+    raw=$(mpicxx -showme:link 2>/dev/null || mpicxx -link-info 2>/dev/null || true)
+    sundials_mpi_libs=$(printf '%s' "$raw" | tr ' ' '\n' | grep -E '^-(L|l|Wl)' | tr '\n' ' ')
   fi
+  [ -z "$sundials_mpi_libs" ] && sundials_mpi_libs="-lmpi"
   # File-probe fallback: mpi.h is often in a vendor subdir that the bare
   # compiler driver doesn't search (e.g. Debian's OpenMPI ships it at
   # /usr/include/x86_64-linux-gnu/openmpi/mpi.h).
@@ -464,6 +470,7 @@ sundials_file_probe() {
   if [ "$fp_core" = "1" ]; then
     fp_libs="$fp_libs -lsundials_core"
   fi
+  fp_libs="$fp_libs $sundials_mpi_libs"
 
   if probe_compile "$snippet" "$fp_cflags" "$fp_libs"; then
     sundials_cflags="$fp_cflags"
@@ -532,6 +539,7 @@ if [ "$sundials_available" = "0" ] \
       sundials-cvodes sundials-nvecserial \
       sundials-sunmatrixdense sundials-sunlinsoldense 2>/dev/null || true)
   if [ -n "$sundials_libs" ]; then
+    sundials_libs="$sundials_libs $sundials_mpi_libs"
     sundials_cflags=$(echo "$sundials_mpi_cflags $pc_cflags" | sed 's/^ *//; s/ *$//')
     sundials_available=1
     log "SUNDIALS detected via pkg-config"
@@ -545,7 +553,7 @@ fi
 # 6.x-style link first, then add -lsundials_core for 7+.
 if [ "$sundials_available" = "0" ]; then
   base_libs="-lsundials_cvodes -lsundials_nvecserial -lsundials_sunmatrixdense -lsundials_sunlinsoldense"
-  for trial_libs in "$base_libs" "$base_libs -lsundials_core"; do
+  for trial_libs in "$base_libs $sundials_mpi_libs" "$base_libs -lsundials_core $sundials_mpi_libs"; do
     if probe_compile "$snippet" "$sundials_mpi_cflags" "$trial_libs"; then
       sundials_cflags="$sundials_mpi_cflags"
       sundials_libs="$trial_libs"

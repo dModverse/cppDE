@@ -1,3 +1,9 @@
+# cppDE 0.11.10
+
+* `./configure` finds a SUNDIALS built with MPI, as Debian ships it: it adds
+  the MPI link flags, without which the probe failed and `cvode()` was
+  disabled.
+
 # cppDE 0.11.9
 
 * Breaking: the limit of consecutive rejected steps is the argument
