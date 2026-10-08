@@ -28,8 +28,7 @@ solveODEBatch(
   keepStore = FALSE,
   store = NULL,
   sensErrCon = TRUE,
-  adjoint = NULL,
-  maxattemps = NULL
+  adjoint = NULL
 )
 }
 \arguments{
@@ -130,8 +129,6 @@ sensitivities, has no effect under \code{derivMode = "reverse"}, and a
 
 \item{adjoint}{Optional \code{\link[=adjointControl]{adjointControl()}} object for a model compiled with
 \code{derivMode = "reverse"}. Default \code{NULL}, the same as \code{adjointControl()}.}
-
-\item{maxattemps}{Deprecated spelling of \code{maxattempts}.}
 }
 \value{
 A list of \code{\link[=solveODE]{solveODE()}} results, one per condition, named after

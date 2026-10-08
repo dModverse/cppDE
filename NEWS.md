@@ -1,3 +1,9 @@
+# cppDE 0.11.9
+
+* Breaking: the limit of consecutive rejected steps is the argument
+  `maxattempts` of `solveODE()`, `solveODEBatch()`, `prepareBatch()` and of the
+  per-condition lists.
+
 # cppDE 0.11.8
 
 * `cvode()` reverse models with root events interpolate the forward state by
@@ -8,9 +14,6 @@
 
 # cppDE 0.11.7
 
-* `maxattemps` is now spelled `maxattempts` in `solveODE()`,
-  `solveODEBatch()`, `prepareBatch()` and the per-condition lists of
-  `conditions`. The old spelling still works and warns once per call.
 * `install_libs()` is now `installLibs()`; the old name remains as a
   deprecated alias.
 * `ptc()` takes the tolerances in `controls` as `reltol` and `abstol`, as the

@@ -558,25 +558,3 @@ test_that("the batch writes one trace file per condition", {
                "one per condition")
 })
 
-test_that("the old spelling maxattemps works with one warning per call", {
-  ref <- solveODE(m_plain, tt, conds$k1$parms, maxattempts = 20L)
-  expect_warning(old <- solveODE(m_plain, tt, conds$k1$parms, maxattemps = 20L),
-                 "'maxattemps' is deprecated")
-  expect_identical(old$variable, ref$variable)
-  expect_error(solveODE(m_plain, tt, conds$k1$parms, maxattempts = 20L,
-                        maxattemps = 20L), "only")
-
-  cs <- lapply(conds, c, maxattemps = 20L)
-  w <- character(0)
-  bat <- withCallingHandlers(
-    solveODEBatch(m_plain, cs, times = tt, maxattemps = 20L, cores = 2L),
-    warning = function(cnd) {
-      w <<- c(w, conditionMessage(cnd))
-      invokeRestart("muffleWarning")
-    })
-  expect_length(w, 1L)
-  expect_identical(bat$k1$variable, ref$variable)
-
-  expect_warning(h <- prepareBatch(m_plain, cs, times = tt), "deprecated")
-  expect_s3_class(h, "cppDEbatch")
-})

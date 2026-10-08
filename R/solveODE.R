@@ -621,7 +621,6 @@
 #'   [cvode()] model takes `TRUE` only.
 #' @param adjoint Optional [adjointControl()] object for a model compiled with
 #'   `derivMode = "reverse"`. Default `NULL`, the same as `adjointControl()`.
-#' @param maxattemps Deprecated spelling of `maxattempts`.
 #'
 #' @return A named list:
 #' - `time`: the output times, length `n_t`.
@@ -675,11 +674,9 @@ solveODE <- function(model, times, parms,
                      onFailure = c("stop", "warn", "silent"),
                      traceFile = NULL, cotangent = NULL, curvature = NULL,
                      keepStore = FALSE, store = NULL,
-                     sensErrCon = TRUE, adjoint = NULL, maxattemps = NULL) {
+                     sensErrCon = TRUE, adjoint = NULL) {
 
   onFailure <- match.arg(onFailure)
-  maxattempts <- .renamedArg(maxattempts, maxattemps, !missing(maxattempts),
-                             "maxattempts", "maxattemps")
 
   prep <- .odeCallArgs(model, times, parms, tangent, hessian, fixed, forcings,
                        abstol, reltol, maxattempts, maxsteps, hini, roottol, maxroot,
@@ -754,17 +751,13 @@ solveODEBatch <- function(model, conditions,
                           onFailure = c("stop", "warn", "silent"),
                           cotangent = NULL, curvature = NULL,
                           keepStore = FALSE, store = NULL,
-                          sensErrCon = TRUE, adjoint = NULL,
-                          maxattemps = NULL) {
+                          sensErrCon = TRUE, adjoint = NULL) {
 
   onFailure <- match.arg(onFailure)
-  maxattempts <- .renamedArg(maxattempts, maxattemps, !missing(maxattempts),
-                             "maxattempts", "maxattemps")
   preps <- .batchPreps(model, conditions, times, parms, tangent, hessian,
                        fixed, forcings, abstol, reltol, maxattempts, maxsteps,
                        hini, roottol, maxroot, cotangent, curvature,
-                       keepStore, store, sensErrCon, adjoint,
-                       warned = !is.null(maxattemps))
+                       keepStore, store, sensErrCon, adjoint)
 
   SYM <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   .batchRun(model, preps, SYM, .batchDimnames(preps, SYM), names(conditions),
@@ -785,19 +778,17 @@ solveODEBatch <- function(model, conditions,
 
 
 # Validate and marshal every condition. Serial R work, shared by solveODEBatch()
-# and prepareBatch(). `warned` is TRUE when the caller has already warned about
-# the old spelling `maxattemps`.
+# and prepareBatch().
 .batchPreps <- function(model, conditions, times, parms, tangent, hessian,
                         fixed, forcings, abstol, reltol, maxattempts, maxsteps,
                         hini, roottol, maxroot, cotangent = NULL, curvature = NULL,
                         keepStore = FALSE, store = NULL, sensErrCon = TRUE,
-                        adjoint = NULL, warned = FALSE) {
+                        adjoint = NULL) {
 
   if (!is.list(conditions) || !length(conditions))
     stop("'conditions' must be a non-empty list", call. = FALSE)
   if (!all(vapply(conditions, is.list, logical(1))))
     stop("every element of 'conditions' must be a list of arguments", call. = FALSE)
-  conditions <- .renameInConditions(conditions, warned)
 
   known <- c("times", "parms", "tangent", "hessian", "fixed", "forcings",
              "abstol", "reltol", "maxattempts", "maxsteps", "hini", "roottol",
@@ -827,37 +818,6 @@ solveODEBatch <- function(model, conditions,
                  a$hini, a$roottol, a$maxroot, a$cotangent, a$curvature,
                  a$keepStore, a$store, a$sensErrCon, a$adjoint)
   })
-}
-
-
-# The value of a renamed argument. The old name warns and is used when given;
-# giving both names is an error.
-.renamedArg <- function(new, old, newGiven, newName, oldName) {
-  if (is.null(old)) return(new)
-  if (newGiven)
-    stop("give '", newName, "' only; '", oldName, "' is its deprecated ",
-         "spelling", call. = FALSE)
-  warning("'", oldName, "' is deprecated; use '", newName, "'", call. = FALSE)
-  old
-}
-
-
-# Per-condition lists with `maxattemps` renamed to `maxattempts`, warning once
-# per call unless the caller has warned already.
-.renameInConditions <- function(conditions, warned = FALSE) {
-  old <- vapply(conditions, function(a) "maxattemps" %in% names(a), logical(1))
-  if (!any(old)) return(conditions)
-  both <- vapply(conditions, function(a) "maxattempts" %in% names(a), logical(1))
-  if (any(old & both))
-    stop("give 'maxattempts' only; 'maxattemps' is its deprecated spelling",
-         call. = FALSE)
-  if (!warned)
-    warning("'maxattemps' is deprecated; use 'maxattempts'", call. = FALSE)
-  conditions[old] <- lapply(conditions[old], function(a) {
-    names(a)[names(a) == "maxattemps"] <- "maxattempts"
-    a
-  })
-  conditions
 }
 
 
@@ -970,16 +930,12 @@ prepareBatch <- function(model, conditions,
                          hini = 0, roottol = 1e-6, maxroot = 1L,
                          cotangent = NULL, curvature = NULL,
                          keepStore = FALSE, store = NULL,
-                         sensErrCon = TRUE, adjoint = NULL,
-                         maxattemps = NULL) {
+                         sensErrCon = TRUE, adjoint = NULL) {
 
-  maxattempts <- .renamedArg(maxattempts, maxattemps, !missing(maxattempts),
-                             "maxattempts", "maxattemps")
   preps <- .batchPreps(model, conditions, times, parms, tangent, hessian,
                        fixed, forcings, abstol, reltol, maxattempts, maxsteps,
                        hini, roottol, maxroot, cotangent, curvature,
-                       keepStore, store, sensErrCon, adjoint,
-                       warned = !is.null(maxattemps))
+                       keepStore, store, sensErrCon, adjoint)
 
   sym <- .nativeSym(paste0("solve_", as.character(model), "_batch"))
   structure(list(
