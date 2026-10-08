@@ -1,6 +1,8 @@
 // Values of PCHIP forcings at given times, the interpolant the generated
 // models evaluate.
 
+// no length(), error() ... macros: they break libc++ headers included below
+#define R_NO_REMAP
 #include <R.h>
 #include <Rinternals.h>
 

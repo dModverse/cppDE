@@ -1,3 +1,8 @@
+# cppDE 0.11.4
+
+* `forcingValues()` builds with clang and libc++ (macOS): `R_NO_REMAP` before
+  the R headers, as in `ptc()`.
+
 # cppDE 0.11.3
 
 * A forcing holds the value of its first and last point outside them, where
