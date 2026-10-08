@@ -1109,13 +1109,13 @@ static std::vector<RootEvent> build_root_events(const double* params,
             event_apply_sec = ""
             if has_root_events:
                 event_apply_sec = f"""      std::vector<int> triggered_idx, trig_dir;
-      bool rows = false;   // a state switch alone writes no row
+      bool rows = false;   // a switch writes no row, a terminal root only the closing one
       for (int j = 0; j < {n_event_roots}; ++j) {{
         if (rinfo[{n_user_rootfunc} + j] != 0 &&
             (ud.root_fired[j] < ud.maxroot || event_roots[j].mode >= 0)) {{
           triggered_idx.push_back(j);
           trig_dir.push_back(rinfo[{n_user_rootfunc} + j]);
-          rows = rows || event_roots[j].mode < 0;
+          rows = rows || (event_roots[j].mode < 0 && !event_roots[j].terminal);
         }}
       }}
       bool any_terminal = false;

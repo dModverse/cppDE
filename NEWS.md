@@ -1,3 +1,8 @@
+# cppDE 0.11.11
+
+* A terminal `rootfunc` ends the output with one row at its root. The native
+  backend wrote the root time twice, the first copy 1e-15 before it.
+
 # cppDE 0.11.10
 
 * `./configure` finds a SUNDIALS built with MPI, as Debian ships it: it adds

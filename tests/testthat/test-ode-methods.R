@@ -209,13 +209,14 @@ test_that("rootfunc stops the integration at the first zero crossing", {
   last <- length(res$time)
   expect_equal(res$time[last], log(4) / 0.2, tolerance = 1e-8)
   expect_equal(unname(res$variable[last, "A"]), 0.25, tolerance = 1e-8)
-  expect_identical(unique(res$time[res$time < 6.5]), as.numeric(0:6))
+  expect_identical(res$time[-last], as.numeric(0:6))
 
   skip_if_not(has_cvode, "CVODE backend not available")
   cv <- solveODE(cv_stopper, 0:20, c(A = 1, k1 = 0.2), abstol = 1e-10, reltol = 1e-10,
                  roottol = 1e-10)
-  expect_equal(cv$time[length(cv$time)], log(4) / 0.2, tolerance = 1e-6)
-  expect_lt(max(cv$time), 20)
+  last <- length(cv$time)
+  expect_equal(cv$time[last], log(4) / 0.2, tolerance = 1e-6)
+  expect_identical(cv$time[-last], as.numeric(0:6))
 })
 
 # -- Symbol names -------------------------------------------------------------

@@ -332,10 +332,11 @@ private:
    }
  }
 
- // Whether a crossing produces output rows: a switch alone does not.
+ // Whether a crossing writes a row before and after it: only a state event
+ // does. A switch writes none, a terminal root only the closing row.
  bool observes(const std::vector<TriggeredEvent>& triggered) const {
    for (const auto& te : triggered)
-     if (m_root[te.index].mode < 0) return true;
+     if (m_root[te.index].mode < 0 && !m_root[te.index].terminal) return true;
    return false;
  }
 
