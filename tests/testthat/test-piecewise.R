@@ -30,9 +30,9 @@ pw_mod <- list(
                          B = " piecewise(kf*A, time - ts < 0, ks*A)"),
                        modelname = "pw_time_switch", deriv = TRUE,
                        compile = FALSE),
-  state_switch = cppODE(c(A = "-piecewise(kf*A, A - thr > 0, ks*A)"),
-                        modelname = "pw_state_switch", deriv = TRUE,
-                        compile = FALSE),
+  state_switch = suppressWarnings(
+    cppODE(c(A = "-piecewise(kf*A, A - thr > 0, ks*A)"),
+           modelname = "pw_state_switch", deriv = TRUE, compile = FALSE)),
   d2 = cppFUN(c(y = "piecewise(a^2*b, a - 1 > 0, b*a + a^3)"),
               parameters = c("a", "b"), deriv = TRUE, deriv2 = TRUE,
               derivMode = "forward", modelname = "pw_d2"),
@@ -269,4 +269,11 @@ test_that("Heaviside survives differentiation", {
   # The decay switches off at 0.5 and the state holds there.
   expect_equal(unname(res$variable[nrow(res$variable), 1]), 0.5, tolerance = 1e-3)
   expect_false(anyNA(res$tangent))
+})
+
+test_that("a switch on a state warns when derivatives are built", {
+  rhs <- c(A = "-piecewise(kf*A, A - thr > 0, ks*A)")
+  expect_warning(cppODE(rhs, modelname = "pw_state_warn", deriv = TRUE, compile = FALSE),
+                 "switches on a condition of a state")
+  expect_silent(cppODE(rhs, modelname = "pw_state_nowarn", deriv = FALSE, compile = FALSE))
 })

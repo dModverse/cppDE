@@ -1374,6 +1374,27 @@ def switch_times(model):
     return out
 
 
+def state_switches(model):
+    """Names of the states whose right-hand side switches on a condition that
+    reads a state: a comparison of piecewise or a logical operator, or the
+    argument of Heaviside or sign. The solver does not locate such a switch."""
+    g = model.g
+    out = []
+    for s, root in zip(model.states, model.rhs_plain):
+        for n in g.topo([root]):
+            o = g.op[n]
+            if o == cg.CMP and g.attr[n] in ("<", "<=", ">", ">="):
+                d = g.sub(*g.args[n])
+            elif o == cg.CALL and g.attr[n] in ("Heaviside", "sign"):
+                d = g.args[n][0]
+            else:
+                continue
+            if g.flags[d] & cg.F_STATE:
+                out.append(s)
+                break
+    return out
+
+
 _MODELS = {}
 
 

@@ -30,6 +30,9 @@
 #' the parameters determine. The solver stops in front of each such time
 #' inside the window and restarts past it, without an output row, so a pulse
 #' such as `piecewise(1, time > ts && time <= t2, 0)` is not stepped over.
+#' A condition that reads a state is not located: the solve is right, the
+#' sensitivities only where the right-hand side is continuous across the switch,
+#' and the constructor warns.
 #'
 #' @param rhs Named character vector of ODE right-hand sides. Names are
 #'   the state variables.
@@ -292,6 +295,16 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     rhs_dict = as.list(setNames(rhs, variables)),
     params_list = params, forcings_list = forcings)))
   n_switch <- length(switch_exprs)
+
+  # A switch on a state is not located, so derivatives across a jump of f miss it
+  sw_states <- as.character(unlist(codegen$state_switch_states(
+    rhs_dict = as.list(setNames(rhs, variables)),
+    params_list = params, forcings_list = forcings)))
+  if (length(sw_states) && (deriv || deriv2 || is_reverse))
+    warning("The right-hand side of ", paste(sw_states, collapse = ", "),
+            " switches on a condition of a state. The solver does not locate ",
+            "the switch; derivatives are correct only where f is continuous ",
+            "across it.", call. = FALSE)
   switch_code <- if (n_switch > 0L) c(
     "static void rhs_switch_times(const double* params, double* out) {",
     sprintf("  out[%d] = %s;", seq_len(n_switch) - 1L, switch_exprs),

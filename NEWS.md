@@ -1,3 +1,9 @@
+# cppDE 0.11.6
+
+* `cppODE()` warns when a condition of `piecewise()`, `Heaviside()` or `sign()`
+  reads a state and derivatives are built: such a switch is not located, so
+  the sensitivities are right only where the right-hand side is continuous.
+
 # cppDE 0.11.5
 
 * New `adjointControl()`, passed as `adjoint` to `solveODE()`,

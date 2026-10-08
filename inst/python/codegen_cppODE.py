@@ -2,8 +2,8 @@
 
 Public API: generate_ode_cpp, generate_event_code, generate_rootfunc_code,
 generate_forcing_init_code, fixed_event_time_exprs, switch_time_exprs,
-decide_sparse and analyze_klu_settings. Expressions and derivatives come from
-cppde_graph via cppde_model.
+state_switch_states, decide_sparse and analyze_klu_settings. Expressions and derivatives
+come from cppde_graph via cppde_model.
 """
 
 import math
@@ -164,6 +164,13 @@ def switch_time_exprs(rhs_dict, params_list, forcings_list=None):
     """
     model = cppde_model.model_for(rhs_dict, params_list, forcings_list)
     return cppde_model.switch_times(model)
+
+
+def state_switch_states(rhs_dict, params_list, forcings_list=None):
+    """States whose right-hand side switches on a condition of a state, see
+    cppde_model.state_switches."""
+    model = cppde_model.model_for(rhs_dict, params_list, forcings_list)
+    return cppde_model.state_switches(model)
 
 
 def generate_event_code(events_df, states_list, params_list, n_states,

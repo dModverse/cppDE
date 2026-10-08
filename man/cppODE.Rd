@@ -132,6 +132,9 @@ parameters alone and affine in time switches the right-hand side at a time
 the parameters determine. The solver stops in front of each such time
 inside the window and restarts past it, without an output row, so a pulse
 such as \code{piecewise(1, time > ts && time <= t2, 0)} is not stepped over.
+A condition that reads a state is not located: the solve is right, the
+sensitivities only where the right-hand side is continuous across the switch,
+and the constructor warns.
 }
 \examples{
 \donttest{
