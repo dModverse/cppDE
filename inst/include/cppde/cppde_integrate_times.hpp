@@ -23,7 +23,6 @@
 #include <cppde/cppde_event_engine.hpp>
 #include <cppde/cppde_step_checker.hpp>
 #include <cppde/cppde_stepper_traits.hpp>
-#include <cppde/cppde_switch_times.hpp>
 
 namespace cppde {
 namespace detail {
@@ -62,7 +61,6 @@ size_t integrate_times(
  auto times = merge_user_and_event_times<Time>(t_begin, t_end, fires);
  EventEngine<Stepper, System, State, Time, DtEstimator> eng(stepper, system, fires, root, std::move(dt_est));
  if (termination) eng.set_termination(std::move(termination));
- eng.set_switch_times(switch_time_sink());
  try {
    size_t steps = eng.process_controlled(x, times, dt, obs, checker, root_tol, max_trigger_root);
    transfer_stepper_diagnostics(stepper, checker);
@@ -99,7 +97,6 @@ size_t integrate_times_dense(
  auto times = merge_user_and_event_times<Time>(t_begin, t_end, fires);
  EventEngine<Stepper, System, State, Time, DtEstimator> eng(stepper, system, fires, root, std::move(dt_est));
  if (termination) eng.set_termination(std::move(termination));
- eng.set_switch_times(switch_time_sink());
  // The reverse mode's checkpoint collector; see cppde_reverse_trajectory.hpp.
  if (step_obs) eng.set_step_observer(std::move(step_obs));
  if (event_obs) eng.set_event_observer(std::move(event_obs));

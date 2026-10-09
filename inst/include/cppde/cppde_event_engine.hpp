@@ -30,7 +30,6 @@
 #include <cppde/cppde_stepper_diagnostics.hpp>
 #include <cppde/cppde_events.hpp>
 #include <cppde/cppde_saltation.hpp>
-#include <cppde/cppde_switch_times.hpp>
 #include <cppde/cppde_step_limits.hpp>
 
 namespace cppde {
@@ -175,11 +174,6 @@ public:
  }
 
  void set_termination(TerminationFunc f) { m_termination = std::move(f); }
-
- // Times at which the right-hand side switches, see cppde_switch_times.hpp.
- void set_switch_times(const switch_times& s) {
-   m_switch_raw.assign(s.t, s.t + s.n);
- }
 
  // Called after every accepted step of the dense loop, where the reverse mode
  // drops its checkpoint; it reads the stepper itself. The controlled loop is
@@ -371,7 +365,6 @@ private:
 
  void init_stepper_after_event(State& x, Time t, Time& dt) {
    m_bridge_pending = false;
-   m_bridge_switch = false;
    recalibrate_dt(x, t, dt);
    m_st.initialize(x, t, dt);
    if constexpr (::cppde::needs_restart_after_event_v<Stepper>) {
@@ -542,35 +535,14 @@ public:
    triggered.reserve(m_root.size());
    std::vector<double> curr_val(m_root.size());
    read_mode_roots(last_val, x, t);
-   prepare_switches(scalar_value(times.front()), m_t_final, false);
+   m_dir = m_t_final >= scalar_value(times.front()) ? 1.0 : -1.0;
 
    while (it != end) {
      Time t_target = *it;
      double t_target_s = scalar_value(t_target);
 
      while (scalar_value(t) < t_target_s - 1e-14) {
-       // A switching time the stepper stands in front of: the state follows f
-       // to the first double past the jump, and the stepper restarts there.
-       const double s = next_switch(scalar_value(t));
-       if (!std::isnan(s) && in_front_of(s, scalar_value(t))) {
-         const double t0 = scalar_value(t);
-         State f0(x.size());
-         m_sys.first(x, f0, t);
-         const double t1 = switch_crossing(x, f0, t0, s);
-         for (size_t i = 0; i < x.size(); ++i) x[i] += f0[i] * (t1 - t0);
-         t = Time(t1);
-         ++m_switch_next;
-         recalibrate_dt(x, t, dt);
-         reset_stepper_unified(m_st, x, t, dt);
-         eval_root_funcs(curr_val, x, t);
-         for (size_t i = 0; i < m_root.size(); ++i) {
-           last_val[i] = curr_val[i]; last_state[i] = x; last_time[i] = t;
-         }
-         continue;
-       }
        double rem = t_target_s - scalar_value(t);
-       if (!std::isnan(s))
-         rem = std::min(rem, s - m_switch_margin - scalar_value(t));
        Time dt_step = (scalar_value(dt) < rem) ? dt : Time(rem);
        auto result = m_st.try_step(m_sys, x, t, dt_step);
 
@@ -683,7 +655,7 @@ public:
 
    const bool fwd = scalar_value(dt) >= 0.0;
    const bool dense_always = !m_root.empty() || static_cast<bool>(m_termination);
-   prepare_switches(scalar_value(times.front()), scalar_value(times.back()), true);
+   m_dir = scalar_value(times.back()) >= scalar_value(times.front()) ? 1.0 : -1.0;
 
    m_st.initialize(x, times.front(), dt);
    m_st.set_dense_demand(*it, dense_always, fwd);
@@ -847,11 +819,9 @@ public:
 
 private:
  // --------------------------------------------------------------------------
- // One accepted step of the dense stepper. A step ends in front of the next
- // switching time at the latest, and the advance after it bridges the stepper
- // over the switch instead of stepping. A stepper that stalls at a jump of the
- // right-hand side in t is bridged over it too. Either bridge is no step and
- // leaves no checkpoint; the stepper restarts past it before the next step. A
+ // One accepted step of the dense stepper. A stepper that stalls at a jump of
+ // the right-hand side in t is bridged over it; the bridge is no step, leaves
+ // no checkpoint, and the stepper restarts past it before the next step. A
  // stall with no jump ahead restarts the stepper where it stands: its history
  // may still hold the right-hand side from before a jump a step went across.
  // --------------------------------------------------------------------------
@@ -859,22 +829,20 @@ private:
  void advance(size_t& steps, Checker& checker) {
    if (m_bridge_pending)
      restart_crossing(m_bridge_t0, m_bridge_x0);
-   if (!bridge_switch()) {
-     limit_to_switch();
-     for (;;) {
-       try {
-         m_st.do_step(m_sys);
-         ++steps; note_step();
-         break;
-       } catch (const step_size_stall& e) {
-         if (bridge_time_jump(e.failed_step())) break;
-         const double t0 = scalar_value(m_st.current_time());
-         // Once per point of time, so a stall of another kind still stops.
-         if (t0 == m_restarted_at) throw;
-         m_restarted_at = t0;
-         const State x0 = m_st.current_state();
-         restart_crossing(t0, x0);
-       }
+   limit_to_cap();
+   for (;;) {
+     try {
+       m_st.do_step(m_sys);
+       ++steps; note_step();
+       break;
+     } catch (const step_size_stall& e) {
+       if (bridge_time_jump(e.failed_step())) break;
+       const double t0 = scalar_value(m_st.current_time());
+       // Once per point of time, so a stall of another kind still stops.
+       if (t0 == m_restarted_at) throw;
+       m_restarted_at = t0;
+       const State x0 = m_st.current_state();
+       restart_crossing(t0, x0);
      }
    }
    checker(); checker.reset();
@@ -899,77 +867,15 @@ private:
    }
  }
 
- // The switching times ahead, see cppde_switch_times.hpp. Only a dense stepper
- // that can shorten a step and bridge crosses them; the controlled loop crosses
- // them itself.
- void prepare_switches(double t_first, double t_last, bool dense) {
-   m_switch_next = 0;
-   m_switch_dir = t_last >= t_first ? 1.0 : -1.0;
-   m_switch_margin = switch_margin(t_first, t_last);
-   bool able = true;
-   if (dense)
-     able = has_bridge<Stepper, State, Time>::value &&
-            has_limit_step<Stepper, Time>::value;
-   if (!able || m_switch_raw.empty()) { m_switch.clear(); return; }
-   m_switch = switch_times_in_window(
-       switch_times{m_switch_raw.data(), m_switch_raw.size()}, t_first, t_last);
- }
-
- // The next switching time not yet behind t, NaN if there is none. One is
- // behind once t has reached the far end of its margin.
- double next_switch(double t) {
-   while (m_switch_next < m_switch.size() &&
-          m_switch_dir * (m_switch[m_switch_next] +
-                          m_switch_dir * m_switch_margin - t) <= 0.0)
-     ++m_switch_next;
-   return m_switch_next < m_switch.size()
-     ? m_switch[m_switch_next] : std::numeric_limits<double>::quiet_NaN();
- }
-
- // Whether t stands in front of the switching time s, within twice the margin
- // or past it.
- bool in_front_of(double s, double t) const {
-   return m_switch_dir * (s - t) <= 2.0 * m_switch_margin;
- }
-
- // Where f(., x0) jumps between t0 and the far end of the margin around s: the
- // first double past the jump, or that far end when no jump shows there.
- double switch_crossing(const State& x0, const State& f0, double t0, double s) {
-   const double t_past = s + m_switch_dir * m_switch_margin;
-   const double t1 = locate_time_jump(x0, f0, t0, t_past - t0);
-   return std::isnan(t1) ? t_past : t1;
- }
-
- // The next step ends a margin short of the next switching time at the latest,
- // and within the step-size bound of a refined run where one is set.
- void limit_to_switch() {
+ // The next step ends within the step-size bound of a refined run where one is
+ // set.
+ void limit_to_cap() {
    if constexpr (has_limit_step<Stepper, Time>::value) {
      const double t0 = scalar_value(m_st.current_time());
-     const double s = next_switch(t0);
-     if (!std::isnan(s))
-       m_st.limit_step(Time(s - m_switch_dir * m_switch_margin));
      if (const step_limits* lim = step_limit_sink()) {
-       const double c = lim->cap(t0, m_switch_dir);
-       if (std::isfinite(c) && c > 0.0) m_st.limit_step(Time(t0 + m_switch_dir * c));
+       const double c = lim->cap(t0, m_dir);
+       if (std::isfinite(c) && c > 0.0) m_st.limit_step(Time(t0 + m_dir * c));
      }
-   }
- }
-
- // The switching time the stepper stands in front of, crossed as a jump of f
- // in t. False where there is none.
- bool bridge_switch() {
-   if constexpr (has_bridge<Stepper, State, Time>::value) {
-     const double t0 = scalar_value(m_st.current_time());
-     const double s = next_switch(t0);
-     if (std::isnan(s) || !in_front_of(s, t0)) return false;
-     const State& x0 = m_st.current_state();
-     State f0(x0.size());
-     m_sys.first(x0, f0, Time(t0));
-     bridge_to(x0, f0, t0, switch_crossing(x0, f0, t0, s));
-     m_bridge_switch = true;
-     return true;
-   } else {
-     return false;
    }
  }
 
@@ -1035,7 +941,6 @@ private:
  // Restarts the stepper on its current state, noted for the reverse mode as a
  // crossing that began at (t_before, x_before).
  void restart_crossing(double t_before, const State& x_before) {
-   if (m_bridge_switch) ++m_switch_next;
    State x = m_st.current_state();
    const Time t = m_st.current_time();
    Time dt = m_st.current_time_step();
@@ -1073,7 +978,7 @@ private:
      localize_root_dense(te.index, xk, tk, t_hi, te.last_val, te.curr_val,
                          root_tol_for(te.index, tol, scalar_value(t_hi)));
      at[k] = scalar_value(tk);
-     if (k > 0 && m_switch_dir * (at[k] - best) >= 0.0) continue;
+     if (k > 0 && m_dir * (at[k] - best) >= 0.0) continue;
      best = at[k]; x_root = xk; t_root = tk;
    }
    keep_cluster(triggered, at, best, tol);
@@ -1098,7 +1003,7 @@ private:
                               root_tol_for(te.index, tol, scalar_value(t_hi)),
                               checker);
      at[k] = scalar_value(th);
-     if (k > 0 && m_switch_dir * (at[k] - best) >= 0.0) continue;
+     if (k > 0 && m_dir * (at[k] - best) >= 0.0) continue;
      best = at[k]; x = xh; t = th;
    }
    keep_cluster(triggered, at, best, tol);
@@ -1191,16 +1096,8 @@ private:
  bool   m_bridge_pending = false;
  double m_bridge_t0 = 0.0;
  State  m_bridge_x0;
- // Whether that bridge crosses m_switch[m_switch_next].
- bool   m_bridge_switch = false;
-
- // Switching times as handed over, and those of the running loop inside its
- // grid with the next one ahead, see prepare_switches().
- std::vector<double> m_switch_raw;
- std::vector<double> m_switch;
- size_t m_switch_next = 0;
- double m_switch_dir = 1.0;
- double m_switch_margin = 0.0;
+ // The direction of integration of the running loop, +1 or -1.
+ double m_dir = 1.0;
  // Where a stall without a jump ahead last restarted the stepper.
  double m_restarted_at = std::numeric_limits<double>::quiet_NaN();
 
