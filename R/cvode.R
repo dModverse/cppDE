@@ -10,8 +10,8 @@
 #'
 #' Available methods are `"bdf"` (default) and `"adams"`. Forward
 #' sensitivities are of first order only; `deriv2` is not supported. Events,
-#' forcings, `rootfunc`, `fixed` and a switch on a state behave as in
-#' [cppODE()]; the switch is located by CVODES' root finding.
+#' forcings, `rootfunc`, `fixed` and a switch on a state or the time behave
+#' as in [cppODE()]; the switch is located by CVODES' root finding.
 #'
 #' Needs SUNDIALS (>= 6.0) at install time, see [installLibs()]; otherwise
 #' `cvode()` errors at the first call with platform-specific install hints.

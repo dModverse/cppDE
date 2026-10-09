@@ -6,12 +6,27 @@
 \description{
 Right-hand sides, root functions and event values of \code{\link[=cppODE]{cppODE()}} and
 \code{\link[=cvode]{cvode()}} models and the equations of \code{\link[=cppFUN]{cppFUN()}} are character strings in R
-syntax. They are read with SymPy and translated to C++.
+syntax. Both ODE backends read them alike.
 }
-\section{Operators}{
+\section{Arithmetic}{
 
-\code{+}, \code{-}, \code{*}, \code{/}, powers as \code{^} or \verb{**}, the comparisons \code{<}, \code{<=}, \code{>},
-\code{>=}, \code{==} and \code{!=}, and the logical operators \code{&&}, \code{||} and \code{!}.
+\code{+}, \code{-}, \code{*} and \code{/}, and powers written as \code{^} or \verb{**}, as in
+\code{"k1*A^2/(K + A)"}.
+}
+
+\section{Comparisons and logic}{
+
+The comparisons \code{<}, \code{<=}, \code{>}, \code{>=}, \code{==} and \code{!=} and the logical
+operators \code{&&}, \code{||} and \code{!} give 1 where they hold and 0 elsewhere. They
+can stand anywhere a number can:
+\itemize{
+\item as a factor, \code{"k*(A > A0)"} or \code{"k*(time >= t1 && time < t2)"};
+\item as the condition of \code{piecewise()}, \code{"piecewise(kon, A > A0, koff)"}.
+}
+
+As in R, \code{!} negates everything up to the next \code{&&}, \code{||}, comma or closing
+bracket: \code{"!A > A0"} reads \code{!(A > A0)}. Write the negation in brackets where
+it is a factor, \code{"k*(!(A > A0))"}.
 }
 
 \section{Functions}{
@@ -22,24 +37,25 @@ syntax. They are read with SymPy and translated to C++.
    Trigonometric \tab \code{sin}, \code{cos}, \code{tan}, \code{cot}, \code{sec}, \code{csc}, \code{asin}, \code{acos}, \code{atan}, \code{acot}, \code{asec}, \code{acsc}, \code{atan2(y, x)} \cr
    Hyperbolic \tab \code{sinh}, \code{cosh}, \code{tanh}, \code{coth}, \code{sech}, \code{csch}, \code{asinh}, \code{acosh}, \code{atanh}, \code{acoth}, \code{asech}, \code{acsch} \cr
    Error function \tab \code{erf}, \code{erfc} \cr
-   Piecewise \tab \code{abs}, \code{sign}, \code{Heaviside}, \code{min}, \code{max}, \code{floor}, \code{ceiling}, \code{round} \cr
-   Switches \tab \code{piecewise(v1, c1, v2, c2, ..., otherwise)} \cr
+   Kinks and steps \tab \code{abs}, \code{min}, \code{max}, \code{floor}, \code{ceiling}, \code{round} \cr
+   Switches \tab \code{piecewise(v1, c1, v2, c2, ..., otherwise)}, \code{Heaviside(x)}, \code{sign(x)} \cr
 }
 
 
-Every function works with every backend and derivative mode. \code{piecewise()}
-takes its arguments in SBML order: the first value whose condition holds,
-else \code{otherwise}.
+Every function works with every backend and derivative mode. \code{floor()},
+\code{ceiling()} and \code{round()} have the derivative 0.
 }
 
 \section{Switches}{
 
-A comparison \code{<}, \code{<=}, \code{>}, \code{>=}, also inside \code{piecewise()} or a logical
-operator, and \code{Heaviside()} and \code{sign()} switch the right-hand side. On time
-and parameters, affine in time, the switching time is known and the solver
-stops in front of it; on a state, the switch is located as a root during
-the solve. Sensitivities take the jump at both kinds, see Details of
-\code{\link[=cppODE]{cppODE()}}. \code{==} and \code{!=} are evaluated as written.
+\code{piecewise()} takes its arguments in SBML order: the first value whose
+condition holds, else \code{otherwise}. A comparison \code{<}, \code{<=}, \code{>} or \code{>=} on a
+state or on the time switches the right-hand side, inside \code{piecewise()} or
+as a factor, and so do \code{Heaviside()} and \code{sign()} of such an amount. The
+solver locates every such switch as a root and continues on the other
+branch, so a pulse in time is not stepped over, and the sensitivities take
+the jump, also where a parameter moves the switch. \code{==} and \code{!=} are
+evaluated as written. Details are in \code{\link[=cppODE]{cppODE()}}.
 }
 
 \section{Symbols}{
@@ -57,6 +73,34 @@ A function not listed here can be requested from the maintainer,
 \url{https://github.com/dModverse/cppDE/issues}.
 }
 
+\examples{
+\donttest{
+if (codegenAvailable()) {
+  ## Comparisons and logic give 1 or 0: as a factor or as a condition.
+  ##   u: a pulse between t1 and t2, `&&` joins two comparisons on time
+  ##   x: decays fast below xc and slowly above, unless mode is 0
+  ##   y: produced once x exceeds xc, with powers as `^` and `**`
+  eqns <- c(
+    u = "a*(time >= t1 && time < t2) - u/tau",
+    x = "k*u - piecewise(kfast, mode == 0 || !(x > xc), kslow)*x",
+    y = "kp*Heaviside(x - xc)*(1 - y^2) - y**2/(K + y)"
+  )
+  parms <- c(u = 0, x = 0, y = 0, a = 2, t1 = 1, t2 = 3, tau = 1, k = 1,
+             kslow = 0.1, kfast = 1, xc = 0.5, mode = 1, kp = 1, K = 0.5)
+  times <- 0:8
+
+  ## The same equations on both backends, compiled together
+  models <- list(cppODE = cppODE(eqns, deriv = FALSE, compile = FALSE))
+  if (codegenAvailable("cvode"))
+    models$cvode <- cvode(eqns, compile = FALSE)
+  do.call(compile, c(unname(models), list(output = "expressions_example")))
+
+  out <- lapply(models, function(m) solveODE(m, times, parms)$variable)
+  cbind(time = times, out$cppODE)
+  if (!is.null(out$cvode)) max(abs(out$cppODE - out$cvode))
+}
+}
+}
 \seealso{
 \code{\link[=cppODE]{cppODE()}}, \code{\link[=cvode]{cvode()}}, \code{\link[=cppFUN]{cppFUN()}}
 }

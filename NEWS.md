@@ -1,3 +1,15 @@
+# cppDE 0.12.1
+
+* A switch on the time, such as the pulse
+  `piecewise(1, time > ts && time <= t2, 0)`, is located as a root like a
+  switch on a state, on both backends. `cvode()` stepped over such a pulse
+  where the right-hand side was zero before it, and the sensitivities of the
+  native backend missed the jump where a parameter moves the switching time.
+* `!` after an operator, as in `k*!(x > 1)`, parses. It negates as in R, up to
+  the next `&&`, `||`, comma or closing bracket.
+* `?expressions` explains arithmetic, comparisons and logic, with an example
+  that solves the same equations with `cppODE()` and `cvode()`.
+
 # cppDE 0.12.0
 
 * New `adjointControl()`, passed as `adjoint` to `solveODE()`,

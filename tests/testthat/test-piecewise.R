@@ -25,6 +25,21 @@ pw_pulse <- function(nm, ...)
   cppODE(c(x = "-k*x + c*piecewise(1, time > ts && time <= t2, 0)",
            y = "k*x - y"),
          modelname = nm, compile = FALSE, ...)
+# Every operator, each in a state of its own. x runs with time, so a condition on
+# x is a switch on a state and one on time a switch in time.
+pw_ops <- c(
+  x = "1",
+  arith = "a*x^2 - x**3/b + (x - a)/(b + x)",
+  cmp_time = "(time > t1) + 2*(time <= t2)",
+  cmp_state = "(x >= t1)*(x < t2)",
+  logic = "a*(x > t1 && x < t2) + (time > t2 || x < h)",
+  not_mul = "3*!(x > t1)",
+  not_prec = "!x > t1",
+  eq_param = "(mode == 1)*x + (mode != 1)",
+  pw_and = "piecewise(a, time >= t1 && x < t2, b)",
+  heaviside = "a*Heaviside(x - t1)"
+)
+has_cvode <- isTRUE(cvodeConfig$available)
 pw_mod <- list(
   time_switch = cppODE(c(A = "-piecewise(kf*A, time - ts < 0, ks*A)",
                          B = " piecewise(kf*A, time - ts < 0, ks*A)"),
@@ -52,8 +67,18 @@ pw_mod <- list(
   pulse_rb4 = pw_pulse("pw_pulse_rb4", method = "rb4", deriv = FALSE),
   pulse_rb4_s = pw_pulse("pw_pulse_rb4_s", method = "rb4", deriv = TRUE),
   pulse_rb4_grid = pw_pulse("pw_pulse_rb4_grid", method = "rb4", deriv = FALSE,
-                            useDenseOutput = FALSE)
+                            useDenseOutput = FALSE),
+  ops = cppODE(pw_ops, modelname = "pw_ops", deriv = TRUE, compile = FALSE)
 )
+if (has_cvode) {
+  pulse_eqns <- c(x = "-k*x + c*piecewise(1, time > ts && time <= t2, 0)",
+                  y = "k*x - y")
+  pw_mod$pulse_cvode <- cvode(pulse_eqns, modelname = "pw_pulse_cvode", compile = FALSE)
+  pw_mod$pulse_cvode_s <- cvode(pulse_eqns, modelname = "pw_pulse_cvode_s",
+                                deriv = TRUE, compile = FALSE)
+  pw_mod$ops_cvode <- cvode(pw_ops, modelname = "pw_ops_cvode", deriv = TRUE,
+                            compile = FALSE)
+}
 do.call(compile, c(unname(pw_mod), list(output = "test_piecewise", cores = test_cores())))
 
 # -- Emitted form -------------------------------------------------------------
@@ -158,6 +183,12 @@ test_that("a pulse on a state at rest is not stepped over", {
     # between them.
     expect_equal(unname(run("pulse_rb4_grid")), unname(exact),
                  tolerance = 1e-8, info = cs$ts)
+    # cvode() locates the switching times as roots.
+    if (!has_cvode) next
+    expect_equal(unname(run("pulse_cvode")), unname(exact), tolerance = 1e-7,
+                 info = paste("cvode", cs$ts))
+    expect_equal(unname(run("pulse_cvode_s")), unname(exact), tolerance = 1e-7,
+                 info = paste("cvode sens", cs$ts))
   }
 })
 
@@ -229,6 +260,40 @@ test_that("the R and C spellings of the logical operators parse", {
   outside <- run(pw_mod$or_not)
   expect_equal(unname(outside),
                p[["A"]] * exp(-p[["k"]] * (times - tk)), tolerance = 1e-7)
+})
+
+test_that("every operator reads as in R, on both backends", {
+  # The reference evaluates the same strings in R and integrates them piece by
+  # piece between the switching points; x equals time. Its finite differences
+  # in t1 and t2 take the jumps at the switching times the tangents carry.
+  times <- seq(0, 4, by = 0.25)
+  pars <- c(a = 2, b = 3, t1 = 1.3, t2 = 2.6, h = 0.5, mode = 1)
+  p <- c(setNames(rep(0, length(pw_ops)), names(pw_ops)), pars)
+  env <- list(piecewise = function(v, cond, otherwise) if (cond) v else otherwise,
+              Heaviside = function(z) if (z > 0) 1 else if (z == 0) 0.5 else 0)
+  reference <- function(pars) {
+    cuts <- sort(unique(c(times, pars[c("h", "t1", "t2")])))
+    sapply(setdiff(names(pw_ops), "x"), function(nm) {
+      f <- function(s) vapply(s, function(si) eval(str2lang(pw_ops[[nm]]),
+        c(list(x = si, time = si), as.list(pars), env)), 0)
+      piece <- vapply(seq_len(length(cuts) - 1), function(i)
+        integrate(f, cuts[i], cuts[i + 1], rel.tol = 1e-12)$value, 0)
+      cumsum(c(0, piece))[match(times, cuts)]
+    })
+  }
+  ref <- reference(pars)
+  h <- 1e-5
+  dref <- lapply(c(t1 = "t1", t2 = "t2"), function(n)
+    (reference(replace(pars, n, pars[[n]] + h)) -
+       reference(replace(pars, n, pars[[n]] - h))) / (2 * h))
+
+  for (m in c("ops", if (has_cvode) "ops_cvode")) {
+    out <- solveODE(pw_mod[[m]], times, p, abstol = 1e-11, reltol = 1e-11)
+    expect_equal(out$variable[, colnames(ref)], ref, tolerance = 1e-7, info = m)
+    for (n in names(dref))
+      expect_equal(unname(out$tangent[, colnames(ref), n]), unname(dref[[n]]),
+                   tolerance = 1e-5, info = paste(m, n))
+  }
 })
 
 test_that("an expression that does not parse names itself", {

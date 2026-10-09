@@ -23,22 +23,18 @@
 #' the output nor the span of the integration. A grid of a single time applies
 #' the events at that time.
 #'
-#' A comparison in `rhs`, or a `Heaviside()` or `sign()`, on time and
-#' parameters alone and affine in time switches the right-hand side at a time
-#' the parameters determine. The solver stops in front of each such time
-#' inside the window and restarts past it, without an output row, so a pulse
-#' such as `piecewise(1, time > ts && time <= t2, 0)` is not stepped over.
-#'
 #' A comparison `<`, `<=`, `>`, `>=` whose sides differ by an amount that reads
-#' a state, in `piecewise()` or a logical operator, and `Heaviside()` or
-#' `sign()` of such an amount, switch the right-hand side where that amount
-#' crosses zero. The solver locates the crossing as a root, to a few doubles
-#' whatever `roottol` says, and continues on the other branch; every method
-#' and derivative mode takes the jump of f there, second order included. A
-#' switch adds no output row and is not limited by `maxroot`. Each branch is
-#' evaluated a step beyond the switch, so it has to be defined there. A
-#' solution that slides along a switching surface, both branches pointing at
-#' it, stops with an error. `==` and `!=` are evaluated as written.
+#' a state or the time, in `piecewise()`, a logical operator or a product, and
+#' `Heaviside()` or `sign()` of such an amount, switch the right-hand side
+#' where that amount crosses zero. The solver locates the crossing as a root,
+#' to a few doubles whatever `roottol` says, and continues on the other branch,
+#' so a pulse such as `piecewise(1, time > ts && time <= t2, 0)` is not stepped
+#' over. Every method and derivative mode takes the jump of f there, second
+#' order included, also where a parameter moves the switching time. A switch
+#' adds no output row and is not limited by `maxroot`. Each branch is evaluated
+#' a step beyond the switch, so it has to be defined there. A solution that
+#' slides along a switching surface, both branches pointing at it, stops with
+#' an error. `==` and `!=` are evaluated as written.
 #'
 #' @param rhs Named character vector of ODE right-hand sides, see
 #'   [expressions]. Names are the state variables.
@@ -300,24 +296,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   if (verbose) message("  \u2713 ODE and Jacobian generated")
 
-  # Times at which a condition on time and parameters switches the right-hand
-  # side, over the flat [states, params] vector. The solve stops in front of
-  # each and crosses it.
-  switch_exprs <- as.character(unlist(codegen$switch_time_exprs(
-    rhs_dict = as.list(setNames(rhs, variables)),
-    params_list = params, forcings_list = forcings)))
-  n_switch <- length(switch_exprs)
-
-  # Modes of the switches on a state, which the solve locates as roots. Their
-  # root events come with the event code.
+  # Modes of the switches on a state or the time, which the solve locates as
+  # roots. Their root events come with the event code.
   n_modes <- as.integer(codegen$state_switch_count(
     rhs_dict = as.list(setNames(rhs, variables)),
     params_list = params, forcings_list = forcings))
-  switch_code <- if (n_switch > 0L) c(
-    "static void rhs_switch_times(const double* params, double* out) {",
-    sprintf("  out[%d] = %s;", seq_len(n_switch) - 1L, switch_exprs),
-    "}") else character(0)
-
   # --- Sparse LU decision ---
   # use_sparse must match what the codegen generated: the Jacobian functor
   # signature is tied to the stepper's matrix type.
@@ -1127,20 +1110,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
                    " odeint_utils::scalar_value(dt));"),
             rev_stepper_type, rev_num_type)) else character(0)
 
-  switch_scope_block <- if (n_switch > 0L) c(
-    "",
-    "  // The switching times of the right-hand side, crossed by the solve.",
-    sprintf("  double _switch_t[%d];", n_switch),
-    "  rhs_switch_times(args.params, _switch_t);",
-    sprintf("  cppde::switch_time_scope _cppde_sw_scope(_switch_t, %d);", n_switch)
-  ) else character(0)
-
   externC <- c(externC,
                stepper_line, "",
                estimate_dt_block,
                dt_est_block,
                rev_collector_block,
-               switch_scope_block,
                "",
                "  // --- Integration (catch recoverable errors for partial results) ---",
                "  std::string solver_message;",
@@ -1607,7 +1581,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     ode_code, "", jac_code,
     if (is_reverse) c("", adj_code) else character(0),
     if (nzchar(event_adj_code)) c("", event_adj_code) else character(0),
-    if (n_switch > 0L) c("", switch_code) else character(0),
     "", observer_code,
     reverse_block,
     "", "}", "", externC

@@ -92,8 +92,8 @@ described in \code{vignette("Methods", package = "cppDE")}.
 \details{
 Available methods are \code{"bdf"} (default) and \code{"adams"}. Forward
 sensitivities are of first order only; \code{deriv2} is not supported. Events,
-forcings, \code{rootfunc}, \code{fixed} and a switch on a state behave as in
-\code{\link[=cppODE]{cppODE()}}; the switch is located by CVODES' root finding.
+forcings, \code{rootfunc}, \code{fixed} and a switch on a state or the time behave
+as in \code{\link[=cppODE]{cppODE()}}; the switch is located by CVODES' root finding.
 
 Needs SUNDIALS (>= 6.0) at install time, see \code{\link[=installLibs]{installLibs()}}; otherwise
 \code{cvode()} errors at the first call with platform-specific install hints.
@@ -102,7 +102,7 @@ KLU, required when \code{sparse = TRUE}, is detected the same way.
 \examples{
 \donttest{
 if (codegenAvailable("cvode")) {
-  ## Needs SUNDIALS at install time, see install_libs(). The models are
+  ## Needs SUNDIALS at install time, see installLibs(). The models are
   ## generated first and compiled together, into one shared object in tempdir().
   eqns <- c(A = "-k1*A", B = "k1*A - k2*B")
 

@@ -1005,10 +1005,10 @@ time-triggered event at that time.
 Terminal conditions are excluded: they stop the integration instead of
 resetting the state.
 
-### State switches
+### Switches on states and time
 
 A comparison in the right-hand side whose sides differ by an amount
-$g(x, t)$ that reads a state, and $\mathrm{Heaviside}(g)$ or
+$g(x, t)$ that reads a state or the time, and $\mathrm{Heaviside}(g)$ or
 $\mathrm{sign}(g)$, switch $f$ on the set where $g$ changes sign. Read
 as written, such a condition makes $f$ discontinuous in $x$: a step
 across the switch fails the error test until it is short enough, and

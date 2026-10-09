@@ -51,10 +51,15 @@ def normalise_logic(expr_str):
 
 
 def _logic_words(s):
-    """`&&`, `||` and prefix `!` as and/or/not; a postfix `!` is kept."""
+    """`&&`, `||` and prefix `!` as and/or/not; a postfix `!` is kept. A `not`
+    is bracketed up to the end of its operand, so that it may follow `*` or `==`."""
     out = []
+    close = []
     i = 0
     while i < len(s):
+        while close and close[-1] == i:
+            out.append(')')
+            close.pop()
         two = s[i:i + 2]
         if two in ('&&', '||'):
             out.append(_LOGIC_WORDS[two])
@@ -63,12 +68,32 @@ def _logic_words(s):
         if s[i] == '!' and two != '!=':
             prev = s[:i].rstrip()[-1:]
             if not (prev.isalnum() or prev in ('_', ')', ']', '.')):
-                out.append(_LOGIC_WORDS['!'])
+                out.append(' (not ')
+                close.append(_operand_end(s, i + 1))
                 i += 1
                 continue
         out.append(s[i])
         i += 1
+    out.extend(')' * len(close))
     return ''.join(out)
+
+
+def _operand_end(s, i):
+    """Index where the operand of a `!` at i - 1 ends: as in R, at `&&`, `||`, a
+    comma or a closing bracket of the enclosing level."""
+    depth = 0
+    while i < len(s):
+        c = s[i]
+        if c in '([':
+            depth += 1
+        elif c in ')]':
+            if depth == 0:
+                return i
+            depth -= 1
+        elif depth == 0 and (c == ',' or s[i:i + 2] in ('&&', '||')):
+            return i
+        i += 1
+    return i
 
 
 def parse_error(expr_str, exc, label=None):

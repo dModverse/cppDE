@@ -1,8 +1,8 @@
 """C++ generators of the native cppDE solvers.
 
 Public API: generate_ode_cpp, generate_event_code, generate_rootfunc_code,
-generate_forcing_init_code, fixed_event_time_exprs, switch_time_exprs,
-state_switch_count, decide_sparse and analyze_klu_settings. Expressions and derivatives
+generate_forcing_init_code, fixed_event_time_exprs, state_switch_count,
+decide_sparse and analyze_klu_settings. Expressions and derivatives
 come from cppde_graph via cppde_model.
 """
 
@@ -154,20 +154,8 @@ def fixed_event_time_exprs(events_df, states_list, params_list, n_states,
     return cppde_model.fixed_event_times(model, rows)
 
 
-def switch_time_exprs(rhs_dict, params_list, forcings_list=None):
-    """Double expressions over the flat vector `params` of the times at which
-    a condition of the right-hand side on time and parameters switches, see
-    cppde_model.switch_times.
-
-    Returns:
-        list of str, empty when there is none.
-    """
-    model = cppde_model.model_for(rhs_dict, params_list, forcings_list)
-    return cppde_model.switch_times(model)
-
-
 def state_switch_count(rhs_dict, params_list, forcings_list=None):
-    """Number of modes of the switches on a state, see
+    """Number of modes of the switches on a state or the time, see
     cppde_model.hold_switches."""
     model = cppde_model.model_for(rhs_dict, params_list, forcings_list)
     return cppde_model.n_switches(model)

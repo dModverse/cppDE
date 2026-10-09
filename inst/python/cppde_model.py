@@ -29,14 +29,18 @@ def as_list(x):
     return list(x)
 
 
-def hold_switches(g, roots):
-    """`roots` with every switch that reads a state read from a mode.
+# A switch on these is held as a mode and located as a root.
+_HELD = cg.F_STATE | cg.F_TIME
 
-    A comparison <, <=, >, >= whose sides differ by a state-dependent amount
-    becomes MODE leaf k, which holds where its argument g is positive (or
-    zero, for <= and >=). Heaviside(g) and sign(g) take two modes, on g and
-    on -g, so that they keep their value at g = 0. == and != stay as they
-    are: they switch on a set of measure zero.
+
+def hold_switches(g, roots):
+    """`roots` with every switch that reads a state or the time read from a mode.
+
+    A comparison <, <=, >, >= whose sides differ by an amount that reads a
+    state or the time becomes MODE leaf k, which holds where its argument g is
+    positive (or zero, for <= and >=). Heaviside(g) and sign(g) take two
+    modes, on g and on -g, so that they keep their value at g = 0. == and !=
+    stay as they are: they switch on a set of measure zero.
 
     Returns:
         (new roots, [(g, closed)] per mode).
@@ -56,16 +60,16 @@ def hold_switches(g, roots):
         o = g.op[n]
         if o == cg.CMP and g.attr[n] in ("<", "<=", ">", ">="):
             a, b = g.args[n]
-            if not (g.flags[a] | g.flags[b]) & cg.F_STATE:
+            if not (g.flags[a] | g.flags[b]) & _HELD:
                 continue
             op = g.attr[n]
             d = g.sub(a, b) if op in (">", ">=") else g.sub(b, a)
-            if not g.flags[d] & cg.F_STATE:
+            if not g.flags[d] & _HELD:
                 continue
             mapping[n] = mode(d, op in ("<=", ">="))
         elif o == cg.CALL and g.attr[n] in ("Heaviside", "sign"):
             d = g.args[n][0]
-            if not g.flags[d] & cg.F_STATE:
+            if not g.flags[d] & _HELD:
                 continue
             up, down = mode(d, False), mode(g.neg(d), False)
             if g.attr[n] == "Heaviside":
@@ -1428,42 +1432,8 @@ def fixed_event_times(model, rows):
     return out or None
 
 
-def switch_times(model):
-    """Double expressions over the flat parameter vector `params` of the times
-    at which a condition of the right-hand side on time and parameters alone
-    switches: the comparisons of piecewise and the logical operators, and the
-    arguments of Heaviside and sign. A condition not affine in time is left
-    out. Each time appears once."""
-    g = model.g
-    t = g.time()
-    other = ~(cg.F_TIME | cg.F_PARAM | cg.F_INIT)
-    out, seen = [], set()
-    pr = em.Printer(g, model.slot("cpp"), style="double")
-    for n in g.topo(model.rhs_plain):
-        o = g.op[n]
-        if o == cg.CMP and g.attr[n] in ("<", "<=", ">", ">="):
-            d = g.sub(*g.args[n])
-        elif o == cg.CALL and g.attr[n] in ("Heaviside", "sign"):
-            d = g.args[n][0]
-        else:
-            continue
-        if not g.flags[d] & cg.F_TIME or g.flags[d] & other:
-            continue
-        # d = a*time + b with a free of time: the switch sits at -b/a.
-        a = model.ad.jvp([d], {t: g.ONE})[0]
-        if g.is_zero(a) or g.flags[a] & cg.F_TIME:
-            continue
-        b = g.substitute([d], {t: g.ZERO})[0]
-        ts = g.neg(g.div(b, a))
-        if ts in seen:
-            continue
-        seen.add(ts)
-        out.append(pr.expr(ts))
-    return out
-
-
 def n_switches(model):
-    """Number of modes the state switches of the right-hand side hold, see
+    """Number of modes the switches of the right-hand side hold, see
     hold_switches."""
     return len(model.switches)
 

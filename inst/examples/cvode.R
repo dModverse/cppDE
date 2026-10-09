@@ -1,6 +1,6 @@
 \donttest{
 if (codegenAvailable("cvode")) {
-  ## Needs SUNDIALS at install time, see install_libs(). The models are
+  ## Needs SUNDIALS at install time, see installLibs(). The models are
   ## generated first and compiled together, into one shared object in tempdir().
   eqns <- c(A = "-k1*A", B = "k1*A - k2*B")
 
