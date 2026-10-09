@@ -157,7 +157,7 @@ static void select_suite(const char* label, unsigned N) {
   emit((std::string(label) + " select false").c_str(), r, N);
   close_to(r.x(), 0.0, "select takes the second branch");
   for (unsigned i = 0; i < N; ++i)
-    close_to(r[i], 0.0, "a literal branch carries no tangent");
+    close_to(r[i], 0.0, "a literal branch has no tangent");
 
   // Nested, the way a multi-branch piecewise is emitted.
   r = select(a < b, 1.0, select(b > 0.0, a + b, a * b));

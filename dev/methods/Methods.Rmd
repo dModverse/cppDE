@@ -2010,7 +2010,7 @@ earlier one and interpolating; the argument trades memory against
 re-integration. This is the main difference between the two
 discretisations: the adjoint sees interpolated states, not the ones
 the forward run stepped through, so the gradient is the derivative of
-no discretisation actually carried out. It approximates the exact
+no discretisation actually performed. It approximates the exact
 gradient to $O(\mathrm{tol})$ and differs by the same order from the
 derivative of the reported value.
 

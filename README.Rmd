@@ -98,11 +98,11 @@ or let cppDE build pinned releases into a per-user cache, which needs no
 administrator rights:
 
 ```r
-cppDE::install_libs("sundials")        # or "suitesparse"
+cppDE::installLibs("sundials")         # or "suitesparse"
 ```
 
 `./configure` finds the cache on every install, so the build is needed once.
-See `?install_libs` for building during the install, build options, and removing
+See `?installLibs` for building during the install, build options, and removing
 the cache.
 `CPPDE_EXTRA_CXXFLAGS` is appended to the flags of every model `compile()`.
 

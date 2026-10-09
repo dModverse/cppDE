@@ -1,5 +1,5 @@
 /*
- The integration loops that carry events: one over a controlled stepper, one
+ The integration loops that handle events: one over a controlled stepper, one
  over dense output.
 
  The loop structure is derived from Boost.Odeint's integrate_times by Karsten

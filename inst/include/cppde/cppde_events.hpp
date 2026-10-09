@@ -2,7 +2,7 @@
  Event specifications and the reset maps applied without transport.
 
  A fixed event fires at a time the caller supplies, a root event when its
- condition crosses zero. Both carry one reset on one state.
+ condition crosses zero. Both apply one reset to one state.
 
  Copyright (C) 2026 Simon Beyer
  */

@@ -61,10 +61,10 @@ compiler** and **Python with SymPy** are required. Windows users need
 The package installs and runs without any system library. Three features
 are gated on one, detected by `./configure` at install time:
 
-| Feature | Needs | Without it |
-|:---|:---|:---|
-| `cvode()` backend | SUNDIALS (\>= 6.0) | the native solvers are unaffected |
-| sparse Jacobian path | SuiteSparse / KLU | `sparse = TRUE` says how to enable it |
+| Feature                    | Needs                   | Without it                               |
+|:---------------------------|:------------------------|:-----------------------------------------|
+| `cvode()` backend          | SUNDIALS (\>= 6.0)      | the native solvers are unaffected        |
+| sparse Jacobian path       | SuiteSparse / KLU       | `sparse = TRUE` says how to enable it    |
 | parallel `solveODEBatch()` | a toolchain with OpenMP | correct results, conditions run serially |
 
 The three are independent; `cppODE()` uses KLU without SUNDIALS. OpenMP
@@ -73,24 +73,24 @@ needs `libomp` (`brew install libomp`).
 
 Either install the libraries as system packages,
 
-| Platform | SUNDIALS | SuiteSparse / KLU |
-|:---|:---|:---|
-| Debian/Ubuntu | `sudo apt install libsundials-dev` | `sudo apt install libsuitesparse-dev` |
-| Fedora | `sudo dnf install sundials-devel` | `sudo dnf install suitesparse-devel` |
-| Arch | `sudo pacman -S sundials` | `sudo pacman -S suitesparse` |
-| macOS (Homebrew) | `brew install sundials` | `brew install suite-sparse` |
+| Platform         | SUNDIALS                           | SuiteSparse / KLU                     |
+|:-----------------|:-----------------------------------|:--------------------------------------|
+| Debian/Ubuntu    | `sudo apt install libsundials-dev` | `sudo apt install libsuitesparse-dev` |
+| Fedora           | `sudo dnf install sundials-devel`  | `sudo dnf install suitesparse-devel`  |
+| Arch             | `sudo pacman -S sundials`          | `sudo pacman -S suitesparse`          |
+| macOS (Homebrew) | `brew install sundials`            | `brew install suite-sparse`           |
 
 or let cppDE build pinned releases into a per-user cache, which needs no
 administrator rights:
 
 ``` r
-cppDE::install_libs("sundials")        # or "suitesparse"
+cppDE::installLibs("sundials")         # or "suitesparse"
 ```
 
 `./configure` finds the cache on every install, so the build is needed
-once. See `?install_libs` for building during the install, build
-options, and removing the cache. `CPPDE_EXTRA_CXXFLAGS` is appended to
-the flags of every model `compile()`.
+once. See `?installLibs` for building during the install, build options,
+and removing the cache. `CPPDE_EXTRA_CXXFLAGS` is appended to the flags
+of every model `compile()`.
 
 To see what was detected:
 
