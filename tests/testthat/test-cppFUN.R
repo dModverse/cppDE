@@ -34,9 +34,6 @@ fx <- list(
                   variables = "int", parameters = c("std", "ini", "default"),
                   deriv = TRUE, derivMode = c("forward", "reverse"),
                   modelname = "cxx_tokens", convenient = TRUE),
-  jac    = cppFUN(fx_trafo, parameters = c("a", "b", "x"),
-                  deriv = TRUE, derivMode = "forward",
-                  modelname = "fun_jac", convenient = TRUE),
   hess   = cppFUN(c(y = "a * b * x^2"), parameters = c("a", "b", "x"),
                   deriv = TRUE, deriv2 = TRUE, derivMode = "forward",
                   modelname = "fun_hess", convenient = TRUE),
@@ -61,12 +58,6 @@ fx <- list(
                      parameters = c("a", "b"), deriv = TRUE,
                      derivMode = "reverse", modelname = "vjp_seeds",
                      convenient = FALSE),
-  dm_fwd  = cppFUN(c(y = "a * a"), parameters = "a", deriv = TRUE,
-                   derivMode = "forward", modelname = "dm_fwd",
-                   convenient = FALSE),
-  dm_rev  = cppFUN(c(y = "a * a"), parameters = "a", deriv = TRUE,
-                   derivMode = "reverse", modelname = "dm_rev",
-                   convenient = FALSE),
   dm_both = cppFUN(c(y = "a * a"), parameters = "a", deriv = TRUE,
                    derivMode = c("forward", "reverse"), modelname = "dm_both",
                    convenient = FALSE),
@@ -165,25 +156,12 @@ test_that("a Python keyword as a symbol name is rejected", {
 # -- Jacobian correctness -----------------------------------------------------
 
 test_that("cppFUN Jacobian matches analytical derivatives", {
-  f <- fx$jac
-  jac <- f$jac(a = 2, b = 0.5, x = 1)
-
-  # jac is [obs, outputs, params] array
+  jac <- fx$basic$jac(a = 2, b = 0.5, x = 1)
   expect_equal(length(dim(jac)), 3)
-  j <- jac[1, , ]  # first (only) observation
-
-  # dy1/da = exp(-b*x) = exp(-0.5)
-  expect_equal(j["y1", "a"], exp(-0.5), tolerance = 1e-8)
-  # dy1/db = -a*x*exp(-b*x) = -2*1*exp(-0.5)
-  expect_equal(j["y1", "b"], -2 * exp(-0.5), tolerance = 1e-8)
-  # dy1/dx = -a*b*exp(-b*x) = -2*0.5*exp(-0.5)
-  expect_equal(j["y1", "x"], -1 * exp(-0.5), tolerance = 1e-8)
-  # dy2/da = 1
-  expect_equal(j["y2", "a"], 1, tolerance = 1e-10)
-  # dy2/db = x = 1
-  expect_equal(j["y2", "b"], 1, tolerance = 1e-10)
-  # dy2/dx = b = 0.5
-  expect_equal(j["y2", "x"], 0.5, tolerance = 1e-10)
+  j <- jac[1, , ]
+  expect_equal(j["y1", ], c(a = exp(-0.5), b = -2 * exp(-0.5), x = -exp(-0.5)),
+               tolerance = 1e-10)
+  expect_equal(j["y2", ], c(a = 1, b = 1, x = 0.5), tolerance = 1e-10)
 })
 
 # -- Hessian structure ---------------------------------------------------------
@@ -191,23 +169,12 @@ test_that("cppFUN Jacobian matches analytical derivatives", {
 test_that("cppFUN Hessian has correct dimensions and is symmetric", {
   f <- fx$hess
   hess_arr <- f$hess(a = 2, b = 3, x = 4)
-
-  expect_true(!is.null(hess_arr))
-  # [obs, outputs, params, params]
-  expect_equal(dim(hess_arr)[2], 1)   # 1 output
-  expect_equal(dim(hess_arr)[3], 3)   # 3 params
-  expect_equal(dim(hess_arr)[4], 3)   # 3 params
+  expect_equal(dim(hess_arr), c(1L, 1L, 3L, 3L))
 
   hess <- hess_arr[1, 1, , ]
-  # Hessian should be symmetric
   expect_equal(hess, t(hess), tolerance = 1e-10)
-
-  # d2y/da db = x^2 = 16
-  expect_equal(hess["a", "b"], 16, tolerance = 1e-8)
-  # d2y/da dx = 2*b*x = 24
-  expect_equal(hess["a", "x"], 24, tolerance = 1e-8)
-  # d2y/db dx = 2*a*x = 16
-  expect_equal(hess["b", "x"], 16, tolerance = 1e-8)
+  expect_equal(c(hess["a", "b"], hess["a", "x"], hess["b", "x"]), c(16, 24, 16),
+               tolerance = 1e-10)
 })
 
 # -- Fixed parameters in cppFUN ------------------------------------------------
@@ -216,10 +183,7 @@ test_that("cppFUN fixed parameters are excluded from derivatives", {
   f <- fx$fixed
   jac <- f$jac(a = 2, b = 3, c = 1)
 
-  # Only 2 params in Jacobian (a, b), not c
-  expect_equal(dim(jac)[3], 2)
-  jac_names <- dimnames(jac)[[3]]
-  expect_false("c" %in% jac_names)
+  expect_identical(dimnames(jac)[[3]], c("a", "b"))
   expect_equal(unname(jac[1, "y", ]), c(3, 2), tolerance = 1e-12)
 })
 
@@ -342,33 +306,21 @@ test_that("derivMode builds exactly the directions it names", {
                "no reverse counterpart")
 
   # Each direction is its own build product, and naming one omits the other.
-  ff <- fx$dm_fwd
-  expect_null(ff$vjp)
-  expect_false(is.null(ff$jac))
-
-  fr <- fx$dm_rev
-  expect_null(fr$jac)
-  expect_false(is.null(fr$vjp))
-  expect_false(is.null(fr$func))
+  expect_null(fx$vjp_fwd$vjp)
+  expect_false(is.null(fx$vjp_fwd$jac))
+  expect_null(fx$vjp_rev$jac)
+  expect_false(is.null(fx$vjp_rev$vjp))
+  expect_false(is.null(fx$vjp_rev$func))
 
   fb <- fx$dm_both
-  expect_false(is.null(fb$jac))
-  expect_false(is.null(fb$vjp))
-
-  # The two objects agree where they overlap.
   p <- c(a = 1.3)
-  w <- matrix(1, 1, 1)
-  expect_equal(unname(fr$vjp(NULL, p, w)$cotangentP[1, 1]),
+  expect_equal(unname(fb$vjp(NULL, p, matrix(1, 1, 1))$cotangentP[1, 1]),
                unname(fb$jac(NULL, p)[1, 1, "a"]), tolerance = 1e-12)
 })
 
-# ---------------------------------------------------------------------------
-#  vjp over a dual: forward over reverse on an observation function.
-#
-#  Oracle is the forward Hessian of the same object, contracted with the
-#  cotangent and read along the tangents of the inputs. Both are exact
-#  derivatives of the same expressions, so the gap is rounding.
-# ---------------------------------------------------------------------------
+# -- vjp over a dual ------------------------------------------------------------
+# The oracle is the forward Hessian of the same object, contracted with the
+# cotangent and read along the tangents of the inputs.
 
 test_that("the dual vjp keeps the first order it already answered", {
   f <- fx$vjp_fr

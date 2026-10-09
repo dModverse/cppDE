@@ -65,7 +65,7 @@ test_that("ptc resolves rates sixteen orders apart", {
 # -- Plain equations ---------------------------------------------------------------
 
 test_that("ptc solves plain equations with flow = FALSE", {
-  # x^2 - a = 0 read as dx/dt is unstable at sqrt(a); as an equation it is a root
+  # The root is unstable read as a flow and found read as an equation.
   r <- ptc(mods$sq, x = c(x = 5), parms = c(a = 4), flow = FALSE)
   expect_true(r$converged)
   expect_equal(r$x[["x"]], 2, tolerance = 1e-10)

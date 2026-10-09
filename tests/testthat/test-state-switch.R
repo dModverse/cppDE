@@ -115,7 +115,7 @@ rl_times <- seq(0, 10, by = 0.25)
 rl_p <- c(x = 1, y = 0, k = 1, c = 0.1)
 
 # Central differences of tight solves without derivatives.
-rl_fd <- function(h = 1e-6) {
+rl_fd <- function(h = 1e-4) {
   run <- function(p) solveODE(mods$rl_plain, rl_times, p, abstol = 1e-12,
                               reltol = 1e-12, roottol = 1e-12)$variable
   out <- lapply(names(rl_p), function(n) {

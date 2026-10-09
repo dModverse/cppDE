@@ -16,6 +16,9 @@ ab_pars  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1)
 ab_times <- seq(0, 5, by = 0.25)
 ev <- data.frame(var = "A", time = 2.1, value = "d", method = "add")
 ev_pars <- c(ab_pars, d = 0.3)
+# At rest behind a switch: x stays zero over 0:50 since ts = 60 lies beyond.
+sw_eqns <- c(x = "-k*(x - c*piecewise(0, time - ts < 0, 1))", y = "k*x - y")
+sw_pars <- c(k = 1, c = 1000, ts = 60, x = 0, y = 0)
 
 per_method <- function(eq, tag, ...)
   lapply(setNames(nm = methods), function(m)
@@ -23,7 +26,8 @@ per_method <- function(eq, tag, ...)
            compile = FALSE, ...))
 mods <- list(rest = per_method(rest_eqns, "rest"), q = per_method(q_eqns, "q"),
              ab = per_method(ab_eqns, "ab"),
-             ev = per_method(ab_eqns, "ev", events = ev))
+             ev = per_method(ab_eqns, "ev", events = ev),
+             sw = per_method(sw_eqns, "sw"))
 fwd <- list(rest = cppODE(rest_eqns, modelname = "rf_fwd_rest", compile = FALSE),
             q = cppODE(q_eqns, modelname = "rf_fwd_q", compile = FALSE),
             ab = cppODE(ab_eqns, modelname = "rf_fwd_ab", compile = FALSE),
@@ -132,4 +136,25 @@ test_that("the multistep sweep takes each step's own tail", {
   gf <- apply(f$tangent * as.vector(W), 3, sum)
   g <- r$cotangent[names(gf), 1]
   expect_lt(max(abs(g - gf)) / max(abs(gf)), 1e-3)
+})
+
+test_that("a trajectory at rest behind a switch gets its exact gradient", {
+  # The state's error estimate is zero, so the grid of a value-only run grows
+  # without bound and the adjoint on it is off by more than its size. The
+  # checked sweep, the gradient under gradtol, takes those steps in substeps.
+  # With k = 1 the tangents are dx/dx0 = e^-t, dy/dx0 = t e^-t, dy/dy0 = e^-t,
+  # and zero in k, c and ts while the switch lies beyond the horizon.
+  tt <- 0:50
+  set.seed(1)
+  W <- array(rnorm(length(tt) * 2 * 2), c(length(tt), 2, 2))
+  ref <- rbind(x = colSums(W[, 1, ] * exp(-tt) + W[, 2, ] * tt * exp(-tt)),
+               y = colSums(W[, 2, ] * exp(-tt)), k = 0, c = 0, ts = 0)
+  o <- list(abstol = 1e-12, reltol = 1e-10)
+  for (m in methods) {
+    rv <- do.call(solveODE, c(list(mods$sw[[m]], tt, sw_pars, cotangent = W,
+                                   adjoint = adjointControl(refine = TRUE,
+                                                            gradtol = 1e-13)), o))
+    expect_equal(unname(rv$cotangent[rownames(ref), ]), unname(ref),
+                 tolerance = 1e-6, info = m)
+  }
 })

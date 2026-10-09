@@ -1,5 +1,5 @@
-# Test steady-state equilibration (rootfunc = "equilibrate") across methods
-# and warm-start behaviour.
+# Steady-state equilibration (rootfunc = "equilibrate") across methods, and
+# warm starts.
 
 skip_on_cran()
 
@@ -17,191 +17,90 @@ pars <- c(R = 1, A = 1, pA = 0, k_act = 0.1, k_deact = 0.7,
           k1 = 0.1, k2 = 0.05)
 times <- seq(0, 1e3, length.out = 500)
 
-ss_R  <- unname(pars["k_act"] / pars["k_deact"])
-total <- unname(pars["A"] + pars["pA"])
-ss_pA <- unname(pars["k1"]) * ss_R / (unname(pars["k2"]) + unname(pars["k1"]) * ss_R) * total
-ss_A  <- total - ss_pA
+stiff_methods <- c("bdf", "rb4")
+all_methods   <- c("bdf", "adams", "rb4", "tsit5")
 
-stiff_methods   <- c("bdf", "rb4")
-all_methods     <- c("bdf", "adams", "rb4", "tsit5")
-
-# One equilibrating model per method with sensitivities and one without,
-# generated uncompiled and linked into one shared object.
+# Sensitivities on the stiff methods only, which the tangent tests use; all
+# models are generated uncompiled and linked into one shared object.
 eq_mod <- lapply(setNames(nm = all_methods), function(m)
-  cppODE(rhs, rootfunc = "equilibrate", method = m,
+  cppODE(rhs, rootfunc = "equilibrate", method = m, deriv = m %in% stiff_methods,
          modelname = paste0("eq_", m), compile = FALSE))
-eq_nosens <- cppODE(rhs, rootfunc = "equilibrate", deriv = FALSE,
-                    modelname = "eq_at_ss", compile = FALSE)
 # Two states whose steady states lie 15 orders apart.
 rhs_scale <- c(small = "ks - d * small", big = "kb - d * big")
 eq_scale  <- cppODE(rhs_scale, rootfunc = "equilibrate", deriv = FALSE,
                     modelname = "eq_scale", compile = FALSE)
-do.call(compile, c(unname(eq_mod), list(eq_nosens, eq_scale),
+do.call(compile, c(unname(eq_mod), list(eq_scale),
                    output = "test_ode_equilibrate", cores = test_cores()))
 
-# -- Basic equilibrate: reaches correct steady state ---------------------------
+# The closed-form steady state and its derivatives in every parameter and
+# initial value, the latter entering through the conserved total.
+ss_expr <- expression(
+  R  = k_act / k_deact,
+  A  = (A + pA) * k2 / (k2 + k1 * k_act / k_deact),
+  pA = (A + pA) * k1 * k_act / k_deact / (k2 + k1 * k_act / k_deact)
+)
+ss_jac <- function(p) {
+  out <- t(vapply(ss_expr, function(e)
+    vapply(names(p), function(v) eval(D(e, v), as.list(p)), 0), numeric(length(p))))
+  dimnames(out) <- list(variable = names(ss_expr), sens = names(p))
+  out
+}
+ss_of <- function(p) vapply(ss_expr, eval, 0, as.list(p))
 
-test_that("equilibrate finds the analytical steady state", {
+# -- Steady state and termination ----------------------------------------------
+
+test_that("every method stops early at the closed-form steady state", {
   for (m in all_methods) {
-    mod <- eq_mod[[m]]
-    res <- solveODE(mod, times, pars, roottol = 1e-06)
-
-    y_final <- res$variable[nrow(res$variable), ]
-    expect_equal(unname(y_final["R"]),  ss_R,  tolerance = 1e-4,
-                 label = paste(m, "R steady state"))
-    expect_equal(unname(y_final["A"]),  ss_A,  tolerance = 1e-4,
-                 label = paste(m, "A steady state"))
-    expect_equal(unname(y_final["pA"]), ss_pA, tolerance = 1e-4,
-                 label = paste(m, "pA steady state"))
+    res <- solveODE(eq_mod[[m]], times, pars, roottol = 1e-06)
+    last <- length(res$time)
+    expect_equal(res$variable[last, ], ss_of(pars), tolerance = 1e-4, info = m)
+    expect_lt(res$time[last], 500)
+    expect_gt(res$time[last], 1)
   }
 })
 
-# -- Equilibrate terminates early ----------------------------------------------
-
-test_that("equilibrate stops integration before final time", {
-  for (m in all_methods) {
-    mod <- eq_mod[[m]]
-    res <- solveODE(mod, times, pars, roottol = 1e-04)
-
-    # Should stop well before t = 1000
-    expect_lt(max(res$time), 500,
-              label = paste(m, "early termination"))
-    # But should have progressed past t = 0
-    expect_gt(max(res$time), 1,
-              label = paste(m, "nontrivial progress"))
-  }
-})
-
-# -- Equilibrate with sensitivities --------------------------------------------
-
-test_that("equilibrate works with first-order sensitivities", {
+test_that("the tangent at the steady state is the derivative of the closed form", {
   for (m in stiff_methods) {
-    mod <- eq_mod[[m]]
-    res <- solveODE(mod, times, pars, roottol = 1e-05)
-
-    expect_true(!is.null(res$tangent), label = paste(m, "tangent present"))
-    expect_true(all(is.finite(res$tangent)), label = paste(m, "tangent finite"))
-
-    # At steady state, sensitivity derivatives should be near zero
-    # (that's what the termination checks)
-    y_final <- res$variable[nrow(res$variable), ]
-    expect_equal(unname(y_final["R"]), ss_R, tolerance = 1e-3,
-                 label = paste(m, "R with sens"))
+    res <- solveODE(eq_mod[[m]], times, pars, roottol = 1e-08)
+    tan <- res$tangent[length(res$time), , ]
+    expect_equal(tan[, names(pars)], ss_jac(pars), tolerance = 1e-4, info = m)
   }
 })
 
-# -- Warm start is faster than cold start --------------------------------------
+test_that("a tighter roottol integrates longer", {
+  res_loose <- solveODE(eq_mod$bdf, times, pars, roottol = 1e-02)
+  res_tight <- solveODE(eq_mod$bdf, times, pars, roottol = 1e-08)
+  expect_gt(max(res_tight$time), max(res_loose$time))
+})
 
-test_that("warm start converges in fewer steps than cold start", {
+# -- Warm start ----------------------------------------------------------------
+
+test_that("a warm start reaches the new steady state in fewer steps than a cold one", {
   for (m in stiff_methods) {
-    mod <- eq_mod[[m]]
+    res1 <- solveODE(eq_mod[[m]], times, pars, roottol = 1e-06)
+    last <- length(res1$time)
+    pars2 <- replace(pars, colnames(res1$variable), res1$variable[last, ])
+    pars2[c("k1", "k2")] <- pars[c("k1", "k2")] * c(1.01, 0.99)
 
-    # Cold start -> equilibrium
-    res1 <- solveODE(mod, times, pars, roottol = 1e-05)
-    yini    <- res1$variable[nrow(res1$variable), ]
-    sensini <- res1$tangent[length(res1$time), , ]
-
-    # Small parameter perturbation
-    pars2 <- pars
-    pars2[names(yini)] <- yini
-    pars2["k1"] <- pars["k1"] * 1.01   # +1%
-    pars2["k2"] <- pars["k2"] * 0.99   # -1%
-
-    # Warm start (with sensitivity initial values)
-    res_warm <- solveODE(mod, times, pars2, tangent = sensini,
-                         roottol = 1e-05)
-
-    # Cold start (same perturbed params, no tangent)
-    res_cold <- solveODE(mod, times, pars2, roottol = 1e-05)
-
-    d_warm <- diagnostics(res_warm)
-    d_cold <- diagnostics(res_cold)
-
-    expect_lt(d_warm$accepted, d_cold$accepted,
-              label = paste(m, "warm < cold steps"))
+    warm <- solveODE(eq_mod[[m]], times, pars2, tangent = res1$tangent[last, , ],
+                     roottol = 1e-06)
+    cold <- solveODE(eq_mod[[m]], times, pars2, roottol = 1e-06)
+    expect_lt(diagnostics(warm)$accepted, diagnostics(cold)$accepted, label = m)
+    expect_equal(warm$variable[length(warm$time), ], ss_of(pars2), tolerance = 1e-4,
+                 info = m)
   }
 })
 
-# -- Warm start reaches correct steady state -----------------------------------
+test_that("a start at the steady state ends at once, unless the tangent must settle", {
+  pars_ss <- replace(pars, names(ss_expr), ss_of(pars))
+  states_only <- solveODE(eq_mod$adams, times, pars_ss, roottol = 1e-04)
+  expect_lt(diagnostics(states_only)$accepted, 5)
 
-test_that("warm start converges to correct new steady state", {
-  mod <- eq_mod$bdf
-
-  # First equilibration
-  res1 <- solveODE(mod, times, pars, roottol = 1e-06)
-  yini    <- res1$variable[nrow(res1$variable), ]
-  sensini <- res1$tangent[length(res1$time), , ]
-
-  # Perturb parameters
-  pars2 <- pars
-  pars2[names(yini)] <- yini
-  pars2["k_act"] <- 0.15  # changed from 0.1
-
-  res2 <- solveODE(mod, times, pars2, tangent = sensini, roottol = 1e-06)
-
-  # New analytical steady state
-  ss_R2  <- unname(0.15 / pars["k_deact"])
-  total2 <- unname(pars2["A"] + pars2["pA"])
-  ss_pA2 <- unname(pars2["k1"]) * ss_R2 / (unname(pars2["k2"]) + unname(pars2["k1"]) * ss_R2) * total2
-  ss_A2  <- total2 - ss_pA2
-
-  y_final <- res2$variable[nrow(res2$variable), ]
-  expect_equal(unname(y_final["R"]), ss_R2, tolerance = 1e-4)
-  expect_equal(unname(y_final["A"]), ss_A2, tolerance = 1e-4)
+  with_tangent <- solveODE(eq_mod$bdf, times, pars_ss, roottol = 1e-04)
+  expect_gt(diagnostics(with_tangent)$accepted, 5)
+  expect_equal(with_tangent$variable[length(with_tangent$time), ], ss_of(pars),
+               tolerance = 1e-4)
 })
-
-# -- Tight tolerance equilibrate -----------------------------------------------
-
-test_that("equilibrate respects tight roottol", {
-  mod <- eq_mod$bdf
-
-  res_loose <- solveODE(mod, times, pars, roottol = 1e-02)
-  res_tight <- solveODE(mod, times, pars, roottol = 1e-08)
-
-  # Tight tolerance should require more time / steps
-  expect_gt(max(res_tight$time), max(res_loose$time),
-            label = "tight tol needs more integration time")
-})
-
-# -- Already at steady state: immediate termination (no sensitivities) ---------
-
-test_that("equilibrate terminates immediately when starting at SS (deriv=FALSE)", {
-  mod <- eq_nosens
-
-  # Start exactly at the analytical steady state
-  pars_ss <- pars
-  pars_ss["R"]  <- ss_R
-  pars_ss["A"]  <- ss_A
-  pars_ss["pA"] <- ss_pA
-
-  res <- solveODE(mod, times, pars_ss, roottol = 1e-04)
-
-  # Without sensitivities, should terminate after very few steps
-  d <- diagnostics(res)
-  expect_lt(d$accepted, 5, label = "immediate SS detection")
-})
-
-# -- At SS with sensitivities: needs to equilibrate sens -----------------------
-
-test_that("equilibrate at SS with deriv=TRUE still needs sensitivity equilibration", {
-  mod <- eq_mod$bdf
-
-  pars_ss <- pars
-  pars_ss["R"]  <- ss_R
-  pars_ss["A"]  <- ss_A
-  pars_ss["pA"] <- ss_pA
-
-  res <- solveODE(mod, times, pars_ss, roottol = 1e-04)
-
-  # States are at SS but sensitivities start at 0 -> need integration
-  d <- diagnostics(res)
-  expect_gt(d$accepted, 5, label = "sens equilibration takes steps")
-
-  # But should still reach the correct state SS
-  y_final <- res$variable[nrow(res$variable), ]
-  expect_equal(unname(y_final["R"]), ss_R, tolerance = 1e-4)
-})
-
 
 # -- Relative criterion ---------------------------------------------------------
 
