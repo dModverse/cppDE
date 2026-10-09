@@ -27,8 +27,8 @@ cppODE(
 )
 }
 \arguments{
-\item{rhs}{Named character vector of ODE right-hand sides. Names are
-the state variables.}
+\item{rhs}{Named character vector of ODE right-hand sides, see
+\link{expressions}. Names are the state variables.}
 
 \item{events}{Optional event \code{data.frame}, see Details. Default \code{NULL}.}
 
@@ -206,7 +206,8 @@ if (codegenAvailable()) {
 }
 }
 \seealso{
-\code{\link[=solveODE]{solveODE()}} for integration; \code{\link[=cvode]{cvode()}} for the
+\link{expressions} for the syntax of equations; \code{\link[=solveODE]{solveODE()}} for
+integration; \code{\link[=cvode]{cvode()}} for the
 SUNDIALS-backed alternative; \code{\link[=cppFUN]{cppFUN()}} for algebraic functions;
 \code{vignette("Methods", package = "cppDE")} for behaviour.
 }

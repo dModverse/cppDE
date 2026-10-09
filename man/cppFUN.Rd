@@ -20,8 +20,8 @@ cppFUN(
 )
 }
 \arguments{
-\item{eqns}{Named character vector or list of algebraic expressions.
-Names define the output variables; defaults to \code{f1}, \code{f2}, ... when
+\item{eqns}{Named character vector or list of algebraic expressions,
+see \link{expressions}. Names define the output variables; defaults to \code{f1}, \code{f2}, ... when
 unnamed.}
 
 \item{variables}{Character vector of variable names supplied per
@@ -163,6 +163,7 @@ if (codegenAvailable()) {
 }
 }
 \seealso{
-\code{\link[=compile]{compile()}} for compilation; \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} for ODE
-integration; \code{\link[=ptc]{ptc()}} for steady states; \code{vignette("Methods", package = "cppDE")}.
+\link{expressions} for the syntax of equations; \code{\link[=compile]{compile()}} for
+compilation; \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} for ODE integration; \code{\link[=ptc]{ptc()}} for
+steady states; \code{vignette("Methods", package = "cppDE")}.
 }

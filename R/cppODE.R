@@ -40,8 +40,8 @@
 #' solution that slides along a switching surface, both branches pointing at
 #' it, stops with an error. `==` and `!=` are evaluated as written.
 #'
-#' @param rhs Named character vector of ODE right-hand sides. Names are
-#'   the state variables.
+#' @param rhs Named character vector of ODE right-hand sides, see
+#'   [expressions]. Names are the state variables.
 #' @param events Optional event `data.frame`, see Details. Default `NULL`.
 #' @param rootfunc Optional integration-termination root: `"equilibrate"`
 #'   or a character vector of expressions. Default `NULL`.
@@ -99,7 +99,8 @@
 #'
 #' @example inst/examples/cppODE.R
 #' @importFrom stats setNames
-#' @seealso [solveODE()] for integration; [cvode()] for the
+#' @seealso [expressions] for the syntax of equations; [solveODE()] for
+#'   integration; [cvode()] for the
 #'   SUNDIALS-backed alternative; [cppFUN()] for algebraic functions;
 #'   `vignette("Methods", package = "cppDE")` for behaviour.
 #' @export

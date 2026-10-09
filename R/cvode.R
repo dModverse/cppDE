@@ -47,7 +47,7 @@
 #' Nonlinear and Differential/Algebraic Equation Solvers.
 #' \emph{ACM Transactions on Mathematical Software} \strong{31}(3), 363-396.
 #'
-#' @seealso [cppODE()], [solveODE()], [cppFUN()];
+#' @seealso [expressions], [cppODE()], [solveODE()], [cppFUN()];
 #'   `vignette("Methods", package = "cppDE")`.
 #' @example inst/examples/cvode.R
 #' @export

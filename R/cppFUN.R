@@ -47,8 +47,8 @@
 #' parameters through to the result. `fixed` at run time excludes further
 #' parameters from differentiation.
 #'
-#' @param eqns Named character vector or list of algebraic expressions.
-#'   Names define the output variables; defaults to `f1`, `f2`, ... when
+#' @param eqns Named character vector or list of algebraic expressions,
+#'   see [expressions]. Names define the output variables; defaults to `f1`, `f2`, ... when
 #'   unnamed.
 #' @param variables Character vector of variable names supplied per
 #'   observation. Defaults to all symbols in `eqns` not in `parameters`.
@@ -117,8 +117,9 @@
 #' The list has attributes `equations`, `variables`, `parameters`, `fixed`,
 #' `modelname`, `srcfile` and `derivMode`.
 #'
-#' @seealso [compile()] for compilation; [cppODE()] and [cvode()] for ODE
-#'   integration; [ptc()] for steady states; `vignette("Methods", package = "cppDE")`.
+#' @seealso [expressions] for the syntax of equations; [compile()] for
+#'   compilation; [cppODE()] and [cvode()] for ODE integration; [ptc()] for
+#'   steady states; `vignette("Methods", package = "cppDE")`.
 #' @example inst/examples/cppFUN.R
 #' @export
 cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parameters = NULL,

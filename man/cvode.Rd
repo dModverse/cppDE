@@ -24,8 +24,8 @@ cvode(
 )
 }
 \arguments{
-\item{rhs}{Named character vector of ODE right-hand sides. Names are
-the state variables.}
+\item{rhs}{Named character vector of ODE right-hand sides, see
+\link{expressions}. Names are the state variables.}
 
 \item{events}{Optional event \code{data.frame}, see Details. Default \code{NULL}.}
 
@@ -129,6 +129,6 @@ Nonlinear and Differential/Algebraic Equation Solvers.
 \emph{ACM Transactions on Mathematical Software} \strong{31}(3), 363-396.
 }
 \seealso{
-\code{\link[=cppODE]{cppODE()}}, \code{\link[=solveODE]{solveODE()}}, \code{\link[=cppFUN]{cppFUN()}};
+\link{expressions}, \code{\link[=cppODE]{cppODE()}}, \code{\link[=solveODE]{solveODE()}}, \code{\link[=cppFUN]{cppFUN()}};
 \code{vignette("Methods", package = "cppDE")}.
 }
