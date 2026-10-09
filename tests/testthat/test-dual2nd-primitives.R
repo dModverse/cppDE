@@ -1,5 +1,6 @@
-# The cppde::dual2nd math primitives against stats::D(), an independent
-# derivation in R. One output per primitive, all in one model.
+# The cppde::dual2nd and cppde::dual math primitives against stats::D(), an
+# independent derivation in R; where D() lacks the function, of an R form with
+# the same value. One output per primitive, all in one model per order.
 
 skip_on_cran()
 
@@ -8,13 +9,20 @@ prims <- c(add = "a + b", mul = "a * b", div = "a / b", sub = "a - b",
            sym = "a*b + b*c + a*c",
            sin = "sin(x)", cos = "cos(x)", tan = "tan(x)", exp = "exp(x)",
            log = "log(x)", sqrt = "sqrt(x)", sinh = "sinh(x)", cosh = "cosh(x)",
-           tanh = "tanh(x)")
+           tanh = "tanh(x)", erf = "erf(x)", erfc = "erfc(x)",
+           atan2 = "atan2(a, b)", atan2q2 = "atan2(a, -b)")
+oracle <- replace(prims, c("erf", "erfc", "atan2", "atan2q2"),
+                  c("2*pnorm(x*sqrt(2)) - 1", "2*pnorm(-x*sqrt(2))",
+                    "atan(a/b)", "pi - atan(a/b)"))
 pars <- c("a", "b", "c", "x")
 d2prim <- cppFUN(prims, parameters = pars, deriv = TRUE, deriv2 = TRUE,
                  derivMode = "forward", modelname = "d2prim")
-compile(d2prim, output = "test_dual2nd_primitives", cores = test_cores())
+d1prim <- cppFUN(prims, parameters = pars, deriv = TRUE,
+                 derivMode = "forward", modelname = "d1prim")
+compile(d2prim, d1prim, output = "test_dual2nd_primitives", cores = test_cores())
 
-# Points away from every singularity of the primitives above, one per row.
+# Points away from every singularity of the primitives above, one per row,
+# with a and b positive so that the oracles of atan2 hold.
 pts <- rbind(c(a = 1.5, b = 2.5, c = 3, x = 0.7),
              c(a = 1.7, b = 2.3, c = 1, x = 1.7),
              c(a = 0.4, b = 1.1, c = 2, x = 0.5))
@@ -28,7 +36,7 @@ test_that("value, gradient and Hessian of every primitive match D()", {
     out <- do.call(d2prim$evaluate,
                    c(as.list(p), list(tangentP = dP, hessianP = dP2, deriv2 = TRUE)))
     for (nm in names(prims)) {
-      e <- str2lang(prims[[nm]])
+      e <- str2lang(oracle[[nm]])
       at <- function(z) eval(z, as.list(p))
       dy <- vapply(pars, function(v) at(D(e, v)), 0)
       d2y <- outer(pars, pars, Vectorize(function(u, v) at(D(D(e, u), v))))
@@ -37,6 +45,19 @@ test_that("value, gradient and Hessian of every primitive match D()", {
       expect_equal(unname(out$tangent[1, nm, ]), unname(dy), tolerance = 1e-10, info = info)
       expect_equal(unname(out$hessian[1, nm, , ]), unname(d2y), tolerance = 1e-10,
                    info = info)
+    }
+  }
+})
+
+test_that("the first-order primitives match D()", {
+  for (i in seq_len(nrow(pts))) {
+    p <- pts[i, ]
+    jac <- do.call(d1prim$jac, as.list(p))
+    for (nm in names(prims)) {
+      e <- str2lang(oracle[[nm]])
+      dy <- vapply(pars, function(v) eval(D(e, v), as.list(p)), 0)
+      expect_equal(unname(jac[1, nm, ]), unname(dy), tolerance = 1e-10,
+                   info = paste(nm, "at point", i))
     }
   }
 })

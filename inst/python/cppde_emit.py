@@ -174,8 +174,8 @@ CPP_CALLS = {
     "abs": ("std::fabs", "cppde::abs", "abs"),
     "min": ("std::min", "cppde::min", "min"),
     "max": ("std::max", "cppde::max", "max"),
-    "erf": ("std::erf", None, None),
-    "erfc": ("std::erfc", None, None),
+    "erf": ("std::erf", "cppde::erf", "erf"),
+    "erfc": ("std::erfc", "cppde::erfc", "erfc"),
     "gamma": ("std::tgamma", None, None),
     "loggamma": ("std::lgamma", None, None),
     "atan2": ("std::atan2", None, None),
@@ -390,6 +390,17 @@ class Printer:
             return "cppde::" + name
         return name
 
+    def _plain(self):
+        return self.style == "double" or (self.style == "template" and self.ad_level == 0)
+
+    def _atan2(self, ya, xa):
+        # Around its value point (x0, y0), atan2(y, x) equals atan2(y0, x0) plus the
+        # atan of cross over dot product, exactly, so every derivative order holds.
+        y, x = "(%s)" % self.expr(ya), "(%s)" % self.expr(xa)
+        y0, x0 = "cppde::value_of(%s)" % y, "cppde::value_of(%s)" % x
+        return "(std::atan2(%s, %s) + %s((%s * %s - %s * %s) / (%s * %s + %s * %s)))" % (
+            y0, x0, self._fn("atan"), x0, y, y0, x, x0, x, y0, y)
+
     def _call(self, n):
         g = self.g
         name = g.attr[n]
@@ -416,6 +427,8 @@ class Printer:
                 return "%s(%s)" % (fn, self.expr(args[0]))
             # Value only; zero derivative.
             return "%s(cppde::value_of(%s))" % (fn, self.expr(args[0]))
+        if name == "atan2" and not self._plain():
+            return self._atan2(args[0], args[1])
         spell = CPP_CALLS.get(name)
         if spell is None:
             raise EmitError("function '%s' has no C++ equivalent" % name)
@@ -426,7 +439,7 @@ class Printer:
         else:
             f = spell[2]
         if f is None:
-            if self.style == "template" and self.ad_level == 0:
+            if self._plain():
                 f = spell[0]
             else:
                 raise EmitError(

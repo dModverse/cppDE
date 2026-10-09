@@ -1,3 +1,9 @@
+# cppDE 0.11.12
+
+* `erf()`, `erfc()` and `atan2()` take forward derivatives of first and second
+  order, so `cppODE()` with `derivMode = "forward"` or `"forward-forward"` and
+  `cppFUN()` accept them as `cvode()` and the reverse modes did.
+
 # cppDE 0.11.11
 
 * A terminal `rootfunc` ends the output with one row at its root. The native

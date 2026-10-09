@@ -60,6 +60,8 @@ CPPDE_DEFINE_SCALAR_UNARY(tanh)
 CPPDE_DEFINE_SCALAR_UNARY(asinh)
 CPPDE_DEFINE_SCALAR_UNARY(acosh)
 CPPDE_DEFINE_SCALAR_UNARY(atanh)
+CPPDE_DEFINE_SCALAR_UNARY(erf)
+CPPDE_DEFINE_SCALAR_UNARY(erfc)
 
 #undef CPPDE_DEFINE_SCALAR_UNARY
 
@@ -343,6 +345,7 @@ inline dual<T, 0>& dual<T, 0>::operator/=(const dual<T, 0>& o) {
     using std::asin;  using std::acos;  using std::atan;                      \
     using std::sinh;  using std::cosh;  using std::tanh;                      \
     using std::asinh; using std::acosh; using std::atanh;                     \
+    using std::erf;   using std::erfc;                                        \
     dual<T, N> r;                                                             \
     const T xv = a.x();                                                       \
     r.x() = (VAL_EXPR);                                                       \
@@ -449,6 +452,10 @@ inline dual<T, N> tanh(const dual<T, N>& a) {
 CPPDE_DEFINE_UNARY(asinh, asinh(xv), T(1) / sqrt(xv * xv + T(1)))
 CPPDE_DEFINE_UNARY(acosh, acosh(xv), T(1) / sqrt(xv * xv - T(1)))
 CPPDE_DEFINE_UNARY(atanh, atanh(xv), T(1) / (T(1) - xv * xv))
+
+// erf' = 2/sqrt(pi) exp(-x^2)
+CPPDE_DEFINE_UNARY(erf,   erf(xv),   T(1.1283791670955126) * exp(-xv * xv))
+CPPDE_DEFINE_UNARY(erfc,  erfc(xv), -T(1.1283791670955126) * exp(-xv * xv))
 
 #undef CPPDE_DEFINE_UNARY
 

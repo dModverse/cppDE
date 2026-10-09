@@ -267,6 +267,7 @@ struct NegOp {
       using std::asin;  using std::acos;  using std::atan;                    \
       using std::sinh;  using std::cosh;  using std::tanh;                    \
       using std::asinh; using std::acosh; using std::atanh;                   \
+      using std::erf;   using std::erfc;                                      \
       y  = (VAL_EXPR);                                                        \
       fp = (FP_EXPR);                                                         \
     }                                                                         \
@@ -287,6 +288,8 @@ CPPDE_DEFINE_ET_UNARY_OP(Tanh,  tanh(xv),   T(1) - y * y);
 CPPDE_DEFINE_ET_UNARY_OP(Asinh, asinh(xv),  T(1) / sqrt(xv * xv + T(1)));
 CPPDE_DEFINE_ET_UNARY_OP(Acosh, acosh(xv),  T(1) / sqrt(xv * xv - T(1)));
 CPPDE_DEFINE_ET_UNARY_OP(Atanh, atanh(xv),  T(1) / (T(1) - xv * xv));
+CPPDE_DEFINE_ET_UNARY_OP(Erf,   erf(xv),    T(1.1283791670955126) * exp(-xv * xv));
+CPPDE_DEFINE_ET_UNARY_OP(Erfc,  erfc(xv),  -T(1.1283791670955126) * exp(-xv * xv));
 
 // abs: derivative sign(x); 0 at x=0, as the eager abs in cppde_dual_math.hpp.
 struct AbsOp {
@@ -527,6 +530,8 @@ CPPDE_DEFINE_ET_MATH_FN(tanh,  TanhOp)
 CPPDE_DEFINE_ET_MATH_FN(asinh, AsinhOp)
 CPPDE_DEFINE_ET_MATH_FN(acosh, AcoshOp)
 CPPDE_DEFINE_ET_MATH_FN(atanh, AtanhOp)
+CPPDE_DEFINE_ET_MATH_FN(erf,   ErfOp)
+CPPDE_DEFINE_ET_MATH_FN(erfc,  ErfcOp)
 CPPDE_DEFINE_ET_MATH_FN(abs,   AbsOp)
 
 #undef CPPDE_DEFINE_ET_MATH_FN
@@ -667,6 +672,8 @@ using dual_expr::tanh;
 using dual_expr::asinh;
 using dual_expr::acosh;
 using dual_expr::atanh;
+using dual_expr::erf;
+using dual_expr::erfc;
 using dual_expr::abs;
 using dual_expr::pow;
 

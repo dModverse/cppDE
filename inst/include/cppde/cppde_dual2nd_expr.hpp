@@ -32,7 +32,7 @@
 
  Coverage: binary +, -, *, /; scalar mixes; unary -; transcendentals exp,
  log, sqrt, sin, cos, tan, asin, acos, atan, sinh, cosh, tanh, asinh,
- acosh, atanh; abs; pow (dual^dual, dual^scalar, scalar^dual). Comparisons
+ acosh, atanh, erf, erfc; abs; pow (dual^dual, dual^scalar, scalar^dual). Comparisons
  stay in cppde_dual2nd_math.hpp (return bool, no tangent propagation).
 
  Copyright (C) 2026 Simon Beyer
@@ -326,6 +326,7 @@ struct NegOp2 {
       using std::asin;  using std::acos;  using std::atan;                    \
       using std::sinh;  using std::cosh;  using std::tanh;                    \
       using std::asinh; using std::acosh; using std::atanh;                   \
+      using std::erf;   using std::erfc;                                      \
       y   = (VAL_EXPR);                                                       \
       fp  = (FP_EXPR);                                                        \
       fpp = (FPP_EXPR);                                                       \
@@ -362,6 +363,13 @@ CPPDE_DEFINE_ET2_UNARY(Acosh, acosh(xv),
 CPPDE_DEFINE_ET2_UNARY(Atanh, atanh(xv),
                                T(1) / (T(1) - xv * xv),
                                T(2) * xv / ((T(1) - xv * xv) * (T(1) - xv * xv)));
+// erf' = 2/sqrt(pi) exp(-x^2), erf'' = -2 x erf'
+CPPDE_DEFINE_ET2_UNARY(Erf,  erf(xv),
+                              T(1.1283791670955126) * exp(-xv * xv),
+                             -T(2) * xv * T(1.1283791670955126) * exp(-xv * xv));
+CPPDE_DEFINE_ET2_UNARY(Erfc, erfc(xv),
+                             -T(1.1283791670955126) * exp(-xv * xv),
+                              T(2) * xv * T(1.1283791670955126) * exp(-xv * xv));
 
 // abs: piecewise; at x=0 set fp=fpp=0.
 struct AbsOp2 {
@@ -675,6 +683,8 @@ CPPDE_DEFINE_ET2_UNARY_FN(tanh,  TanhOp2)
 CPPDE_DEFINE_ET2_UNARY_FN(asinh, AsinhOp2)
 CPPDE_DEFINE_ET2_UNARY_FN(acosh, AcoshOp2)
 CPPDE_DEFINE_ET2_UNARY_FN(atanh, AtanhOp2)
+CPPDE_DEFINE_ET2_UNARY_FN(erf,   ErfOp2)
+CPPDE_DEFINE_ET2_UNARY_FN(erfc,  ErfcOp2)
 CPPDE_DEFINE_ET2_UNARY_FN(abs,   AbsOp2)
 
 #undef CPPDE_DEFINE_ET2_UNARY_FN
@@ -839,6 +849,8 @@ using dual2nd_expr::tanh;
 using dual2nd_expr::asinh;
 using dual2nd_expr::acosh;
 using dual2nd_expr::atanh;
+using dual2nd_expr::erf;
+using dual2nd_expr::erfc;
 using dual2nd_expr::abs;
 using dual2nd_expr::pow;
 using dual2nd_expr::operator<;
