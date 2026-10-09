@@ -1,59 +1,4 @@
-# cppDE 0.11.12
-
-* `erf()`, `erfc()` and `atan2()` take forward derivatives of first and second
-  order, so `cppODE()` with `derivMode = "forward"` or `"forward-forward"` and
-  `cppFUN()` accept them as `cvode()` and the reverse modes did.
-
-# cppDE 0.11.11
-
-* A terminal `rootfunc` ends the output with one row at its root. The native
-  backend wrote the root time twice, the first copy 1e-15 before it.
-
-# cppDE 0.11.10
-
-* `./configure` finds a SUNDIALS built with MPI, as Debian ships it: it adds
-  the MPI link flags, without which the probe failed and `cvode()` was
-  disabled.
-
-# cppDE 0.11.9
-
-* Breaking: the limit of consecutive rejected steps is the argument
-  `maxattempts` of `solveODE()`, `solveODEBatch()`, `prepareBatch()` and of the
-  per-condition lists.
-
-# cppDE 0.11.8
-
-* `cvode()` reverse models with root events interpolate the forward state by
-  Hermite: the polynomial interpolation read a wrong state at the start of
-  every stretch after a root, and the gradient was wrong from there on.
-* Root events that cross zero within one step fire each at its own time, the
-  earliest first, rather than all at the first of them.
-
-# cppDE 0.11.7
-
-* `install_libs()` is now `installLibs()`; the old name remains as a
-  deprecated alias.
-* `ptc()` takes the tolerances in `controls` as `reltol` and `abstol`, as the
-  solvers do. The old names `rtol` and `atol` still work and warn.
-* The help pages state every default, list the fields of `$diagnostics` and
-  the columns of `$trace` in `?solveODE`, and give the signatures and shapes
-  of the functions `cppFUN()` returns. `?solveODE` no longer calls a
-  `cotangent` required when `keepStore = TRUE` lets a reverse solve run
-  without one.
-
-# cppDE 0.11.6
-
-* A comparison in the right-hand side whose sides differ by an amount that
-  reads a state, in `piecewise()` or a logical operator, and `Heaviside()` or
-  `sign()` of such an amount switch where that amount crosses zero, on both
-  backends. The solve holds each switch as a mode, locates the root and sets
-  the mode there, so forward tangents of first and second order, the reverse
-  gradient and its curvature, and `cvode()`'s forward and adjoint
-  sensitivities take the jump of f. A switch adds no output row and is not
-  limited by `maxroot`. A solution that slides along a switching surface stops
-  with an error.
-
-# cppDE 0.11.5
+# cppDE 0.12.0
 
 * New `adjointControl()`, passed as `adjoint` to `solveODE()`,
   `solveODEBatch()`, `prepareBatch()` and `solveBatch()`, controls what a
@@ -77,6 +22,18 @@
   integrates a control tangent there and has no effect on a reverse model.
   Where that grid misses the gradient, as on a trajectory at rest or under a
   forcing the state does not see, use `adjointControl(refine = TRUE)`.
+* Breaking: the limit of consecutive rejected steps is the argument
+  `maxattempts` of `solveODE()`, `solveODEBatch()`, `prepareBatch()` and of the
+  per-condition lists.
+* `install_libs()` is now `installLibs()`; the old name remains as a
+  deprecated alias.
+* `ptc()` takes the tolerances in `controls` as `reltol` and `abstol`, as the
+  solvers do. The old names `rtol` and `atol` still work and warn.
+* The help pages state every default, list the fields of `$diagnostics` and
+  the columns of `$trace` in `?solveODE`, and give the signatures and shapes
+  of the functions `cppFUN()` returns. `?solveODE` no longer calls a
+  `cotangent` required when `keepStore = TRUE` lets a reverse solve run
+  without one.
 * `cvode()` reverse models take events and `rootfunc`: the forward run is
   split at the jumps, one CVODES memory per stretch, and the backward sweep
   takes the adjoint and the gradient through each jump, including event times
@@ -123,6 +80,28 @@
   extrapolated flow takes intervals in either direction of time.
 * `cvode()` reverse models on KLU factorise afresh through
   `SUNLinSol_KLUReInit()` rather than a SUNDIALS internal.
+* A comparison in the right-hand side whose sides differ by an amount that
+  reads a state, in `piecewise()` or a logical operator, and `Heaviside()` or
+  `sign()` of such an amount switch where that amount crosses zero, on both
+  backends. The solve holds each switch as a mode, locates the root and sets
+  the mode there, so forward tangents of first and second order, the reverse
+  gradient and its curvature, and `cvode()`'s forward and adjoint
+  sensitivities take the jump of f. A switch adds no output row and is not
+  limited by `maxroot`. A solution that slides along a switching surface stops
+  with an error.
+* `cvode()` reverse models with root events interpolate the forward state by
+  Hermite: the polynomial interpolation read a wrong state at the start of
+  every stretch after a root, and the gradient was wrong from there on.
+* Root events that cross zero within one step fire each at its own time, the
+  earliest first, rather than all at the first of them.
+* A terminal `rootfunc` ends the output with one row at its root. The native
+  backend wrote the root time twice, the first copy 1e-15 before it.
+* `./configure` finds a SUNDIALS built with MPI, as Debian ships it: it adds
+  the MPI link flags, without which the probe failed and `cvode()` was
+  disabled.
+* `erf()`, `erfc()` and `atan2()` take forward derivatives of first and second
+  order, so `cppODE()` with `derivMode = "forward"` or `"forward-forward"` and
+  `cppFUN()` accept them as `cvode()` and the reverse modes did.
 
 # cppDE 0.11.4
 
