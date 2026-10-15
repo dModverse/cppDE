@@ -1,3 +1,8 @@
+# cppDE 0.13.1
+
+* The demos use ASCII only, and `scales`, which `demo("fitCoPt")` calls, is
+  in `Suggests`.
+
 # cppDE 0.13.0
 
 * Breaking: `pi` is the number in every expression, as in R; a state,

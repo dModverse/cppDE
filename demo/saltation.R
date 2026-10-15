@@ -92,8 +92,8 @@ crossing <- function(conditions, at, after = 0) {
 # Panel labels use the partial derivative sign, U+2202.
 lab1 <- function(var, a) sprintf("\u2202%s / \u2202%s", var, a)
 lab2 <- function(var, a, b) {
-  if (a == b) return(sprintf("\u2202²%s / \u2202%s²", var, a))
-  sprintf("\u2202²%s / \u2202%s\u2202%s", var, a, b)
+  if (a == b) return(sprintf("\u2202\u00b2%s / \u2202%s\u00b2", var, a))
+  sprintf("\u2202\u00b2%s / \u2202%s\u2202%s", var, a, b)
 }
 
 # The last row at a requested time holds the post-event state, whether

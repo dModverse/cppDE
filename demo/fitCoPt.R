@@ -8,7 +8,7 @@
 # | sample | [Co (0.5 nm) / Pt (0.9 nm)]<sub>5</sub>, perpendicular magnetic anisotropy |
 # | pump | 80 fs, 1500 nm |
 # | probe | anomalous Hall conductivity, read with a THz pulse, delays up to 80 ps |
-# | field | 1 to 3 T, seven values, about 30° from the film normal |
+# | field | 1 to 3 T, seven values, about 30 degrees from the film normal |
 #
 # The signal rises within 0.5 ps (ultrafast demagnetisation) and recovers within
 # a few picoseconds. The recovery shows a precession at 40 to 100 GHz. The
@@ -265,7 +265,7 @@ residuals <- withPrior(likelihood, prior, priorSd)
 
 # Multistart ------------------------------------------------------------------
 
-# Gauss-Newton on a trust region with exact subproblem (Moré-Sorensen), from
+# Gauss-Newton on a trust region with exact subproblem (More-Sorensen), from
 # 100 random starts. Positive parameters are fitted as $\log_{10}$, the fractions
 # $K$ and $\phi/90^\circ$ as $\log_{10}\bigl(x/(1-x)\bigr)$, so one unit is one
 # decade. The physics parameters have a Gaussian prior with a standard deviation
