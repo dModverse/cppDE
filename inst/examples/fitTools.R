@@ -1,5 +1,5 @@
 ## =================================================================
-## Fitting helpers for the example_fit*.R scripts and the README
+## Fitting helpers for demo("fitCoPt", package = "cppDE")
 ## =================================================================
 
 ## Each function works on `residuals(pars)`, which returns the scaled residuals

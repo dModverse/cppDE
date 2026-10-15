@@ -1,0 +1,3 @@
+basics      Sensitivities, reverse mode, events, switches, forcings, steady states, cvode() and cppFUN() on small models
+saltation   Sensitivities across events, switches and sliding, checked against symbolic solutions
+fitCoPt     Landau-Lifshitz-Gilbert model fitted to measured magnetisation dynamics

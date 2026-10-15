@@ -23,6 +23,7 @@ test_that("solveODE() checks the times, parameters and forcings it is given", {
   expect_error(solveODE(fwd, "1", p, forcings = u), "'times' must be a non-empty")
   expect_error(solveODE(fwd, tt, unname(p), forcings = u), "'parms' must be a named numeric")
   expect_error(solveODE(fwd, tt, p["A"], forcings = u), "'parms' missing: k")
+  expect_error(solveODE(fwd, tt, c(p, A = 0), forcings = u), "'parms' names more than once: A")
   expect_error(solveODE(fwd, tt, c(A = 1, k = Inf), forcings = u), "'parms' must be finite")
   expect_error(solveODE(fwd, tt, p), "Model requires forcings: u")
   expect_error(solveODE(fwd, tt, p, forcings = unname(u)), "'forcings' must be a named list")
@@ -137,6 +138,8 @@ test_that("solveBatch() checks what replaces the prepared inputs", {
   expect_error(solveBatch(h, parms = list(p)), "'parms' must be a list with one element")
   expect_error(solveBatch(h, parms = list(p, unname(p))), "'parms' elements must be named")
   expect_error(solveBatch(h, parms = list(p, p["A"])), "condition 2: 'parms' missing k")
+  expect_error(solveBatch(h, parms = list(p, c(p, k = 1))),
+               "condition 2: 'parms' names more than once k")
   expect_error(solveBatch(h, parms = list(p, c(A = NaN, k = 1))),
                "condition 2: 'parms' must be finite")
   expect_error(solveBatch(h, store = list(NULL, NULL)), "belongs to a model compiled")

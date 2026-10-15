@@ -31,8 +31,11 @@ first and second order.
   of the parameter count
 - **Second order**: exact Hessians, forward over forward or forward over
   reverse
-- **Events**: time-based and root-triggered, with the saltation
-  correction of first- and second-order sensitivities across a jump
+- **Events and switches**: time- and root-triggered events, and
+  `piecewise()` or comparisons on states and time located as roots; a
+  switch whose branches both push onto its surface slides along it
+  (Filippov). First- and second-order sensitivities take every jump by
+  the saltation correction
 - **Code generation on an expression graph**: Jacobians and derivative
   contractions by automatic differentiation, emitted as straight-line
   C++, with automatic sparsity detection and KLU factorisation for large
@@ -61,10 +64,10 @@ compiler** and **Python with SymPy** are required. Windows users need
 The package installs and runs without any system library. Three features
 are gated on one, detected by `./configure` at install time:
 
-| Feature                    | Needs                   | Without it                               |
-|:---------------------------|:------------------------|:-----------------------------------------|
-| `cvode()` backend          | SUNDIALS (\>= 6.0)      | the native solvers are unaffected        |
-| sparse Jacobian path       | SuiteSparse / KLU       | `sparse = TRUE` says how to enable it    |
+| Feature | Needs | Without it |
+|:---|:---|:---|
+| `cvode()` backend | SUNDIALS (\>= 6.0) | the native solvers are unaffected |
+| sparse Jacobian path | SuiteSparse / KLU | `sparse = TRUE` says how to enable it |
 | parallel `solveODEBatch()` | a toolchain with OpenMP | correct results, conditions run serially |
 
 The three are independent; `cppODE()` uses KLU without SUNDIALS. OpenMP
@@ -73,12 +76,12 @@ needs `libomp` (`brew install libomp`).
 
 Either install the libraries as system packages,
 
-| Platform         | SUNDIALS                           | SuiteSparse / KLU                     |
-|:-----------------|:-----------------------------------|:--------------------------------------|
-| Debian/Ubuntu    | `sudo apt install libsundials-dev` | `sudo apt install libsuitesparse-dev` |
-| Fedora           | `sudo dnf install sundials-devel`  | `sudo dnf install suitesparse-devel`  |
-| Arch             | `sudo pacman -S sundials`          | `sudo pacman -S suitesparse`          |
-| macOS (Homebrew) | `brew install sundials`            | `brew install suite-sparse`           |
+| Platform | SUNDIALS | SuiteSparse / KLU |
+|:---|:---|:---|
+| Debian/Ubuntu | `sudo apt install libsundials-dev` | `sudo apt install libsuitesparse-dev` |
+| Fedora | `sudo dnf install sundials-devel` | `sudo dnf install suitesparse-devel` |
+| Arch | `sudo pacman -S sundials` | `sudo pacman -S suitesparse` |
+| macOS (Homebrew) | `brew install sundials` | `brew install suite-sparse` |
 
 or let cppDE build pinned releases into a per-user cache, which needs no
 administrator rights:
@@ -100,10 +103,44 @@ writeLines(readLines(system.file("cvodeConfig.dcf", package = "cppDE")))
 
 ## Example
 
+A two-state model, compiled once and solved with the sensitivities of
+every state in the initial values and parameters:
+
+``` r
+library(cppDE)
+
+model <- cppODE(c(A = "-k1*A", B = "k1*A - k2*B"))
+out <- solveODE(model, times = 0:10, parms = c(A = 1, B = 0, k1 = 0.5, k2 = 0.2))
+
+out$variable[11, ]       # states at t = 10
+#>           A           B 
+#> 0.006738205 0.214328465
+out$tangent[11, , ]      # [state, parameter] at t = 10
+#>         sens
+#> variable           A         B          k1       k2
+#>        A 0.006738205 0.0000000 -0.06737844  0.00000
+#>        B 0.214328465 0.1353353 -0.17347388 -1.54116
+```
+
+`derivMode = "reverse"` builds the same model for gradients by the
+adjoint, `cvode()` for SUNDIALS CVODES; `?expressions` lists what an
+equation can contain.
+
+## Demos
+
+- [Basics](examples/basics.md): sensitivities of first and second order,
+  reverse-mode gradients, events, switches and sliding, forcings, steady
+  states, `cvode()` and `cppFUN()` on small models.
+- [Saltation](examples/saltation.md): sensitivities across events,
+  switches and sliding, forward and reverse, against symbolic solutions
+  to second order.
 - [Fitting measured magnetisation dynamics](examples/fitCoPt.md): a
   Landau-Lifshitz-Gilbert model fitted to pump-probe measurements by
   Gauss-Newton on forward sensitivities, with a moving-average noise
   model and a multistart.
+
+`demo("saltation", package = "cppDE")` runs one,
+`demo(package = "cppDE")` lists them.
 
 ## License
 

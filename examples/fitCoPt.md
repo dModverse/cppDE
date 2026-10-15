@@ -1,48 +1,60 @@
-<!-- fitCoPt.md is generated from fitCoPt.Rmd. Please edit that file -->
+# `demo("fitCoPt")`
 
-# Fitting measured magnetisation dynamics
+Rendered by `dev/render-demos.R`; run it with `demo("fitCoPt", package = "cppDE")`.
 
 Fit of a Landau-Lifshitz-Gilbert model to the pump-probe measurements of
-Zhang et al. (2025). cppDE integrates the model and its parameter
-sensitivities. Likelihood, noise model and optimiser are R functions
-from [`inst/examples/fitTools.R`](../inst/examples/fitTools.R). The code
-chunks are the sections of
-[`inst/examples/example_fitCoPt.R`](../inst/examples/example_fitCoPt.R).
+Zhang et al. (2025). cppDE integrates the model and its parameter
+sensitivities. Likelihood, noise model and optimiser are R functions from
+`inst/examples/fitTools.R`.
 
-## The experiment
-
-|  |  |
-|:---|:---|
-| sample | \[Co (0.5 nm) / Pt (0.9 nm)\]<sub>5</sub>, perpendicular magnetic anisotropy |
+| | |
+|:--|:--|
+| sample | [Co (0.5 nm) / Pt (0.9 nm)]<sub>5</sub>, perpendicular magnetic anisotropy |
 | pump | 80 fs, 1500 nm |
 | probe | anomalous Hall conductivity, read with a THz pulse, delays up to 80 ps |
 | field | 1 to 3 T, seven values, about 30° from the film normal |
 
-The signal rises within 0.5 ps (ultrafast demagnetisation) and recovers
-within a few picoseconds. The recovery shows a precession at 40 to 100
-GHz. The seven traces are fitted jointly.
+The signal rises within 0.5 ps (ultrafast demagnetisation) and recovers within
+a few picoseconds. The recovery shows a precession at 40 to 100 GHz. The
+seven traces are fitted jointly.
+
+Data: measured traces of Fig. 3 in Z. Zhang, Y. Shiota, S. Karube,
+Y. Watanabe, T. Ono and H. Hirori,
+[Phys. Rev. Applied **24**, 044079 (2025)](https://doi.org/10.1103/4p39-gyrd),
+published under CC BY 4.0 in
+[doi:10.5281/zenodo.17333041](https://doi.org/10.5281/zenodo.17333041); see
+`inst/COPYRIGHTS`.
+
 
 ``` r
 library(cppDE)
 library(ggplot2)
+
 source(system.file("examples", "fitTools.R", package = "cppDE"))
 
 theme_set(theme_bw(base_size = 11))
 cores <- if (.Platform$OS.type == "windows") 1L else min(10L, parallel::detectCores())
 ```
 
+## Data
+
+
 ``` r
 raw    <- read.csv(system.file("extdata", "zhang2025_precession.csv",
                                package = "cppDE"))
 fields <- sort(unique(raw$field_kOe))
+```
 
-## The first picosecond (ultrafast demagnetisation) is not described by the
-## model and is left out of the fit.
+The first picosecond (ultrafast demagnetisation) is not described by the
+model and is left out of the fit.
+
+
+``` r
 obs      <- lapply(split(raw, raw$field_kOe), function(tr) tr[tr$time_ps >= 1, ])
 measured <- do.call(rbind, obs)
 kOe      <- as_labeller(function(x) paste(x, "kOe"))
 
-## y axis linear near zero and logarithmic above.
+# y axis linear near zero and logarithmic above.
 signalAxis <- scale_y_continuous(
   trans  = scales::pseudo_log_trans(sigma = 0.005, base = 10),
   breaks = c(-0.01, 0, 0.01, 0.03, 0.1, 0.3, 1))
@@ -57,62 +69,53 @@ print(
 )
 ```
 
-<img src="figures/fitCoPt-data-1.svg" alt="" width="100%" />
+![plot of chunk unnamed-chunk-3](figures/fitCoPt/unnamed-chunk-3-1.png)
 
 ## Model
+The magnetisation direction $\mathbf m$, $|\mathbf m| = 1$, follows the
+Landau-Lifshitz-Gilbert equation in Landau-Lifshitz form,
 
-The magnetisation direction $`\mathbf m`$, $`|\mathbf m| = 1`$, follows
-the Landau-Lifshitz-Gilbert equation in Landau-Lifshitz form,
-
-``` math
+$$
 \dot{\mathbf m} = -\frac{\gamma}{1+\alpha^2}
 \left[\mathbf m\times\mathbf h + \alpha\,\mathbf m\times(\mathbf m\times\mathbf h)\right],
 \qquad \gamma = \frac{g\,\mu_B}{\hbar},
-```
+$$
 
-with Gilbert damping $`\alpha`$ and g-factor $`g`$. The effective field
-is the applied field, tilted by $`\phi`$ from the normal
-$`\hat{\mathbf z}`$, plus the perpendicular anisotropy field $`H_a`$,
+with Gilbert damping $\alpha$ and g-factor $g$. The effective field is the
+applied field, tilted by $\phi$ from the normal $\hat{\mathbf z}$, plus the
+perpendicular anisotropy field $H_a$,
 
-``` math
+$$
 \mathbf h = H\,(\sin\phi,\,0,\,\cos\phi) + H_a\,\bigl(1 - k(t)\bigr)\,m_z\,\hat{\mathbf z}.
-```
+$$
 
-Heating lowers the anisotropy field by the fraction
-$`k(t) = K\,\kappa(t)`$, $`\kappa(0) = 1`$, which decays as
-$`\dot\kappa = -\kappa/\tau_K`$.
+Heating lowers the anisotropy field by the fraction $k(t) = K\,\kappa(t)$,
+$\kappa(0) = 1$, which decays as $\dot\kappa = -\kappa/\tau_K$.
 
-Before the pump, $`\mathbf m`$ rests at
-$`\mathbf m_0 = (\sin\theta_0, 0, \cos\theta_0)`$, where the torque
-vanishes,
+Before the pump, $\mathbf m$ rests at
+$\mathbf m_0 = (\sin\theta_0, 0, \cos\theta_0)$, where the torque vanishes,
 
-``` math
+$$
 H\sin(\theta_0-\phi) + H_a\sin\theta_0\cos\theta_0 = 0 ,
-```
+$$
 
-and the field there is parallel to $`\mathbf m_0`$,
-$`\mathbf h(\mathbf m_0) = \lambda\,\mathbf m_0`$ with
-$`\lambda = H\cos(\theta_0-\phi) + H_a\cos^2\theta_0`$. The drop of
-$`H_a`$ moves the equilibrium; $`\mathbf m`$ precesses about it while
-$`H_a`$ recovers.
+and the field there is parallel to $\mathbf m_0$,
+$\mathbf h(\mathbf m_0) = \lambda\,\mathbf m_0$ with
+$\lambda = H\cos(\theta_0-\phi) + H_a\cos^2\theta_0$. The drop of $H_a$
+moves the equilibrium; $\mathbf m$ precesses about it while $H_a$ recovers.
 
-The deviation from $`\mathbf m_0`$ is of order $`K`$, and the states of
-the model are $`\boldsymbol\xi = (\mathbf m - \mathbf m_0)/K`$ and
-$`\kappa`$. Because $`\mathbf m_0\times\mathbf h(\mathbf m_0) = 0`$, the
-right-hand side in these states is a polynomial in $`K`$ without a
-constant term. The equations hold for any $`K`$, and $`K\to 0`$ gives
-the linearised dynamics. This avoids computing $`m_{z0} - m_z`$ as a
-difference of nearly equal numbers.
+The deviation from $\mathbf m_0$ is of order $K$, and the states of the model
+are $\boldsymbol\xi = (\mathbf m - \mathbf m_0)/K$ and $\kappa$. Because
+$\mathbf m_0\times\mathbf h(\mathbf m_0) = 0$, the right-hand side in these
+states is a polynomial in $K$ without a constant term. The equations hold for
+any $K$, and $K\to 0$ gives the linearised dynamics. This avoids computing
+$m_{z0} - m_z$ as a difference of nearly equal numbers.
+
 
 ``` r
 muB <- 8.794e-5                      # mu_B / hbar in rad / (ps mT)
 
-## LLG, m' = -g (m x h + alpha m x (m x h)), g = g-factor mu_B / hbar /
-## (1 + alpha^2), field h = H (sin phi, 0, cos phi) + Ha (1 - K kappa) mz z.
-## States xi = (m - m0) / K and kappa, with the equilibrium
-## m0 = (sin th, 0, cos th). Since h(m0) = lam m0, the right-hand side is a
-## polynomial in K without constant term. Positive parameters enter as log10.
-a   <- "(10^log10Alpha)"
+a   <- "(10^log10Alpha)"                                  # positive parameters as log10
 g   <- sprintf("(%g*10^log10G/(1 + %s^2))", muB, a)
 xm  <- "(xi_x*sin(th) + xi_z*cos(th))"                  # xi . m0
 xx  <- "(xi_x^2 + xi_y^2 + xi_z^2)"                     # xi . xi
@@ -122,13 +125,13 @@ a2  <- sprintf("(%s*xi_z)", eta)
 b1  <- sprintf("(2*%s)", xm)
 b2  <- xx
 
-## m x h / K
+# m x h / K
 cx <- sprintf("(lam*xi_y*cos(th) + K*%s*xi_y)", eta)
 cy <- sprintf("(lam*(xi_z*sin(th) - xi_x*cos(th)) - %s*sin(th) - K*%s*xi_x)",
               eta, eta)
 cz <- "(-lam*xi_y*sin(th))"
 
-## (m (m.h) - h (m.m)) / K
+# (m (m.h) - h (m.m)) / K
 dx <- sprintf(paste0("(lam*xi_x + sin(th)*%s - lam*sin(th)*%s",
                      " + K*(xi_x*%s + sin(th)*%s - lam*sin(th)*%s)",
                      " + K^2*xi_x*%s)"),
@@ -145,60 +148,59 @@ llg <- c(
   xi_z = sprintf("-%s*(%s + %s*%s)", g, cz, a, dz),
   kap  = "-kap*10^(-log10TauK)"
 )
+```
 
-## Initial states xi = 0 and kappa = 1 are not estimated. H and phi enter only
-## through th and lam.
+Initial states xi = 0 and kappa = 1 are not estimated. H and phi enter only
+through th and lam.
+
+
+``` r
 model <- cppODE(llg, fixed = c("xi_x", "xi_y", "xi_z", "kap"),
                 modelname = "copt_precession", method = "bdf", deriv = TRUE)
 ```
 
-## Observable, sensitivities and noise
-
+## Likelihood
 The anomalous Hall conductivity is proportional to the out-of-plane
-magnetisation. The recovery of the demagnetisation is not part of the
-model and is described per measurement by two exponentials:
+magnetisation. The recovery of the demagnetisation is not part of the model and
+is described per measurement by two exponentials:
 
-``` math
+$$
 y(t) = A_1 e^{-t/\tau_1} + A_2 e^{-t/\tau_2} + S\,\bigl[m_{z0} - m_z(t)\bigr]
-= A_1 e^{-t/\tau_1} + A_2 e^{-t/\tau_2} - S\,K\,\xi_z(t).
-```
+     = A_1 e^{-t/\tau_1} + A_2 e^{-t/\tau_2} - S\,K\,\xi_z(t).
+$$
 
-$`\alpha`$, $`g`$, $`H_a`$, $`\tau_K`$, $`S`$, $`K`$ and $`\phi`$ are
-shared by all fields; background and noise level are per measurement.
-$`H`$ is the set field value; $`\mu_B/\hbar`$ is the only fixed
-constant.
+$\alpha$, $g$, $H_a$, $\tau_K$, $S$, $K$ and $\phi$ are shared by all fields;
+background and noise level are per measurement. $H$ is the set field value;
+$\mu_B/\hbar$ is the only fixed constant.
 
-cppDE returns $`\partial\boldsymbol\xi/\partial p`$ for the parameters
-of the model. $`\theta_0`$ and $`\lambda`$ depend on $`H_a`$ and
-$`\phi`$; the implicit function theorem gives
+cppDE returns $\partial\boldsymbol\xi/\partial p$ for the parameters of the
+model. $\theta_0$ and $\lambda$ depend on $H_a$ and $\phi$; the implicit
+function theorem gives
 
-``` math
+$$
 \frac{\partial\theta_0}{\partial H_a} = -\frac{\sin\theta_0\cos\theta_0}{D},\qquad
 \frac{\partial\theta_0}{\partial\phi} = \frac{H\cos(\theta_0-\phi)}{D},\qquad
 D = H\cos(\theta_0-\phi) + H_a\cos 2\theta_0 ,
-```
+$$
 
-and the chain rule gives the sensitivities with respect to $`H_a`$ and
-$`\phi`$. No finite differences are used.
+and the chain rule gives the sensitivities with respect to $H_a$ and $\phi$.
+No finite differences are used.
 
-The autocorrelation of the residuals decays within five samples, about
-one picosecond. The noise is modelled as a moving average (Box et
-al. 2015),
+The autocorrelation of the residuals decays within five samples, about one
+picosecond. The noise is modelled as a moving average (Box et al. 2015),
 
-``` math
+$$
 u_t = \eta_t + \sum_{j=1}^{5} w_j\,\eta_{t-j},\qquad \eta_t\sim\mathcal N(0,\sigma^2),
-```
+$$
 
-with the kernel $`w`$ shared by all measurements and $`\sigma`$ per
-measurement. Correlations beyond five samples are zero, so the noise
-model cannot describe the precession. The likelihood is the conditional
-sum of squares of the innovations $`\eta_t`$; the $`\log\sigma`$ term
-enters as a pseudo-residual, which keeps the problem least squares.
+with the kernel $w$ shared by all measurements and $\sigma$ per measurement.
+Correlations beyond five samples are zero, so the noise model cannot describe
+the precession. The likelihood is the conditional sum of squares of the
+innovations $\eta_t$; the $\log\sigma$ term enters as a pseudo-residual, which
+keeps the problem least squares.
+
 
 ``` r
-## Equilibrium before the pump: H sin(th - phi) + Ha sin(th) cos(th) = 0 and
-## lam = H cos(th - phi) + Ha cos(th)^2. Derivatives of th and lam with respect
-## to Ha and phi from the implicit function theorem.
 equilibrium <- function(Ha, H, phi) {
   torque <- function(th) H * sin(th - phi) + Ha * sin(th) * cos(th)
   th     <- uniroot(torque, c(0, phi), tol = 1e-12 * phi)$root
@@ -212,10 +214,6 @@ equilibrium <- function(Ha, H, phi) {
        dPhi  = c(th = thPhi, lam = H * sin(th - phi) - Ha * sc * thPhi))
 }
 
-## Signal: two-exponential background plus S (mz0 - mz) = -S K xi_z. Physics
-## parameters and noise kernel are shared by all fields, background and noise
-## level are per field. Positive parameters are fitted as log10, K and
-## phi / 90 deg as log10(x / (1 - x)).
 physics   <- c("log10Alpha", "log10G", "log10Ha", "log10TauK", "log10S",
                "logit10K", "logit10Phi")
 kernel    <- paste0("w", 1:5)
@@ -263,12 +261,7 @@ traceSignal <- function(p, k, tt) {
   list(y = e1 + e2 + prec, J = J)
 }
 
-## Noise: moving average of order 5, the lag at which the autocorrelation of
-## the residuals decays. Kernel and noise levels are estimated. `innovations`
-## are the whitened residuals. Moving-average models and the conditional sum
-## of squares: Box, Jenkins, Reinsel, Ljung, Time Series Analysis, 5th ed.,
-## Wiley (2015).
-likelihood <- function(p) {
+likelihood <- function(p) {               # innovations: the whitened residuals
   r <- J <- innovations <- vector("list", length(fields))
   for (k in seq_along(fields)) {
     part <- traceSignal(p, k, obs[[k]]$time_ps)
@@ -286,8 +279,6 @@ likelihood <- function(p) {
        innovations = setNames(innovations, paste(fields, "kOe")))
 }
 
-## Gaussian prior on the physics parameters, standard deviation 3 decades,
-## centred on order-of-magnitude values and the nominal field angle.
 priorSd   <- 3
 prior     <- c(log10Alpha = -1, log10G = log10(2), log10Ha = 3,
                log10TauK = log10(30), log10S = 0, logit10K = 0,
@@ -295,14 +286,13 @@ prior     <- c(log10Alpha = -1, log10G = log10(2), log10Ha = 3,
 residuals <- withPrior(likelihood, prior, priorSd)
 ```
 
-## Fit
+## Multistart
+Gauss-Newton on a trust region with exact subproblem (Moré-Sorensen), from
+100 random starts. Positive parameters are fitted as $\log_{10}$, the fractions
+$K$ and $\phi/90^\circ$ as $\log_{10}\bigl(x/(1-x)\bigr)$, so one unit is one
+decade. The physics parameters have a Gaussian prior with a standard deviation
+of three decades, centred on orders of magnitude and the nominal field angle.
 
-Gauss-Newton on a trust region with exact subproblem (Moré-Sorensen),
-from 100 random starts. Positive parameters are fitted as $`\log_{10}`$,
-the fractions $`K`$ and $`\phi/90^\circ`$ as
-$`\log_{10}\bigl(x/(1-x)\bigr)`$, so one unit is one decade. The physics
-parameters have a Gaussian prior with a standard deviation of three
-decades, centred on orders of magnitude and the nominal field angle.
 
 ``` r
 set.seed(2)
@@ -317,9 +307,13 @@ perTrace <- do.call(cbind, lapply(fields, function(f) {
   colnames(m) <- c(bgNames(f), sigmaName(f))
   m
 }))
+```
 
-## Geometrically decaying kernels are invertible, so every start can be
-## whitened.
+Geometrically decaying kernels are invertible, so every start can be
+whitened.
+
+
+``` r
 decay <- runif(nStart, 0.2, 0.8)
 kernelStarts <- outer(decay, seq_along(kernel), `^`)
 colnames(kernelStarts) <- kernel
@@ -336,18 +330,26 @@ starts <- cbind(log10Alpha = runif(nStart, log10(0.005), 0),
 ms <- multistart(residuals, starts, cores)
 
 print(table(ms$status))
+```
+
+```
 #> 
 #> global  local 
 #>     58     42
+```
+
+``` r
 print(plotWaterfall(ms))
 ```
 
-<img src="figures/fitCoPt-multistart-1.svg" alt="" width="100%" />
+![plot of chunk unnamed-chunk-8](figures/fitCoPt/unnamed-chunk-8-1.png)
 
 ``` r
-
 fit <- ms$best
 ```
+
+## Fit and residuals
+
 
 ``` r
 fitted <- do.call(rbind, lapply(seq_along(fields), function(k) {
@@ -367,12 +369,13 @@ print(
 )
 ```
 
-<img src="figures/fitCoPt-fit-1.svg" alt="" width="100%" />
+![plot of chunk unnamed-chunk-9](figures/fitCoPt/unnamed-chunk-9-1.png)
+
+The whitened residuals, the innovations, with the Ljung-Box test (Ljung and
+Box 1978) and their autocorrelation.
+
 
 ``` r
-
-## Whitened residuals, Ljung-Box test (Ljung, Box, Biometrika 65, 297, 1978)
-## and autocorrelation.
 res <- likelihood(fit$par)$innovations
 
 print(
@@ -388,11 +391,13 @@ print(
 )
 ```
 
-<img src="figures/fitCoPt-fit-2.svg" alt="" width="100%" />
+![plot of chunk unnamed-chunk-10](figures/fitCoPt/unnamed-chunk-10-1.png)
 
 ``` r
-
 print(signif(residualCheck(res), 3))
+```
+
+```
 #>          n chi2_per_point     lag1 LjungBox      p
 #> 10 kOe 286              1 -0.00928    17.40 0.0654
 #> 14 kOe 215              1 -0.07440     9.44 0.4910
@@ -401,43 +406,108 @@ print(signif(residualCheck(res), 3))
 #> 25 kOe 215              1 -0.00731     4.72 0.9090
 #> 28 kOe 215              1  0.09600    10.40 0.4030
 #> 30 kOe 215              1  0.04600    11.40 0.3270
+```
+
+``` r
 print(plotResidualACF(res))
 ```
 
-<img src="figures/fitCoPt-fit-3.svg" alt="" width="100%" />
+![plot of chunk unnamed-chunk-10](figures/fitCoPt/unnamed-chunk-10-2.png)
 
 ``` r
-
 labels <- c(log10Alpha = "alpha", log10G = "g", log10Ha = "Ha [mT]",
             log10TauK = "tauK [ps]", log10S = "S", logit10K = "anisotropy drop",
             logit10Phi = "phi / 90 deg")
 estimates <- natural(fit$par[physics])
 names(estimates) <- labels[physics]
 print(signif(estimates, 4))
+```
+
+```
 #>           alpha               g         Ha [mT]       tauK [ps]               S 
 #>         0.09411         2.10600       414.50000        39.06000       329.20000 
 #> anisotropy drop    phi / 90 deg 
 #>         0.01983         0.13470
+```
 
+``` r
 noiseLevel <- setNames(exp(fit$par[sigmaName(fields)]), paste(fields, "kOe"))
 print(signif(noiseLevel, 3))
+```
+
+```
 #>  10 kOe  14 kOe  15 kOe  20 kOe  25 kOe  28 kOe  30 kOe 
 #> 0.00323 0.00470 0.00341 0.00356 0.00330 0.00434 0.00386
+```
+
+``` r
 print(signif(fit$par[kernel], 3))
+```
+
+```
 #>    w1    w2    w3    w4    w5 
 #> 0.967 0.708 0.444 0.256 0.136
 ```
 
-The innovations pass the Ljung-Box test (Ljung and Box 1978). For small
-precession amplitudes, $`S`$, $`K`$ and $`\phi`$ enter to first order as
-a product and are not determined individually.
+## Profile likelihood
+For the profiles the prior is centred on the best fit with standard
+deviation 10 decades, and the fit is repeated.
 
-Small-angle precession frequency about the equilibrium (Smit-Beljers)
-against the frequencies obtained in the paper from damped-sine fits:
 
 ``` r
-## Small-angle precession frequency (Smit-Beljers) from the fitted parameters,
-## compared with the frequencies from damped-sine fits in the paper.
+priorSd   <- 10
+prior[]   <- fit$par[names(prior)]
+residuals <- withPrior(likelihood, prior, priorSd)
+wide      <- gaussNewton(residuals, fit$par)
+```
+
+At most 100 steps and 4 decades on each side of the best fit.
+
+
+``` r
+prof <- profiles(residuals, wide$par, which = physics, range = 4,
+                 maxSteps = 100, cores = cores)
+print(plotProfiles(prof, labels = labels))
+```
+
+![plot of chunk unnamed-chunk-12](figures/fitCoPt/unnamed-chunk-12-1.png)
+
+``` r
+# 95 percent intervals from the data part of the profiles.
+intervals <- profileIntervals(prof)
+rownames(intervals) <- labels[rownames(intervals)]
+print(signif(intervals, 4))
+```
+
+```
+#>                     lower    upper
+#> alpha             0.07732   0.1135
+#> g                 2.04500   2.1910
+#> Ha [mT]         353.40000 526.8000
+#> tauK [ps]        32.66000  46.7900
+#> S                12.54000      Inf
+#> anisotropy drop   0.00000   0.1504
+#> phi / 90 deg      0.00000   0.4194
+```
+
+``` r
+cat(sprintf("field angle between %.0f and %.0f degrees\n",
+            90 * intervals["phi / 90 deg", "lower"],
+            90 * intervals["phi / 90 deg", "upper"]))
+```
+
+```
+#> field angle between 0 and 38 degrees
+```
+
+## Precession frequencies compared with the paper
+For small precession amplitudes, $S$, $K$ and $\phi$ enter to first order as
+a product and are not determined individually. The small-angle precession
+frequency about the equilibrium (Smit-Beljers) from the fitted parameters,
+against the frequencies obtained in the paper from damped-sine fits:
+
+
+``` r
 fmr <- function(H, Ha, alpha, g, phi) {
   th <- equilibrium(Ha, H, phi)$theta
   w  <- g * muB * sqrt((H * cos(th - phi) + Ha * cos(2 * th)) * H * sin(phi) / sin(th))
@@ -451,6 +521,9 @@ paper$model_GHz <- sapply(100 * paper$field_kOe, fmr,
                           g     = estimates[["g"]],
                           phi   = pi / 2 * estimates[["phi / 90 deg"]])
 print(paper)
+```
+
+```
 #>   field_kOe frequency_GHz model_GHz
 #> 1        10        39.494  40.85750
 #> 2        14        53.890  52.47403
@@ -461,14 +534,7 @@ print(paper)
 #> 7        30       102.080  99.09177
 ```
 
-Data: measured traces of Fig. 3 in Z. Zhang, Y. Shiota, S. Karube, Y.
-Watanabe, T. Ono and H. Hirori, [Phys. Rev. Applied **24**, 044079
-(2025)](https://doi.org/10.1103/4p39-gyrd), published under CC BY 4.0 in
-[doi:10.5281/zenodo.17333041](https://doi.org/10.5281/zenodo.17333041);
-see [`inst/COPYRIGHTS`](../inst/COPYRIGHTS).
-
 Noise model: G. E. P. Box, G. M. Jenkins, G. C. Reinsel and G. M. Ljung,
-*Time Series Analysis: Forecasting and Control*, 5th ed. (Wiley, 2015).
-G. M. Ljung and G. E. P. Box, *On a measure of lack of fit in time
-series models*, [Biometrika **65**, 297
-(1978)](https://doi.org/10.1093/biomet/65.2.297).
+*Time Series Analysis: Forecasting and Control*, 5th ed. (Wiley, 2015).
+G. M. Ljung and G. E. P. Box, *On a measure of lack of fit in time series
+models*, [Biometrika **65**, 297 (1978)](https://doi.org/10.1093/biomet/65.2.297).

@@ -46,8 +46,10 @@ order.
   parameter through the solve; reverse mode returns the gradient of a functional
   in one backward sweep, at a cost independent of the parameter count
 - **Second order**: exact Hessians, forward over forward or forward over reverse
-- **Events**: time-based and root-triggered, with the saltation correction of
-  first- and second-order sensitivities across a jump
+- **Events and switches**: time- and root-triggered events, and `piecewise()`
+  or comparisons on states and time located as roots; a switch whose branches
+  both push onto its surface slides along it (Filippov). First- and
+  second-order sensitivities take every jump by the saltation correction
 - **Code generation on an expression graph**: Jacobians and derivative
   contractions by automatic differentiation, emitted as straight-line C++, with
   automatic sparsity detection and KLU factorisation for large systems
@@ -114,10 +116,36 @@ writeLines(readLines(system.file("cvodeConfig.dcf", package = "cppDE")))
 
 ## Example
 
+A two-state model, compiled once and solved with the sensitivities of every
+state in the initial values and parameters:
+
+```{r example}
+library(cppDE)
+
+model <- cppODE(c(A = "-k1*A", B = "k1*A - k2*B"))
+out <- solveODE(model, times = 0:10, parms = c(A = 1, B = 0, k1 = 0.5, k2 = 0.2))
+
+out$variable[11, ]       # states at t = 10
+out$tangent[11, , ]      # [state, parameter] at t = 10
+```
+
+`derivMode = "reverse"` builds the same model for gradients by the adjoint,
+`cvode()` for SUNDIALS CVODES; `?expressions` lists what an equation can contain.
+
+## Demos
+
+- [Basics](examples/basics.md): sensitivities of first and second order,
+  reverse-mode gradients, events, switches and sliding, forcings, steady
+  states, `cvode()` and `cppFUN()` on small models.
+- [Saltation](examples/saltation.md): sensitivities across events, switches
+  and sliding, forward and reverse, against symbolic solutions to second order.
 - [Fitting measured magnetisation dynamics](examples/fitCoPt.md): a
   Landau-Lifshitz-Gilbert model fitted to pump-probe measurements by
   Gauss-Newton on forward sensitivities, with a moving-average noise model and
   a multistart.
+
+`demo("saltation", package = "cppDE")` runs one, `demo(package = "cppDE")`
+lists them.
 
 ## License
 

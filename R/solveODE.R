@@ -393,6 +393,8 @@
   ## --- parms ---
   if (!is.numeric(parms) || is.null(names(parms)))
     stop("'parms' must be a named numeric vector")
+  dup <- unique(names(parms)[duplicated(names(parms))])
+  if (length(dup)) stop("'parms' names more than once: ", paste(dup, collapse = ", "))
   required_nms <- c(variables, parameters)
   miss <- setdiff(required_nms, names(parms))
   if (length(miss)) stop("'parms' missing: ", paste(miss, collapse = ", "))
@@ -1011,6 +1013,10 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
     if (!is.null(parms)) {
       pk <- parms[[k]]
       if (is.null(names(pk))) stop("'parms' elements must be named", call. = FALSE)
+      dup <- unique(names(pk)[duplicated(names(pk))])
+      if (length(dup))
+        stop("condition ", k, ": 'parms' names more than once ",
+             paste(dup, collapse = ", "), call. = FALSE)
       miss <- setdiff(handle$required, names(pk))
       if (length(miss))
         stop("condition ", k, ": 'parms' missing ", paste(miss, collapse = ", "),

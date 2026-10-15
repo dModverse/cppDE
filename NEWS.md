@@ -16,21 +16,31 @@
   the native backend, first-order sensitivities on `cvode()`, reverse
   gradients on both, and the forward-reverse curvature.
 
-* Switches that cross at the same time take one saltation each, and a slow
-  crossing takes its saltation.
+* Switches that cross at the same time take one saltation each. A root
+  crossed at a small rate takes its saltation: the crossing counts as
+  tangential only where the rate is negligible against the terms it is summed
+  from, not below a fixed 1e-15.
 
 * A switch whose root is zero at `t0`, at a fixed event or after its own
   crossing takes the side the solution leaves to, on both backends, and the
   sensitivities take its jump once.
 
-* `abs()`, `min()` and `max()` of a state or of the time switch as held
-  comparisons, and a comparison of switches follows their modes, so the
-  sensitivities of every order take the kink or jump. `floor()`, `ceiling()`,
+* `abs()`, `min()` and `max()` of a state or of the time are switches: the
+  solver locates the kink as a root, as for a comparison. A comparison of
+  switches follows their modes. The sensitivities of every order take the kink
+  or jump. `floor()`, `ceiling()`,
   `round()` and `trunc()` of a state or of the time in an ODE right-hand side
   are an error.
 
 * At a kink or step the derivative is that of the branch the value takes,
   forward and reverse alike, in `cppFUN()` and the symbolic Jacobians.
+
+* `solveODE()`, `solveODEBatch()` and `solveBatch()` reject a parameter
+  named twice in `parms`.
+
+* The demos `basics`, `saltation` and `fitCoPt` replace the scripts in
+  `inst/examples/`. `saltation` checks the sensitivities across events,
+  switches and sliding against symbolic solutions.
 
 # cppDE 0.12.1
 
