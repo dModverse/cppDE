@@ -170,8 +170,8 @@ public:
   single_thread_blas_scope& operator=(const single_thread_blas_scope&) = delete;
 
 private:
-  // -1 means "nothing to restore": no runtime API, no getter, or we were
-  // inside a parallel region.
+  // -1 means nothing to restore: no runtime API, no getter, or the call came
+  // from inside a parallel region.
   int m_saved[CPPDE_BLAS_MAX_VENDORS] = {-1, -1, -1, -1};
   int m_n = 0;
 };

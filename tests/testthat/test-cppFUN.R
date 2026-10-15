@@ -61,6 +61,8 @@ fx <- list(
   dm_both = cppFUN(c(y = "a * a"), parameters = "a", deriv = TRUE,
                    derivMode = c("forward", "reverse"), modelname = "dm_both",
                    convenient = FALSE),
+  pinum  = cppFUN(c(y = "pi * a + E"), parameters = c("a", "E"), deriv = TRUE,
+                  derivMode = "forward", modelname = "fun_pi", convenient = TRUE),
   vjp_fr = cppFUN(c(y1 = "a * x1^2 + b * x1 * x2", y2 = "sin(a * x2) + b^2 * x1"),
                   variables = c("x1", "x2"), parameters = c("a", "b"),
                   deriv2 = TRUE, derivMode = c("forward", "forward-reverse"),
@@ -84,6 +86,17 @@ test_that("cppFUN returns correct output", {
   expect_equal(colnames(res), c("y1", "y2"))
   expect_equal(unname(res[1, "y1"]), 2 * exp(-0.5), tolerance = 1e-10)
   expect_equal(unname(res[1, "y2"]), 2.5, tolerance = 1e-10)
+})
+
+test_that("attach.input passes an unmodelled parameter through as an output", {
+  f <- fx$basic
+  y <- f$func(a = 2, b = 0.5, x = 1, k = 3, attach.input = TRUE)
+  expect_equal(colnames(y), c("y1", "y2", "k"))
+  expect_equal(unname(y[1, "k"]), 3)
+  J <- f$jac(a = 2, b = 0.5, x = 1, k = 3, attach.input = TRUE)
+  expect_equal(dimnames(J)[[2]], c("y1", "y2", "k"))
+  expect_equal(unname(J[1, "k", ]), as.numeric(dimnames(J)[[3]] == "k"))
+  expect_equal(unname(J[1, "y1", "a"]), exp(-0.5), tolerance = 1e-12)
 })
 
 test_that("an object that was not compiled says so", {
@@ -135,6 +148,14 @@ test_that("symbols named after C++ tokens do not reach the generated source", {
              c(std = 2, ini = 0.5, default = 3), matrix(c(0, 1), 1, 2))
   expect_equal(unname(r$cotangentX[1, 1, 1]), 0.25, tolerance = 1e-10)
   expect_equal(unname(r$cotangentP["std", 1]), 4, tolerance = 1e-10)
+})
+
+test_that("pi is the number, E a parameter, and pi names nothing", {
+  f <- fx$pinum
+  expect_equal(unname(f$func(a = 2, E = 1)[1, "y"]), 2 * pi + 1, tolerance = 1e-12)
+  expect_equal(unname(f$jac(a = 2, E = 1)[1, "y", "a"]), pi, tolerance = 1e-12)
+  expect_error(cppFUN(c(y = "a * 2"), parameters = c("a", "pi"), modelname = "pi_par"),
+               "'pi' is a number in the equations")
 })
 
 test_that("a Python keyword as a symbol name is rejected", {

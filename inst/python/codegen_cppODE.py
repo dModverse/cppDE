@@ -110,7 +110,7 @@ def generate_forcing_init_code(n_forcings, num_type=None):
     return [
         "",
         "  // --- Initialize forcings (PCHIP interpolation) ---",
-        f"  const int n_forcings = static_cast<int>(args.flen.size());",
+        "  const int n_forcings = static_cast<int>(args.flen.size());",
         f"  std::vector<cppde::PchipForcing<{num_type}>> forcing_storage(n_forcings);",
         f"  std::vector<const cppde::PchipForcing<{num_type}>*> F(n_forcings);",
         "",

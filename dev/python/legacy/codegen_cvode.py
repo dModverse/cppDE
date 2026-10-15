@@ -436,7 +436,7 @@ def generate_cvode_cpp(
         for (i, d_expr) in df_dp_by_pk[pk]:
             df_dp_entries.append((i, pk, d_expr))
 
-    # --- Adjoint (stage 8 of dev/adjoint-plan.md) ---
+    # --- Adjoint ---
     #
     # lambda' = -J(x,p)' lambda and the quadrature q' = -(df/dp)' lambda are
     # transposes of data the forward path already builds, so nothing new is

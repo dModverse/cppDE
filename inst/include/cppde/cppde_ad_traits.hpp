@@ -333,7 +333,7 @@ inline void bulk_inject_results(
     b[i].x() = b_val[i];
     if (n_derivs > 0) {
       // Activate dependence (sets internal flag / allocates tangent vec).
-      // Static N: diff(0) seeds m_diff[0]=1 etc; we overwrite all slots below.
+      // Static N: diff(0) seeds m_diff[0] = 1; every slot is overwritten below.
       // Dynamic N==0: diff(0, n_derivs) sizes the tangent buffer.
       if constexpr (StaticN > 0) {
         if (!b[i].depend()) b[i].diff(0);

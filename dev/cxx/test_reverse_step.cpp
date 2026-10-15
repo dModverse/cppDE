@@ -1,4 +1,4 @@
-// One integration step backwards on tsit5: stage 3a of dev/adjoint-plan.md.
+// One integration step backwards on tsit5.
 //
 // The oracle is the forward mode on the same step. Forward propagates the
 // full sensitivity S of (x, theta, t, h) -> x_out, reverse only w' S for one w.

@@ -21,6 +21,8 @@
 #include <type_traits>
 #include <memory>
 #include <stdexcept>
+#include <cppde/cppde_sliding.hpp>
+#include <cppde/cppde_switch_surface.hpp>
 #include <cppde/cppde_step_checker.hpp>
 #include <cppde/cppde_stepper_traits.hpp>
 #include <cppde/cppde_profiler.hpp>
@@ -204,11 +206,12 @@ private:
  {
    triggered.clear();
    for (size_t i = 0; i < m_root.size(); ++i) {
+     if (m_root[i].mode >= 0 && is_sliding(m_root[i].mode)) continue;
      if (m_root[i].mode >= 0 && last_val[i] == 0.0) {
        leave_surface(i, curr_val[i], last_state[i], last_time[i], triggered);
        continue;
      }
-     if ((fired[i] < max_trigger || m_root[i].mode >= 0) &&
+     if ((fired[i] < max_trigger || m_root[i].mode >= 0 || m_root[i].slide_exit >= 0) &&
          !std::isnan(last_val[i]) &&
          root_crossed(last_val[i], curr_val[i]) &&
          direction_matches(last_val[i], m_root[i].direction)) {
@@ -238,7 +241,12 @@ private:
  // What a root reads on its surface at (x, t): its residual there plus the
  // rounding of its terms, |g_x| |x| + |g_t| |t| a few doubles deep.
  double surface_noise(const RootEvent<State, Time>& e, const State& x, const Time& t) {
-   double r = std::abs(scalar_value(e.func(x, t)));
+   return std::abs(scalar_value(e.func(x, t))) +
+          16.0 * std::numeric_limits<double>::epsilon() * root_terms(e, x, t);
+ }
+
+ // The sizes of the terms of g at (x, t), |g_x| |x| + |g_t| |t|.
+ double root_terms(const RootEvent<State, Time>& e, const State& x, const Time& t) {
    double m = 0.0;
    if (e.dg_dx) {
      State gx(x.size());
@@ -247,7 +255,19 @@ private:
        m += std::abs(scalar_value(gx[j]) * scalar_value(x[j]));
    }
    if (e.dg_dt) m += std::abs(scalar_value(e.dg_dt(x, t)) * scalar_value(t));
-   return r + 16.0 * std::numeric_limits<double>::epsilon() * m;
+   return m;
+ }
+
+ // A mode read afresh after a jump, except on its surface: there the jump left
+ // its root where it was, and the crossing that put it there, or leave_surface
+ // after the restart, decides the mode.
+ void reread_mode(size_t i, const State& xs, const Time& ts) {
+   const auto& e = m_root[i];
+   const double t = scalar_value(ts);
+   if (std::abs(t - m_switch_t[i]) < 1e-14) return;
+   const double g = scalar_value(e.func(xs, ts));
+   if (negligible(g, root_terms(e, xs, ts))) return;
+   set_switch_mode(e.mode, mode_holds(g, e.closed));
  }
 
  // --------------------------------------------------------------------------
@@ -287,8 +307,7 @@ private:
      }
 
      if (has_non_terminal && has_gradients) {
-       saltation_root_analytical_batch(x_root, x_before, t_root, m_sys,
-                                       m_root, triggered, at_surface);
+       saltate_switches_apart(x_root, x_before, t_root, triggered);
      } else if (has_non_terminal) {
        for (const auto& te : triggered) {
          if (!m_root[te.index].terminal) {
@@ -305,6 +324,82 @@ private:
    return has_terminal;
  }
 
+ // Events triggered together share one dt* and one roundtrip, except
+ // switches alone: two that coincide at the nominal parameters move apart with
+ // them, so each takes its own saltation, in the order triggered.
+ void saltate_switches_apart(State& x_root, const State& x_before, const Time& t_root,
+                             const std::vector<TriggeredEvent>& triggered) {
+   std::vector<TriggeredEvent> apart;
+   bool other = false;
+   for (const auto& te : triggered) {
+     const auto& e = m_root[te.index];
+     if (e.terminal) continue;
+     if (e.mode >= 0 && e.dg_dx && e.dg_dt) apart.push_back(te);
+     else other = true;
+   }
+   if (other || apart.size() < 2) {
+     saltate(x_root, x_before, t_root, triggered);
+     return;
+   }
+   State xb = x_before;
+   for (const auto& te : apart) {
+     saltate(x_root, xb, t_root, std::vector<TriggeredEvent>{te});
+     xb = x_root;
+   }
+ }
+
+ void saltate(State& x, const State& x_before, const Time& t,
+              const std::vector<TriggeredEvent>& triggered) {
+   auto at_surface = [this, &triggered](const State& xs, const auto& ts) {
+     switch_after_roots(triggered, xs, Time(ts));
+   };
+   saltation_root_analytical_batch(x, x_before, t, m_sys, m_root, triggered,
+                                   at_surface);
+ }
+
+ // The roots that just fired sit on their surface, and so does the switch a
+ // slide just left: zero, so the crossing is not seen a second time.
+ void mark_on_surface(std::vector<double>& last_val,
+                      const std::vector<TriggeredEvent>& triggered) const {
+   for (const auto& te : triggered) {
+     last_val[te.index] = 0.0;
+     const int k = m_root[te.index].slide_exit;
+     if (k < 0) continue;
+     for (size_t i = 0; i < m_root.size(); ++i)
+       if (m_root[i].mode == k) last_val[i] = 0.0;
+   }
+ }
+
+ static void core_no_mix() {
+   throw std::runtime_error(
+       "the state switches that slide at once have no Filippov mix of their "
+       "branches that keeps the solution on all their surfaces");
+ }
+
+ // Switch k slides where both branches move onto its surface at (x, t).
+ void enter_slide(int k, const State& x, const Time& t) {
+   if constexpr (is_sliding_system<System>::value) {
+     int off = 0, on = 0;
+     m_sys.rate_signs(k, x, t, off, on);
+     if (surface_choice(off, on) != surface_side::slide) return;
+     set_sliding(k);
+     if (!m_sys.mixable(x, t)) core_no_mix();
+   } else {
+     (void)k; (void)x; (void)t;
+   }
+ }
+
+ // Where the integration starts or restarts: the switches on their surface.
+ void enter_slides_on_surface(const State& x, const Time& t) {
+   if (!m_has_modes) return;
+   for (size_t i = 0; i < m_root.size(); ++i) {
+     const auto& e = m_root[i];
+     if (e.mode < 0 || is_sliding(e.mode)) continue;
+     if (!negligible(scalar_value(e.func(x, t)), root_terms(e, x, t))) continue;
+     enter_slide(e.mode, x, t);
+   }
+ }
+
  // The modes after a crossing: a triggered switch takes the side its root
  // crossed to, and a reset among the events reads every other mode afresh.
  void switch_after_roots(const std::vector<TriggeredEvent>& triggered,
@@ -313,8 +408,13 @@ private:
    bool jumped = false;
    for (const auto& te : triggered) {
      const auto& e = m_root[te.index];
-     if (e.mode >= 0) set_switch_mode(e.mode, te.last_val < 0.0);
-     else if (!e.terminal && e.state_index >= 0) jumped = true;
+     if (e.slide_exit >= 0) {
+       set_switch_mode(e.slide_exit, e.exit_on);
+     } else if (e.mode >= 0) {
+       set_switch_mode(e.mode, te.last_val < 0.0);
+       m_switch_t[te.index] = scalar_value(ts);
+       enter_slide(e.mode, xs, ts);
+     } else if (!e.terminal && e.state_index >= 0) jumped = true;
    }
    if (!jumped) return;
    for (size_t i = 0; i < m_root.size(); ++i) {
@@ -322,7 +422,7 @@ private:
      if (e.mode < 0) continue;
      bool hit = false;
      for (const auto& te : triggered) hit = hit || te.index == i;
-     if (!hit) set_switch_mode(e.mode, mode_holds(scalar_value(e.func(xs, ts)), e.closed));
+     if (!hit) reread_mode(i, xs, ts);
    }
  }
 
@@ -330,7 +430,8 @@ private:
  // does. A switch writes none, a terminal root only the closing row.
  bool observes(const std::vector<TriggeredEvent>& triggered) const {
    for (const auto& te : triggered)
-     if (m_root[te.index].mode < 0 && !m_root[te.index].terminal) return true;
+     if (m_root[te.index].mode < 0 && m_root[te.index].slide_exit < 0 &&
+         !m_root[te.index].terminal) return true;
    return false;
  }
 
@@ -420,7 +521,7 @@ private:
    // The step restarts on the surface of the events that just fired. Their
    // round-off residual there has a sign, and keeping it would let the
    // crossing that was just handled be detected a second time.
-   for (const auto& te : triggered) last_val[te.index] = 0.0;
+   mark_on_surface(last_val, triggered);
  }
 
  void eval_root_funcs(std::vector<double>& cv, const State& x, const Time& t) {
@@ -474,7 +575,8 @@ private:
      eval_root_funcs(after, probe, t);
      size_t pick = m_root.size();
      for (size_t i = 0; i < m_root.size(); ++i)
-       if (!m_root[i].terminal && m_root[i].mode < 0 && count[i] < max_trigger &&
+       if (!m_root[i].terminal && m_root[i].mode < 0 && m_root[i].slide_exit < 0 &&
+           count[i] < max_trigger &&
            !std::isnan(before[i]) && root_crossed(before[i], after[i]) &&
            direction_matches(before[i], m_root[i].direction)) { pick = i; break; }
      before = after;
@@ -489,7 +591,10 @@ private:
    auto at_surface = [&](State& xs, const auto& ts) {
      const Time t_surface(ts);
      for (size_t i : order) apply_event_action(xs, xs, t_surface, m_root[i]);
-     if (m_has_modes) init_switch_modes(m_root, xs, t_surface);
+     if (!m_has_modes) return;
+     for (size_t i = 0; i < m_root.size(); ++i)
+       if (m_root[i].mode >= 0) reread_mode(i, xs, t_surface);
+     enter_slides_on_surface(xs, t_surface);
    };
    apply_fixed_events_at_time(x, t, m_fixed, m_sys, at_surface);
    for (size_t i : order) fired[i]++;
@@ -520,6 +625,8 @@ public:
 
    std::vector<size_t> fired(m_root.size(), 0);
    init_switch_modes(m_root, x, t);
+   enter_slides_on_surface(x, t);
+   m_switch_t.assign(m_root.size(), std::numeric_limits<double>::quiet_NaN());
    if (apply_fixed_events(x, t, fired, max_trigger)) {
      recalibrate_dt(x, t, dt);
      reset_stepper_unified(m_st, x, t, dt);
@@ -584,7 +691,7 @@ public:
              last_val[j] = scalar_value(m_root[j].func(x, t));
              last_state[j] = x; last_time[j] = t;
            }
-           for (const auto& te : triggered) last_val[te.index] = 0.0;
+           mark_on_surface(last_val, triggered);
          } else {
            for (size_t i = 0; i < m_root.size(); ++i) {
              last_val[i] = curr_val[i]; last_state[i] = x; last_time[i] = t;
@@ -632,6 +739,8 @@ public:
 
    std::vector<size_t> fired(m_root.size(), 0);
    init_switch_modes(m_root, x, *it);
+   enter_slides_on_surface(x, *it);
+   m_switch_t.assign(m_root.size(), std::numeric_limits<double>::quiet_NaN());
    {
      State x_pre;
      if (m_event_obs) x_pre = x;
@@ -1091,6 +1200,7 @@ private:
  // Per switch: whether its mode was last set on leaving the surface, see
  // leave_surface().
  std::vector<bool> m_off_surface;
+ std::vector<double> m_switch_t;   // when each switch last flipped
 
  // A bridge over a jump in t whose restart is still due, and where it began.
  bool   m_bridge_pending = false;

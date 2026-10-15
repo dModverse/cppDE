@@ -124,8 +124,8 @@ public:
         e.fn(e.obj);
         a_.dtors_.pop_back();
       }
-      // Restore slab tops: any slab beyond saved_active_ is fully free; the
-      // saved one rolls back to saved_top_. We keep the slabs alive for reuse.
+      // Slabs beyond saved_active_ are free again and the saved one rolls back
+      // to saved_top_; the slabs stay allocated for reuse.
       for (std::size_t i = a_.active_; i > saved_active_; --i) {
         a_.slabs_[i].top = 0;
       }

@@ -139,9 +139,15 @@ so a pulse such as \code{piecewise(1, time > ts && time <= t2, 0)} is not steppe
 over. Every method and derivative mode takes the jump of f there, second
 order included, also where a parameter moves the switching time. A switch
 adds no output row and is not limited by \code{maxroot}. Each branch is evaluated
-a step beyond the switch, so it has to be defined there. A solution that
-slides along a switching surface, both branches pointing at it, stops with
-an error. \code{==} and \code{!=} are evaluated as written.
+a step beyond the switch, so it has to be defined there. Where both branches
+push the solution onto the surface, it slides along it (Filippov): f is the
+mix \code{a*f_on + (1 - a)*f_off} that keeps the surface's argument at zero, and
+the slide ends where one branch turns away. \code{"kin - v*(x > 0)"} with
+\code{kin < v} holds x at 0, the limit of Michaelis-Menten kinetics for Km to 0.
+Several switches slide at once on the mix of all combinations of their
+branches whose weights keep every surface; a set of slides without such a
+mix stops with an error.
+\code{==} and \code{!=} are evaluated as written.
 }
 \examples{
 \donttest{

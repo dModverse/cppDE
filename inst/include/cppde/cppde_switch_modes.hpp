@@ -43,8 +43,12 @@ struct switch_mode_scope {
   switch_mode_scope& operator=(const switch_mode_scope&) = delete;
 };
 
-// Mode k of the running solve.
+// Mode k of the running solve. A sliding mode reads as held; the sliding
+// right-hand side sets either value while it evaluates a branch.
 inline bool switch_mode(int k) { return switch_mode_sink().m[k] != 0; }
+
+// The value of a mode that slides along its surface.
+constexpr signed char sliding_mode = 2;
 
 namespace detail {
 
@@ -56,6 +60,27 @@ inline bool mode_holds(double g, bool closed) {
 
 inline void set_switch_mode(int k, bool on) {
   switch_mode_sink().m[k] = on ? 1 : 0;
+}
+
+inline bool is_sliding(int k) { return switch_mode_sink().m[k] == sliding_mode; }
+
+inline void set_sliding(int k) { switch_mode_sink().m[k] = sliding_mode; }
+
+// The first switch that slides, -1 for none.
+inline int sliding_switch() {
+  const switch_modes& s = switch_mode_sink();
+  for (std::size_t k = 0; k < s.n; ++k)
+    if (s.m[k] == sliding_mode) return static_cast<int>(k);
+  return -1;
+}
+
+// The switches that slide, in order.
+inline std::vector<int> sliding_switches() {
+  const switch_modes& s = switch_mode_sink();
+  std::vector<int> out;
+  for (std::size_t k = 0; k < s.n; ++k)
+    if (s.m[k] == sliding_mode) out.push_back(static_cast<int>(k));
+  return out;
 }
 
 // The modes as they stand, empty for a model without any.

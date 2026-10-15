@@ -18,6 +18,13 @@ from sympy.parsing.sympy_parser import (convert_xor, parse_expr,
 _MAX_EXPR_CHARS = 200
 
 _LOGIC_RE = re.compile(r'&&|\|\||!(?!=)')
+# Operators R reads differently from Python, or not at all.
+_FOREIGN_RE = re.compile(r'%[^%\s]*%|%|//|<-|~|@')
+_FOREIGN_MSG = {
+    '%%': "'%%' is not supported; write a - floor(a/b)*b",
+    '%/%': "'%/%' is not supported; write floor(a/b)",
+    '<-': "'<-' is an assignment in R; write '< -' for a comparison",
+}
 _LOGIC_WORDS = {'&&': ' and ', '||': ' or ', '!': ' not '}
 
 
@@ -38,9 +45,31 @@ class _BoolOpsToCalls(ast.NodeTransformer):
                         args=[node.operand], keywords=[])
 
 
+def r_operators(expr_str):
+    """`expr_str` with `&` and `|` as `&&` and `||`, which they equal on
+    scalars. An operator R reads differently from Python, or not at all, is a
+    ValueError that names it."""
+    m = _FOREIGN_RE.search(expr_str)
+    if m:
+        op = m.group(0)
+        raise ValueError(_FOREIGN_MSG.get(op, "'%s' is not supported" % op))
+    return re.sub(r'(?<![&|])([&|])(?![&|])', r'\1\1', expr_str)
+
+
+def check_r_syntax(tree):
+    """Raise ValueError on syntax that Python parses and R reads otherwise:
+    a chained comparison, which R does not chain."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Compare) and len(node.ops) > 1:
+            raise ValueError("a chained comparison is not supported; "
+                             "write 'a < x && x < b'")
+
+
 def normalise_logic(expr_str):
     """Rewrite `&&`, `||` and `!` as And / Or / Not calls, grouped by Python's
-    parser; a textual swap to `&` and `|` would bind above the comparisons."""
+    parser; a textual swap to `&` and `|` would bind above the comparisons.
+    `&` and `|` read as `&&` and `||`, see `r_operators`."""
+    expr_str = r_operators(expr_str)
     if not _LOGIC_RE.search(expr_str):
         return expr_str
     src = _logic_words(expr_str).strip()
@@ -120,11 +149,30 @@ def sbml_piecewise(*args):
     return sp.Piecewise(*pairs)
 
 
+def _round_half_even(x):
+    f = sp.floor(x)
+    d = x - f
+    odd = sp.Ne(sp.floor(f / 2), f / 2)
+    return sp.Piecewise((f + 1, sp.Or(d > sp.S.Half, sp.And(sp.Eq(d, sp.S.Half), odd))),
+                        (f, True))
+
+
+def _trunc(x):
+    return sp.Piecewise((sp.floor(x), x >= 0), (sp.ceiling(x), True))
+
+
+def _ifelse(c, a, b):
+    if not isinstance(c, (sp.logic.boolalg.Boolean, sp.core.relational.Relational)):
+        c = sp.Ne(c, 0)
+    return sp.Piecewise((a, c), (b, True))
+
+
 @lru_cache(maxsize=1)
 def parse_dict():
     """Local dictionary for `parse_expr`.
 
-    S, I, N, O, Q and C are plain symbols; exp10/exp2 are exp(x*log(b)).
+    S, I, N, O, Q and C are plain symbols and pi is the number; exp10/exp2
+    are exp(x*log(b)).
     """
     return {
         'S': sp.Symbol('S'), 'I': sp.Symbol('I'), 'N': sp.Symbol('N'),
@@ -147,7 +195,7 @@ def parse_dict():
         'sqrt': sp.sqrt, 'cbrt': sp.cbrt, 'root': sp.root, 'pow': sp.Pow,
         'abs': sp.Abs, 'sign': sp.sign,
         'floor': sp.floor, 'ceiling': sp.ceiling,
-        'round': lambda x: sp.floor(x + sp.Rational(1, 2)),
+        'round': _round_half_even, 'trunc': _trunc, 'ifelse': _ifelse,
         'min': sp.Min, 'max': sp.Max,
         'factorial': sp.factorial, 'gamma': sp.gamma,
         'loggamma': sp.loggamma, 'digamma': sp.digamma,
@@ -159,7 +207,7 @@ def parse_dict():
         'And': sp.And, 'Or': sp.Or, 'Not': sp.Not,
         'KroneckerDelta': sp.KroneckerDelta, 'Piecewise': sp.Piecewise,
         'piecewise': sbml_piecewise,
-        'pi': sp.pi, 'E': sp.E, 'oo': sp.oo, 'euler_gamma': sp.EulerGamma,
+        'pi': sp.pi,
         're': sp.re, 'im': sp.im, 'conjugate': sp.conjugate, 'arg': sp.arg,
     }
 
@@ -167,8 +215,7 @@ def parse_dict():
 IDENT_RE = re.compile(r'(?<![\.\w])[A-Za-z_][A-Za-z0-9_]*')
 PY_RESERVED = frozenset(keyword.kwlist) | {'True', 'False', 'None'}
 # Parse-dict names kept when used bare.
-_CONSTANTS = frozenset(('pi', 'E', 'oo', 'euler_gamma', 'S', 'I', 'N', 'O',
-                        'Q', 'C'))
+_CONSTANTS = frozenset(('pi', 'S', 'I', 'N', 'O', 'Q', 'C'))
 
 
 def safe_sympify(expr_str, local_symbols=None, label=None):
@@ -177,7 +224,13 @@ def safe_sympify(expr_str, local_symbols=None, label=None):
     Raises:
         ValueError: from `parse_error` on a syntax error.
     """
-    expr_str = normalise_logic(str(expr_str).strip())
+    text = str(expr_str).strip()
+    try:
+        expr_str = normalise_logic(text)
+        check_r_syntax(ast.parse(expr_str.replace('^', '**'), mode='eval'))
+    except (ValueError, SyntaxError) as e:
+        if isinstance(e, ValueError):
+            raise parse_error(text, e, label=label) from None
     if expr_str == "0":
         return sp.Integer(0)
     local = dict(parse_dict())
@@ -188,6 +241,8 @@ def safe_sympify(expr_str, local_symbols=None, label=None):
         if name in PY_RESERVED or (local_symbols and name in local_symbols):
             continue
         called = expr_str[m.end():].lstrip().startswith('(')
+        if called and name not in local:
+            raise parse_error(expr_str, "unknown function '%s'" % name, label=label)
         if name not in local or (not called and name not in _CONSTANTS):
             local[name] = sp.Symbol(name, real=True)
     try:

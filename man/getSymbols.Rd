@@ -16,6 +16,6 @@ Character vector of unique symbol names.
 }
 \description{
 Returns the unique names of all symbols occurring in a character
-vector of R expressions.
+vector of R expressions. \code{pi} is the number and no symbol.
 }
 \keyword{internal}

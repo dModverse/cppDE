@@ -142,6 +142,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   # The symbol arguments name the same symbols as the equations and are checked
   # with them.
   checkSymbolNames(eqns, variables, parameters, fixed)
+  checkConstantNames(names(eqns), variables, parameters, fixed)
 
   outnames <- names(eqns) %||% paste0("f", seq_along(eqns))
   if (!is.null(fixed)) { variables <- setdiff(variables, fixed); parameters <- union(parameters, fixed) }
@@ -158,7 +159,8 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
                            parameters = as.list(parameters),
                            ad = use_ad, deriv2 = deriv2, vjp = use_vjp,
                            vjp_fr = use_vjpfr,
-                           modelname = modelname, outdir = normalizePath(outdir, "/", FALSE), version = as.character(utils::packageVersion("cppDE")))
+                           modelname = modelname, outdir = normalizePath(outdir, "/", FALSE),
+                           version = as.character(utils::packageVersion("cppDE")))
 
   # --- Instance state and thin wrappers ---
   ## All the engine needs and nothing else. The returned closures hold only
@@ -190,8 +192,12 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     evaluateBatch = evaluateBatch_impl,
     vjp      = vjp_impl
   )
-  attr(outfn, "equations") <- eqns; attr(outfn, "variables") <- variables; attr(outfn, "parameters") <- parameters
-  attr(outfn, "fixed") <- fixed; attr(outfn, "modelname") <- modelname; attr(outfn, "srcfile") <- normalizePath(cpp_file, "/", FALSE)
+  attr(outfn, "equations")  <- eqns
+  attr(outfn, "variables")  <- variables
+  attr(outfn, "parameters") <- parameters
+  attr(outfn, "fixed")      <- fixed
+  attr(outfn, "modelname")  <- modelname
+  attr(outfn, "srcfile")    <- normalizePath(cpp_file, "/", FALSE)
   attr(outfn, "derivMode") <- derivMode
   for (nm in c("func", "jac", "hess", "evaluate", "evaluateBatch", "vjp")) {
     if (!is.null(outfn[[nm]])) {
@@ -240,7 +246,8 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     }
   } else {
     if (is.null(vars)) stop("Variables defined but 'vars' is NULL.")
-    if (is.vector(vars) && !is.list(vars)) vars <- matrix(vars, ncol = length(st$innames), dimnames = list(NULL, st$innames))
+    if (is.vector(vars) && !is.list(vars))
+      vars <- matrix(vars, ncol = length(st$innames), dimnames = list(NULL, st$innames))
     cn <- colnames(vars)
     if (is.null(cn)) { colnames(vars) <- st$innames; cn <- st$innames }
     # match() does the same test as setdiff() without the unique()/coerce pass,
@@ -274,24 +281,44 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 }
 
 # --- Attach helpers (pass-through of unmodelled inputs) ---
-.abind3 <- function(a, b) { d <- dim(a); db <- dim(b); r <- array(0, c(d[1], d[2]+db[2], d[3]), list(dimnames(a)[[1]], c(dimnames(a)[[2]], dimnames(b)[[2]]), dimnames(a)[[3]])); r[,1:d[2],] <- a; r[,d[2]+1:db[2],] <- b; r }
-.abind4 <- function(a, b) { d <- dim(a); db <- dim(b); r <- array(0, c(d[1], d[2]+db[2], d[3], d[4]), list(dimnames(a)[[1]], c(dimnames(a)[[2]], dimnames(b)[[2]]), dimnames(a)[[3]], dimnames(a)[[4]])); r[,1:d[2],,] <- a; r[,d[2]+1:db[2],,] <- b; r }
 
+# `a` with `b` appended along the second dimension; the other dimensions are a's.
+.bindOutputs <- function(a, b) {
+  d <- dim(a)
+  k <- d[2]
+  dn <- dimnames(a)
+  dn[[2]] <- c(dn[[2]], dimnames(b)[[2]])
+  at <- function(j) c(list(TRUE, j), rep(list(TRUE), length(d) - 2))
+  r <- array(0, replace(d, 2, k + dim(b)[2]), dn)
+  r <- do.call(`[<-`, c(list(r), at(seq_len(k)), list(value = a)))
+  do.call(`[<-`, c(list(r), at(k + seq_len(dim(b)[2])), list(value = b)))
+}
+
+# The unmodelled inputs appended as outputs: a variable as itself with derivative
+# 0, a parameter as a constant column that is also a direction of its own, with
+# derivative 1 in itself.
 .attachExtras <- function(res, n_obs, ev, ep, type) {
   if (is.null(ev) && is.null(ep)) return(res)
   if (type == "fun") {
     if (!is.null(ev)) res <- cbind(res, ev)
-    if (!is.null(ep)) res <- cbind(res, matrix(rep(ep, each = n_obs), n_obs, length(ep), dimnames = list(NULL, names(ep))))
-  } else if (type == "jac") {
-    cs <- dimnames(res)[[3]]; ncs <- length(cs)
-    if (!is.null(ev)) res <- .abind3(res, array(0, c(n_obs, ncol(ev), ncs), list(NULL, colnames(ev), cs)))
-    if (!is.null(ep)) { np <- length(ep); pn <- names(ep); d <- dim(res); new <- array(0, c(d[1], d[2]+np, d[3]+np), list(dimnames(res)[[1]], c(dimnames(res)[[2]], pn), c(dimnames(res)[[3]], pn))); new[,1:d[2],1:d[3]] <- res; for (k in seq_len(np)) new[,d[2]+k,d[3]+k] <- 1; res <- new }
-  } else {
-    cs <- dimnames(res)[[3]]; ncs <- length(cs)
-    if (!is.null(ev)) res <- .abind4(res, array(0, c(n_obs, ncol(ev), ncs, ncs), list(NULL, colnames(ev), cs, cs)))
-    if (!is.null(ep)) { np <- length(ep); pn <- names(ep); d <- dim(res); new <- array(0, c(d[1], d[2]+np, d[3]+np, d[4]+np), list(dimnames(res)[[1]], c(dimnames(res)[[2]], pn), c(dimnames(res)[[3]], pn), c(dimnames(res)[[4]], pn))); new[,1:d[2],1:d[3],1:d[4]] <- res; res <- new }
+    if (is.null(ep)) return(res)
+    return(cbind(res, matrix(rep(ep, each = n_obs), n_obs, length(ep),
+                             dimnames = list(NULL, names(ep)))))
   }
-  res
+  cs <- dimnames(res)[[3]]
+  nd <- if (type == "jac") 1L else 2L
+  if (!is.null(ev))
+    res <- .bindOutputs(res, array(0, c(n_obs, ncol(ev), rep(length(cs), nd)),
+                                   c(list(NULL, colnames(ev)), rep(list(cs), nd))))
+  if (is.null(ep)) return(res)
+  np <- length(ep)
+  d <- dim(res)
+  grow <- c(list(NULL), rep(list(names(ep)), length(d) - 1))
+  new <- array(0, d + c(0, rep(np, length(d) - 1)), Map(c, dimnames(res), grow))
+  new <- do.call(`[<-`, c(list(new, TRUE), lapply(d[-1], seq_len), list(value = res)))
+  if (type == "jac")
+    for (k in seq_len(np)) new[, d[2] + k, d[3] + k] <- 1
+  new
 }
 
 # --- Chain-rule helpers ---
@@ -396,7 +423,9 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     res <- .callSym(symc, .asdbl(M), .asdbl(p), as.integer(n_obs))
     dimnames(res) <- list(NULL, st$outnames)
   } else if (!is.null(sym)) {
-    out <- .cSym(sym, x = as.double(M), y = double(length(st$outnames) * n_obs), p = as.double(p), n = as.integer(n_obs), k = as.integer(length(st$innames)), l = as.integer(length(st$outnames)))
+    out <- .cSym(sym, x = as.double(M), y = double(length(st$outnames) * n_obs),
+                 p = as.double(p), n = as.integer(n_obs), k = as.integer(length(st$innames)),
+                 l = as.integer(length(st$outnames)))
     res <- matrix(out$y, n_obs, length(st$outnames), dimnames = list(NULL, st$outnames))
   } else .notCompiled(st)
   .attachExtras(res, n_obs, chk$extra_vars, chk$extra_params, "fun")
@@ -770,34 +799,48 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
 # --- Convenient wrappers ---
 
+# The arguments of a convenient call: the variables into the observation matrix,
+# the parameters into the vector, and with attach.input every other input to
+# the one its length fits.
+.splitArgs <- function(st, args, attach.input) {
+  M <- if (length(st$innames)) do.call(cbind, args[st$innames])
+  p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
+  if (!attach.input) return(list(M = M, p = p))
+  n_obs <- if (!is.null(M)) nrow(M) else 1L
+  for (nm in setdiff(names(args), c(st$innames, st$parameters))) {
+    v <- args[[nm]]
+    if (length(v) == n_obs) {
+      M <- if (is.null(M)) matrix(v, ncol = 1, dimnames = list(NULL, nm))
+           else cbind(M, setNames(data.frame(v), nm))
+    } else if (length(v) == 1) {
+      p <- c(p, setNames(v, nm))
+    } else {
+      warning("Extra '", nm, "' ignored")
+    }
+  }
+  list(M = M, p = p)
+}
+
 .makeFunWrapper <- function(st, impl) {
   if (is.null(impl)) return(NULL)
   function(..., attach.input = FALSE, fixed = NULL) {
-    args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
-    if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
-    for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
-    impl(M, p, attach.input, fixed)
+    a <- .splitArgs(st, list(...), attach.input)
+    impl(a$M, a$p, attach.input, fixed)
   }
 }
 
 .makeDerivWrapper <- function(st, impl, has_d2 = FALSE) {
   if (is.null(impl)) return(NULL)
-  if (has_d2) {
-    function(..., tangentX = NULL, tangentP = NULL, hessianX = NULL,
-             hessianP = NULL, attach.input = FALSE, fixed = NULL) {
-      args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
-      if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
-      for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
-      impl(M, p, tangentX, tangentP, hessianX, hessianP, attach.input, fixed)
-    }
-  } else {
-    function(..., tangentX = NULL, tangentP = NULL,
-             attach.input = FALSE, fixed = NULL) {
-      args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
-      if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
-      for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
-      impl(M, p, tangentX, tangentP, attach.input, fixed)
-    }
+  if (!has_d2)
+    return(function(..., tangentX = NULL, tangentP = NULL,
+                    attach.input = FALSE, fixed = NULL) {
+      a <- .splitArgs(st, list(...), attach.input)
+      impl(a$M, a$p, tangentX, tangentP, attach.input, fixed)
+    })
+  function(..., tangentX = NULL, tangentP = NULL, hessianX = NULL,
+           hessianP = NULL, attach.input = FALSE, fixed = NULL) {
+    a <- .splitArgs(st, list(...), attach.input)
+    impl(a$M, a$p, tangentX, tangentP, hessianX, hessianP, attach.input, fixed)
   }
 }
 
@@ -805,9 +848,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   if (is.null(impl)) return(NULL)
   function(..., tangentX = NULL, tangentP = NULL, hessianX = NULL,
            hessianP = NULL, deriv2 = FALSE, attach.input = FALSE, fixed = NULL) {
-    args <- list(...); M <- if (length(st$innames)) do.call(cbind, args[st$innames]); p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
-    if (attach.input) { extra <- setdiff(names(args), c(st$innames, st$parameters)); n_obs <- if (!is.null(M)) nrow(M) else 1L
-    for (nm in extra) { v <- args[[nm]]; if (length(v) == n_obs) { M <- if (is.null(M)) matrix(v, ncol=1, dimnames=list(NULL,nm)) else cbind(M, setNames(data.frame(v), nm)) } else if (length(v) == 1) p <- c(p, setNames(v, nm)) else warning("Extra '", nm, "' ignored") } }
-    impl(M, p, tangentX, tangentP, hessianX, hessianP, deriv2, attach.input, fixed)
+    a <- .splitArgs(st, list(...), attach.input)
+    impl(a$M, a$p, tangentX, tangentP, hessianX, hessianP, deriv2, attach.input, fixed)
   }
 }

@@ -187,7 +187,7 @@ public:
     int ncf = 0;   // Newton convergence failure count (this step attempt)
     int nef = 0;   // Error test failure count (this step attempt)
 
-    // nflag: controls whether we force a Jacobian setup
+    // nflag: whether a Jacobian setup is forced
     // FIRST_CALL or PREV_ERR_FAIL: normal setup decision (convfail = CV_NO_FAILURES)
     // PREV_CONV_FAIL: force setup (convfail = CV_FAIL_OTHER)
     enum class NFlag { first_call, prev_err_fail, prev_conv_fail };
@@ -470,7 +470,7 @@ private:
       m_eta = 1.0;
     } else {
       m_eta = std::min(m_eta, m_stepper.etamax());
-      // Note: hmax limiting omitted (we don't have hmax)
+      // No hmax, so no limit from it.
     }
   }
 

@@ -21,6 +21,7 @@
 #include <cppde/cppde_events.hpp>
 #include <cppde/cppde_saltation.hpp>
 #include <cppde/cppde_event_engine.hpp>
+#include <cppde/cppde_sliding.hpp>
 #include <cppde/cppde_step_checker.hpp>
 #include <cppde/cppde_stepper_traits.hpp>
 
@@ -59,7 +60,9 @@ size_t integrate_times(
  std::vector<FixedEvent<State, typename State::value_type>> kept;
  const auto& fires = fixed_events_in_window(t_begin, t_end, fixed, kept);
  auto times = merge_user_and_event_times<Time>(t_begin, t_end, fires);
- EventEngine<Stepper, System, State, Time, DtEstimator> eng(stepper, system, fires, root, std::move(dt_est));
+ auto slider = make_sliding_system(system, root);
+ EventEngine<Stepper, decltype(slider), State, Time, DtEstimator> eng(
+     stepper, slider, fires, slider.roots(), std::move(dt_est));
  if (termination) eng.set_termination(std::move(termination));
  try {
    size_t steps = eng.process_controlled(x, times, dt, obs, checker, root_tol, max_trigger_root);
@@ -95,7 +98,9 @@ size_t integrate_times_dense(
  std::vector<FixedEvent<State, typename State::value_type>> kept;
  const auto& fires = fixed_events_in_window(t_begin, t_end, fixed, kept);
  auto times = merge_user_and_event_times<Time>(t_begin, t_end, fires);
- EventEngine<Stepper, System, State, Time, DtEstimator> eng(stepper, system, fires, root, std::move(dt_est));
+ auto slider = make_sliding_system(system, root);
+ EventEngine<Stepper, decltype(slider), State, Time, DtEstimator> eng(
+     stepper, slider, fires, slider.roots(), std::move(dt_est));
  if (termination) eng.set_termination(std::move(termination));
  // The reverse mode's checkpoint collector; see cppde_reverse_trajectory.hpp.
  if (step_obs) eng.set_step_observer(std::move(step_obs));

@@ -1,4 +1,4 @@
-// The trajectory backwards across events: stage 5 of dev/adjoint-plan.md.
+// The trajectory backwards across events.
 //
 // An event is two maps between two steps. The jump, which for a fixed time is
 // the reset transported across the discontinuity by the Heun sandwich and for a

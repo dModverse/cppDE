@@ -17,8 +17,8 @@ import math
 import re
 from fractions import Fraction
 
-from cppsympy import (derivative_template, from_sympy, normalise_logic,
-                      parse_error, safe_sympify)
+from cppsympy import (check_r_syntax, derivative_template, from_sympy,
+                      normalise_logic, parse_error, safe_sympify)
 
 # ---------------------------------------------------------------------------
 # Operations
@@ -984,9 +984,6 @@ class Graph:
 # Bare names read as numbers.
 CONSTANTS = {
     'pi': math.pi,
-    'E': math.e,
-    'oo': math.inf,
-    'euler_gamma': 0.5772156649015329,
 }
 
 
@@ -1058,7 +1055,25 @@ def _minmax(name):
 
 
 def _round(g, a):
-    return g.call('floor', g.add(_one(a, 'round'), g.HALF))
+    """Half to even, as R rounds; x - floor(x) is exact."""
+    x = _one(a, 'round')
+    f = g.call('floor', x)
+    d = g.sub(x, f)
+    half_f = g.mul(f, g.HALF)
+    odd = g.cmp('!=', g.call('floor', half_f), half_f)
+    up = g.or_(g.cmp('>', d, g.HALF), g.and_(g.cmp('==', d, g.HALF), odd))
+    return g.select(up, g.add(f, g.ONE), f)
+
+
+def _trunc(g, a):
+    x = _one(a, 'trunc')
+    return g.select(g.cmp('>=', x, g.ZERO), g.call('floor', x), g.call('ceiling', x))
+
+
+def _ifelse(g, a):
+    if len(a) != 3:
+        raise ValueError("ifelse() takes three arguments, got %d" % len(a))
+    return g.select(g.truth(a[0]), a[1], a[2])
 
 
 def _heaviside(g, a):
@@ -1121,6 +1136,7 @@ FUNCS = {
     'root': _root, 'pow': _pow,
     'abs': _unary('abs'), 'Abs': _unary('abs'), 'sign': _unary('sign'),
     'floor': _unary('floor'), 'ceiling': _unary('ceiling'), 'round': _round,
+    'trunc': _trunc, 'ifelse': _ifelse,
     'min': _minmax('min'), 'max': _minmax('max'),
     'Min': _minmax('min'), 'Max': _minmax('max'),
     'Heaviside': _heaviside, 'DiracDelta': _dirac,
@@ -1258,8 +1274,11 @@ class Parser:
             except RecursionError:
                 src = _flat_sums(src)
                 tree = ast.parse(src, mode='eval')
+            check_r_syntax(tree)
         except SyntaxError:
             return self._sympy(text, label)
+        except ValueError as e:
+            raise parse_error(text, e, label=label) from None
         self._src = src if (src.isascii() and '\n' not in src) else None
         try:
             return self._walk(tree.body)
@@ -1548,22 +1567,18 @@ class AD:
                                        (g.add(x, one), Fraction(-1, 2))]))]
         if name == "atanh":
             return [(0, g.inv(g.sub(one, g.pow(x, Fraction(2)))))]
+        # A kink or step takes the derivative of the branch its value takes, as
+        # the forward duals do: delta is 0, and a tie goes to the dual's winner.
         if name == "abs":
             return [(0, g.call("sign", x))]
-        if name == "sign":
-            return [(0, g.scale(2, g.call("delta", x)))]
-        if name == "Heaviside":
-            return [(0, g.call("delta", x))]
-        if name in _FLAT:
+        if name in ("sign", "Heaviside") or name in _FLAT:
             return [(0, g.ZERO)]
         if name == "min":
-            y = a[1]
-            return [(0, g.call("Heaviside", g.sub(y, x))),
-                    (1, g.call("Heaviside", g.sub(x, y)))]
+            first = g.cmp("<", x, a[1])
+            return [(0, first), (1, g.not_(first))]
         if name == "max":
-            y = a[1]
-            return [(0, g.call("Heaviside", g.sub(x, y))),
-                    (1, g.call("Heaviside", g.sub(y, x)))]
+            first = g.cmp(">=", x, a[1])
+            return [(0, first), (1, g.not_(first))]
         if name in ("erf", "erfc"):
             c = 2.0 / (3.141592653589793 ** 0.5)
             d = g.scale(c, g.call("exp", g.neg(g.pow(x, Fraction(2)))))

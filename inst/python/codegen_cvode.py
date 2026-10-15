@@ -12,6 +12,7 @@ right-hand side is one Jacobian-vector product.
 """
 
 import os
+import re
 import time
 
 import cppde_model
@@ -128,10 +129,9 @@ def generate_cvode_cpp(
             if s:
                 rootfunc_nodes.append(model.parse(s))
 
-    # --- events ---
-    # Each event has the post-event value g of its state, the method
-    # folded in, with its partials in x, p and t; a time event adds the time
-    # and its dt/dp, a root event the condition r and its partials.
+    # Each event: the post-event value g of its state with its partials in x, p
+    # and t; a time event adds its time and dt/dp, a root event the condition r
+    # and its partials.
     ev = cppde_model.CvodeEvent(model)
     time_events = []
     root_events = []
@@ -301,7 +301,7 @@ def generate_cvode_cpp(
 
 
 # =====================================================================
-# C++ source template
+# C++ source: builders chained by _render_source
 # =====================================================================
 
 def _fail_main(code, msg):
@@ -353,6 +353,37 @@ def _render_source(
     include_time_zero=True,
     data_code="",
 ):
+    """The C++ source. Each builder returns its locals, which the later
+    builders and _assemble take by name; **_ drops the rest."""
+    ctx = dict(locals())
+    for build in (
+        _common_parts,
+        _root_registration,
+        _event_structs,
+        _sens_snippets,
+        _event_helpers,
+        _equilibrate_check,
+        _step_dispatch,
+        _output_sink,
+        _main_loop,
+        _asa_plain,
+        _asa_segments,
+        _linear_solver,
+        _asa_restart,
+        _adjoint_jacobian,
+        _adjoint_entries,
+    ):
+        ctx.update(build(**ctx))
+    src = _assemble(**ctx)
+    if not n_modes:
+        return src
+    return _cv_sliding(src, ctx)
+
+
+def _common_parts(
+        data_code, deriv, n_forcings, n_modes, n_table_roots, reverse, root_events,
+        time_events, **_):
+    """Flags, forcings and the sensitivity storage every source shares."""
     deriv_flag = "true" if deriv else "false"
     # The modes of the state switches live as long as the solve and its sweep.
     mode_scope = ((
@@ -436,14 +467,20 @@ def _render_source(
 """
     else:
         forcing_init_block = ""
+    return {k: v for k, v in locals().items() if k != "_"}
 
-    # --- Rootfunc / event-root registration ---
+
+def _root_registration(
+        forcing_local, n_modes, n_user_rootfunc, root_body, root_events,
+        rootfunc_mode, **_):
+    """root_fn with the user roots first and the event roots after them."""
 
     # root_fn writes the user rootfunc into gout[0..n_user-1] and the event roots
     # after it. On CV_ROOT_RETURN a user root terminates, an event root applies its
     # state change and saltation, then reinits and continues unless terminal.
     n_event_roots   = len(root_events)
-    n_total_roots   = n_user_rootfunc + n_event_roots
+    # Two exit roots per switch end a slide (cppde_sliding.hpp).
+    n_total_roots   = n_user_rootfunc + n_event_roots + 2 * n_modes
     has_user_root   = rootfunc_mode == "user"
     need_cvode_root = (n_total_roots > 0)
 
@@ -473,7 +510,7 @@ static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
         # get direction 0 (any crossing); event roots use their spec.
         direction_entries = ["0"] * n_user_rootfunc + [
             str(e["direction"]) for e in root_events
-        ]
+        ] + ["0"] * (2 * n_modes)
         direction_list = ", ".join(direction_entries)
 
         # A state switch whose new branch holds the state on its surface leaves
@@ -485,7 +522,7 @@ static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
                 f"  {{ int rd[{n_total_roots}] = {{ {direction_list} }};\n"
                 f"    if (CVodeRootInit(cvode_mem, {n_total_roots}, root_fn) < 0) "
                 + fail("RC_LINIT_FAIL", "CVodeRootInit failed") + "\n"
-                f"    if (CVodeSetRootDirection(cvode_mem, rd) < 0) "
+                "    if (CVodeSetRootDirection(cvode_mem, rd) < 0) "
                 + fail("RC_LINIT_FAIL", "CVodeSetRootDirection failed") + "\n"
                 + quiet + "  }\n"
             )
@@ -496,20 +533,26 @@ static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
         def rootfunc_init(fail):
             return ""
     rootfunc_init_block = rootfunc_init(_fail_main)
+    return {k: v for k, v in locals().items() if k != "_"}
 
-    # --- Events (time and root) ---
+
+def _event_structs(
+        has_events, has_root_events, has_time_events, n_modes, root_events,
+        time_events, **_):
+    """The time and root event structs and their builders."""
 
     # Time events land in a sorted std::vector<TimeEvent> traversed in the main
     # loop, root events in std::vector<RootEvent> dispatched from CV_ROOT_RETURN.
-    event_block_includes = "#include <functional>\n" if has_events else ""
+    event_block_includes = ("#include <functional>\n"
+                            "#include <cppde/cppde_switch_surface.hpp>\n") if has_events else ""
     if n_modes:
         event_block_includes += "#include <cppde/cppde_switch_modes.hpp>\n"
     if has_time_events:
         event_block_includes += "#include <cppde/cppde_event_window.hpp>\n"
     event_struct = ""
     if has_time_events:
-        event_struct += f"""
-struct TimeEvent {{
+        event_struct += """
+struct TimeEvent {
   double time;
   int    var_idx;
   // All lambdas capture `params` (pointer) and `F` (ref) from the builder.
@@ -522,10 +565,10 @@ struct TimeEvent {{
   std::function<double(const double* x, double t)> dg_dt_fn;
   // dt_e/dp_k (saltation correction for parameterized event times).
   std::function<double(const double* x, double t, int k)> dt_dp_fn;
-}};
+};
 
 static std::vector<TimeEvent> build_time_events(const double* params,
-                                                const std::vector<const cppde::PchipForcing<double>*>& F) {{
+                                                const std::vector<const cppde::PchipForcing<double>*>& F) {
   (void)params; (void)F;
   std::vector<TimeEvent> ev;
 """
@@ -558,8 +601,8 @@ static std::vector<TimeEvent> build_time_events(const double* params,
 """
 
     if has_root_events:
-        event_struct += f"""
-struct RootEvent {{
+        event_struct += """
+struct RootEvent {
   int  var_idx;
   int  direction;
   bool terminal;
@@ -577,10 +620,10 @@ struct RootEvent {{
   int  mode = -1;
   bool closed = false;
   std::function<double(const double* x, double t)> r_fn;
-}};
+};
 
 static std::vector<RootEvent> build_root_events(const double* params,
-                                                const std::vector<const cppde::PchipForcing<double>*>& F) {{
+                                                const std::vector<const cppde::PchipForcing<double>*>& F) {
   (void)params; (void)F;
   std::vector<RootEvent> ev;
 """
@@ -635,8 +678,11 @@ static std::vector<RootEvent> build_root_events(const double* params,
   return ev;
 }
 """
+    return {k: v for k, v in locals().items() if k != "_"}
 
-    # ---- Conditional sens code snippets ----
+
+def _sens_snippets(deriv, n_params, n_states, **_):
+    """Sensitivity set-up, storage and read-back snippets."""
     if deriv:
         phi_rows = n_states + n_params
         sens_init_block = f"""  if (Ns_active > 0) {{
@@ -699,17 +745,27 @@ static std::vector<RootEvent> build_root_events(const double* params,
         sens_store_block = ""
         sens_fevals_block = ""
 
-    # Event helpers emitted into the entry point. `apply_event` updates y[var_idx]
-    # and, with deriv, yS[*][var_idx] from the precomputed partials dg/dx, dg/dp.
-
-    # The saltation body is templated on the event handle: TimeEvent uses
-    # ev.dt_dp_fn, RootEvent the IFT-computed dt_root_dp passed in.
     event_sens_reinit = ""
     time_event_apply_lambda = ""
     root_event_apply_lambda = ""
+    return {k: v for k, v in locals().items() if k != "_"}
 
+
+def _event_helpers(
+        asa_seg, deriv, event_sens_reinit, has_events, has_root_events, n_event_roots,
+        has_time_events, n_modes, n_params, n_states, reinit, reverse,
+        root_event_apply_lambda, sens_store_block, sens_t0_block, time_event_apply_lambda,
+        **_):
+    """Mode bookkeeping and the lambdas that apply time and root events."""
     if has_events:
         event_builder_block = (
+            "  // An output row: the state and, with sensitivities, their columns.\n"
+            "  auto cv_push_row = [&](double t_row) {\n"
+            "    out_t.push_back(t_row);\n"
+            "    const double* y_arr = N_VGetArrayPointer(y);\n"
+            "    for (int i = 0; i < NEQ; ++i) out_y.push_back(y_arr[i]);\n"
+            + sens_store_block + ("\n" if sens_store_block else "") +
+            "  };\n"
             "  f_buf = N_VClone(y);\n"
             "  if (!f_buf) { cleanup(); return res.fail(cppde::RC_NO_MALLOC, \"N_VClone failed for event scratch\"); }\n"
         )
@@ -725,32 +781,40 @@ static std::vector<RootEvent> build_root_events(const double* params,
             event_builder_block += (
                 "  // The modes of the state switches: read off the state, or set by\n"
                 "  // the crossing of their root, after which a reset among the events\n"
-                "  // reads every other mode afresh.\n"
-                "  auto cv_read_modes = [&](const double* x, double t) {\n"
-                "    for (const auto& e : event_roots)\n"
-                "      if (e.mode >= 0)\n"
-                "        cppde::detail::set_switch_mode(\n"
-                "            e.mode, cppde::detail::mode_holds(e.r_fn(x, t), e.closed));\n"
+                "  // reads every other mode afresh. A root on its surface, where the\n"
+                "  // reset left it, keeps its mode; cv_enter_surface decides it.\n"
+                "  std::vector<double> cv_switch_t(event_roots.size(),\n"
+                "                                  std::numeric_limits<double>::quiet_NaN());\n"
+                "  auto cv_on_surface = [&](size_t j, const double* x, double t) {\n"
+                "    const auto& e = event_roots[j];\n"
+                "    if (std::fabs(t - cv_switch_t[j]) < 1e-14) return true;\n"
+                "    double m = std::fabs(e.dr_dt_fn(x, t) * t);\n"
+                "    for (int i = 0; i < NEQ; ++i) m += std::fabs(e.dr_dx_fn(x, t, i) * x[i]);\n"
+                "    return cppde::detail::negligible(e.r_fn(x, t), m);\n"
                 "  };\n"
+                "  auto cv_read_modes = [&](const double* x, double t, bool keep = true) {\n"
+                "    for (size_t j = 0; j < event_roots.size(); ++j) {\n"
+                "      const auto& e = event_roots[j];\n"
+                "      if (e.mode < 0 || (keep && cv_on_surface(j, x, t))) continue;\n"
+                "      cppde::detail::set_switch_mode(\n"
+                "          e.mode, cppde::detail::mode_holds(e.r_fn(x, t), e.closed));\n"
+                "    }\n"
+                "  };\n"
+                + _cv_slide_setup(n_event_roots - n_modes) +
                 "  auto cv_switch_after = [&](const std::vector<int>& trig,\n"
                 "                             const std::vector<int>& dir,\n"
                 "                             const double* x, double t) {\n"
                 "    bool jumped = false;\n"
                 "    for (size_t q = 0; q < trig.size(); ++q) {\n"
                 "      const auto& e = event_roots[trig[q]];\n"
-                "      if (e.mode >= 0) cppde::detail::set_switch_mode(e.mode, dir[q] > 0);\n"
-                "      else if (!e.terminal) jumped = true;\n"
+                "      if (e.mode < 0) { jumped = jumped || !e.terminal; continue; }\n"
+                "      cppde::detail::set_switch_mode(e.mode, dir[q] > 0);\n"
+                "      cv_switch_t[trig[q]] = t;\n"
+                "      cv_maybe_slide(e.mode, x, t);\n"
                 "    }\n"
-                "    if (!jumped) return;\n"
-                "    for (size_t j = 0; j < event_roots.size(); ++j) {\n"
-                "      const auto& e = event_roots[j];\n"
-                "      if (e.mode < 0 ||\n"
-                "          std::find(trig.begin(), trig.end(), (int)j) != trig.end()) continue;\n"
-                "      cppde::detail::set_switch_mode(\n"
-                "          e.mode, cppde::detail::mode_holds(e.r_fn(x, t), e.closed));\n"
-                "    }\n"
+                "    if (jumped) cv_read_modes(x, t);\n"
                 "  };\n"
-                "  cv_read_modes(N_VGetArrayPointer(y), t0);\n"
+                "  cv_read_modes(N_VGetArrayPointer(y), t0, false);\n"
                 + ("  asa_segs[0].modes = cppde::detail::switch_mode_snapshot();\n"
                    if asa_seg else "")
             )
@@ -859,12 +923,9 @@ static std::vector<RootEvent> build_root_events(const double* params,
             time_event_apply_lambda
             .replace("@READ_MODES@\n", "    cv_read_modes(y_arr, t_e);\n" if n_modes else "")
             .replace("@READ_MODES_J@", "    cv_read_modes(y_arr, J.t);\n" if n_modes else ""))
-        # A time event fires inside the grid's window only, the rule of
-        # cppde_event_window.hpp that the native backend applies: one before t0
-        # is skipped, one at t0 is applied before the solve starts, and the t0
-        # row is written again with the state after it, as every row at an
-        # event time has. The main loop stops short of the last time.
-        # Under ASA the t0 row written below belongs to the stretch after them.
+        # A time event fires inside the grid's window only (cppde_event_window.hpp):
+        # one at t0 is applied before the solve and rewrites the t0 row, which
+        # under ASA belongs to the stretch after it.
         asa_t0_rows = ("      for (auto& s_ : asa_segs) s_.row0 = s_.row1 = 0;\n"
                        if asa_seg else "")
         event_pre_t0_block = f"""  const double t_last = times[n_times - 1];
@@ -942,12 +1003,14 @@ static std::vector<RootEvent> build_root_events(const double* params,
     const auto& ref = event_roots[ref_j];
 
     double g_dot = ref.dr_dt_fn(x_old.data(), t_e);
+    double g_terms = std::fabs(g_dot);
     std::vector<double> rx(NEQ);
     for (int i = 0; i < NEQ; ++i) {{
       rx[i] = ref.dr_dx_fn(x_old.data(), t_e, i);
       g_dot += rx[i] * f_old[i];
+      g_terms += std::fabs(rx[i] * f_old[i]);
     }}
-    if (std::fabs(g_dot) < 1e-14) {{
+    if (cppde::detail::negligible(g_dot, g_terms)) {{
       Rf_warning("Root event: tangential crossing (g_dot ~ 0): sensitivities may be unreliable at t=%.6e", t_e);
     }}
 
@@ -1053,7 +1116,70 @@ static std::vector<RootEvent> build_root_events(const double* params,
             "    cv_switch_after(triggered_idx, trig_dir, y_arr, t_e);\n" if n_modes else "")
 
     event_apply_lambda = time_event_apply_lambda + root_event_apply_lambda
+    if n_modes:
+        event_apply_lambda += f"""  // CVODE sees no crossing where the integration starts on a switching
+  // surface. There the mode follows the sign of r' on both branches, a switch
+  // to it is a crossing at t, and both branches pushing onto the surface stop.
+  double cv_surface_at = t0;
+  auto cv_enter_surface = [&]() -> int {{
+    const double t = cv_surface_at;
+    cv_surface_at = std::numeric_limits<double>::quiet_NaN();
+    double* x = N_VGetArrayPointer(y);
+    std::vector<int> trig, dir;
+    for (size_t j = 0; j < event_roots.size(); ++j) {{
+      const auto& e = event_roots[j];
+      if (e.mode < 0 || cppde::detail::is_sliding(e.mode) || !cv_on_surface(j, x, t)) continue;
+      const bool was = cppde::switch_mode(e.mode);
+      int rdot[2];
+      for (int on = 0; on < 2; ++on) {{
+        cppde::detail::set_switch_mode(e.mode, on == 1);
+        rhs_fn(t, y, f_buf, &ud);
+        const double* f = N_VGetArrayPointer(f_buf);
+        double v = e.dr_dt_fn(x, t), m = std::fabs(v);
+        for (int i = 0; i < NEQ; ++i) {{
+          const double d = e.dr_dx_fn(x, t, i) * f[i];
+          v += d; m += std::fabs(d);
+        }}
+        rdot[on] = cppde::detail::rate_sign(v, m);
+      }}
+      cppde::detail::set_switch_mode(e.mode, was);
+      const auto side = cppde::detail::surface_choice(rdot[0], rdot[1]);
+      if (side == cppde::detail::surface_side::slide) {{
+        cppde::detail::set_sliding(e.mode);
+        if (!cv_mixable(y, t)) {{
+          cv_no_mix();
+          return -1;
+        }}
+        continue;
+      }}
+      if (side == cppde::detail::surface_side::keep) continue;
+      const bool want = side == cppde::detail::surface_side::on;
+      if (want == was) continue;
+      trig.push_back((int)j);
+      dir.push_back(want ? 1 : -1);
+    }}
+    if (trig.empty()) return 0;
+    apply_root_events_batch(trig, dir, t);
+    cv_harvest();
+    if ({reinit("t")}) {{
+      return_code = cppde::RC_ILL_INPUT;
+      solver_msg = "CVodeReInit after a switch at a restart failed";
+      return -1;
+    }}
+{event_sens_reinit}    if (hard_fail) return -1;
+    cv_rebase();
+    return 0;
+  }};
+  auto cv_surface_mark = [&](double t) -> int {{
+    cv_surface_at = t;
+    return cv_enter_surface();
+  }};
+"""
+    return {k: v for k, v in locals().items() if k != "_"}
 
+
+def _equilibrate_check(rootfunc_mode, **_):
+    """The post-step steady-state test of rootfunc = 'equilibrate'."""
     if rootfunc_mode == "equilibrate":
         # Post-step check: every |ydot| <= root_tol |y| + abstol.
         equilibrate_check_block = """    {
@@ -1074,12 +1200,25 @@ static std::vector<RootEvent> build_root_events(const double* params,
 """
     else:
         equilibrate_check_block = ""
+    return {k: v for k, v in locals().items() if k != "_"}
 
-    # --- do_cvode_step: single step with CV_ROOT_RETURN dispatch ---
+
+def _step_dispatch(
+        asa_seg, deriv, event_sens_reinit, has_events, has_root_events,
+        n_event_roots, n_modes, n_total_roots, n_user_rootfunc, need_cvode_root,
+        reinit, **_):
+    """do_cvode_step: one CVode call and the root dispatch on CV_ROOT_RETURN."""
 
     # Returns 0 for the target reached, 1 for a user rootfunc stop, 2 for a terminal
     # root event, -1 for an error, with return_code holding the raw CVODE flag.
     # On 1 and 2 the caller pushes the final output row.
+    def surface_mark(t):
+        return f"      cv_surface_at = {t};\n" if n_modes else ""
+
+    def surface_now(t):
+        return (f"      if (cv_surface_mark({t}) < 0) {{ stop = true; break; }}\n"
+                if n_modes else "")
+
     if has_events:
         if deriv:
             sens_get_lambda = """      {
@@ -1108,28 +1247,52 @@ static std::vector<RootEvent> build_root_events(const double* params,
 """
             event_apply_sec = ""
             if has_root_events:
+                # CVODE reports a root again where it restarts on it; a switch
+                # that flipped at that time already is not flipped twice.
+                again = ("\n            && !(event_roots[j].mode >= 0 &&\n"
+                         "                 (std::fabs((double)tret - cv_switch_t[j]) < 1e-14 ||\n"
+                         "                  cppde::detail::is_sliding(event_roots[j].mode)))"
+                         if n_modes else "")
+                exit0 = n_user_rootfunc + n_event_roots
+                exits = (f"""      // A slide ends where r' of a branch reaches 0: that branch's mode.
+      bool exited = false;
+      for (int k = 0; k < {n_modes}; ++k)
+        for (int e = 0; e < 2; ++e)
+          if (rinfo[{exit0} + 2 * k + e] != 0 && cppde::detail::is_sliding(k)) {{
+            cppde::detail::set_switch_mode(k, e == 0);
+            cv_switch_t[{n_event_roots - n_modes} + k] = (double)tret;
+            exited = true;
+          }}
+""" if n_modes else "")
+                exited = " || exited" if n_modes else ""
                 event_apply_sec = f"""      std::vector<int> triggered_idx, trig_dir;
       bool rows = false;   // a switch writes no row, a terminal root only the closing one
       for (int j = 0; j < {n_event_roots}; ++j) {{
         if (rinfo[{n_user_rootfunc} + j] != 0 &&
-            (ud.root_fired[j] < ud.maxroot || event_roots[j].mode >= 0)) {{
+            (ud.root_fired[j] < ud.maxroot || event_roots[j].mode >= 0){again}) {{
           triggered_idx.push_back(j);
           trig_dir.push_back(rinfo[{n_user_rootfunc} + j]);
           rows = rows || (event_roots[j].mode < 0 && !event_roots[j].terminal);
         }}
       }}
-      bool any_terminal = false;
-      if (!triggered_idx.empty()) {{
+{exits}      bool any_terminal = false;
+      if (!triggered_idx.empty(){exited}) {{
         // The native backend emits the state just before the event and the
         // state just after it, both at the root time. Skip a row that the
         // requested-times loop is about to write anyway.
         if (rows && std::abs(target - ((double)tret - 1e-15)) >= 1e-14) {{
-          out_t.push_back((double)tret - 1e-15);
-          {{ const double* y_arr = N_VGetArrayPointer(y);
-            for (int i = 0; i < NEQ; ++i) out_y.push_back(y_arr[i]); }}
-{sens_store_block}
+          cv_push_row((double)tret - 1e-15);
         }}
-        any_terminal = apply_root_events_batch(triggered_idx, trig_dir, (double)tret);
+        bool switches_only = triggered_idx.size() > 1;
+        for (int j : triggered_idx) switches_only = switches_only && event_roots[j].mode >= 0;
+        if (switches_only) {{
+          // Switches crossing together move apart with the parameters: one
+          // saltation each, in the order triggered.
+          for (size_t q = 0; q < triggered_idx.size(); ++q)
+            apply_root_events_batch({{triggered_idx[q]}}, {{trig_dir[q]}}, (double)tret);
+        }} else if (!triggered_idx.empty()) {{
+          any_terminal = apply_root_events_batch(triggered_idx, trig_dir, (double)tret);
+        }}
         for (int j : triggered_idx) ud.root_fired[j]++;
 #ifdef CVODE_STEP_TRACE
         {{
@@ -1150,12 +1313,9 @@ static std::vector<RootEvent> build_root_events(const double* params,
         }}
 {event_sens_reinit}        if (hard_fail) return -1;
         cv_rebase();
-        // A terminal event stops here and the caller writes the closing row.
+{surface_mark("tret")}        // A terminal event stops here and the caller writes the closing row.
         if (rows && !any_terminal && std::abs(target - (double)tret) >= 1e-14) {{
-          out_t.push_back((double)tret);
-          {{ const double* y_arr = N_VGetArrayPointer(y);
-            for (int i = 0; i < NEQ; ++i) out_y.push_back(y_arr[i]); }}
-{sens_store_block}
+          cv_push_row((double)tret);
         }}
       }}
       if (any_terminal) {{
@@ -1177,10 +1337,15 @@ static std::vector<RootEvent> build_root_events(const double* params,
                          "      asa_segs.back().used = true;\n")
         else:
             step_call = "      int flag = CVode(cvode_mem, target, y, &tret, CV_NORMAL);\n"
+        # A switch on the surface at the target is taken before its row is
+        # written, as one CVODE reports there.
+        target_return = ("cv_surface_mark(tret_out)" if n_modes else "0")
+        surface_call = ("      if (!std::isnan(cv_surface_at) && cv_enter_surface() < 0) return -1;\n"
+                        if n_modes else "")
         do_cvode_step_lambda = f"""  auto do_cvode_step = [&](double target, double& tret_out) -> int {{
     while (true) {{
       sunrealtype tret;
-{step_call}      if (flag < 0) {{
+{surface_call}{step_call}      if (flag < 0) {{
         return_code = flag;
         char buf[160];
         std::snprintf(buf, sizeof(buf),
@@ -1189,17 +1354,20 @@ static std::vector<RootEvent> build_root_events(const double* params,
         return -1;
       }}
 {sens_get_lambda}      tret_out = (double)tret;
-      if (flag != CV_ROOT_RETURN) return 0;
+      if (flag != CV_ROOT_RETURN) return {target_return};
 {root_dispatch_block}      if (tret_out >= target) return 0;
     }}
   }};
 """
     else:
         do_cvode_step_lambda = ""
+    return {k: v for k, v in locals().items() if k != "_"}
 
-    # --- Zero-copy sink: the batch entry sizes the results before the solve when
-    # the grid is fixed (no root event, no rootfunc, no ASA adjoint). Time-event
-    # rows are counted per condition through <model>_fixed_event_times.
+
+def _output_sink(
+        deriv, include_time_zero, modelname, n_table_roots, reverse, rootfunc_mode,
+        time_events, **_):
+    """Preallocation of the batch results where the output grid is fixed."""
     cv_fixed_grid = (n_table_roots == 0 and rootfunc_mode == "none"
                      and not reverse)
     n_cv_ev = len(time_events) if cv_fixed_grid else 0
@@ -1243,8 +1411,13 @@ static std::vector<RootEvent> build_root_events(const double* params,
     else:
         cv_prealloc_block = "  (void)dimnamesSEXP;   // root handling: the grid is dynamic\n"
         cv_finish_block = ""
+    return {k: v for k, v in locals().items() if k != "_"}
 
-    # --- Main integration loop body ---
+
+def _main_loop(
+        equilibrate_check_block, event_sens_reinit, has_events, has_time_events,
+        reinit, reverse, sens_get_block, sens_store_block, surface_now, **_):
+    """The loop over the output times, with or without events."""
     # Under ASA the forward pass runs CVodeF, which stores the checkpoints;
     # ncheck_ is not read.
     if reverse:
@@ -1268,10 +1441,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
         if (rc < 0) {{ stop = true; break; }}
         t_reached = tret_loc;
         if (rc >= 1) {{
-          out_t.push_back(t_reached);
-          {{ const double* y_arr = N_VGetArrayPointer(y);
-            for (int i = 0; i < NEQ; ++i) out_y.push_back(y_arr[i]); }}
-{sens_store_block}
+          cv_push_row(t_reached);
           stop = true; break;
         }}
       }}
@@ -1291,14 +1461,11 @@ static std::vector<RootEvent> build_root_events(const double* params,
       }}
 {event_sens_reinit}      if (hard_fail) {{ stop = true; break; }}
       cv_rebase();
-      // An event time that is not itself a requested output time still gets a
+{surface_now("t_e")}      // An event time that is not itself a requested output time still gets a
       // row, holding the post-event state, same contract as the native
       // backend. When it coincides with times[k] the branch below emits it.
       if (t_e < times[k]) {{
-        out_t.push_back(t_e);
-        {{ const double* y_arr = N_VGetArrayPointer(y);
-          for (int i = 0; i < NEQ; ++i) out_y.push_back(y_arr[i]); }}
-{sens_store_block}
+        cv_push_row(t_e);
       }}
       ev_idx++;
     }}
@@ -1322,10 +1489,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
       int rc = do_cvode_step(times[k], tret_loc);
       if (rc < 0) break;
       t_reached = tret_loc;
-      out_t.push_back(t_reached);
-      {{ const double* y_arr = N_VGetArrayPointer(y);
-        for (int i = 0; i < NEQ; ++i) out_y.push_back(y_arr[i]); }}
-{sens_store_block}
+      cv_push_row(t_reached);
 #ifdef CVODE_STEP_TRACE
       cvode_emit_trace_row(cvode_mem, _ele_buf, _ewt_buf, nullptr, nullptr,
                            Ns_active, t_reached, "CVODE",
@@ -1336,10 +1500,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
 {equilibrate_check_block}
     }} else {{
       // Reached times[k] already via an event: record snapshot.
-      out_t.push_back(t_reached);
-      {{ const double* y_arr = N_VGetArrayPointer(y);
-        for (int i = 0; i < NEQ; ++i) out_y.push_back(y_arr[i]); }}
-{sens_store_block}
+      cv_push_row(t_reached);
     }}
   }}
 #ifdef CVODE_STEP_TRACE
@@ -1449,13 +1610,14 @@ static std::vector<RootEvent> build_root_events(const double* params,
   }}
 #endif
 """
+    return {k: v for k, v in locals().items() if k != "_"}
 
-    # --- ASA: checkpoint allocation before the forward pass, sweep after it ---
-    # Per seed column, lambda' = -J'lambda and q' = -(df/dp)'lambda run from T
-    # to t0, and lambda jumps by the seed row W_o at each output time.
-    # A run cut into stretches interpolates the forward state by Hermite: the
-    # polynomial one reads a wrong state at the very start of a stretch that a
-    # root opened, where the backward problem ends.
+
+def _asa_plain(asa_seg, reverse, **_):
+    """Adjoint sensitivity analysis of a run without events."""
+    # Per seed column lambda' = -J'lambda and q' = -(df/dp)'lambda run from T to
+    # t0, lambda jumping by the seed row at each output time. Stretches use
+    # Hermite interpolation, exact at the start of a stretch a root opened.
     asa_interp = "CV_HERMITE" if asa_seg else "CV_POLYNOMIAL"
     if reverse:
         asa_init_block = """
@@ -1641,8 +1803,13 @@ static std::vector<RootEvent> build_root_events(const double* params,
     else:
         asa_init_block = ""
         asa_sweep_block = ""
+    return {k: v for k, v in locals().items() if k != "_"}
 
-    # --- ASA over events ---
+
+def _asa_segments(
+        asa_seg, asa_sweep_block, has_root_events, has_time_events, n_modes,
+        need_cvode_root, reverse, **_):
+    """Adjoint sensitivity analysis over the stretches between jumps."""
     # The forward run is cut at every jump into stretches, each on its own
     # CVODES memory and checkpoints. The backward sweep runs them last to first
     # and passes lambda and the quadrature through each jump's adjoint.
@@ -1948,7 +2115,13 @@ struct AsaJump {
         root_off = ("    CVodeRootInit(cvode_mem, 0, nullptr);\n"
                     if reverse and need_cvode_root else "")
         asa_sweep_block = asa_sweep_block.replace("@ROOT_OFF@", root_off)
+    return {k: v for k, v in locals().items() if k != "_"}
 
+
+def _linear_solver(
+        forcing_local, jac_body, klu_settings, nnz_total, reverse, use_lapack,
+        use_sparse, **_):
+    """Dense, LAPACK or KLU linear solver set-up."""
     # A seed reaches the adjoint under reverse and means nothing otherwise, so
     # each direction refuses the other rather than ignoring the argument.
     if reverse:
@@ -2056,6 +2229,12 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
     # A jump closes the stretch on the current memory; the next one starts on a
     # fresh memory, or on the same one when nothing was integrated on it yet.
     asa_restart_lambda = ""
+    return {k: v for k, v in locals().items() if k != "_"}
+
+
+def _asa_restart(
+        asa_interp, asa_seg, cv_method, ls_setup_for, n_modes, rootfunc_init, **_):
+    """Restart of the forward run on a fresh memory after a jump under ASA."""
     if asa_seg:
         asa_restart_lambda = f"""  auto asa_restart = [&](double t_r) -> int {{
     const size_t cur = asa_segs.size() - 1;
@@ -2096,6 +2275,14 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
     # pattern.
     asa_ud_members = ""
     jacB_decl = jacB_impl = lsB_setup = ""
+    return {k: v for k, v in locals().items() if k != "_"}
+
+
+def _adjoint_jacobian(
+        asa_sweep_block, deriv, forcing_local, lsB_setup, n_params, n_states,
+        nnz_total, reverse, sens_body, use_sparse, klu_btf=None, klu_ord=None,
+        ls_ctor=None, phi_rows=None, **_):
+    """The backward problem's Jacobian and linear solver."""
     if reverse:
         asa_ud_members = ("  SUNMatrix Jscratch = nullptr;              // J for jacB_fn\n"
                           "  std::vector<sunindextype> jacB_next;       // CSC transpose cursor\n")
@@ -2187,8 +2374,11 @@ static int sens_rhs1_fn(int Ns, sunrealtype t,
   }}
 }}
 """
+    return {k: v for k, v in locals().items() if k != "_"}
 
-    # --- Adjoint entry points, emitted only under reverse ---
+
+def _adjoint_entries(adj_quad_body, adj_rhs_body, forcing_local, reverse, **_):
+    """The adjoint right-hand side and quadrature, under reverse only."""
     if reverse:
         adj_decl = (
             "static int adj_rhs_fn(sunrealtype t, N_Vector y, N_Vector yB,\n"
@@ -2240,7 +2430,23 @@ static int adj_quad_fn(sunrealtype t, N_Vector y, N_Vector yB,
     else:
         adj_decl = ""
         adj_impl = ""
+    return {k: v for k, v in locals().items() if k != "_"}
 
+
+def _assemble(
+        adj_decl, adj_impl, asa_checkpoints, asa_cleanup, asa_decl, asa_init_block,
+        asa_restart_lambda, asa_structs, asa_sweep_block, asa_ud_members,
+        cv_event_times_fn, cv_finish_block, cv_method, cv_prealloc_block,
+        cv_zero_block, data_block, deriv_flag, do_cvode_step_lambda,
+        event_apply_lambda, event_block_includes, event_builder_block,
+        event_pre_t0_block, event_struct, events_ud_members, forcing_include,
+        forcing_init_block, forcing_local, forcing_ud_members, jacB_decl, jacB_impl,
+        jac_decl, jac_impl, linmap_include, ls_includes, ls_setup, main_loop_body,
+        mode_scope, modelname, n_event_roots, n_global, n_states, ode_body,
+        reparam_ud_members, rootfunc_decl, rootfunc_impl, rootfunc_init_block,
+        seed_guard, sens_decl, sens_fevals_block, sens_impl, sens_init_block,
+        sens_t0_block, version, **_):
+    """The whole C++ source."""
     return f"""/** Code auto-generated by cppDE {version} (CVODE backend) **/
 
 #define R_NO_REMAP
@@ -2321,8 +2527,8 @@ static void cvode_emit_trace_row(void* cvode_mem,
                                  N_Vector* eleS_buf, N_Vector* ewtS_buf,
                                  int ns_active, double t_reached,
                                  const char* row_mode = "CVODE",
-                                 long nst_carry = 0, long nfe_carry = 0,
-                                 long nje_carry = 0, long nsetups_carry = 0) {{
+                                 long nst_offset = 0, long nfe_offset = 0,
+                                 long nje_offset = 0, long nsetups_offset = 0) {{
   long n_steps = 0, n_fe = 0, n_je = 0, n_setups = 0;
   int  last_order = 0;
   double last_h = 0.0;
@@ -2356,8 +2562,8 @@ static void cvode_emit_trace_row(void* cvode_mem,
   auto* _tbp = cppde::ndf_detail::trace_sink();
   if (!_tbp) return;
   auto& tb = *_tbp;
-  n_steps += nst_carry; n_fe += nfe_carry;
-  n_je += nje_carry;    n_setups += nsetups_carry;
+  n_steps += nst_offset; n_fe += nfe_offset;
+  n_je += nje_offset;    n_setups += nsetups_offset;
   tb.nst.push_back(static_cast<int>(n_steps));
   tb.t.push_back(t_reached);
   tb.h.push_back(last_h);
@@ -2633,3 +2839,409 @@ extern "C" SEXP solve_{modelname}(
   return out;
 }}
 """
+
+
+
+# ---------------------------------------------------------------------
+# Sliding along a switching surface (cppde_sliding.hpp), CVODE side
+# ---------------------------------------------------------------------
+
+def _cv_slide_setup(sw0):
+    """The rate r' of each switch root along f, and the slide entry after a crossing."""
+    return (
+        "  // r' of switch k along f, with the size of its terms.\n"
+        "  ud.slide_rate = [&event_roots](int k, const double* x, double t,\n"
+        "                                 const double* f, double* terms) {\n"
+        f"    const auto& e = event_roots[{sw0} + k];\n"
+        "    double r = e.dr_dt_fn(x, t), m = std::fabs(r);\n"
+        "    for (int i = 0; i < NEQ; ++i) {\n"
+        "      const double d = e.dr_dx_fn(x, t, i) * f[i];\n"
+        "      r += d; m += std::fabs(d);\n"
+        "    }\n"
+        "    if (terms) *terms = m;\n"
+        "    return r;\n"
+        "  };\n"
+        "  // Whether the slides as they stand have a mix of weights in [0, 1].\n"
+        "  auto cv_mixable = [&](N_Vector yv, double t) {\n"
+        "    const std::vector<int> S = cppde::detail::sliding_switches();\n"
+        "    std::vector<double> a;\n"
+        "    if (S.empty()) return true;\n"
+        "    if (!cv_solve(&ud, S, t, yv, a)) return false;\n"
+        "    for (double w : a) if (!(w >= -1e-9 && w <= 1.0 + 1e-9)) return false;\n"
+        "    return true;\n"
+        "  };\n"
+        "  auto cv_no_mix = [&]() {\n"
+        "    hard_fail = true;\n"
+        "    return_code = cppde::RC_UNRECOGNIZED_ERR;\n"
+        "    solver_msg = \"the state switches that slide at once have no Filippov mix of \"\n"
+        "                 \"their branches that keeps the solution on all their surfaces\";\n"
+        "  };\n"
+        "  // Switch k slides where both branches, the other slides mixed, move onto\n"
+        "  // its surface at (x, t).\n"
+        "  auto cv_maybe_slide = [&](int k, const double* x, double t) {\n"
+        "    int s[2];\n"
+        "    N_Vector xv = N_VMake_Serial(NEQ, const_cast<double*>(x), y->sunctx);\n"
+        "    std::vector<double> f(NEQ);\n"
+        "    N_Vector fv = N_VMake_Serial(NEQ, f.data(), y->sunctx);\n"
+        "    signed char& m = cppde::switch_mode_sink().m[k];\n"
+        "    const signed char keep = m;\n"
+        "    for (int on = 0; on < 2; ++on) {\n"
+        "      m = on;\n"
+        "      rhs_fn(t, xv, fv, &ud);\n"
+        "      double terms = 0.0;\n"
+        "      const double r = ud.slide_rate(k, x, t, f.data(), &terms);\n"
+        "      s[on] = cppde::detail::rate_sign(r, terms);\n"
+        "    }\n"
+        "    m = keep;\n"
+        "    N_VDestroy(fv);\n"
+        "    if (cppde::detail::surface_choice(s[0], s[1]) == cppde::detail::surface_side::slide) {\n"
+        "      cppde::detail::set_sliding(k);\n"
+        "      if (!cv_mixable(xv, t)) cv_no_mix();\n"
+        "    }\n"
+        "    N_VDestroy(xv);\n"
+        "  };\n")
+
+
+_CV_SLIDE_UD = """  // Sliding (cppde_sliding.hpp): r' of switch k along f, set by the solve, f
+  // of each combination of the slides, and scratch.
+  std::function<double(int, const double*, double, const double*, double*)> slide_rate;
+  std::vector<std::vector<double>> slide_fm;
+  std::vector<double> slide_y, slide_tmp;
+"""
+
+_CV_SLIDE_CORE = """
+// ---- Sliding along switching surfaces (cppde_sliding.hpp) ----
+// While the switches S slide, f = sum_c w_c(a) f_c over the combinations c of
+// their modes, with the weights a such that r' of every root in S is zero; the
+// derivatives of a enter by central differences in x and the parameters.
+
+// f of every combination of the slides S at (t, y), into ud->slide_fm.
+static void cv_combos(UserData* ud, const std::vector<int>& S, sunrealtype t, N_Vector y) {
+  signed char* md = cppde::switch_mode_sink().m;
+  const std::size_t M = std::size_t(1) << S.size();
+  ud->slide_fm.resize(M);
+  for (std::size_t c = 0; c < M; ++c) {
+    for (std::size_t i = 0; i < S.size(); ++i) md[S[i]] = ((c >> i) & 1u) ? 1 : 0;
+    ud->slide_fm[c].assign(NEQ, 0.0);
+    N_Vector fv = N_VMake_Serial(NEQ, ud->slide_fm[c].data(), y->sunctx);
+    rhs_model(t, y, fv, ud);
+    N_VDestroy(fv);
+  }
+  for (int k : S) md[k] = cppde::sliding_mode;
+}
+
+// The weights of the slides S at (t, y) by Newton on the rates' mix; false
+// where it does not converge. f of each combination stays in ud->slide_fm.
+static bool cv_solve(UserData* ud, const std::vector<int>& S, sunrealtype t, N_Vector y,
+                     std::vector<double>& a) {
+  const double* x = N_VGetArrayPointer(y);
+  const std::size_t n = S.size(), M = std::size_t(1) << n;
+  cv_combos(ud, S, t, y);
+  std::vector<double> r(n * M);
+  for (std::size_t k = 0; k < n; ++k)
+    for (std::size_t c = 0; c < M; ++c)
+      r[k * M + c] = ud->slide_rate(S[k], x, t, ud->slide_fm[c].data(), nullptr);
+  a.assign(n, 0.5);
+  double step = 1.0;
+  for (int it = 0; it < 60 && step > 1e-15; ++it) {
+    std::vector<double> R(n, 0.0), A(n * n, 0.0);
+    for (std::size_t k = 0; k < n; ++k)
+      for (std::size_t c = 0; c < M; ++c) {
+        R[k] += r[k * M + c] * cppde::detail::combo_weight(a, c);
+        for (std::size_t j = 0; j < n; ++j)
+          A[k * n + j] += r[k * M + c] * cppde::detail::combo_weight(a, c, (int)j);
+      }
+    cppde::detail::small_solve(A, R);
+    step = 0.0;
+    for (std::size_t j = 0; j < n; ++j) {
+      a[j] -= R[j];
+      step = std::max(step, std::fabs(R[j]));
+    }
+  }
+  for (double v : a)
+    if (!std::isfinite(v)) return false;
+  return step <= 1e-10;
+}
+
+// The mix of ud->slide_fm with weights a, or with `d` >= 0 its derivative in a_d.
+static void cv_mix(UserData* ud, const std::vector<double>& a, double* out, int d = -1) {
+  for (int i = 0; i < NEQ; ++i) {
+    double s = 0.0;
+    for (std::size_t c = 0; c < ud->slide_fm.size(); ++c)
+      s += cppde::detail::combo_weight(a, c, d) * ud->slide_fm[c][i];
+    out[i] = s;
+  }
+}
+
+// The weights at (x + h dx, p + h dp); a null direction stays put.
+static bool cv_solve_at(UserData* ud, const std::vector<int>& S, sunrealtype t, N_Vector y,
+                        const double* dx, const double* dp, double h, std::vector<double>& a) {
+  const double* x = N_VGetArrayPointer(y);
+  std::vector<double> xh(x, x + NEQ);
+  if (dx) for (int i = 0; i < NEQ; ++i) xh[i] += h * dx[i];
+  std::vector<double> keep(ud->params.begin() + NEQ, ud->params.end());
+  if (dp) for (int j = 0; j < NPAR_ADJ; ++j) ud->params[NEQ + j] += h * dp[j];
+  N_Vector yh = N_VMake_Serial(NEQ, xh.data(), y->sunctx);
+  const bool ok = cv_solve(ud, S, t, yh, a);
+  N_VDestroy(yh);
+  std::copy(keep.begin(), keep.end(), ud->params.begin() + NEQ);
+  return ok;
+}
+
+// The derivative of the weights along (dx, dp), zero along a zero direction.
+static bool cv_slope(UserData* ud, const std::vector<int>& S, sunrealtype t, N_Vector y,
+                     const double* dx, const double* dp, std::vector<double>& da) {
+  const double* x = N_VGetArrayPointer(y);
+  double n = 0.0, s = 1.0;
+  if (dx) for (int i = 0; i < NEQ; ++i) {
+    n = std::max(n, std::fabs(dx[i])); s = std::max(s, std::fabs(x[i]));
+  }
+  if (dp) for (int j = 0; j < NPAR_ADJ; ++j) {
+    n = std::max(n, std::fabs(dp[j])); s = std::max(s, std::fabs(ud->params[NEQ + j]));
+  }
+  da.assign(S.size(), 0.0);
+  if (n == 0.0) return true;
+  const double h = 1e-6 * s / n;
+  std::vector<double> up, dn;
+  if (!cv_solve_at(ud, S, t, y, dx, dp, h, up) || !cv_solve_at(ud, S, t, y, dx, dp, -h, dn))
+    return false;
+  for (std::size_t k = 0; k < S.size(); ++k) da[k] = (up[k] - dn[k]) / (2.0 * h);
+  return true;
+}
+
+// The slides held at combination c around `f`.
+template<class F>
+static int cv_held(const std::vector<int>& S, std::size_t c, F&& f) {
+  signed char* md = cppde::switch_mode_sink().m;
+  for (std::size_t i = 0; i < S.size(); ++i) md[S[i]] = ((c >> i) & 1u) ? 1 : 0;
+  const int r = f();
+  for (int k : S) md[k] = cppde::sliding_mode;
+  return r;
+}
+
+// The combination with the largest weight.
+static std::size_t cv_dominant(const std::vector<double>& a) {
+  std::size_t best = 0;
+  double wbest = -1.0;
+  for (std::size_t c = 0; c < (std::size_t(1) << a.size()); ++c) {
+    const double w = cppde::detail::combo_weight(a, c);
+    if (w > wbest) { wbest = w; best = c; }
+  }
+  return best;
+}
+
+static int rhs_fn(sunrealtype t, N_Vector y, N_Vector ydot, void* ud_vp) {
+  const std::vector<int> S = cppde::detail::sliding_switches();
+  if (S.empty()) return rhs_model(t, y, ydot, ud_vp);
+  try {
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  std::vector<double> a;
+  if (!cv_solve(ud, S, t, y, a)) return -1;
+  cv_mix(ud, a, N_VGetArrayPointer(ydot));
+  return 0;
+  } catch (...) {
+    return -1;
+  }
+}
+
+static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy, SUNMatrix J, void* ud_vp,
+                  N_Vector tmp1, N_Vector tmp2, N_Vector tmp3) {
+  const std::vector<int> S = cppde::detail::sliding_switches();
+  if (S.empty()) return jac_model(t, y, fy, J, ud_vp, tmp1, tmp2, tmp3);
+  try {
+  std::vector<double> a;
+  if (!cv_solve(static_cast<UserData*>(ud_vp), S, t, y, a)) return -1;
+  return cv_held(S, cv_dominant(a),
+                 [&] { return jac_model(t, y, fy, J, ud_vp, tmp1, tmp2, tmp3); });
+  } catch (...) {
+    return -1;
+  }
+}
+"""
+
+_CV_SLIDE_SENS = """
+static int sens_rhs1_fn(int Ns, sunrealtype t, N_Vector y, N_Vector ydot, int iS,
+                        N_Vector yS, N_Vector ySdot, void* ud_vp,
+                        N_Vector tmp1, N_Vector tmp2) {
+  const std::vector<int> S = cppde::detail::sliding_switches();
+  if (S.empty()) return sens_model(Ns, t, y, ydot, iS, yS, ySdot, ud_vp, tmp1, tmp2);
+  try {
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  std::vector<double> a;
+  if (!cv_solve(ud, S, t, y, a)) return -1;
+  const std::size_t M = ud->slide_fm.size(), n = S.size();
+  std::vector<std::vector<double>> dfda(n, std::vector<double>(NEQ));
+  for (std::size_t j = 0; j < n; ++j) cv_mix(ud, a, dfda[j].data(), (int)j);
+  double* out = N_VGetArrayPointer(ySdot);
+  std::vector<double> acc(NEQ, 0.0), buf(NEQ);
+  for (std::size_t c = 0; c < M; ++c) {
+    N_Vector bv = N_VMake_Serial(NEQ, buf.data(), y->sunctx);
+    const int r = cv_held(S, c, [&] { return sens_model(Ns, t, y, ydot, iS, yS, bv, ud_vp, tmp1, tmp2); });
+    N_VDestroy(bv);
+    if (r < 0) return r;
+    const double w = cppde::detail::combo_weight(a, c);
+    for (int i = 0; i < NEQ; ++i) acc[i] += w * buf[i];
+  }
+  const double* Mp = ud->Phi_prime.data() + NEQ + NPARMS * iS;
+  std::vector<double> da;
+  if (!cv_slope(ud, S, t, y, N_VGetArrayPointer(yS), Mp, da)) return -1;
+  for (int i = 0; i < NEQ; ++i) {
+    out[i] = acc[i];
+    for (std::size_t j = 0; j < n; ++j) out[i] += dfda[j][i] * da[j];
+  }
+  return 0;
+  } catch (...) {
+    return -1;
+  }
+}
+"""
+
+_CV_SLIDE_ADJ = """
+// The multipliers q_j = df/da_j . lambda of the weights at (t, y).
+static std::vector<double> cv_multipliers(UserData* ud, const std::vector<double>& a,
+                                          const double* lam) {
+  std::vector<double> q(a.size(), 0.0), d(NEQ);
+  for (std::size_t j = 0; j < a.size(); ++j) {
+    cv_mix(ud, a, d.data(), (int)j);
+    for (int i = 0; i < NEQ; ++i) q[j] += d[i] * lam[i];
+  }
+  return q;
+}
+
+// lambda' = -J_s' lambda: the mix of the combinations and -grad_x a' q.
+static int adj_rhs_fn(sunrealtype t, N_Vector y, N_Vector yB, N_Vector yBdot, void* ud_vp) {
+  const std::vector<int> S = cppde::detail::sliding_switches();
+  if (S.empty()) return adj_rhs_model(t, y, yB, yBdot, ud_vp);
+  try {
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  std::vector<double> a;
+  if (!cv_solve(ud, S, t, y, a)) return -1;
+  const std::vector<double> q = cv_multipliers(ud, a, N_VGetArrayPointer(yB));
+  const std::size_t M = std::size_t(1) << S.size();
+  std::vector<double> acc(NEQ, 0.0), buf(NEQ);
+  for (std::size_t c = 0; c < M; ++c) {
+    N_Vector bv = N_VMake_Serial(NEQ, buf.data(), y->sunctx);
+    const int r = cv_held(S, c, [&] { return adj_rhs_model(t, y, yB, bv, ud_vp); });
+    N_VDestroy(bv);
+    if (r < 0) return r;
+    const double w = cppde::detail::combo_weight(a, c);
+    for (int i = 0; i < NEQ; ++i) acc[i] += w * buf[i];
+  }
+  double* out = N_VGetArrayPointer(yBdot);
+  std::vector<double> e(NEQ, 0.0), da;
+  for (int i = 0; i < NEQ; ++i) {
+    e[i] = 1.0;
+    if (!cv_slope(ud, S, t, y, e.data(), nullptr, da)) return -1;
+    e[i] = 0.0;
+    out[i] = acc[i];
+    for (std::size_t j = 0; j < S.size(); ++j) out[i] -= da[j] * q[j];
+  }
+  return 0;
+  } catch (...) {
+    return -1;
+  }
+}
+
+// q' = -(df_s/dp)' lambda: the same mix and -grad_p a' q.
+static int adj_quad_fn(sunrealtype t, N_Vector y, N_Vector yB, N_Vector qBdot, void* ud_vp) {
+  const std::vector<int> S = cppde::detail::sliding_switches();
+  if (S.empty()) return adj_quad_model(t, y, yB, qBdot, ud_vp);
+  try {
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  std::vector<double> a;
+  if (!cv_solve(ud, S, t, y, a)) return -1;
+  const std::vector<double> q = cv_multipliers(ud, a, N_VGetArrayPointer(yB));
+  const int nq = (int)N_VGetLength(qBdot);
+  const std::size_t M = std::size_t(1) << S.size();
+  std::vector<double> acc(nq, 0.0), buf(nq);
+  for (std::size_t c = 0; c < M; ++c) {
+    N_Vector bv = N_VMake_Serial(nq, buf.data(), y->sunctx);
+    const int r = cv_held(S, c, [&] { return adj_quad_model(t, y, yB, bv, ud_vp); });
+    N_VDestroy(bv);
+    if (r < 0) return r;
+    const double w = cppde::detail::combo_weight(a, c);
+    for (int j = 0; j < nq; ++j) acc[j] += w * buf[j];
+  }
+  double* out = N_VGetArrayPointer(qBdot);
+  std::vector<double> e(NPAR_ADJ > 0 ? NPAR_ADJ : 1, 0.0), da;
+  for (int j = 0; j < nq; ++j) {
+    out[j] = acc[j];
+    if (j >= NPAR_ADJ) continue;
+    e[j] = 1.0;
+    if (!cv_slope(ud, S, t, y, nullptr, e.data(), da)) return -1;
+    e[j] = 0.0;
+    for (std::size_t l = 0; l < S.size(); ++l) out[j] -= da[l] * q[l];
+  }
+  return 0;
+  } catch (...) {
+    return -1;
+  }
+}
+
+static int jacB_fn(sunrealtype t, N_Vector y, N_Vector yB, N_Vector fyB, SUNMatrix JB,
+                   void* ud_vp, N_Vector tmp1B, N_Vector tmp2B, N_Vector tmp3B) {
+  const std::vector<int> S = cppde::detail::sliding_switches();
+  if (S.empty()) return jacB_model(t, y, yB, fyB, JB, ud_vp, tmp1B, tmp2B, tmp3B);
+  try {
+  std::vector<double> a;
+  if (!cv_solve(static_cast<UserData*>(ud_vp), S, t, y, a)) return -1;
+  return cv_held(S, cv_dominant(a),
+                 [&] { return jacB_model(t, y, yB, fyB, JB, ud_vp, tmp1B, tmp2B, tmp3B); });
+  } catch (...) {
+    return -1;
+  }
+}
+"""
+
+
+def _cv_sliding(src, c):
+    """`src` with the model's rhs, Jacobian, sensitivity, adjoint and root functions
+    renamed *_model and wrapped by their sliding versions."""
+    n_modes = c["n_modes"]
+    n_ev = len(c["root_events"])
+    sw0 = n_ev - n_modes
+    n_user = c["n_user_rootfunc"]
+    names = ["rhs_fn", "jac_fn", "root_fn"]
+    if c["deriv"]:
+        names.append("sens_rhs1_fn")
+    if c["reverse"]:
+        names += ["adj_rhs_fn", "adj_quad_fn", "jacB_fn"]
+    for nm in names:
+        model = "sens_model" if nm == "sens_rhs1_fn" else nm.replace("_fn", "_model")
+        src, n = re.subn(r"static int %s\(([^;{]*)\)\s*\{" % nm,
+                         lambda m: "static int %s(%s) {" % (model, m.group(1)), src, count=1)
+        assert n == 1, nm
+    root = f"""
+// The surfaces switches slide on are no roots meanwhile; their exits are, where
+// a weight reaches 1 or 0.
+static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
+  const int r = root_model(t, y, gout, ud_vp);
+  if (r < 0) return r;
+  try {{
+  UserData* ud = static_cast<UserData*>(ud_vp);
+  const std::vector<int> S = cppde::detail::sliding_switches();
+  std::vector<double> a;
+  if (!S.empty() && !cv_solve(ud, S, t, y, a)) return -1;
+  for (int k = 0; k < {n_modes}; ++k) {{
+    sunrealtype* ex = gout + {n_user + n_ev} + 2 * k;
+    std::size_t i = 0;
+    while (i < S.size() && S[i] != k) ++i;
+    if (i == S.size()) {{ ex[0] = ex[1] = 1.0; continue; }}
+    gout[{n_user + sw0} + k] = 1.0;
+    ex[0] = a[i] - 1.0;
+    ex[1] = -a[i];
+  }}
+  return 0;
+  }} catch (...) {{
+    return -1;
+  }}
+}}
+"""
+    block = (_CV_SLIDE_CORE + (_CV_SLIDE_SENS if c["deriv"] else "")
+             + (_CV_SLIDE_ADJ if c["reverse"] else "") + root)
+    anchor = "} // anonymous namespace"
+    assert src.count(anchor) == 1
+    src = src.replace(anchor, block + "\n" + anchor)
+    ud_anchor = "struct UserData {\n  std::vector<double> params;               // length NPARMS\n"
+    assert src.count(ud_anchor) == 1
+    return src.replace(ud_anchor, ud_anchor + _CV_SLIDE_UD)

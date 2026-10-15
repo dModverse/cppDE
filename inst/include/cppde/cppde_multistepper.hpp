@@ -227,9 +227,8 @@ void adams_set_coefficients(
 
   // --- cvAdamsFinish: normalize m[] into l[] and compute tq[2..5] ---
   //
-  // cvAdamsFinish modifies m[] in-place when computing tq[3]
-  // (multiplies by one more (1 + xi_inv*x) factor to degree q).
-  // We replicate that.
+  // As in cvAdamsFinish, m[] is modified in place when computing tq[3]: one
+  // more (1 + xi_inv*x) factor, to degree q.
 
   const double M0_inv = 1.0 / M0;
 

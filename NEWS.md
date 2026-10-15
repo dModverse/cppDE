@@ -1,3 +1,37 @@
+# cppDE 0.13.0
+
+* Breaking: `pi` is the number in every expression, as in R; a state,
+  parameter, forcing or variable named `pi` is an error. `E` is a name;
+  Euler's number is `exp(1)`.
+
+* Breaking: expressions read as R reads them. `&` and `|` are `&&` and `||`,
+  `round()` rounds half to even, and `ifelse()` and `trunc()` are new. A
+  chained comparison such as `t1 < time < t2`, `%%`, `%/%`, `%`, `//`, `~`,
+  `@`, `<-` without a space and an unknown function are errors that name the
+  construct.
+
+* A state switch whose branches both push the solution onto its surface
+  slides along it (Filippov) instead of stopping with an error, and several
+  switches slide at once. Values and first- and second-order sensitivities on
+  the native backend, first-order sensitivities on `cvode()`, reverse
+  gradients on both, and the forward-reverse curvature.
+
+* Switches that cross at the same time take one saltation each, and a slow
+  crossing takes its saltation.
+
+* A switch whose root is zero at `t0`, at a fixed event or after its own
+  crossing takes the side the solution leaves to, on both backends, and the
+  sensitivities take its jump once.
+
+* `abs()`, `min()` and `max()` of a state or of the time switch as held
+  comparisons, and a comparison of switches follows their modes, so the
+  sensitivities of every order take the kink or jump. `floor()`, `ceiling()`,
+  `round()` and `trunc()` of a state or of the time in an ODE right-hand side
+  are an error.
+
+* At a kink or step the derivative is that of the branch the value takes,
+  forward and reverse alike, in `cppFUN()` and the symbolic Jacobians.
+
 # cppDE 0.12.1
 
 * A switch on the time, such as the pulse
@@ -136,8 +170,8 @@
 
 * `ptc()`: the absolute floor of a row's residual scale is `atol` times its largest
   partial derivative, not its diagonal. A row whose own rate is tiny but whose
-  partner's is not (Smad2 next to pSmad2) was scaled up to 1e12 times too tight,
-  the step matrix became numerically singular and `ptc()` only shrank `dt`.
+  partner's is not was scaled up to twelve orders of magnitude too tight, the step
+  matrix became numerically singular and `ptc()` only shrank `dt`.
 
 # cppDE 0.11.0
 

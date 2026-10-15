@@ -2,10 +2,10 @@
 ## Does the adjoint's own per-step number predict where the gradient
 ## error sits?
 ##
-## Stufe 9 of dev/adjoint-plan.md wants the step size chosen from lambda
-## as well as from the state, under err = max(err_state, err_lambda). The
-## weight it uses has to be a refinement indicator: a per-step number
-## whose ranking says where refining buys the most gradient accuracy.
+## Choosing the step size from lambda as well as from the state, under
+## err = max(err_state, err_lambda), needs a weight that is a refinement
+## indicator: a per-step number whose ranking says where refining buys the
+## most gradient accuracy.
 ##
 ## Two candidates fall out of a sweep for free, and they are not the same
 ## quantity:
@@ -19,8 +19,7 @@
 ##                                 moves when the step covers more time,
 ##                                 not how much accuracy the step costs.
 ##
-## The plan named wdt as the indicator. This script is the check, and it
-## is written so that a wrong guess shows up rather than hides.
+## This script checks which of the two is the indicator.
 ##
 ## Measured, per model and over rtol:
 ##
@@ -29,11 +28,11 @@
 ##      residual estimates, and the check is direct: the ratio should sit
 ##      near one and stay there over the decades.
 ##   2. sum |eta_k| against errG, the error in the gradient. That is the
-##      quantity Stufe 9 actually wants to control, and eta does not
+##      quantity the step control wants to bound, and eta does not
 ##      estimate it, which would take a second-order adjoint. What the
 ##      measurement can settle is whether the two fall together, so that
 ##      controlling the one controls the other.
-##   3. the same for sum |wdt_k| h_k, the plan's original guess. If wdt is
+##   3. the same for sum |wdt_k| h_k. If wdt is
 ##      the transport derivative, this ratio grows by a decade per decade
 ##      of tolerance, because the numerator does not fall and the
 ##      denominator does.
@@ -45,8 +44,7 @@
 ## Robertson's does, is not summarised by a norm divided by its largest
 ## entry.
 ##
-## The models are the ones the plan asks for: a stiff one and an event
-## one, not only the decay toy.
+## Models: a decay, a stiff one and an event one.
 ## =================================================================
 rm(list = ls(all.names = TRUE))
 
@@ -65,8 +63,8 @@ RTOL_REF <- 1e-13
 
 # --- Models ------------------------------------------------------------------
 # Decay is the control: smooth, non-stiff, nearly constant h. Robertson is
-# stiff, so lambda spans decades. The root model is where the plan expects the
-# first-order remainder to misbehave, a crossing making the map discontinuous
+# stiff, so lambda spans decades. The root model is where the
+# first-order remainder can misbehave, a crossing making the map discontinuous
 # in the state.
 
 models <- list(

@@ -280,7 +280,7 @@ test_that("a batch switches every condition where its own root lies", {
   }
 })
 
-test_that("a solution that slides along the surface stops with a message", {
-  # Both branches point at x = 1, so the mode would have to flip without end.
-  expect_error(tight(mods$slide, sw_times, c(x = 0.5)), "slides along")
+test_that("a solution that both branches push onto the surface slides along it", {
+  out <- tight(mods$slide, sw_times, c(x = 0.5))
+  expect_equal(unname(out$variable[, "x"]), pmin(0.5 + sw_times, 1), tolerance = 1e-9)
 })

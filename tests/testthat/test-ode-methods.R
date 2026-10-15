@@ -250,6 +250,14 @@ test_that("a Python keyword as a symbol name is rejected", {
                "'global'")
 })
 
+test_that("pi is the number and names nothing", {
+  m <- cppODE(c(x = "-pi*k*x + E"), modelname = "pi_num", compile = FALSE)
+  expect_identical(attr(m, "parameters"), c("k", "E"))
+  expect_error(cppODE(c(pi = "-k*pi"), modelname = "pi_state"),
+               "'pi' is a number in the equations")
+  expect_error(cppODE(c(y = "-k*y"), forcings = "pi", modelname = "pi_forcing"), "'pi'")
+})
+
 # -- Forcings -----------------------------------------------------------------
 
 test_that("a forcing that multiplies a state reaches the Jacobian", {

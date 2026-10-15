@@ -82,6 +82,11 @@ struct RootEvent {
   // -1 for an event. The mode holds where func > 0, or >= 0 when closed.
   int mode = -1;
   bool closed = false;
+
+  // The end of a slide along switch `slide_exit`'s surface, -1 otherwise: the
+  // root where r' with that mode at `exit_on` reaches 0, and the solution leaves.
+  int slide_exit = -1;
+  bool exit_on = false;
 };
 
 // Every mode from the comparisons at (x, t).

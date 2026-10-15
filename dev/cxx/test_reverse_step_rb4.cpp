@@ -1,4 +1,4 @@
-// One Rosenbrock step backwards: stage 3b of dev/adjoint-plan.md.
+// One Rosenbrock step backwards.
 //
 // The oracle is the forward mode on the same step. Forward propagates the full
 // sensitivity S of (x, theta) -> x_out, reverse only w' S for one w. Both

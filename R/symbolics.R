@@ -1,7 +1,7 @@
 #' Extract Symbol Names from R Expressions
 #'
 #' Returns the unique names of all symbols occurring in a character
-#' vector of R expressions.
+#' vector of R expressions. `pi` is the number and no symbol.
 #'
 #' @param expr Character vector of R expressions.
 #' @param omit Optional character vector of symbol names to remove.
@@ -19,11 +19,14 @@ getSymbols <- function(expr, omit = NULL) {
   if (is.null(parsed)) return(character(0))
 
   pd <- utils::getParseData(parsed)
-  syms <- unique(pd[pd$token == "SYMBOL", "text"])
+  syms <- setdiff(unique(pd[pd$token == "SYMBOL", "text"]), .constants)
 
   if (!is.null(omit)) syms <- setdiff(syms, omit)
   syms
 }
+## Names read as numbers, as in R.
+.constants <- "pi"
+
 ## Python 3 `keyword.kwlist`.
 .pythonKeywords <- c(
   "False","None","True","and","as","assert","async","await","break","class",
@@ -60,4 +63,19 @@ checkSymbolNames <- function(...) {
        ". The code generator reads the equations with Python's parser and ",
        "cannot read such a name as a symbol. Rename it in the model definition.",
        call. = FALSE)
+}
+
+#' Reject Names of Constants
+#'
+#' Stops when a state, parameter, forcing or variable is named `pi`.
+#'
+#' @param ... Character vectors of names. `NULL` is ignored.
+#' @return `NULL`, invisibly. Called for the error.
+#'
+#' @keywords internal
+checkConstantNames <- function(...) {
+  hit <- intersect(unlist(list(...), use.names = FALSE), .constants)
+  if (!length(hit)) return(invisible(NULL))
+  stop("'", hit[1], "' is a number in the equations and cannot name a state, parameter, ",
+       "forcing or variable. Rename it in the model definition.", call. = FALSE)
 }

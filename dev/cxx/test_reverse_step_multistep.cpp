@@ -1,4 +1,4 @@
-// One multistep step backwards, BDF and Adams: stage 3b of dev/adjoint-plan.md.
+// One multistep step backwards, BDF and Adams.
 //
 // The oracle is the forward mode on the same step. What a multistep method
 // hands across a step boundary is the Nordsieck history and not the state

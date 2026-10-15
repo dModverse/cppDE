@@ -538,7 +538,8 @@ inline dual<T, N> pow(const U& a, const dual<T, N>& b) {
 }
 
 // =============================================================================
-// min / max / clamp: select-by-value, derivatives = winner's derivatives
+// min / max / clamp: select-by-value, derivatives = winner's derivatives; a tie
+// goes to the first argument of max and to the second of min
 // =============================================================================
 template<class T, unsigned N>
 inline dual<T, N> min(const dual<T, N>& a, const dual<T, N>& b) {
@@ -555,7 +556,9 @@ inline dual<T, N> min(const dual<T, N>& a, const U& b) {
 }
 template<class T, unsigned N, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual<T, N> min(const U& a, const dual<T, N>& b) { return min(b, a); }
+inline dual<T, N> min(const U& a, const dual<T, N>& b) {
+  return (static_cast<T>(a) < b.x()) ? dual<T, N>(a) : b;
+}
 template<class T, unsigned N, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
 inline dual<T, N> max(const dual<T, N>& a, const U& b) {
@@ -563,7 +566,9 @@ inline dual<T, N> max(const dual<T, N>& a, const U& b) {
 }
 template<class T, unsigned N, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual<T, N> max(const U& a, const dual<T, N>& b) { return max(b, a); }
+inline dual<T, N> max(const U& a, const dual<T, N>& b) {
+  return (static_cast<T>(a) < b.x()) ? b : dual<T, N>(a);
+}
 
 template<class T, unsigned N, class L, class H>
 inline dual<T, N> clamp(const dual<T, N>& a, const L& lo, const H& hi) {

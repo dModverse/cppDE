@@ -16,6 +16,7 @@
 #include <cmath>
 #include <limits>
 #include <type_traits>
+#include <cppde/cppde_switch_surface.hpp>
 #include <cppde/cppde_events.hpp>
 #include <cppde/cppde_event_window.hpp>
 #include <cppde/cppde_ad_traits.hpp>
@@ -69,6 +70,27 @@ inline double root_ift_curvature(
   return -0.5 * ((scalar_value(g_dot_fwd) - g_dot_s) / eps) / g_dot_s;
 }
 
+// r' = dg/dt + sum_i dg/dx_i f_i at (x, t), and the sum of its terms' sizes.
+template<class state_type, class time_type>
+inline typename state_type::value_type root_rate(
+    const RootEvent<state_type, time_type>& evt, const state_type& x,
+    const time_type& t, const state_type& f, double& terms)
+{
+  using value_type = typename state_type::value_type;
+  const size_t n = x.size();
+  // Armed, so a callee that opens its own arena scope writes the tangents here.
+  state_type grad_g(n);
+  for (auto& v : grad_g) ad_traits::arm_tangents(v);
+  evt.dg_dx(x, t, grad_g);
+  value_type g_dot = evt.dg_dt(x, t);
+  terms = std::abs(scalar_value(g_dot));
+  for (size_t i = 0; i < n; ++i) {
+    g_dot += grad_g[i] * f[i];
+    terms += std::abs(scalar_value(grad_g[i]) * scalar_value(f[i]));
+  }
+  return g_dot;
+}
+
 // --- Helper: compute dt* for a root event (IFT + 2nd-order correction) ---
 template<class state_type, class time_type, class System>
 inline typename state_type::value_type compute_dt_star(
@@ -79,17 +101,12 @@ inline typename state_type::value_type compute_dt_star(
     const RootEvent<state_type, time_type>& evt)
 {
   using value_type = typename state_type::value_type;
-  const size_t n = x_before.size();
 
-  // Analytical g_dot = sum_i(dg/dx_i · f_i) + dg/dt
-  state_type grad_g(n);
-  evt.dg_dx(x_before, t_event, grad_g);
-  value_type g_dot = evt.dg_dt(x_before, t_event);
-  for (size_t i = 0; i < n; ++i)
-    g_dot += grad_g[i] * f_before[i];
-
-  double g_dot_s = scalar_value(g_dot);
-  if (std::abs(g_dot_s) < 1e-15) {
+  double terms = 0.0;
+  const value_type g_dot = root_rate(evt, x_before, t_event, f_before, terms);
+  const double g_dot_s = scalar_value(g_dot);
+  // Tangential where r' is negligible, however slowly a valid crossing runs.
+  if (negligible(g_dot_s, terms)) {
     return value_type(0.0);
   }
 
@@ -143,13 +160,9 @@ inline void saltation_root_analytical_batch(
     const auto& evt = root_events[te.index];
     if (evt.terminal) continue;
     if (evt.dg_dx && evt.dg_dt) {
-      state_type grad_g(n);
-      evt.dg_dx(x_before, t_event, grad_g);
-      value_type g_dot = evt.dg_dt(x_before, t_event);
-      for (size_t i = 0; i < n; ++i)
-        g_dot += grad_g[i] * f_before[i];
-
-      if (std::abs(scalar_value(g_dot)) >= 1e-15) {
+      double terms = 0.0;
+      const value_type g_dot = root_rate(evt, x_before, t_event, f_before, terms);
+      if (!negligible(scalar_value(g_dot), terms)) {
         dt_star = compute_dt_star(x_before, t_event, sys, f_before, evt);
         have_dt_star = true;
       }
@@ -207,8 +220,8 @@ inline void saltation_root_analytical_batch(
   at_surface(x_after, t_star);
 
   // --- 5. Backward Heun shift to grid time ---
-  //     x_after lives at t* = t_event + dt_star.  We transport backward
-  //     by -dt_star.  f_after at departure (t_star), f_back at arrival (t_event).
+  //     x_after lives at t* = t_event + dt_star and is transported back by
+  //     -dt_star: f_after at departure (t_star), f_back at arrival (t_event).
   state_type f_after(n);
   sys.first(x_after, f_after, t_star);
 

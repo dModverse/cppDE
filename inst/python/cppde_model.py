@@ -40,7 +40,12 @@ def hold_switches(g, roots):
     state or the time becomes MODE leaf k, which holds where its argument g is
     positive (or zero, for <= and >=). Heaviside(g) and sign(g) take two
     modes, on g and on -g, so that they keep their value at g = 0. == and !=
-    stay as they are: they switch on a set of measure zero.
+    stay as they are: they switch on a set of measure zero. A comparison of
+    held switches reads their modes and is no switch itself. abs(), min() and
+    max() of a state or the time become selects on held comparisons, so their
+    kink is located; a tie takes the branch the forward dual takes. floor() and
+    ceiling() of a state or the time, whose jumps no root locates, are a
+    ValueError.
 
     Returns:
         (new roots, [(g, closed)] per mode).
@@ -55,30 +60,55 @@ def hold_switches(g, roots):
             out.append(key)
         return g.mode(modes[key])
 
-    mapping = {}
+    def holds(d, closed):
+        if g.flags[d] & _HELD:
+            return mode(d, closed)
+        return g.cmp(">=" if closed else ">", d, g.ZERO)
+
+    # Children first, each switch read off the children as already held, so a
+    # condition on a held comparison follows its mode.
+    memo = {}
     for n in g.topo(roots):
+        args = tuple(memo.get(a, a) for a in g.args[n])
         o = g.op[n]
-        if o == cg.CMP and g.attr[n] in ("<", "<=", ">", ">="):
-            a, b = g.args[n]
-            if not (g.flags[a] | g.flags[b]) & _HELD:
-                continue
-            op = g.attr[n]
-            d = g.sub(a, b) if op in (">", ">=") else g.sub(b, a)
-            if not g.flags[d] & _HELD:
-                continue
-            mapping[n] = mode(d, op in ("<=", ">="))
-        elif o == cg.CALL and g.attr[n] in ("Heaviside", "sign"):
-            d = g.args[n][0]
-            if not g.flags[d] & _HELD:
-                continue
+        name = g.attr[n]
+        new = None
+        if o == cg.CMP and name in ("<", "<=", ">", ">="):
+            a, b = args
+            if (g.flags[a] | g.flags[b]) & _HELD:
+                d = g.sub(a, b) if name in (">", ">=") else g.sub(b, a)
+                if g.flags[d] & _HELD:
+                    new = mode(d, name in ("<=", ">="))
+        elif o == cg.CALL and name in ("Heaviside", "sign") and g.flags[args[0]] & _HELD:
+            d = args[0]
             up, down = mode(d, False), mode(g.neg(d), False)
-            if g.attr[n] == "Heaviside":
-                mapping[n] = g.select(up, g.ONE, g.select(down, g.ZERO, g.HALF))
+            if name == "Heaviside":
+                new = g.select(up, g.ONE, g.select(down, g.ZERO, g.HALF))
             else:
-                mapping[n] = g.select(up, g.ONE, g.select(down, g.MINUS_ONE, g.ZERO))
-    if not mapping:
+                new = g.select(up, g.ONE, g.select(down, g.MINUS_ONE, g.ZERO))
+        elif o == cg.CALL and name in ("abs", "min", "max") \
+                and any(g.flags[a] & _HELD for a in args):
+            if name == "abs":
+                d = args[0]
+                new = g.select(holds(d, True), d, g.neg(d))
+            else:
+                new = args[0]
+                for w in args[1:]:
+                    if name == "max":
+                        new = g.select(holds(g.sub(new, w), True), new, w)
+                    else:
+                        new = g.select(holds(g.sub(w, new), False), new, w)
+        elif o == cg.CALL and name in ("floor", "ceiling") and g.flags[args[0]] & _HELD:
+            raise ValueError("floor(), ceiling(), round() and trunc() of a state or "
+                             "of the time are not supported; write the step with "
+                             "comparisons")
+        if new is None and args != g.args[n]:
+            new = g.rebuild(n, args)
+        if new is not None:
+            memo[n] = new
+    if not out:
         return list(roots), []
-    return g.substitute(roots, mapping), out
+    return [memo.get(r, r) for r in roots], out
 
 
 class OdeModel:

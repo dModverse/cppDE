@@ -163,8 +163,8 @@ public:
         depend_ = true;
       }
     } else if (tan_ != nullptr) {
-      // RHS is non-depend, we have a buffer: zero the tangents (mirror
-      // copy-assignment behaviour to avoid stale derivative values).
+      // A non-depend right-hand side zeroes the tangents of an existing buffer,
+      // as copy assignment does, so no stale derivative survives.
       for (unsigned i = 0; i < N; ++i) tan_[i] = T();
       depend_ = false;
     } else {
@@ -399,8 +399,8 @@ public:
         for (unsigned i = 0; i < size_; ++i) tan_[i] = std::move(o.tan_[i]);
       }
     } else if (size_ > 0) {
-      // RHS is non-depend, we have a buffer: zero the tangents (mirror
-      // the copy-assignment behaviour to avoid stale derivative values).
+      // A non-depend right-hand side zeroes the tangents of an existing buffer,
+      // as copy assignment does, so no stale derivative survives.
       for (unsigned i = 0; i < size_; ++i) tan_[i] = T();
     }
     return *this;

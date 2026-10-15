@@ -11,18 +11,25 @@ syntax. Both ODE backends read them alike.
 \section{Arithmetic}{
 
 \code{+}, \code{-}, \code{*} and \code{/}, and powers written as \code{^} or \verb{**}, as in
-\code{"k1*A^2/(K + A)"}.
+\code{"k1*A^2/(K + A)"}. Operators R does not have or reads otherwise are an
+error: \code{\%\%} (write \code{a - floor(a/b)*b}), \code{\%/\%} (write \code{floor(a/b)}), \verb{\%},
+\verb{//}, \code{~}, \code{@}, and \verb{<-} without a space, which R reads as an assignment.
 }
 
 \section{Comparisons and logic}{
 
 The comparisons \code{<}, \code{<=}, \code{>}, \code{>=}, \code{==} and \code{!=} and the logical
-operators \code{&&}, \code{||} and \code{!} give 1 where they hold and 0 elsewhere. They
-can stand anywhere a number can:
+operators \code{&&}, \code{||} and \code{!} give 1 where they hold and 0 elsewhere. \code{&}
+and \code{|} read as \code{&&} and \code{||}, which they equal on numbers. They can stand
+anywhere a number can:
 \itemize{
 \item as a factor, \code{"k*(A > A0)"} or \code{"k*(time >= t1 && time < t2)"};
-\item as the condition of \code{piecewise()}, \code{"piecewise(kon, A > A0, koff)"}.
+\item as the condition of \code{piecewise()}, \code{"piecewise(kon, A > A0, koff)"}, or
+of \code{ifelse()}, \code{"ifelse(A > A0, kon, koff)"}.
 }
+
+A comparison does not chain: \code{"t1 < time < t2"} is an error, write
+\code{"t1 < time && time < t2"}.
 
 As in R, \code{!} negates everything up to the next \code{&&}, \code{||}, comma or closing
 bracket: \code{"!A > A0"} reads \code{!(A > A0)}. Write the negation in brackets where
@@ -37,13 +44,20 @@ it is a factor, \code{"k*(!(A > A0))"}.
    Trigonometric \tab \code{sin}, \code{cos}, \code{tan}, \code{cot}, \code{sec}, \code{csc}, \code{asin}, \code{acos}, \code{atan}, \code{acot}, \code{asec}, \code{acsc}, \code{atan2(y, x)} \cr
    Hyperbolic \tab \code{sinh}, \code{cosh}, \code{tanh}, \code{coth}, \code{sech}, \code{csch}, \code{asinh}, \code{acosh}, \code{atanh}, \code{acoth}, \code{asech}, \code{acsch} \cr
    Error function \tab \code{erf}, \code{erfc} \cr
-   Kinks and steps \tab \code{abs}, \code{min}, \code{max}, \code{floor}, \code{ceiling}, \code{round} \cr
-   Switches \tab \code{piecewise(v1, c1, v2, c2, ..., otherwise)}, \code{Heaviside(x)}, \code{sign(x)} \cr
+   Kinks and steps \tab \code{abs}, \code{min}, \code{max}, \code{floor}, \code{ceiling}, \code{round}, \code{trunc} \cr
+   Switches \tab \code{piecewise(v1, c1, v2, c2, ..., otherwise)}, \code{ifelse(c, v1, v2)}, \code{Heaviside(x)}, \code{sign(x)} \cr
 }
 
 
 Every function works with every backend and derivative mode. \code{floor()},
-\code{ceiling()} and \code{round()} have the derivative 0.
+\code{ceiling()}, \code{round()} and \code{trunc()} have the derivative 0; \code{round()}
+rounds half to even, as R does. At a kink or step the derivative is that of
+the branch the value takes, forward and reverse alike: \code{sign()} and
+\code{Heaviside()} have the derivative 0, and a tie of \code{max()} takes its first
+argument, of \code{min()} its second. In the right-hand side of an ODE model they
+take parameters and forcings only: of a state or of the time they jump
+where no root is located, which is an error. Write such a step with
+comparisons, \code{"piecewise(0, x < 1, 1, x < 2, 2)"}.
 }
 
 \section{Switches}{
@@ -54,16 +68,19 @@ state or on the time switches the right-hand side, inside \code{piecewise()} or
 as a factor, and so do \code{Heaviside()} and \code{sign()} of such an amount. The
 solver locates every such switch as a root and continues on the other
 branch, so a pulse in time is not stepped over, and the sensitivities take
-the jump, also where a parameter moves the switch. \code{==} and \code{!=} are
+the jump, also where a parameter moves the switch. Where both branches push
+the solution onto the surface it slides along it, so \code{"v*(x > 0)"} is the
+Km to 0 limit of \code{"v*x/(Km + x)"}, also with an input. \code{==} and \code{!=} are
 evaluated as written. Details are in \code{\link[=cppODE]{cppODE()}}.
 }
 
 \section{Symbols}{
 
-\code{time} is the independent variable. Every other name is a state, a
-parameter, a forcing or a variable of \code{\link[=cppFUN]{cppFUN()}}, \code{pi} and \code{E} included:
-write \code{exp(1)} for Euler's number. Python keywords such as \code{lambda}, \verb{in}
-or \code{if}, and \code{True}, \code{False} and \code{None}, cannot be names.
+\code{time} is the independent variable, and \code{pi} is the number, as in R; \code{pi}
+cannot name a state, a parameter, a forcing or a variable. Every other name
+is a state, a parameter, a forcing or a variable of \code{\link[=cppFUN]{cppFUN()}}, \code{E}
+included: write \code{exp(1)} for Euler's number. Python keywords such as
+\code{lambda}, \verb{in} or \code{if}, and \code{True}, \code{False} and \code{None}, cannot be names.
 }
 
 \section{Further functions}{

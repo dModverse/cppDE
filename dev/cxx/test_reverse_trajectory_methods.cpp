@@ -1,4 +1,4 @@
-// The trajectory backwards on all four methods: stage 4 of dev/adjoint-plan.md.
+// The trajectory backwards on all four methods.
 //
 // The oracle is the forward mode over the same trajectory, and the sharpness
 // comes from both sides running the same step sequence. The adaptive run in

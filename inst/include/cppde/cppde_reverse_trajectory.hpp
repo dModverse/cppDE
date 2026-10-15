@@ -144,7 +144,8 @@ public:
   // in both directions: push_event scans backwards over what already stands at
   // that time, observe() forwards while the window is open. A root event also
   // observes just before the jump, at a time just below t, which is why the
-  // backward scan stops on the first time that differs.
+  // backward scan stops on the first time that differs. An observation from
+  // before the step that found the jump stands before it.
   void observe(double t) {
     std::size_t ev = event_record<T>::npos;
     if (m_open_event != event_record<T>::npos) {
@@ -165,7 +166,7 @@ public:
     m_events.push_back(e);
     const std::size_t idx = m_events.size() - 1;
     for (std::size_t i = m_obs.size(); i-- > 0;) {
-      if (m_obs[i].t != e.t) break;
+      if (m_obs[i].t != e.t || m_obs[i].step < e.after_step) break;
       m_obs[i].event = idx;
     }
     m_open_event = idx;

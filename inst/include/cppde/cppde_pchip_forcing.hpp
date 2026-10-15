@@ -103,7 +103,7 @@ struct PchipForcing {
     std::vector<double> delta(n_intervals);
     for (size_t i = 0; i < n_intervals; ++i) {
       h[i] = t[i + 1] - t[i];
-      // Note: h[i] > 0 guaranteed since we checked for duplicates above
+      // h[i] > 0: duplicates were rejected above.
       delta[i] = (y[i + 1] - y[i]) / h[i];
     }
 

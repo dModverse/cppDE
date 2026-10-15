@@ -40,7 +40,9 @@ inline dual2nd<T, N> min(const dual2nd<T, N>& a, const U& b) {
 }
 template<class T, unsigned N, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual2nd<T, N> min(const U& a, const dual2nd<T, N>& b) { return min(b, a); }
+inline dual2nd<T, N> min(const U& a, const dual2nd<T, N>& b) {
+  return (static_cast<T>(a) < b.scalar()) ? dual2nd<T, N>(a) : b;
+}
 template<class T, unsigned N, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
 inline dual2nd<T, N> max(const dual2nd<T, N>& a, const U& b) {
@@ -48,7 +50,9 @@ inline dual2nd<T, N> max(const dual2nd<T, N>& a, const U& b) {
 }
 template<class T, unsigned N, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual2nd<T, N> max(const U& a, const dual2nd<T, N>& b) { return max(b, a); }
+inline dual2nd<T, N> max(const U& a, const dual2nd<T, N>& b) {
+  return (static_cast<T>(a) < b.scalar()) ? b : dual2nd<T, N>(a);
+}
 
 template<class T, unsigned N, class L, class H>
 inline dual2nd<T, N> clamp(const dual2nd<T, N>& a, const L& lo, const H& hi) {

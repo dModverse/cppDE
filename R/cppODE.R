@@ -32,9 +32,15 @@
 #' over. Every method and derivative mode takes the jump of f there, second
 #' order included, also where a parameter moves the switching time. A switch
 #' adds no output row and is not limited by `maxroot`. Each branch is evaluated
-#' a step beyond the switch, so it has to be defined there. A solution that
-#' slides along a switching surface, both branches pointing at it, stops with
-#' an error. `==` and `!=` are evaluated as written.
+#' a step beyond the switch, so it has to be defined there. Where both branches
+#' push the solution onto the surface, it slides along it (Filippov): f is the
+#' mix `a*f_on + (1 - a)*f_off` that keeps the surface's argument at zero, and
+#' the slide ends where one branch turns away. `"kin - v*(x > 0)"` with
+#' `kin < v` holds x at 0, the limit of Michaelis-Menten kinetics for Km to 0.
+#' Several switches slide at once on the mix of all combinations of their
+#' branches whose weights keep every surface; a set of slides without such a
+#' mix stops with an error.
+#' `==` and `!=` are evaluated as written.
 #'
 #' @param rhs Named character vector of ODE right-hand sides, see
 #'   [expressions]. Names are the state variables.
@@ -163,6 +169,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # Every expression the model is built from. Numeric event columns hold no
   # identifiers, and "equilibrate" is a keyword of rootfunc, not an expression.
   checkSymbolNames(rhs, forcings, fixed)
+  checkConstantNames(names(rhs), forcings, fixed, events$var)
   if (!is.null(events)) {
     for (col in c("var", "value", "time", "root"))
       if (col %in% names(events) && is.character(events[[col]]))
@@ -397,7 +404,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "#include <cppde/cppde.hpp>",
     "#include <cppde/cppde_r_batch.hpp>",
     if (is_reverse) c("#include <cppde/cppde_adjoint_step.hpp>",
-                      "#include <cppde/cppde_extrapolated_flow.hpp>") else NULL
+                      "#include <cppde/cppde_extrapolated_flow.hpp>",
+                      "#include <cppde/cppde_sliding_adjoint.hpp>") else NULL
   )
 
   # --- Using declarations ---
@@ -933,7 +941,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     rev_arg <- if (is_reverse)
       sprintf("%s, std::ref(_rev_coll), _rev_coll.event_observer()",
               if (nzchar(termination_arg)) "" else ", nullptr") else ""
-    integrate_line <- sprintf("  integrate_times_dense(denseStepper, std::make_pair(sys, jac), x, times.begin(), times.end(), dt, obs, fixed_events, root_events, checker, root_tol, maxroot, dt_est%s%s);", termination_arg, rev_arg)
+    integrate_line <- sprintf(paste0("  integrate_times_dense(denseStepper, std::make_pair(sys, jac), ",
+                             "x, times.begin(), times.end(), ",
+                             "dt, obs, fixed_events, root_events, checker, root_tol, maxroot, dt_est%s%s);"), termination_arg, rev_arg)
   } else {
     # ---- Single-step stepper (rb4 or tsit5) ----
     # Both use the generic onestep_controller with Gustafsson PI control.
@@ -972,7 +982,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         sprintf("%s, std::ref(_rev_coll), _rev_coll.event_observer()",
                 if (nzchar(termination_arg)) ""
                 else ", cppde::detail::no_dt_estimator{}, nullptr") else ""
-      integrate_line <- sprintf("  integrate_times_dense(denseStepper, std::make_pair(sys, jac), x, times.begin(), times.end(), dt, obs, fixed_events, root_events, checker, root_tol, maxroot%s%s);", termination_arg, rev_arg)
+      integrate_line <- sprintf(paste0("  integrate_times_dense(denseStepper, std::make_pair(sys, jac), ",
+                             "x, times.begin(), times.end(), ",
+                             "dt, obs, fixed_events, root_events, checker, root_tol, maxroot%s%s);"), termination_arg, rev_arg)
     } else {
       stepper_line <- paste(
         c(sprintf("  auto controlledStepper = cppde::onestep_controller<%s>(abstol, reltol);", os_type),
@@ -980,7 +992,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
           onestep_prep_line),
         collapse = "\n"
       )
-      integrate_line <- sprintf("  integrate_times(controlledStepper, std::make_pair(sys, jac), x, times.begin(), times.end(), dt, obs, fixed_events, root_events, checker, root_tol, maxroot%s);", termination_arg)
+      integrate_line <- sprintf(paste0("  integrate_times(controlledStepper, std::make_pair(sys, jac), ",
+                             "x, times.begin(), times.end(), ",
+                             "dt, obs, fixed_events, root_events, checker, root_tol, maxroot%s);"), termination_arg)
     }
   }
 
@@ -1229,9 +1243,14 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   if (is_reverse) {
     # The transposed solve a corrector needs. An explicit method has none, and
     # a Rosenbrock stage transposes the stepper's own factorisation.
-    solver_decl <- if (written_onestep) character(0) else c(
-      sprintf("  cppde::reverse::equation_solver<jacobian, %s, %s> _rev_solver(jac);",
-              rev_num_type, if (use_sparse) "true" else "false"))
+    # The system as the forward run took it, sliding where a switch slides; the
+    # sweep and its solves read f and J from it.
+    solver_decl <- c(
+      "  auto _cl_sys = cppde::detail::make_sliding_system(std::make_pair(sys, jac), root_events);",
+      if (written_onestep) character(0) else
+        sprintf(paste0("  cppde::reverse::equation_solver<decltype(_cl_sys.second), %s, %s> ",
+                       "_rev_solver(_cl_sys.second);"),
+                rev_num_type, if (use_sparse) "true" else "false"))
 
     externC <- c(externC,
       "",
@@ -1292,7 +1311,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
               n_variables),
       if (use_written) c(
         "  {",
-        "    auto _cl_sys = std::make_pair(sys, jac);",
         if (written_onestep) c(
           sprintf("    cppde::adjoint::closed_onestep_trajectory<%s> _cl;", rev_stepper_type),
           sprintf("    %s _cl_st;", rev_stepper_type),
@@ -1312,10 +1330,12 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         if (second_reverse) character(0)
         else if (written_onestep) "    if (args.refine > 0) _cl.set_refine(args.refine * args.reltol, args.abstol, args.gradtol);"
         else "    if (args.refine > 0) _flow.set_refine(args.refine * args.reltol, args.abstol, args.gradtol);",
-        "    adjoint_terms _adj(_theta, F);",
+        "    adjoint_terms _adj_model(_theta, F);",
         "    event_adjoint_terms _eadj(_theta, F);",
+        "    auto _adj = cppde::adjoint::make_sliding_adjoint(_adj_model, _eadj, _cl_sys);",
+        "    auto _eadj_sl = cppde::adjoint::make_sliding_event_adjoint(_eadj, _cl_sys);",
         "    auto _cl_jmp = cppde::adjoint::make_jump_terms(",
-        "        _cl_sys, _eadj, fixed_events, root_events);",
+        "        _cl_sys, _eadj_sl, fixed_events, _cl_sys.roots());",
         "    for (int c = 0; c < n_seed; ++c) {",
         "      for (int o = 0; o < n_out; ++o)",
         sprintf("        for (int i = 0; i < %d; ++i)", n_variables),
@@ -1435,7 +1455,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
   externC <- c(
     externC,
-    sprintf('extern "C" SEXP solve_%s(SEXP timesSEXP, SEXP paramsSEXP, SEXP sens1iniSEXP, SEXP sens2iniSEXP, SEXP fixedSEXP, SEXP abstolSEXP, SEXP reltolSEXP, SEXP maxprogressSEXP, SEXP maxstepsSEXP, SEXP hiniSEXP, SEXP root_tolSEXP, SEXP maxrootSEXP, SEXP forcingTimesSEXP, SEXP forcingValuesSEXP, SEXP seedSEXP, SEXP dimnamesSEXP) {',
+    sprintf(paste0('extern "C" SEXP solve_%s(SEXP timesSEXP, SEXP paramsSEXP, ',
+                   'SEXP sens1iniSEXP, SEXP sens2iniSEXP, SEXP fixedSEXP, SEXP abstolSEXP, ',
+                   'SEXP reltolSEXP, SEXP maxprogressSEXP, SEXP maxstepsSEXP, SEXP hiniSEXP, ',
+                   'SEXP root_tolSEXP, SEXP maxrootSEXP, SEXP forcingTimesSEXP, ',
+                   'SEXP forcingValuesSEXP, SEXP seedSEXP, SEXP dimnamesSEXP) {'),
             modelname),
     "  cppde::rbatch::solve_args a = cppde::rbatch::read_solve_args(",
     "      timesSEXP, paramsSEXP, sens1iniSEXP, sens2iniSEXP, fixedSEXP,",

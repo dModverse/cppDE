@@ -105,6 +105,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
 
   # Every expression the model is built from, as in cppODE().
   checkSymbolNames(rhs, forcings, fixed)
+  checkConstantNames(names(rhs), forcings, fixed, events$var)
   if (!is.null(events)) {
     for (col in c("var", "value", "time", "root"))
       if (col %in% names(events) && is.character(events[[col]]))
