@@ -271,6 +271,7 @@ public:
 
         // Complete step: update Nordsieck array
         m_stepper.complete_step();
+        m_stepper.stald_record();
         m_stepper.set_tn_current(t_new);
 
         // Snapshot Nordsieck for dense output BEFORE order/stepsize changes.
@@ -398,6 +399,7 @@ private:
     if (m_stepper.etamax() <= 1.0 + 1e-14) {
       m_stepper.set_qwait(std::max(m_stepper.qwait(), 2));
       m_eta = 1.0;
+      stald_reduce();
       return;
     }
 
@@ -436,8 +438,15 @@ private:
       } else {
         m_eta = etaqp1;
         new_q = m_stepper.current_order() + 1;
-        m_stepper.save_acor_to_zn_qmax();
       }
+    }
+
+    // STALD overrides any choice but a decrease, as cvBDFStab does.
+    if (new_q >= m_stepper.current_order() && stald_reduce()) return;
+
+    if (order_decision_step) {
+      if (new_q > m_stepper.current_order())
+        m_stepper.save_acor_to_zn_qmax();
 
       if (new_q != m_stepper.current_order()) {
         m_stepper.set_order_for_next_step(new_q);
@@ -452,6 +461,17 @@ private:
     }
 
     apply_eta_limits();
+  }
+
+  // One order down at the step size of order q-1 when STALD finds the dominant
+  // root outside the stability region of the current order.
+  bool stald_reduce()
+  {
+    if (!m_stepper.stald_violation()) return false;
+    m_eta = std::min(m_stepper.compute_etaqm1(), m_stepper.etamax());
+    m_stepper.set_order_for_next_step(m_stepper.current_order() - 1);
+    m_stepper.set_qwait(m_stepper.current_L());
+    return true;
   }
 
   bool dense_output_needed(time_type t_new) const

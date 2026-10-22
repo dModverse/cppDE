@@ -59,6 +59,7 @@ OPTS <- list(
   `petab-root` = file.path(ROOT, "benchmarks", "cache", "petab", "Benchmark-Models"),
   builddir     = "",          # default: a fresh temp directory
   `extra-solvers` = "FALSE",
+  stald        = "FALSE",
   `sparse-sweep` = "TRUE",
   `max-density` = "0.25",
   `min-sweep-states` = "8",
@@ -79,7 +80,7 @@ parse_args <- function(args, opts) {
     if (grepl("=", key)) {
       kv <- strsplit(key, "=", fixed = TRUE)[[1L]]
       key <- kv[1L]; val <- paste(kv[-1L], collapse = "=")
-    } else if (key %in% c("quick", "help", "extra-solvers", "sparse-sweep",
+    } else if (key %in% c("quick", "help", "extra-solvers", "stald", "sparse-sweep",
                           "include-excluded", "no-plots", "no-sparse-sweep")) {
       val <- "TRUE"
     } else {
@@ -170,6 +171,8 @@ cppDE benchmark suite, cppDE vs SUNDIALS CVODE(S)
   --max-sens <n>                cap on sensitivity parameters    [32]
   --min-points <n>              minimum output grid size         [25]
   --extra-solvers               also run cppDE BDF and Rosenbrock4
+  --stald                       also run cppDE NDF, cppDE BDF and CVODE BDF
+                                with stability limit detection
   --no-sparse-sweep             leave out the dense/sparse sweep
         By default every model where the linear solver is actually a
         choice is additionally run with it pinned dense and pinned
@@ -238,7 +241,8 @@ shard_keep <- function(nms) {
   (rank(nms, ties.method = "first") - 1L) %% shard_n == (shard_i - 1L)
 }
 SPARSE_SWEEP <- as_bool(OPTS$`sparse-sweep`)
-configs <- solver_configs(extra = as_bool(OPTS$`extra-solvers`))
+configs <- solver_configs(extra = as_bool(OPTS$`extra-solvers`),
+                          stald = as_bool(OPTS$stald))
 sweep_configs <- if (SPARSE_SWEEP) sparse_sweep_configs() else NULL
 model_filter <- trimws(strsplit(OPTS$models, ",")[[1L]])
 model_filter <- model_filter[nzchar(model_filter)]

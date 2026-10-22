@@ -1,10 +1,10 @@
 Package: cppDE
 Title: 'C++' Code Generation for ODEs with Sensitivity Propagation
-Version: 0.13.1
+Version: 0.13.2
 Authors@R: c(
     person("Simon", "Beyer", , "simon.beyer@fdm.uni-freiburg.de", role = c("aut", "cre")),
     person("Lawrence Livermore National Security", role = "cph",
-           comment = "Portions of cppde_multistepper(_controller).hpp and cppde_newton.hpp derived from SUNDIALS/CVODE(S); see inst/COPYRIGHTS"),
+           comment = "Portions of cppde_multistepper(_controller).hpp, cppde_newton.hpp and cppde_stald.hpp derived from SUNDIALS/CVODE(S); see inst/COPYRIGHTS"),
     person("Southern Methodist University", role = "cph",
            comment = "SUNDIALS/CVODE(S) co-copyright holder; see inst/COPYRIGHTS"),
     person("Karsten", "Ahnert", role = "cph",
@@ -61,6 +61,6 @@ Suggests:
     dplyr,
     scales
 VignetteBuilder: R.rsp
-Config/roxygen2/version: 8.1.0
+Config/roxygen2/version: 8.1.1
 Config/testthat/edition: 3
 Config/testthat/parallel: true

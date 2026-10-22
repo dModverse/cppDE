@@ -47,10 +47,10 @@ adjointControl <- function(refine = FALSE, gradtol = NULL, trace = FALSE) {
 .adjointWanted <- function(ctl)
   !is.null(ctl) && ctl$trace
 
-# The control onto the cotangent, the channel the generated sweep reads, so the
-# .Call signature stays fixed.
-.adjointApply <- function(ctl, model, cotangent, is_cvode) {
-  if (is.null(ctl)) return(cotangent)
+# The entries of the solve argument list that hold the control. A solve
+# without a cotangent sweeps nothing and takes none.
+.adjointArgs <- function(ctl, model, has_cotangent, is_cvode) {
+  if (is.null(ctl)) return(list())
   if (!inherits(ctl, "cppDEadjointControl"))
     stop("'adjoint' must come from adjointControl()", call. = FALSE)
   mode <- attr(model, "derivMode")
@@ -62,17 +62,17 @@ adjointControl <- function(refine = FALSE, gradtol = NULL, trace = FALSE) {
       stop("on the CVODE backend 'adjoint' takes 'gradtol' alone: the backward ",
            "problem is CVODES' own continuous adjoint, with no discrete steps ",
            "to check or report", call. = FALSE)
-    if (!is.null(ctl$gradtol) && !is.null(cotangent))
-      attr(cotangent, "gradtol") <- ctl$gradtol
-    return(cotangent)
+    if (!has_cotangent || is.null(ctl$gradtol)) return(list())
+    return(list(gradtol = as.double(ctl$gradtol)))
   }
-  if (!is.null(cotangent) && .adjointWanted(ctl))
-    attr(cotangent, "adjointGrid") <- TRUE
-  if (!is.null(cotangent) && ctl$refine) {
-    attr(cotangent, "refine") <- 1
-    if (!is.null(ctl$gradtol)) attr(cotangent, "gradtol") <- ctl$gradtol
+  if (!has_cotangent) return(list())
+  out <- list()
+  if (.adjointWanted(ctl)) out$adjoint_grid <- TRUE
+  if (ctl$refine) {
+    out$refine <- 1
+    if (!is.null(ctl$gradtol)) out$gradtol <- as.double(ctl$gradtol)
   }
-  cotangent
+  out
 }
 
 # The sweep's grid as $adjoint.

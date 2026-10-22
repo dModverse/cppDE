@@ -9,8 +9,8 @@
 ##      Rscript benchmarks/run-on-cluster.R --collect --jobname cppde_full
 
 ##  The problems are parsed locally and travel inside the transferred workspace,
-##  so a compute node needs only cppDE and a C++ compiler. Each array task takes
-##  one shard of the problem list and returns its rows, merged here.
+##  so a compute node needs only cppDE, dMod2 and a C++ compiler. Each array task
+##  takes one shard of the problem list and returns its rows, merged here.
 
 ##  Array tasks land on whatever nodes SLURM has free, so ratios stay valid,
 ##  both solvers of a cell running in one task, while absolute milliseconds are
@@ -40,7 +40,8 @@ bench_source(file.path(ROOT, "benchmarks", "R"))
 OPT <- list(
   jobname      = "cppde_bench",
   machine      = "helix",
-  partition    = "cpu-single",
+  partition    = "cpu-single",    # set in the Helix template; unused with --jobscript
+  jobscript    = "",              # SLURM template; "" = dMod2's Helix template
   cores        = "64",            # cores requested from SLURM (a whole node)
   `bench-cores` = "12",           # benchmark workers actually used
   `mem-per-core` = "2",           # GB per requested core
@@ -71,7 +72,6 @@ OPT <- list(
   `max-worker-gb` = "",           # needs the `unix` package on the nodes
   outdir       = file.path(ROOT, "benchmarks", "results"),
   `petab-root` = file.path(ROOT, "benchmarks", "cache", "petab", "Benchmark-Models"),
-  `ssh-passwd` = "",
   ## Library paths put in front on the nodes, comma separated, for a development
   ## installation next to the default one; "" uses the default library.
   libs         = "",
@@ -102,9 +102,19 @@ if (tf(OPT$help)) {
   cat(sprintf("  --%-14s [%s]\n", names(OPT), unlist(OPT)), sep = "")
   cat("\n  --dry-run   build the shards locally and report, submit nothing",
       "\n  --submit    build, transfer and submit",
-      "\n  --collect   fetch results of an earlier --submit and merge them\n\n")
+      "\n  --collect   fetch results of an earlier --submit and merge them",
+      "\n  --jobscript a job script template, see ?dMod2::distributedComputing;",
+      "\n              \"\" uses dMod2's Helix template with --partition\n\n")
   quit(save = "no")
 }
+
+## distributedComputing() keeps a job's manifest in the working directory it was
+## submitted from, so --submit and --collect both run in JOBDIR. Paths given on
+## the command line are resolved before that.
+JOBDIR <- file.path(ROOT, "benchmarks", "results", ".jobs")
+OPT$outdir       <- normalizePath(OPT$outdir, mustWork = FALSE)
+OPT$`petab-root` <- normalizePath(OPT$`petab-root`, mustWork = FALSE)
+if (nzchar(OPT$jobscript)) OPT$jobscript <- normalizePath(OPT$jobscript, mustWork = FALSE)
 
 n_shards <- as.integer(OPT$shards)
 cores    <- as.integer(OPT$cores)          # SLURM allocation
@@ -148,8 +158,6 @@ if (compile_slots > 0 && max_compile_gb > 0 &&
 ##  Collect mode: fetch an earlier submission and merge
 ## ---------------------------------------------------------------------
 
-JOBDIR <- file.path(ROOT, "benchmarks", "results", ".jobs")
-
 if (tf(OPT$collect)) {
   ## The submission's own options are replayed from disk, so --collect
   ## needs nothing but the job name.  Anything given on the command line
@@ -163,20 +171,22 @@ if (tf(OPT$collect)) {
     cat(sprintf("replaying submission record: tier %s, modes %s, %d shard(s)\n",
                 OPT$tier, OPT$modes, n_shards))
   } else {
-    cat("no submission record found; using the options given on the command line.\n",
-        "If --shards differs from the submission, the fetch will not line up.\n",
-        sep = "")
+    cat("no submission record found; the run is labelled with the options",
+        "given on the command line.\n")
   }
-  ## dMod2 validates var_values/no_rep before it looks at `recover`, so
-  ## the array shape has to be restated even when only fetching.
-  job <- dMod2::distributedComputing({ NULL }, jobname = OPT$jobname,
-                                    machine = OPT$machine, recover = TRUE,
-                                    var_values = list(seq_len(n_shards)))
+  setwd(JOBDIR)
+  job <- dMod2::distributedComputing(NULL, jobname = OPT$jobname, recover = TRUE)
   if (!job$check()) message("note: the cluster reports the job as incomplete; ",
                             "merging whatever has arrived")
-  job$get()
-  res <- get("cluster_result", envir = .GlobalEnv)
-  parts <- Filter(is.data.frame, if (is.data.frame(res)) list(res) else res)
+  res <- job$get()
+  for (k in seq_along(res)) {
+    if (is.null(res[[k]]))
+      cat(sprintf("  shard %d: no result\n", k))
+    else if (inherits(res[[k]], "try-error"))
+      cat(sprintf("  shard %d failed: %s\n", k,
+                  sub("\n.*", "", conditionMessage(attr(res[[k]], "condition")))))
+  }
+  parts <- Filter(function(x) is.data.frame(x) && nrow(x), res)
   if (!length(parts)) stop("no data frames came back from the cluster")
   df <- do.call(rbind, parts)
   tag <- paste0(format(Sys.time(), "%Y%m%d-%H%M%S"), "_", OPT$tier,
@@ -189,8 +199,8 @@ if (tf(OPT$collect)) {
     nrep = OPT$nrep, date = format(Sys.time()),
     options = paste(sprintf("%s=%s", names(OPT), unlist(OPT)), collapse = " ")))
   suppressWarnings(save_plots(df, out))
-  cat(sprintf("\nmerged %d rows from %d shard(s) into %s\n",
-              nrow(df), length(parts), out))
+  cat(sprintf("\nmerged %d rows from %d of %d shard(s) into %s\n",
+              nrow(df), length(parts), length(res), out))
   if ("node" %in% names(df)) {
     cat("\nnodes used (absolute times are only comparable within one):\n")
     print(table(df$node))
@@ -252,10 +262,28 @@ cat(sprintf("tolerances (%s): %s\n",
 cat(sprintf("equivalent local run:\n  Rscript benchmarks/run-benchmarks.R --tier %s --modes %s --cores %d\n",
             OPT$tier, OPT$modes, bench_cores))
 
+## The job script: --jobscript as given, otherwise dMod2's Helix template with
+## its partition line set to --partition, written to JOBDIR at submission.
+if (nzchar(OPT$jobscript)) {
+  if (!file.exists(OPT$jobscript)) stop("--jobscript ", OPT$jobscript, " does not exist")
+  if ("partition" %in% SET)
+    warning("--partition is ignored, the partition is the one in --jobscript",
+            call. = FALSE, immediate. = TRUE)
+  cat(sprintf("job script: %s\n", OPT$jobscript))
+} else {
+  helix <- system.file("slurm", "helix.sh", package = "dMod2")
+  if (!nzchar(helix)) stop("this dMod2 has no slurm/helix.sh; update it or pass --jobscript")
+  js <- readLines(helix, warn = FALSE)
+  at <- grep("^#SBATCH --partition=", js)
+  if (length(at) != 1L) stop(helix, " has no single #SBATCH --partition line")
+  js[at] <- paste0("#SBATCH --partition=", OPT$partition)
+  cat(sprintf("job script: dMod2's Helix template, %s\n", js[at]))
+}
+
 if (!tf(OPT$submit)) {
   cat("\nDry run, nothing submitted.\n")
   cat("Before submitting, verify on the cluster:\n",
-      " 1. cppDE installs and loads for `module load math/R`\n",
+      " 1. cppDE and dMod2 install and load for `module load math/R`\n",
       " 2. cppDE:::cvodeConfig$available is TRUE there (CVODE backend)\n",
       " 3. a C++ compiler is on PATH on the compute nodes, the benchmark\n",
       "    generates and compiles C++ at run time\n",
@@ -281,20 +309,29 @@ maxs2fr  <- as.integer(OPT$`max-sens2-fr`)
 maxst2   <- as.integer(OPT$`max-states-sens2`)
 maxstff  <- as.integer(OPT$`max-states-ff`)
 
-cat(sprintf("\nsubmitting '%s' to %s\n  partition %s, %d cores allocated, %d workers, walltime %s\n",
-            OPT$jobname, OPT$machine, OPT$partition, cores, bench_cores, OPT$walltime))
+dir.create(JOBDIR, showWarnings = FALSE, recursive = TRUE)
+jobscript <- OPT$jobscript
+if (!nzchar(jobscript)) {
+  jobscript <- file.path(JOBDIR, paste0(OPT$jobname, ".sh"))
+  writeLines(js, jobscript)
+}
 
+cat(sprintf("\nsubmitting '%s' to %s with %s\n  %d cores allocated, %d workers, walltime %s\n",
+            OPT$jobname, OPT$machine, jobscript, cores, bench_cores, OPT$walltime))
+
+setwd(JOBDIR)
 job <- dMod2::distributedComputing(
   {
-    ## Runs on a compute node. `var_1` is this task's shard index; the benchmark
-    ## functions and `shards` arrive in the workspace.
+    ## Runs on a compute node. `taskId` is this task's shard index and `cores` its
+    ## allocation, of which --bench-cores run workers; the benchmark functions and
+    ## `shards` arrive in the workspace.
 
     ## The workspace holds function objects, not attached packages, so cppDE has
     ## to be loaded here or every model fails and the shard returns nothing.
     library(cppDE)
     stopifnot(isTRUE(cppDE:::cvodeConfig$available))
     Sys.setenv(OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1")
-    builddir <- file.path(tempdir(), paste0("cppde_bench_", var_1))
+    builddir <- file.path(tempdir(), paste0("cppde_bench_", taskId))
     dir.create(builddir, showWarnings = FALSE, recursive = TRUE)
 
     ## Memory guards, before the fork so the workers inherit them. The Makevars goes
@@ -305,10 +342,10 @@ job <- dMod2::distributedComputing(
       message("note: could not set a per-worker memory limit on ",
               Sys.info()[["nodename"]])
 
-    out <- run_all_problems(shards[[var_1]], builddir = builddir,
+    out <- run_all_problems(shards[[taskId]], builddir = builddir,
                             tolerances = tolerances, modes = modes,
                             configs = cfgs, sweep_configs = sweep_cfgs,
-                            nrep = nrep, cores = bench_cores,
+                            nrep = nrep, cores = min(bench_cores, cores),
                             max_sens2 = maxs2, min_time = min_time,
                             compile_slots = compile_slots, max_sens = max_sens,
                             reverse_from = rev_from, max_states_sens2 = maxst2,
@@ -316,7 +353,7 @@ job <- dMod2::distributedComputing(
     ## Stamp the hardware: absolute times are only comparable across rows
     ## that ran on the same node.
     if (!is.null(out) && nrow(out)) {
-      out$shard <- var_1
+      out$shard <- taskId
       out$node  <- unname(Sys.info()[["nodename"]])
       out$cpu   <- tryCatch(sub(".*: ", "", grep("model name",
                      readLines("/proc/cpuinfo", warn = FALSE), value = TRUE)[1L]),
@@ -324,22 +361,19 @@ job <- dMod2::distributedComputing(
     }
     out
   },
-  jobname      = OPT$jobname,
-  partition    = OPT$partition,
-  cores        = cores,
-  nodes        = 1,
-  mem_per_core = as.numeric(OPT$`mem-per-core`),
-  walltime     = OPT$walltime,
-  machine      = OPT$machine,
-  ssh_passwd   = if (nzchar(OPT$`ssh-passwd`)) OPT$`ssh-passwd` else NULL,
-  var_values   = list(seq_len(n_shards)),
-  recover      = FALSE,
-  libs         = if (nzchar(OPT$libs)) strsplit(OPT$libs, ",")[[1L]] else NULL)
+  tasks      = seq_len(n_shards),
+  machine    = setNames(cores, OPT$machine),
+  jobname    = OPT$jobname,
+  slurm      = TRUE,
+  jobscript  = jobscript,
+  memPerCore = as.numeric(OPT$`mem-per-core`),
+  walltime   = OPT$walltime,
+  libs       = if (nzchar(OPT$libs)) strsplit(OPT$libs, ",")[[1L]] else NULL)
 
-dir.create(JOBDIR, showWarnings = FALSE, recursive = TRUE)
 saveRDS(OPT[setdiff(names(OPT), c("dry-run", "submit", "collect", "help"))],
         file.path(JOBDIR, paste0(OPT$jobname, ".rds")))
 
+print(job)
 cat("\nsubmitted. Poll and fetch with:\n",
     sprintf("  Rscript benchmarks/run-on-cluster.R --collect --jobname %s\n",
             OPT$jobname), sep = "")

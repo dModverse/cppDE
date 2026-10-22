@@ -55,6 +55,7 @@
 #include <cppde/cppde_ad_traits.hpp>
 #include <cppde/cppde_dual_slab.hpp>
 #include <cppde/cppde_nordsieck_block.hpp>
+#include <cppde/cppde_stald.hpp>
 
 namespace cppde {
 
@@ -527,18 +528,45 @@ public:
   };
 
   // ====================================================================
-  //  q_max_current: effective max order for this method.
-  //  Adams: 12.  BDF/NDF: 5.  Used by the controller to clamp
-  //  order-increase decisions.
+  //  q_max_current: the order an increase may reach, the method's own (12
+  //  Adams, 5 BDF/NDF) or the lower cap of set_max_order().
   // ====================================================================
 
   int q_max_current() const
   {
-    if constexpr (Method == multistep_method::adams) {
-      return adams_constants::max_order_adams;     // = 12
-    } else {
-      return 5;                                    // pure NDF/BDF
-    }
+    return (m_maxord_user > 0 && m_maxord_user < max_order) ? m_maxord_user
+                                                           : max_order;
+  }
+
+  // 0 or anything above the method's own order leaves the method's own.
+  void set_max_order(int q) { m_maxord_user = q; }
+
+  // Stability limit detection, BDF family only; a no-op on Adams.
+  void set_stald(bool v) { m_stald = v && Method != multistep_method::adams; }
+  bool stald() const { return m_stald; }
+  int  n_stald_reductions() const { return m_n_stald; }
+
+  // After complete_step, before any order change: the scaled derivatives of
+  // degree q-1, q and q+1 that stald_detect() reads, as cvBDFStab saves them.
+  void stald_record()
+  {
+    if (!m_stald || m_q < 3) return;
+    double fact = 1.0;
+    for (int i = 1; i <= m_q - 1; ++i) fact *= i;
+    const double sq   = fact * m_q * (m_q + 1) * m_acnrm / std::max(m_tq[5], 1e-10);
+    const double sqm1 = fact * m_q * wrms_norm_ewt(m_zn[m_q].m_v);
+    const double sqm2 = fact * wrms_norm_ewt(m_zn[m_q - 1].m_v);
+    m_ssdat.push(sqm2, sqm1, sq);
+  }
+
+  // Whether the dominant root of the last q + 5 steps at this order lies
+  // outside the stability region of order q.
+  bool stald_violation()
+  {
+    if (!m_stald || m_q < 3 || m_nscon < m_q + 5) return false;
+    if (stald_detect(m_ssdat, m_q) <= 3) return false;
+    ++m_n_stald;
+    return true;
   }
 
   // ====================================================================
@@ -1219,7 +1247,9 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     }
 
     m_qwait--;
-    if (m_qwait == 1 && m_q != q_max_current()) {
+    // The method's own maximum rather than the cap: the saved correction is
+    // read only by an order increase, and the replay builds no cap.
+    if (m_qwait == 1 && m_q != max_order) {
       for (size_t i = 0; i < n; ++i)
         m_zn[max_order].m_v[i] = m_acor.m_v[i];
       m_saved_tq5 = m_tq[5];
@@ -1294,6 +1324,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     m_gamrat = 1.0; m_crate = 1.0;
     m_acnrm = 0; m_nstlp = 0; m_nstlj = 0;
     m_saved_tq5 = 0; m_tn_current = t0_s;
+    m_ssdat.clear();
 
     m_tau.fill(time_type(0));
     m_tau[1] = dt_s;
@@ -2175,6 +2206,10 @@ public:
 
   bool m_use_ndf_kappa = true;   // NDF kappa coefficients (runtime, default: NDF)
   bool m_sens_err_con = true;    // tangents count in the error and corrector tests
+  int  m_maxord_user = 0;        // order cap, 0 for the method's own
+  bool m_stald = false;          // stability limit detection
+  int  m_n_stald = 0;            // order reductions STALD made
+  cppde::stald_data m_ssdat;
 
 #ifdef CPPDE_STEP_TRACE
   // Scratch state populated by step_newton and read by trace_step() at the

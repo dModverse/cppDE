@@ -443,7 +443,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "  // Step-size bounds of a refined run, none unless the caller set them.",
     "  cppde::step_limit_scope _cppde_sl_scope(args.limits);",
     "",
-    "  StepChecker checker(args.maxprogress, args.maxsteps);",
+    "  StepChecker checker(args.maxattempts, args.maxsteps);",
     "",
     sprintf("  cppde::vector_t<%s> x(%d);", numType, n_variables),
     sprintf("  cppde::vector_t<%s> full_params(%d);", numType, n_variables + n_params),
@@ -455,20 +455,20 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     externC <- c(
       externC,
       "  // Custom sensitivity initial values (length validated after n_sens is computed)",
-      "  bool has_sens1ini = (args.sens1ini != nullptr);",
-      "  const double* sens1ini = has_sens1ini ? args.sens1ini : nullptr;"
+      "  bool has_sens1ini = (args.tangent != nullptr);",
+      "  const double* sens1ini = has_sens1ini ? args.tangent : nullptr;"
     )
 
     if (deriv2) {
       externC <- c(
         externC,
-        "  bool has_sens2ini = (args.sens2ini != nullptr);",
-        "  const double* sens2ini = has_sens2ini ? args.sens2ini : nullptr;"
+        "  bool has_sens2ini = (args.hessian != nullptr);",
+        "  const double* sens2ini = has_sens2ini ? args.hessian : nullptr;"
       )
     } else {
       externC <- c(
         externC,
-        "  if (args.sens2ini != nullptr)",
+        "  if (args.hessian != nullptr)",
         "    return res.fail(cppde::RC_ILL_INPUT, \"hessian supplied but deriv2 = FALSE\");"
       )
     }
@@ -917,6 +917,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
               if (useNDF) "true" else "false"),
       sprintf("  controlledStepper.stepper().set_sens_err_con(%s);",
               sens_err_con_arg),
+      "  controlledStepper.stepper().set_max_order(args.max_order);",
+      "  controlledStepper.stepper().set_stald(args.stald);",
       # Slab priming for any AD path (heap dual<T,0> or static-N dual<T,N>),
       # a no-op for non-AD and nested-AD types. Emitted before the
       # std::move into denseStepper.
@@ -1005,7 +1007,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
                        if (use_sparse) "sparse" else "dense"),
                "  double abstol = args.abstol;",
                "  double reltol = args.reltol;",
-               "  double root_tol = args.root_tol;",
+               "  double root_tol = args.roottol;",
                "  double hini = args.hini;",
                "  int maxroot = args.maxroot;",
                "  ode_system sys(full_params, F);",
@@ -1013,7 +1015,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
                if (is_reverse) c(
                  "  // Checkpoint store for the reverse pass: reused from the caller, or",
                  "  // made here and freed on return unless the caller keeps it.",
-                 "  rev_state* _rev_st = static_cast<rev_state*>(args.store_in);",
+                 "  rev_state* _rev_st = static_cast<rev_state*>(args.store);",
                  "  bool _rev_reuse = (_rev_st != nullptr);",
                  "  std::unique_ptr<rev_state> _rev_owned;",
                  "  if (!_rev_reuse) { _rev_owned.reset(new rev_state()); _rev_st = _rev_owned.get(); }",
@@ -1261,15 +1263,15 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "    _rev_st->out_t.assign(result_times.begin(), result_times.end());",
       "    _rev_st->out_y.assign(y.begin(), y.end());",
       "  }",
-      "  if (args.want_store) {",
+      "  if (args.keep_store) {",
       "    res.store_out  = _rev_owned.release();",
       "    res.wrap_store = &rev_state_wrap;",
       "  }",
       "",
       "  // --- The backward sweep ---",
       "  // No seed with a store to keep: return the checkpoints without a sweep.",
-      "  if (args.seed == nullptr) {",
-      "    if (args.want_store) return res.return_code;",
+      "  if (args.cotangent == nullptr) {",
+      "    if (args.keep_store) return res.return_code;",
       "    return res.fail(cppde::RC_ILL_INPUT,",
       "                    \"a model compiled with derivMode = reverse needs a cotangent\");",
       "  }",
@@ -1295,7 +1297,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         "  res.adjoint2.assign((size_t)n_phi_rows * n_sens * n_seed, 0.0);")
       else character(0),
       solver_decl,
-      "  if (args.adj_trace) {",
+      "  if (args.adjoint_grid) {",
       "    const int _ns = (int)_rev_store.n_steps();",
       sprintf("    res.n_adj_steps = _ns;  res.n_adj_states = %d;", n_variables),
       "    res.step_t.assign((size_t)_ns, 0.0);",
@@ -1326,7 +1328,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
           if (!second_reverse)
             sprintf("    cppde::adjoint::extrapolated_flow<%s::lu_type> _flow;", rb4_double)
           else character(0)),
-        "    _cl.trace_lambda(args.adj_trace);",
+        "    _cl.trace_lambda(args.adjoint_grid);",
         if (second_reverse) character(0)
         else if (written_onestep) "    if (args.refine > 0) _cl.set_refine(args.refine * args.reltol, args.abstol, args.gradtol);"
         else "    if (args.refine > 0) _flow.set_refine(args.refine * args.reltol, args.abstol, args.gradtol);",
@@ -1340,16 +1342,16 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         "      for (int o = 0; o < n_out; ++o)",
         sprintf("        for (int i = 0; i < %d; ++i)", n_variables),
         sprintf("          _seed_col[(size_t)o * %d + i] =", n_variables),
-        sprintf("              args.seed[o + (size_t)n_out * (i + (size_t)%d * c)];", n_variables),
+        sprintf("              args.cotangent[o + (size_t)n_out * (i + (size_t)%d * c)];", n_variables),
         if (second_reverse) c(
-          "      if (args.seed_tan != nullptr && args.n_seed_tan > 0) {",
+          "      if (args.curvature != nullptr && args.n_seed_tan > 0) {",
           "        const int _ntg = args.n_seed_tan < n_sens ? args.n_seed_tan : n_sens;",
           "        for (int o = 0; o < n_out; ++o)",
           sprintf("          for (int i = 0; i < %d; ++i) {", n_variables),
           sprintf("            auto& _sc = _seed_col[(size_t)o * %d + i];", n_variables),
           "            _sc.diff(0, n_sens);",
           "            for (int v = 0; v < _ntg; ++v)",
-          "              _sc.d(v) = args.seed_tan[o + (size_t)n_out *",
+          "              _sc.d(v) = args.curvature[o + (size_t)n_out *",
           sprintf("                  (i + (size_t)%d * ((size_t)c + (size_t)n_seed * v))];", n_variables),
           "          }",
           "      }")
@@ -1380,7 +1382,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
           "        res.adjoint[i + (size_t)n_phi_rows * c] = _cl.wx0()[i] + _cl.wp()[i];",
           sprintf("      for (int j = %d; j < n_phi_rows; ++j)", n_variables),
           "        res.adjoint[j + (size_t)n_phi_rows * c] = _cl.wp()[j];"),
-        "      if (args.adj_trace) {",
+        "      if (args.adjoint_grid) {",
         "        const int _ns = res.n_adj_steps;",
         if (written_onestep || !second_reverse) c(
           "        if (c == 0) {",
@@ -1455,30 +1457,21 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
   externC <- c(
     externC,
-    sprintf(paste0('extern "C" SEXP solve_%s(SEXP timesSEXP, SEXP paramsSEXP, ',
-                   'SEXP sens1iniSEXP, SEXP sens2iniSEXP, SEXP fixedSEXP, SEXP abstolSEXP, ',
-                   'SEXP reltolSEXP, SEXP maxprogressSEXP, SEXP maxstepsSEXP, SEXP hiniSEXP, ',
-                   'SEXP root_tolSEXP, SEXP maxrootSEXP, SEXP forcingTimesSEXP, ',
-                   'SEXP forcingValuesSEXP, SEXP seedSEXP, SEXP dimnamesSEXP) {'),
-            modelname),
-    "  cppde::rbatch::solve_args a = cppde::rbatch::read_solve_args(",
-    "      timesSEXP, paramsSEXP, sens1iniSEXP, sens2iniSEXP, fixedSEXP,",
-    "      abstolSEXP, reltolSEXP, maxprogressSEXP, maxstepsSEXP, hiniSEXP,",
-    "      root_tolSEXP, maxrootSEXP, forcingTimesSEXP, forcingValuesSEXP, seedSEXP);",
-    sprintf("  return cppde::rbatch::solve_one(a, %d, %s, %s, &solve_impl, dimnamesSEXP);",
+    sprintf('extern "C" SEXP solve_%s(SEXP argsSEXP) {', modelname),
+    "  cppde::rbatch::solve_args a = cppde::rbatch::read_solve_args(argsSEXP);",
+    sprintf("  return cppde::rbatch::solve_one(a, %d, %s, %s, &solve_impl);",
             n_variables, dflag, d2flag),
     "}",
     "",
-    sprintf('extern "C" SEXP solve_%s_batch(SEXP condsSEXP, SEXP nthreadsSEXP, SEXP dimnamesSEXP) {', modelname),
+    sprintf('extern "C" SEXP solve_%s_batch(SEXP condsSEXP, SEXP nthreadsSEXP) {', modelname),
     "  const int K  = Rf_length(condsSEXP);",
     "  const int nt = Rf_isNull(nthreadsSEXP) ? 0 : INTEGER(nthreadsSEXP)[0];",
-    if (fixed_grid) "" else "  (void)dimnamesSEXP;",
     "",
     "  // Phase A: every R read and every R allocation, serially.",
     "  std::vector<cppde::rbatch::solve_args> A;",
     "  A.reserve(K);",
     "  for (int k = 0; k < K; ++k)",
-    "    A.push_back(cppde::rbatch::read_cond_args(VECTOR_ELT(condsSEXP, k)));",
+    "    A.push_back(cppde::rbatch::read_solve_args(VECTOR_ELT(condsSEXP, k)));",
     "  std::vector<cppde::rbatch::solve_result> R_(K);",
     "  SEXP out = PROTECT(Rf_allocVector(VECSXP, K));",
     if (fixed_grid) paste0(
@@ -1488,7 +1481,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         paste0("  std::vector<std::vector<double> > EV(K, std::vector<double>(%d));\n",
                "  for (int k = 0; k < K; ++k) %s_fixed_event_times(A[k].params, EV[k].data());\n"),
         n_ev_times, modelname) else "",
-      sprintf("  std::vector<cppde::rbatch::pre_ctx> P = cppde::rbatch::prealloc_batch(\n      out, A, %d, %d, %s, %s, %s, dimnamesSEXP%s);\n",
+      sprintf("  std::vector<cppde::rbatch::pre_ctx> P = cppde::rbatch::prealloc_batch(\n      out, A, %d, %d, %s, %s, %s%s);\n",
               n_variables, n_total_sens, dflag, d2flag,
               if (includeTimeZero) "true" else "false",
               if (n_ev_times > 0L) ", &EV" else ""),
@@ -1629,6 +1622,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   attr(modelname, "sparse")        <- use_sparse
   attr(modelname, "method")        <- method
   attr(modelname, "useNDF")        <- useNDF
+  attr(modelname, "solveAbi")      <- .solveAbi
   # Dimension names: under reparametrization the sens columns are theta slots.
   # The sens dim defaults to model-parameter names; solveODE() overrides it per
   # call when the tangent has a full Phi' shape.

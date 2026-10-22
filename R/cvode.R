@@ -247,6 +247,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   attr(modelname, "method")      <- method
   attr(modelname, "useNDF")      <- NA  # not meaningful for CVODE
   attr(modelname, "backend")     <- "cvode"
+  attr(modelname, "solveAbi")    <- .solveAbi
 
   # The sens dim defaults to model-parameter names; solveODE() overrides it per
   # call when the tangent has a full Phi' shape.

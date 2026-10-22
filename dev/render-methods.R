@@ -47,14 +47,14 @@ if (!nzchar(Sys.which("lualatex"))) {
   }
 }
 
-rmarkdown::render(
+# Rendered next to the source, where LaTeX finds the figures, then moved.
+pdf <- rmarkdown::render(
   input       = src,
   output_file = "Methods.pdf",
-  output_dir  = normalizePath("vignettes", mustWork = TRUE),
   quiet       = FALSE
 )
-
-if (!file.exists(out))
-  stop("Render finished but ", out, " was not produced.")
+if (!file.copy(pdf, out, overwrite = TRUE))
+  stop("Render finished but ", out, " was not written.")
+unlink(pdf)
 
 message("Wrote ", out, " (", format(file.size(out) / 1024, digits = 1), " KiB)")

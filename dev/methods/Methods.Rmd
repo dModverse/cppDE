@@ -58,7 +58,7 @@ first order       & forward, reverse           & forward, reverse         & forw
 second order      & forward-forward,           & none                     & forward-forward,            \\
                   & forward-reverse            &                          & forward-reverse             \\
 derivatives       & dual numbers, adjoint      & forward sensitivity      & dual numbers                \\
-                  &                            & equations                &                             \\
+                  &                            & equations, adjoint       &                             \\
 libraries         & LAPACK, KLU optional       & SUNDIALS $\ge 6.0$,      & none                        \\
                   &                            & KLU optional             &                             \\
 \bottomrule
@@ -324,8 +324,8 @@ $\delta$ the WRMS norm of the latest correction, $\rho$ the estimated
 contraction rate and $\tau_q$ an order-dependent constant. As in
 CVODE, $W$ is refactorised when $\gamma = h_n\beta_0$ has moved by more
 than $30\,\%$ since the last factorisation, after $20$ steps, or after
-a failed corrector; $J$ is re-evaluated after $51$ steps or when a
-failure is attributed to it. Without a new Jacobian, a sparse $W$
+a failed corrector or error test; $J$ is re-evaluated at a refactorisation
+once it is $51$ steps old, and after a failed corrector. Without a new Jacobian, a sparse $W$
 changes only on its diagonal.
 
 ### Adams-Moulton ($\mathtt{adams}$)
@@ -477,7 +477,7 @@ weighted root-mean-square norm
     \frac{e_{n,j}}{w_{n,j}}
   \right)^{\!2}},
   \qquad
-  w_{n,j} = \mathtt{atol} + \mathtt{rtol}\,|x^{\mathrm{ref}}_{n,j}|,
+  w_{n,j} = \mathtt{abstol} + \mathtt{reltol}\,|x^{\mathrm{ref}}_{n,j}|,
   \label{eq:wrms}
 \end{equation}
 whose weights put components of different magnitude and unit on a
@@ -519,34 +519,58 @@ step while the order is unchanged; the largest ratio fixes the next
 order. A ratio below $1.5$ leaves $h$ unchanged, and the ratio is
 capped at $10^4$ on the first step and at $10$ afterwards.
 
+The order never exceeds $q_{\max}$, $5$ for BDF/NDF and $12$ for Adams,
+or a smaller \texttt{maxOrder} given to a solve. The error test alone
+cannot see that a step size has reached the edge of the stability domain
+of order $q$, which for $q \ge 3$ excludes a wedge around the imaginary
+axis: it answers with rejections and a shrinking $h$ where a lower order
+would be stable. \texttt{stald = TRUE} adds CVODE's stability limit
+detection to the BDF family [@hindmarsh2005sundials]. From order $3$ on,
+each step records the squared norms of the scaled derivatives of degree
+$q-1$ and $q$, from the Nordsieck columns, and of degree $q+1$, from the
+corrector's correction. Once $q+5$ steps have been taken at order $q$,
+the last five records give the magnitude $r$ of the dominant root of the
+step-to-step error propagation, and $r > 0.98$ lowers the order by one at
+the step size $\eta_{q-1} h$. It overrides the order selection unless
+that already lowers the order. Detection is off by default, as in
+CVODE: it lowers the step count on weakly damped stiff oscillations, and
+elsewhere it costs the estimate on every step. On a \texttt{cvode()}
+model, \texttt{maxOrder} and \texttt{stald} set CVODE's own
+\texttt{CVodeSetMaxOrd} and \texttt{CVodeSetStabLimDet}.
+
 ### The first step
 
-cppDE estimates the first step size from the initial state as in
-Hairer, N\o{}rsett and Wanner [@hairer2008solving, Algorithm II.4.4]: a rough
-$h_0 \sim \|x_0\| / \|f_0\|$ fixes a scale, a second derivative
+The single-step methods estimate the first step size from the initial
+state as in Hairer, N\o{}rsett and Wanner [@hairer2008solving, Algorithm II.4.4]: a rough
+$h_0 = 0.01\,\|x_0\| / \|f_0\|$ fixes a scale, a second derivative
 $\ddot x$ along the trajectory fixes the curvature, and
 \begin{equation}
   h_1 = \left(
     \frac{0.01}{\max\bigl(\|f_0\|, \|\ddot x\|\bigr)}
-  \right)^{\!1/(p+1)}
+  \right)^{\!1/2}
   \label{eq:hnw-h1}
 \end{equation}
-turns the two into a step for a method of order $p$. The implicit
-methods obtain $\ddot x = \partial f/\partial t + J f$ from the
-generated Jacobian, the explicit one from a finite difference of $f$.
-All norms are the weighted norms of \eqref{eq:wrms}; with
-\texttt{sensErrCon = TRUE} they include the sensitivity components.
+turns the two into a step. The exponent is that of a first-order
+method for both: $\|\ddot x\|$ stands in for the derivative of order
+$p+1$, which it is only at $p = 1$, and a method of higher order raises
+its step within a few steps. \texttt{rb4} obtains
+$\ddot x = \partial f/\partial t + J f$ from the generated Jacobian,
+\texttt{tsit5} from a finite difference of $f$. The norms are weighted
+maximum norms with weights $\mathtt{abstol} + \mathtt{reltol}\,|x_0|$;
+with \texttt{sensErrCon = TRUE} they include the sensitivity components.
+The step is $\min(100\,h_0,\, h_1,\, h_{\mathrm{ub}})$: the upper bound
+$h_{\mathrm{ub}}$, at most a tenth of the interval, keeps a single Euler
+step from changing any component by more than a fraction of its own
+scale, and a lower bound keeps $t_0 + h$ distinct from $t_0$ in double
+precision.
 
-Two bounds apply, as in CVODE: an upper bound $h_{\mathrm{ub}}$,
-capped by the remaining interval, keeps a single Euler step from
-changing any component by more than a fraction of its own scale; a
-lower bound $h_{\mathrm{lb}}$ keeps $h_0$ above the rounding of the
-time variable. The multistep methods use a port of the CVODES routine
-\texttt{cvHin}, which refines $\sqrt{h_{\mathrm{lb}} h_{\mathrm{ub}}}$
-by a finite-difference curvature until two successive estimates agree
+The multistep methods use a port of the CVODES routine
+\texttt{cvHin}, which starts from $\sqrt{h_{\mathrm{lb}} h_{\mathrm{ub}}}$,
+with $h_{\mathrm{lb}}$ above the rounding of the time variable, and
+refines it by a finite-difference curvature until two successive estimates agree
 within a factor of two, so the first step equals the one CVODES takes
-on the same problem. The estimator runs again after every event, on
-the post-event state.
+on the same problem. After every event each method estimates its step
+again with this port, from the post-event state.
 
 ## Dense output
 
@@ -571,8 +595,11 @@ $s = (t - t_n)/h_n \in [0, 1]$ the three families use:
   \]
   with the coefficients of Table \ref{tab:ros-dense}.
 - BDF/NDF and Adams: the Nordsieck polynomial of degree $q$ held after
-  the step, $x(t) = \sum_{j=0}^{q} z_{n+1,j}\,
-  \bigl((t - t_{n+1})/h_n\bigr)^{j}$.
+  the step,
+  \[
+    x(t) = \sum_{j=0}^{q} z_{n+1,j}\,
+    \Bigl(\frac{t - t_{n+1}}{h_n}\Bigr)^{j}.
+  \]
 
 Both single-step interpolants are of order $3$, below the order of the
 step itself ($5$ for Tsit5, $4$ for Rosenbrock4); the multistep
@@ -718,7 +745,7 @@ error vector and weight,
     \frac{(e_S)_{ik}}{w^{(k)}_{i}}
   \right)^{\!2}},
   \qquad
-  w^{(k)}_{i} = \mathtt{atol} + \mathtt{rtol}\,|(S_\theta)_{ik}^{\mathrm{ref}}|,
+  w^{(k)}_{i} = \mathtt{abstol} + \mathtt{reltol}\,|(S_\theta)_{ik}^{\mathrm{ref}}|,
   \label{eq:wrms-col}
 \end{equation}
 where $(S_\theta)_{ik}^{\mathrm{ref}}$ is taken like
@@ -1235,8 +1262,9 @@ applies between the acceptance of this step and the next:
   \label{eq:step-tail}
 \end{align}
 The operators $A$, $B$ and $c$ act on the slot index only; their
-coefficients follow from the carry and are the same for every state
-component. They are read off the stepper, not transposed by hand: a
+coefficients follow from the Nordsieck carry, the order, step-size
+history and counters the stepper holds beside the slots, and are the
+same for every state component. They are read off the stepper, not transposed by hand: a
 probe whose states are the Nordsieck slots is driven through the
 routines of the forward step, seeded with the identity in the
 $[\text{slot} \times \text{component}]$ array, and one pass returns
@@ -1515,12 +1543,11 @@ rank-one term.
   \label{eq:root-quotient}
 \end{equation}
 and the second term contains $g$, which is zero in value: absent from
-the gradient, full strength in the Hessian. A $g$ linear in the state
-and independent of time reduces $\nabla \dot g$ to
-$J^{\mathsf T}\nabla g$ and leaves the other two terms untested, so the
-generator differentiates
+the gradient, full strength in the Hessian. The generator differentiates
 $\dot g = \partial g/\partial t + \nabla g \cdot f$ as one expression
-rather than assembling three terms. This yields
+rather than assembling three terms, so all three are present, including the
+two that vanish for a $g$ linear in the state and independent of time.
+This yields
 $\nabla \partial g/\partial t$ and $(\nabla^{2} g) f$ and, on $\theta$,
 the matching $\partial^{2} g/\partial\theta\,\partial t$,
 $(\partial \nabla g/\partial\theta)\cdot f$ and
@@ -1635,7 +1662,7 @@ state error measures that only on the modes present in the state,
 weighted by its own magnitude. On a trajectory at rest it measures
 nothing: a state that starts at zero and is not driven, or a steady
 state, is a polynomial the corrector reproduces, its error estimate is
-zero, and the step grows by the largest admissible factor on every step.
+zero, and the step grows by the controller's maximum factor on every step.
 The adjoint on that grid is the exact derivative of a scheme far from
 the flow. For $\dot x = -k x$, $\dot y = k x - y$ from $x = y = 0$ over
 $0, 1, \ldots, 50$, a grid of four steps returns $+0.80$ for a
@@ -1664,12 +1691,14 @@ sum from the end of the run down to $t_n$ is the running gradient
 $\bar\theta(t_n)$. With $\delta$ the error estimate of the step's adjoint,
 the step passes when
 \begin{equation}
+  \begin{gathered}
   \max\Bigl(\bigl\|\delta\lambda(t_n)\bigr\|_{\mathrm{rms},\,w_\lambda},\;
              \bigl\|\delta\Delta\bar\theta_n\bigr\|_{\mathrm{rms},\,w_\theta}\Bigr) \le 1,
-  \qquad
+  \\
   w_{\lambda,i} = \mathtt{reltol}\,|\lambda_i(t_n)| + \mathtt{abstol},
-  \quad
+  \qquad
   w_{\theta,i} = \mathtt{reltol}\,|\bar\theta_i(t_n)| + \mathtt{gradtol},
+  \end{gathered}
   \label{eq:refine-test}
 \end{equation}
 in the weighted root-mean-square norm of \eqref{eq:wrms}. The gradient term
@@ -1687,10 +1716,11 @@ is taken as it is. Otherwise the step is taken again in $m = 2, 4,
 \ldots, 1024$ substeps from its own start state, forward and back with the
 observations that fall into each, and successive refinements are
 compared. The difference $d_m$ is divided by Richardson's factor
-$\min\bigl(2^q - 1,\; d_{m/2}/d_m - 1\bigr)$ only as far as two successive
+$\min\bigl(2^q - 1,\; \max(1,\, d_{m/2}/d_m - 1)\bigr)$ only as far as two successive
 differences show the order $q$; the first halving is taken at face
 value. \texttt{tsit5} has no embedded adjoint and starts with the halving.
-\verb|$adjoint$substeps| reports the $m$ each step took.
+With \texttt{adjointControl(trace = TRUE)}, \verb|$adjoint$substeps|
+reports the $m$ each step took.
 
 **Multistep methods.** The share of a \texttt{bdf} or \texttt{adams} step
 cannot be recomputed in halves: the Nordsieck array couples the step to
@@ -1783,7 +1813,7 @@ $(\nabla_\theta J,\; \nabla^2_\theta J\,V)$, both exact rather than
 difference quotients [@pearlmutter1994fast]; for $V = I_M$ the second
 member is the Hessian. For an ODE this is the second-order adjoint
 [@wang1992second; @ozyurt2005cheap]. It is selected by
-\texttt{derivMode = "forward-reverse"} and reported as
+\mbox{\texttt{derivMode = "forward-reverse"}} and reported as
 \verb|curvature|, of shape $[n_x + n_p, N, n_{\text{seed}}]$, beside
 the \verb|cotangent| and \verb|tangent| of the same run.
 
@@ -1897,16 +1927,19 @@ inside an enclosing OpenMP region, where the caller already runs in
 parallel, and in a child created by \texttt{fork()}, because the OpenMP
 thread pool does not survive a fork; a \texttt{pthread\_atfork} handler
 marks the child. The BLAS library's own threads are set to one for the
-duration of a batch and restored afterwards, and the same handler does
-so around every \texttt{fork()}. \texttt{forkGuard()} reports which
+duration of a batch and restored afterwards. A second
+\texttt{pthread\_atfork} handler, installed once per process, sets the
+BLAS and OpenMP thread counts to one across every \texttt{fork()} and
+restores them in the parent. \texttt{forkGuard()} reports which
 BLAS library was found, and \texttt{batchAvailable()} whether a model
 runs its conditions in parallel.
 
 \texttt{prepareBatch()} performs the first phase once and keeps the
 converted arguments in a handle; \texttt{solveBatch()} then solves the
-same conditions with new parameter values, tangents, cotangents or
-error weights of unchanged shapes, as an optimiser does at every
-iteration. Reverse-mode solves use the same entry with one cotangent
+same conditions with new parameter values, tangents, Hessians,
+cotangents, curvatures, adjoint controls or stores of unchanged shapes,
+as an optimiser does at every iteration; new tolerances need a new
+\texttt{prepareBatch()}. Reverse-mode solves use the same entry with one cotangent
 per condition, and \texttt{cvode()} models provide the same batch
 entry.
 
@@ -2088,9 +2121,10 @@ until then.
 
 ## Entry points and derivative directions
 
-\texttt{derivMode} names the derivative directions built:
-\verb|"forward"|, \verb|"reverse"| or both, the default. Naming one
-omits the entries of the other and their compile time. \texttt{deriv}
+\texttt{derivMode} names the derivative products built, any of
+\verb|"forward"|, the default, \verb|"reverse"| and
+\verb|"forward-reverse"|, which implies \verb|"reverse"|. A product left
+out costs no entries and no compile time. \texttt{deriv}
 and \texttt{deriv2} switch the first- and second-order entries;
 \texttt{deriv2 = TRUE} requires \verb|"forward"|. Table
 \ref{tab:funcpp-dispatch} lists the R functions of the returned object
@@ -2099,21 +2133,23 @@ and the compiled entries they call.
 \begin{table}[h]
 \centering
 \small
+\setlength{\tabcolsep}{3pt}
 \begin{tabular}{@{} l l l @{}}
 \toprule
 R function & direction & compiled entry \\
 \midrule
-\texttt{func(x, p)}                                            & both    & \texttt{\_eval\_c} \\
+\texttt{func(x, p)}                                            & any     & \texttt{\_eval\_c} \\
 \texttt{jac(x, p[, tangentX, tangentP])}                       & forward & \texttt{\_eval\_ad\_c} \\
 \texttt{hess(x, p[, tangentX, tangentP, hessianX, hessianP])}  & forward & \texttt{\_eval\_ad2\_c} \\
 \texttt{evaluate(\ldots, deriv2)}                              & forward & \texttt{\_eval\_ad\_c} or \texttt{\_eval\_ad2\_c} \\
 \texttt{evaluateBatch(sets, cores, deriv2)}                    & forward & \texttt{\_eval\_ad\_batch} or \texttt{\_eval\_ad2\_batch} \\
 \texttt{vjp(x, p, cotangent)}                                  & reverse & \texttt{\_vjp\_c} \\
-\texttt{vjp(x, p, cotangent, tangentX, tangentP, curvature)}   & reverse & \texttt{\_vjp\_ad\_c} \\
+\texttt{vjp(x, p, cotangent, tangentX, tangentP, curvature)}   & forward-reverse & \texttt{\_vjp\_ad\_c} \\
 \bottomrule
 \end{tabular}
 \caption{R functions of a \texttt{cppFUN()} object and the compiled
-entries they call, each prefixed by the model name. The \texttt{\_c}
+entries they call, each prefixed by the model name; \texttt{x} and
+\texttt{p} stand for the arguments \texttt{vars} and \texttt{params}. The \texttt{\_c}
 entries are \texttt{.Call} interfaces that take their arguments by
 reference; \texttt{\_eval}, \texttt{\_eval\_ad}, \texttt{\_eval\_ad2} and
 \texttt{\_vjp} also exist as \texttt{.C} interfaces, used only for a
@@ -2502,8 +2538,8 @@ $51^\circ$ leaves no room for further reduction.
 \label{app:adams-coeffs}
 
 \emph{Source.} Hindmarsh et al. [@hindmarsh2005sundials], the
-$\ell$-vector formulation of CVODE; implemented in \texttt{adams\_set\_coefficients()} in
-\texttt{cppde\_multistepper.hpp}.
+$\ell$-vector formulation of CVODE; implemented in
+\texttt{cppde\_multistepper.hpp} by \texttt{adams\_set\_coefficients()}.
 
 The Adams-Moulton coefficients depend on the step-size history, so no
 static table holds them: they are recomputed every step from the
@@ -2526,9 +2562,10 @@ controller selects $q \in \{1, \dots, 12\}$ at run time.
 
 \label{app:ros-coeffs}
 
-\emph{Source.} Hairer and Wanner [@hairer2010solving, §IV.7], identical to the default
+\emph{Source.} Hairer and Wanner [@hairer2010solving, §IV.7], the default
 coefficients of the \texttt{rosenbrock4} stepper of
-Boost.Numeric.Odeint; implemented in
+Boost.Numeric.Odeint except the sign of $d_4$, which is that of
+\texttt{rodas.f}; implemented in
 \texttt{default\_rosenbrock\_coefficients} in
 \texttt{cppde\_rosenbrock4.hpp}.
 
@@ -2557,8 +2594,8 @@ Table \ref{tab:ros-dense}.
 \begin{tabular}{@{} c S @{\quad} c S @{\quad} c S @{}}
 \toprule
 $\gamma$ & {0.25} & $d_1$ & {0.25}    & $c_2$ & {0.386} \\
-$d_2$    & {-0.1043} & $d_3$ & {0.1035} & $c_3$ & {0.21}  \\
-$d_4$    & {0.0362}  &       &           & $c_4$ & {0.63}  \\
+$d_2$    & {$-0.1043$} & $d_3$ & {0.1035} & $c_3$ & {0.21}  \\
+$d_4$    & {$-0.0362$} &       &           & $c_4$ & {0.63}  \\
 \bottomrule
 \end{tabular}
 \caption{Rosenbrock4 diagonal coefficient $\gamma$, time-partial

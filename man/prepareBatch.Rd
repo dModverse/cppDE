@@ -25,7 +25,9 @@ prepareBatch(
   keepStore = FALSE,
   store = NULL,
   sensErrCon = TRUE,
-  adjoint = NULL
+  adjoint = NULL,
+  maxOrder = NULL,
+  stald = FALSE
 )
 }
 \arguments{
@@ -35,8 +37,8 @@ prepareBatch(
 Recognised names are \code{times}, \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent},
 \code{curvature}, \code{fixed}, \code{forcings}, \code{abstol}, \code{reltol}, \code{maxattempts},
 \code{maxsteps}, \code{hini}, \code{roottol}, \code{maxroot}, \code{keepStore}, \code{store},
-\code{sensErrCon} and \code{adjoint}; each overrides the batch-wide argument of the
-same name.}
+\code{sensErrCon}, \code{adjoint}, \code{maxOrder} and \code{stald}; each overrides the
+batch-wide argument of the same name.}
 
 \item{times, parms}{Batch-wide \code{times} and \code{parms} as in \code{\link[=solveODE]{solveODE()}}, for
 the conditions that do not give their own. Default \code{NULL}.}
@@ -112,6 +114,14 @@ sensitivities, has no effect under \code{derivMode = "reverse"}, and a
 
 \item{adjoint}{Optional \code{\link[=adjointControl]{adjointControl()}} object for a model compiled with
 \code{derivMode = "reverse"}. Default \code{NULL}, the same as \code{adjointControl()}.}
+
+\item{maxOrder}{Optional upper bound on the order of a multistep method,
+1 to 5 for \code{"bdf"} and 1 to 12 for \code{"adams"}. Default \code{NULL}, the
+method's own maximum. An error on \code{"rb4"} and \code{"tsit5"}.}
+
+\item{stald}{Logical, default \code{FALSE}. Stability limit detection for method
+\code{"bdf"}: the order drops when the step size leaves the stability region
+of the current order. See \code{vignette("Methods")}.}
 }
 \value{
 An object of class \code{"cppDEbatch"} for \code{\link[=solveBatch]{solveBatch()}}.

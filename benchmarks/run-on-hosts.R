@@ -1,33 +1,30 @@
 #!/usr/bin/env Rscript
 
 ## =====================================================================
-##  run-with-runbg.R: run the benchmark on plain ssh hosts via runbg().
+##  run-on-hosts.R: run the benchmark on this machine or on ssh hosts via
+##  dMod2::distributedComputing().
 ## =====================================================================
 
-##      Rscript benchmarks/run-with-runbg.R --dry-run
-##      Rscript benchmarks/run-with-runbg.R --machines you@box --submit
-##      Rscript benchmarks/run-with-runbg.R --collect --jobname cppde_bg
+##      Rscript benchmarks/run-on-hosts.R --dry-run
+##      Rscript benchmarks/run-on-hosts.R --machines you@box --submit
+##      Rscript benchmarks/run-on-hosts.R --collect --jobname cppde_bg
 
 ##  Same tiers and cost-balanced shards as run-on-cluster.R, so results from
 ##  the two routes are comparable. The problems are parsed here and travel in
-##  the workspace; a host needs only cppDE and a C++ compiler.
+##  the workspace; a host needs only cppDE, dMod2 and a C++ compiler.
 
-##  runbg() has no scheduler: `--machines` is the entire placement policy, and
-##  naming a host n times starts n concurrent R processes on it. The preflight
-##  refuses a placement that does not fit and the memory guards bound the rest.
+##  `--machines` is the entire placement policy: the shards are dealt over it in
+##  turn and a host runs them one after the other, --bench-cores workers each.
+##  The preflight refuses what does not fit, the memory guards bound the rest.
 
 ##  Nothing reserves the machine, so ratios stay valid while absolute
-##  milliseconds do not; every row records node and cpu. Authentication has to
-##  be non-interactive, including for `--machines localhost`.
-
-##  runbg's own `walltime` is not exposed: in dMod2 it splices a second
-##  statement into the try() call and the remote script no longer parses.
-##  Bound the run with the tier and --max-states instead.
+##  milliseconds do not; every row records node and cpu. "localhost" runs here
+##  without ssh, every other host needs non-interactive ssh authentication.
 
 suppressPackageStartupMessages({
   library(cppDE)
   if (!requireNamespace("dMod2", quietly = TRUE))
-    stop("dMod2 is required for runbg submission")
+    stop("dMod2 is required for submission")
 })
 
 ROOT <- local({
@@ -44,9 +41,9 @@ bench_source(file.path(ROOT, "benchmarks", "R"))
 
 OPT <- list(
   jobname      = "cppde_bg",
-  machines     = "localhost",     # comma-separated host pool for ssh
-  shards       = "",              # jobs to start; default: one per host
-  `bench-cores` = "4",            # benchmark workers inside one job
+  machines     = "localhost",     # comma-separated hosts, each once; localhost without ssh
+  shards       = "",              # shards to start; default: one per host
+  `bench-cores` = "4",            # cores of each host, one benchmark worker each
   tier         = "tiny",
   modes        = "nosens,sens1",
   conditions   = "1",
@@ -56,6 +53,7 @@ OPT <- list(
   tol          = "default",
   nrep         = "5",
   `min-time`   = "0.25",
+  walltime     = "",              # HH:MM:SS per shard; "" = no limit
   `log-lines`  = "40",
   `sparse-sweep` = "TRUE",
   `max-density` = "0.25",
@@ -67,6 +65,9 @@ OPT <- list(
   `max-worker-gb` = "",           # RLIMIT_AS per worker; "" = off
   `mem-per-worker` = "6",         # preflight floor, GB available per worker
   `mem-budget`  = "0.5",          # fraction of a host's free RAM we may plan for
+  ## Library paths put in front on the hosts, comma separated, for a development
+  ## installation next to the default one; "" uses the default library.
+  libs         = "",
   outdir       = file.path(ROOT, "benchmarks", "results"),
   `petab-root` = file.path(ROOT, "benchmarks", "cache", "petab", "Benchmark-Models"),
   `dry-run`    = "FALSE",
@@ -100,18 +101,20 @@ while (i <= length(args)) {
 tf <- function(x) isTRUE(as.logical(x))
 
 if (tf(OPT$help)) {
-  cat("\nRun the cppDE benchmark on ssh-reachable hosts via dMod2::runbg().\n\n")
+  cat("\nRun the cppDE benchmark on this machine or ssh hosts via",
+      "dMod2::distributedComputing().\n\n")
   cat(sprintf("  --%-14s [%s]\n", names(OPT), unlist(OPT)), sep = "")
   cat("\n  --dry-run    build and balance the shards locally, send nothing",
-      "\n  --submit     probe the hosts, transfer and start the jobs",
-      "\n  --wait       with --submit: block until done, then merge",
-      "\n               (runbg runs the hosts in sequence when it waits,",
-      "\n                so this is meant for a single shard)",
-      "\n  --check      ask whether the results are on the hosts yet",
-      "\n  --log        tail each host's R CMD BATCH output",
+      "\n  --submit     probe the hosts, transfer and start the shards",
+      "\n  --wait       with --submit: block until done, merge, and delete",
+      "\n               the job folders unless a shard failed",
+      "\n  --check      report which shards are done, running or failed",
+      "\n  --log        tail each shard's output, task_<i>.out",
       "\n  --collect    fetch an earlier --submit and merge it",
-      "\n  --purge      delete the remote job folders and local scratch",
-      "\n  --terminate  kill the remote R processes of this job",
+      "\n  --purge      delete the job folders on the hosts and here",
+      "\n  --terminate  stop the shards of this job",
+      "\n  --walltime   HH:MM:SS, ends a shard through `timeout` on the host",
+      "\n  --libs       library paths put in front on the hosts, comma separated",
       "\n  --no-sparse-sweep  leave out the dense/sparse sweep.  On by",
       "\n               default: every model where the linear solver is a",
       "\n               real choice (>= --min-sweep-states states, denser",
@@ -141,7 +144,7 @@ if (tf(OPT$help)) {
 ## nothing but the job name.  Anything given on the command line still
 ## wins, for a record that is missing or stale.
 JOBDIR <- file.path(ROOT, "benchmarks", "results", ".jobs")
-REC    <- file.path(JOBDIR, paste0(OPT$jobname, ".runbg.rds"))
+REC    <- file.path(JOBDIR, paste0(OPT$jobname, ".hosts.rds"))
 
 if (any(c("check", "collect", "log", "purge", "terminate") %in% SET) &&
     file.exists(REC)) {
@@ -151,21 +154,26 @@ if (any(c("check", "collect", "log", "purge", "terminate") %in% SET) &&
               OPT$tier, OPT$modes, OPT$shards, OPT$machines))
 }
 
-## Paths are resolved before anything changes directory: runbg writes its
-## scratch into, and fetches results into, the working directory.
+## distributedComputing() keeps a job's manifest, and the job folder of
+## "localhost", in the working directory it was submitted from, so every mode
+## runs in JOBDIR. Paths given on the command line are resolved before that.
 OPT$outdir       <- normalizePath(OPT$outdir, mustWork = FALSE)
 OPT$`petab-root` <- normalizePath(OPT$`petab-root`, mustWork = FALSE)
 
 machines <- trimws(strsplit(OPT$machines, ",")[[1L]])
 machines <- machines[nzchar(machines)]
 if (!length(machines)) stop("--machines needs at least one host")
+if (anyDuplicated(machines)) stop("name every host once in --machines")
 n_shards <- if (nzchar(OPT$shards)) as.integer(OPT$shards) else length(machines)
 if (is.na(n_shards) || n_shards < 1L) stop("--shards must be a positive integer")
-## One runbg job per shard; the host pool is dealt round-robin, so a
-## single host named once and --shards 4 gives four jobs on that host.
-placement <- machines[((seq_len(n_shards) - 1L) %% length(machines)) + 1L]
 bench_cores <- as.integer(OPT$`bench-cores`)
+if (is.na(bench_cores) || bench_cores < 1L) stop("--bench-cores must be a positive integer")
 OPT$shards <- as.character(n_shards)
+## distributedComputing() deals the tasks over the machines in turn: shard i runs
+## on machines[host_of[i]] and writes to <jobname>_folder/<host_of[i]> there.
+host_of <- ((seq_len(n_shards) - 1L) %% length(machines)) + 1L
+deal    <- machines[host_of]
+LIBS <- if (nzchar(OPT$libs)) trimws(strsplit(OPT$libs, ",")[[1L]]) else NULL
 
 ## The semaphore counts per host, not per job, so the default is a property of
 ## the host. Four concurrent builds at the 8 GB ceiling is ~32 GB of compiler
@@ -181,12 +189,6 @@ if (is.na(compile_slots) || compile_slots < 0L)
 if (is.na(max_compile_gb)) stop("--max-compile-gb must be a number")
 if (is.na(max_worker_gb)) stop("--max-worker-gb must be a number")
 
-## runbg() names its files after `filename` and works in getwd(), scp'ing every
-## *.c/*.cpp/*.o/*.so next to them and fetching results back there. A scratch
-## directory keeps it from shipping unrelated sources into the repo.
-STAGE <- file.path(ROOT, "benchmarks", "results", ".runbg")
-dir.create(STAGE, showWarnings = FALSE, recursive = TRUE)
-
 
 ## ---------------------------------------------------------------------
 ##  Talking to the hosts
@@ -199,17 +201,28 @@ fmt_num <- function(x, digits = 0) {
   if (!isTRUE(is.finite(x))) "?" else sprintf(paste0("%.", digits, "f"), x)
 }
 
-ssh_run <- function(host, cmd) {
-  out <- suppressWarnings(system2(
-    "ssh", c("-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
-             shQuote(host), shQuote(cmd)),
-    stdout = TRUE, stderr = TRUE))
+## A shell command on `host` with the environment of a task: "localhost" runs it
+## here with this session's R and library paths first, any other host over ssh.
+## --libs goes in front on both, expanded by the host's shell.
+on_host <- function(host, cmd) {
+  if (length(LIBS))
+    cmd <- paste0('export R_LIBS="', paste(sub("^~", "$HOME", LIBS), collapse = ":"),
+                  '${R_LIBS:+:$R_LIBS}"; ', cmd)
+  out <- suppressWarnings(if (identical(host, "localhost"))
+    system2("sh", c("-c", shQuote(paste0(
+      "export PATH=", shQuote(R.home("bin")), ":\"$PATH\" R_LIBS=",
+      shQuote(paste(.libPaths(), collapse = ":")), "; ", cmd))),
+      stdout = TRUE, stderr = TRUE)
+  else
+    system2("ssh", c("-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+                     shQuote(host), shQuote(cmd)),
+            stdout = TRUE, stderr = TRUE))
   list(status = attr(out, "status") %||% 0L, out = out)
 }
 
-## Everything the job needs from a host, in one round trip and with the same R
-## runbg will start (`R`, not `Rscript`, and --vanilla, so ~/.Renviron is out of
-## the picture on both sides alike).
+## Everything the job needs from a host, in one round trip and with the R the
+## tasks start: `Rscript` of a non-login ssh shell, or this session's R for
+## "localhost".
 
 ## The last field generates, compiles and solves a one-state model, because
 ## `cvodeConfig$available` is an install-time flag: a SUNDIALS displaced on the
@@ -236,7 +249,8 @@ host_report <- function(host) {
     ' nzchar(Sys.which("g++")) || nzchar(Sys.which("clang++")),',
     ' parallel::detectCores(), sprintf("%.1f", gb("MemTotal")),',
     ' sprintf("%.1f", gb("MemAvailable")), sprintf("%.2f", la),',
-    ' requireNamespace("unix", quietly = TRUE));',
+    ' requireNamespace("unix", quietly = TRUE),',
+    ' isTRUE(try(requireNamespace("dMod2", quietly = TRUE), silent = TRUE)));',
     'cat("CPPDEPROBEa,", paste(v, collapse = ","), "\\n", sep = ""); flush(stdout());',
     'ok <- tryCatch({',
     ' m <- cppDE::cvode(c(A = "-k*A"), modelname = "cppde_hostprobe", compile = TRUE);',
@@ -244,7 +258,7 @@ host_report <- function(host) {
     ' isTRUE(all(is.finite(r$variable)))',
     '}, error = function(e) FALSE);',
     'cat("CPPDEPROBEb,", ok, "\\n", sep = "")')
-  r <- ssh_run(host, paste("R --vanilla --no-echo -e", shQuote(rcode)))
+  r <- on_host(host, paste("Rscript -e", shQuote(rcode)))
   tail3 <- function() paste(utils::tail(r$out, 3L), collapse = " | ")
   pick <- function(tag) {
     ln <- grep(tag, r$out, fixed = TRUE, value = TRUE)
@@ -252,13 +266,13 @@ host_report <- function(host) {
     strsplit(sub(paste0(".*", tag, ","), "", utils::tail(ln, 1L)), ",", fixed = TRUE)[[1L]]
   }
   f <- pick("CPPDEPROBEa")
-  if (is.null(f) || length(f) < 10L) return(list(ok = FALSE, why = tail3()))
+  if (is.null(f) || length(f) < 11L) return(list(ok = FALSE, why = tail3()))
   s <- pick("CPPDEPROBEb")
   num <- function(x) suppressWarnings(as.numeric(x))
   list(ok = TRUE, rversion = f[1L], cppde = f[2L] == "TRUE",
        cvode = f[3L] == "TRUE", klu = f[4L] == "TRUE", cxx = f[5L] == "TRUE",
        cores = num(f[6L]), mem_total = num(f[7L]), mem_avail = num(f[8L]),
-       load1 = num(f[9L]), unixpkg = f[10L] == "TRUE",
+       load1 = num(f[9L]), unixpkg = f[10L] == "TRUE", dmod2 = f[11L] == "TRUE",
        ## The static fields are flushed before the solve, so a reply that stops after
        ## them means the solve took the R process down rather than raising a
        ## condition, which is what a displaced SUNDIALS does and no flag can report.
@@ -277,7 +291,7 @@ preflight <- function(hosts) {
   budget_frac <- suppressWarnings(as.numeric(OPT$`mem-budget`))
   if (!isTRUE(is.finite(budget_frac)) || budget_frac <= 0 || budget_frac > 1)
     stop("--mem-budget must be a fraction in (0, 1]")
-  for (h in unique(hosts)) {
+  for (h in hosts) {
     rep <- host_report(h)
     if (!rep$ok) {
       cat(sprintf("  %-24s UNREACHABLE / no R: %s\n", h, rep$why))
@@ -291,15 +305,18 @@ preflight <- function(hosts) {
                 if (rep$cxx) "yes" else "NO",
                 if (isTRUE(rep$solve)) "yes" else if (is.na(rep$solve)) "CRASH" else "NO"))
     if (nzchar(rep$why %||% "")) cat(sprintf("  %-24s %s\n", "", rep$why))
-    if (!rep$cppde || !rep$cvode || !rep$cxx || !isTRUE(rep$solve)) bad <- c(bad, h)
+    if (!rep$dmod2)
+      cat(sprintf("  %-24s dMod2 NOT INSTALLED: every task starts with library(dMod2)\n", ""))
+    if (!rep$cppde || !rep$cvode || !rep$cxx || !rep$dmod2 || !isTRUE(rep$solve))
+      bad <- c(bad, h)
 
-    ## What this submission is about to ask of this particular box.
-    jobs    <- sum(hosts == h)
-    workers <- jobs * bench_cores
-    cat(sprintf("  %-24s %s cores, %s GB RAM (%s GB available), load %s -> %d job(s) x %d = %d worker(s)\n",
+    ## What this submission is about to ask of this particular box: its shards
+    ## run one after the other, so the workers of one shard are the peak.
+    workers <- bench_cores
+    cat(sprintf("  %-24s %s cores, %s GB RAM (%s GB available), load %s -> %d shard(s) in turn x %d worker(s)\n",
                 "", fmt_num(rep$cores, 0), fmt_num(rep$mem_total, 0),
                 fmt_num(rep$mem_avail, 0), fmt_num(rep$load1, 2),
-                jobs, bench_cores, workers))
+                sum(deal == h), workers))
     if (isTRUE(rep$cores > 0) && workers > rep$cores) {
       cat(sprintf("  %-24s TOO MANY WORKERS: %d workers on %s cores\n",
                   "", workers, fmt_num(rep$cores, 0)))
@@ -349,10 +366,11 @@ preflight <- function(hosts) {
   ## fact, and --force must never be able to talk past it.
   if (length(bad))
     stop("host(s) not ready: ", paste(unique(bad), collapse = ", "),
-         "\n  runbg starts `R CMD BATCH --vanilla` over a non-login ssh shell,",
-         "\n  so anything a module system or ~/.profile sets up must be reachable",
-         "\n  from ~/.bashrc. The benchmark also compiles C++ at run time and",
-         "\n  needs cppDE's CVODE backend (cppDE::install_libs(\"sundials\")).",
+         "\n  The tasks run `Rscript` over a non-login ssh shell, so anything a",
+         "\n  module system or ~/.profile sets up must be reachable from ~/.bashrc;",
+         "\n  --libs puts a library path in front. Every task attaches dMod2, the",
+         "\n  benchmark compiles C++ at run time and needs cppDE's CVODE backend",
+         "\n  (cppDE::install_libs(\"sundials\")).",
          "\n  A failing or crashing solve with everything else green usually",
          "\n  means another SUNDIALS on the loader's search path is displacing",
          "\n  the one cppDE was installed against; run",
@@ -362,8 +380,8 @@ preflight <- function(hosts) {
   if (length(over)) {
     msg <- paste0(
       "placement exceeds the host(s): ", paste(unique(over), collapse = ", "),
-      "\n  Lower --shards or --bench-cores, spread over more --machines,",
-      "\n  or wait for the box to empty out. A sweep that oversubscribes a",
+      "\n  Lower --bench-cores, leave the host out of --machines, or wait",
+      "\n  for the box to empty out. A sweep that oversubscribes a",
       "\n  machine without a scheduler does not merely run slowly: enough",
       "\n  concurrent compilers drive the kernel into reclaim until it stops",
       "\n  answering, and the whole job is lost along with the host.",
@@ -373,27 +391,33 @@ preflight <- function(hosts) {
   }
 }
 
-## The control handles of an earlier submission, without re-sending it.
-runbg_handle <- function() dMod2::runbg({ NULL }, machine = placement,
-                                       filename = OPT$jobname, recover = TRUE)
+## The functions of an earlier submission, from the manifest in JOBDIR.
+job_handle <- function() {
+  if (!dir.exists(JOBDIR)) stop("no job was submitted from ", JOBDIR)
+  setwd(JOBDIR)
+  dMod2::distributedComputing(NULL, jobname = OPT$jobname, recover = TRUE)
+}
 
 
 ## ---------------------------------------------------------------------
 ##  Merging what came back
 ## ---------------------------------------------------------------------
 
-merge_results <- function(res) {
-  res <- if (is.data.frame(res)) list(res) else res
-  for (k in seq_along(res))
-    if (inherits(res[[k]], "try-error"))
-      cat(sprintf("  shard %d failed on %s: %s\n", k, placement[k],
+merge_results <- function(res, host = NULL) {
+  on <- function(k) if (is.null(host)) "" else paste(" on", host[k])
+  for (k in seq_along(res)) {
+    if (is.null(res[[k]]))
+      cat(sprintf("  shard %d%s: no result, see --log\n", k, on(k)))
+    else if (inherits(res[[k]], "try-error"))
+      cat(sprintf("  shard %d failed%s: %s\n", k, on(k),
                   sub("\n.*", "", conditionMessage(attr(res[[k]], "condition")))))
+  }
   parts <- Filter(function(x) is.data.frame(x) && nrow(x), res)
   if (!length(parts))
     stop("no data frames came back; try --log to see what the hosts did")
   df <- do.call(rbind, parts)
   tag <- paste0(format(Sys.time(), "%Y%m%d-%H%M%S"), "_", OPT$tier,
-                "_runbg_c", bench_cores, "_", gsub(",", "-", OPT$modes))
+                "_hosts_c", bench_cores, "_", gsub(",", "-", OPT$modes))
   out <- file.path(OPT$outdir, tag)
   dir.create(out, showWarnings = FALSE, recursive = TRUE)
   utils::write.csv(df, file.path(out, "results.csv"), row.names = FALSE)
@@ -416,44 +440,48 @@ merge_results <- function(res) {
 ##  Modes that only need the job name
 ## ---------------------------------------------------------------------
 
-## R CMD BATCH names its transcript after the basename of the script and ssh
-## drops us in the home directory, so the log sits beside the job folder rather
-## than inside it. Both are tried: an unfindable log is an undebuggable job.
+## A shard writes its output to task_<i>.out in its job folder: below JOBDIR
+## for "localhost", below the home directory on a remote host.
 if (tf(OPT$log)) {
   n <- as.integer(OPT$`log-lines`)
-  for (k in seq_along(placement)) {
-    f <- sprintf("%s_%d", OPT$jobname, k)
-    cat(sprintf("\n===== shard %d on %s =====\n", k, placement[k]))
-    r <- ssh_run(placement[k], sprintf(
-      "tail -n %d %s.Rout 2>/dev/null || tail -n %d %s_folder/%s.Rout", n, f, n, f, f))
-    cat(paste(r$out, collapse = "\n"), "\n")
+  invisible(job_handle())
+  for (k in seq_len(n_shards)) {
+    f <- file.path(paste0(OPT$jobname, "_folder"), host_of[k], sprintf("task_%d.out", k))
+    cat(sprintf("\n===== shard %d on %s =====\n", k, deal[k]))
+    out <- if (identical(deal[k], "localhost")) {
+      if (file.exists(f)) utils::tail(readLines(f, warn = FALSE), n) else "(no output yet)"
+    } else {
+      on_host(deal[k], sprintf("tail -n %d %s 2>/dev/null || echo '(no output yet)'",
+                               n, shQuote(f)))$out
+    }
+    cat(out, sep = "\n")
   }
   quit(save = "no")
 }
 
-if (tf(OPT$terminate)) { runbg_handle()$terminate(); quit(save = "no") }
+if (tf(OPT$terminate)) {
+  job_handle()$terminate()
+  cat("stopped the shards of '", OPT$jobname, "'\n", sep = "")
+  quit(save = "no")
+}
 
 if (tf(OPT$purge)) {
-  setwd(STAGE)
-  runbg_handle()$purge()
+  job_handle()$purge(local = TRUE)
   unlink(REC)
-  cat("purged remote folders and local scratch for '", OPT$jobname, "'\n", sep = "")
+  cat("purged the job folders of '", OPT$jobname, "' on the hosts and here\n", sep = "")
   quit(save = "no")
 }
 
 if (tf(OPT$check)) {
-  setwd(STAGE)
-  invisible(runbg_handle()$check())
+  invisible(job_handle()$check())
   quit(save = "no")
 }
 
 if (tf(OPT$collect)) {
-  setwd(STAGE)
-  job <- runbg_handle()
+  job <- job_handle()
   if (!job$check())
-    message("note: not every shard has reported; merging whatever has arrived")
-  job$get()
-  merge_results(get(".runbgOutput", envir = .GlobalEnv))
+    message("note: not every shard is done; merging whatever has arrived")
+  merge_results(job$get(), deal)
   quit(save = "no")
 }
 
@@ -493,13 +521,11 @@ shards <- sh$shards
 cov <- tier_coverage(problems, OPT$tier)
 print_tier_coverage(cov, OPT$tier)
 cat(sprintf("\n%d problems, %d cases -> %d shard(s) over %d host(s)\n",
-            length(problems), sum(lengths(problems)), n_shards,
-            length(unique(placement))))
+            length(problems), sum(lengths(problems)), n_shards, length(machines)))
 print_shard_plan(shards, sh$load)
-for (h in unique(placement))
-  cat(sprintf("  %-24s %d job(s) x %d worker(s) = %d concurrent solves\n",
-              h, sum(placement == h), bench_cores,
-              sum(placement == h) * bench_cores))
+for (h in machines)
+  cat(sprintf("  %-24s %d shard(s) in turn x %d worker(s)\n",
+              h, sum(deal == h), bench_cores))
 
 ## The compile ceiling is per host and not per job, so it is reported
 ## that way, with two jobs on a box the number below is still the whole
@@ -518,20 +544,21 @@ sweep_cfgs <- if (tf(OPT$`sparse-sweep`)) sparse_sweep_configs() else NULL
 nrep     <- as.integer(OPT$nrep)
 min_time <- as.numeric(OPT$`min-time`)
 maxs2    <- as.integer(OPT$`max-sens2`)
+max_sens <- as.integer(OPT$`max-sens`)
 
-## runbg() saves one workspace and copies it to every job, so the payload is
-## paid per shard. Naming what travels keeps `problems` out of it: R's
-## serialiser writes the shards' cases twice if the undivided list is present.
+## The workspace is copied to every host. Naming what travels keeps `problems`
+## out of it: R's serialiser writes the shards' cases twice if the undivided
+## list is present.
 
 ## BENCH_SEM is an environment, not a function, and the guards resolve it by
 ## name in .GlobalEnv at call time, so it has to travel explicitly.
 payload <- c(Filter(function(n) is.function(get(n, envir = .GlobalEnv)),
                     ls(.GlobalEnv)),
              "shards", "tolerances", "modes", "cfgs", "sweep_cfgs",
-             "nrep", "bench_cores", "maxs2", "min_time", "BENCH_SEM",
+             "nrep", "maxs2", "min_time", "max_sens", "BENCH_SEM",
              "compile_slots", "max_compile_gb", "max_worker_gb")
 
-cat(sprintf("\nworkspace payload: %s per shard\n",
+cat(sprintf("\nworkspace payload: %s per host\n",
             format(utils::object.size(mget(payload, envir = .GlobalEnv)),
                    units = "MB")))
 cat(sprintf("tolerances (%s): %s\n",
@@ -547,7 +574,7 @@ cat(sprintf("equivalent local run:\n  Rscript benchmarks/run-benchmarks.R --tier
 
 if (!tf(OPT$submit)) {
   cat("\nDry run, nothing sent.\n")
-  if ("machines" %in% SET) { cat("host probe:\n"); try(preflight(placement)) }
+  if ("machines" %in% SET) { cat("host probe:\n"); try(preflight(machines)) }
   else cat("Add --machines user@host to probe the hosts from here.\n")
   cat("\nThen re-run with --machines user@host --submit\n")
   quit(save = "no")
@@ -559,33 +586,29 @@ if (!tf(OPT$submit)) {
 ## ---------------------------------------------------------------------
 
 cat("\nhost probe:\n")
-preflight(placement)
+preflight(machines)
 
 WAIT <- tf(OPT$wait)
-if (WAIT && n_shards > 1L)
-  warning("runbg() starts the jobs sequentially when it waits, so --wait ",
-          "with ", n_shards, " shards runs them one after another",
-          call. = FALSE, immediate. = TRUE)
-
 cat(sprintf("\nstarting '%s': %d shard(s), %d worker(s) each\n",
             OPT$jobname, n_shards, bench_cores))
 
 dir.create(JOBDIR, showWarnings = FALSE, recursive = TRUE)
 saveRDS(OPT[setdiff(names(OPT), FLAGS)], REC)
 
-setwd(STAGE)
-invisible(dMod2::runbg(
+setwd(JOBDIR)
+res <- dMod2::distributedComputing(
   {
-    ## Runs on a host. `.node` is this job's shard index, set by runbg after the
-    ## workspace is loaded; `shards` and the benchmark functions arrive in it.
+    ## Runs on a host. `taskId` is this task's shard index and `cores` the cores
+    ## of its host, one worker each; `shards` and the benchmark functions arrive
+    ## in the workspace.
 
-    ## runbg only re-attaches the packages attached here, so cppDE is loaded
-    ## explicitly or every model fails and the shard returns nothing.
+    ## A task attaches dMod2 and nothing else, so cppDE is loaded explicitly
+    ## or every model fails and the shard returns nothing.
     library(cppDE)
     stopifnot(isTRUE(cppDE:::cvodeConfig$available))
     Sys.setenv(OMP_NUM_THREADS = "1", OPENBLAS_NUM_THREADS = "1",
                MKL_NUM_THREADS = "1")
-    builddir <- file.path(tempdir(), paste0("cppde_bench_", .node))
+    builddir <- file.path(tempdir(), paste0("cppde_bench_", taskId))
     dir.create(builddir, showWarnings = FALSE, recursive = TRUE)
 
     ## The memory guards, set up before the workers are forked so they inherit
@@ -599,17 +622,17 @@ invisible(dMod2::runbg(
       message("note: could not set a per-worker memory limit on ",
               Sys.info()[["nodename"]])
 
-    out <- run_all_problems(shards[[.node]], builddir = builddir,
+    out <- run_all_problems(shards[[taskId]], builddir = builddir,
                             tolerances = tolerances, modes = modes,
                             configs = cfgs, sweep_configs = sweep_cfgs,
-                            nrep = nrep, cores = bench_cores,
+                            nrep = nrep, cores = cores,
                             max_sens2 = maxs2, min_time = min_time,
                             compile_slots = compile_slots,
-                            max_sens = as.integer(OPT$`max-sens`))
+                            max_sens = max_sens)
     ## Stamp the hardware: absolute times are only comparable across rows
     ## that ran on the same host, and here nothing guaranteed they did.
     if (!is.null(out) && nrow(out)) {
-      out$shard <- .node
+      out$shard <- taskId
       out$node  <- unname(Sys.info()[["nodename"]])
       out$cpu   <- tryCatch(sub(".*: ", "", grep("model name",
                      readLines("/proc/cpuinfo", warn = FALSE), value = TRUE)[1L]),
@@ -617,17 +640,21 @@ invisible(dMod2::runbg(
     }
     out
   },
-  machine  = placement,
-  filename = OPT$jobname,
+  tasks    = seq_len(n_shards),
+  machine  = setNames(rep(bench_cores, length(machines)), machines),
+  jobname  = OPT$jobname,
+  walltime = if (nzchar(OPT$walltime)) OPT$walltime,
   input    = payload,
-  wait     = WAIT))
+  libs     = LIBS,
+  wait     = WAIT)
 
 if (WAIT) {
-  merge_results(get(".runbgOutput", envir = .GlobalEnv))
+  merge_results(res)
 } else {
+  print(res)
   cat("\nstarted. Poll, inspect and fetch with:\n",
-      sprintf("  Rscript benchmarks/run-with-runbg.R --check   --jobname %s\n", OPT$jobname),
-      sprintf("  Rscript benchmarks/run-with-runbg.R --log     --jobname %s\n", OPT$jobname),
-      sprintf("  Rscript benchmarks/run-with-runbg.R --collect --jobname %s\n", OPT$jobname),
+      sprintf("  Rscript benchmarks/run-on-hosts.R --check   --jobname %s\n", OPT$jobname),
+      sprintf("  Rscript benchmarks/run-on-hosts.R --log     --jobname %s\n", OPT$jobname),
+      sprintf("  Rscript benchmarks/run-on-hosts.R --collect --jobname %s\n", OPT$jobname),
       sep = "")
 }

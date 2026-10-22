@@ -20,10 +20,12 @@ in
   inst/include/cppde/cppde_multistepper.hpp
   inst/include/cppde/cppde_multistepper_controller.hpp
   inst/include/cppde/cppde_newton.hpp
+  inst/include/cppde/cppde_stald.hpp
 
 is a port of the BDF/Adams algorithms, step-size and order control,
 predictor/corrector pipeline, error-weight machinery, NDF kappa
-modification, and Newton iteration from SUNDIALS/CVODE(S) (file
+modification, Newton iteration and stability limit detection
+(cvBDFStab, cvSLdet) from SUNDIALS/CVODE(S) (file
 `cvode.c` and related sources).  Routine names referenced in inline
 comments (cvSetAdams, cvAdjustParams, cvNlsFunctional, cvDlsSetup,
 cvSensUpdateNorm, cvHin, …) point to their CVODE(S) origins.  The

@@ -701,7 +701,7 @@ def _sens_snippets(deriv, n_params, n_states, **_):
       cleanup();
       return res.fail(cppde::RC_ILL_INPUT, _m);
     }}
-    ud.Phi_prime.assign(args.sens1ini, args.sens1ini + expected_len);
+    ud.Phi_prime.assign(args.tangent, args.tangent + expected_len);
     // yS0[iS][i] = Phi'[i, iS] for state-row i
     for (int iS = 0; iS < Ns_active; ++iS) {{
       double* v = N_VGetArrayPointer(yS[iS]);
@@ -1395,12 +1395,12 @@ def _output_sink(
                    f"    {modelname}_fixed_event_times(A[k].params, EV[k].data());\n")
         cv_prealloc_block = (
             _ev +
-            "  // CVODE needs sens1ini when deriv is on, so sens_width() reads the\n"
+            "  // CVODE needs a tangent when deriv is on, so sens_width() reads the\n"
             "  // requested column count straight off the condition.\n"
             "  std::vector<cppde::rbatch::pre_ctx> P = cppde::rbatch::prealloc_batch(\n"
             f"      out, A, NEQ, 0, {'true' if deriv else 'false'}, false, "
             f"{'true' if include_time_zero else 'false'},\n"
-            f"      dimnamesSEXP{', &EV' if n_cv_ev else ''});\n"
+            f"      {'&EV' if n_cv_ev else 'nullptr'});\n"
             "  for (int k = 0; k < K; ++k) {\n"
             "    R_[k].acquire = &cppde::rbatch::pre_acquire;\n"
             "    R_[k].acquire_ctx = &P[k];\n"
@@ -1409,7 +1409,7 @@ def _output_sink(
             f"    if (R_[k].used_sink) {{ cppde::rbatch::finish_prealloc(out, k, R_[k], "
             f"{'true' if deriv else 'false'}, false); continue; }}\n")
     else:
-        cv_prealloc_block = "  (void)dimnamesSEXP;   // root handling: the grid is dynamic\n"
+        cv_prealloc_block = ""   # root handling: the grid is dynamic
         cv_finish_block = ""
     return {k: v for k, v in locals().items() if k != "_"}
 
@@ -1623,7 +1623,7 @@ def _asa_plain(asa_seg, reverse, **_):
         asa_init_block = """
   // --- adjoint sensitivity analysis: checkpoint allocation ---
   // @INTERP@ interpolation of the forward state between checkpoints.
-  if (args.seed == nullptr) {
+  if (args.cotangent == nullptr) {
     cleanup();
     return res.fail(cppde::RC_ILL_INPUT,
                     "a model compiled with derivMode = reverse needs a cotangent");
@@ -1679,7 +1679,7 @@ def _asa_plain(asa_seg, reverse, **_):
       {
         double* lam = N_VGetArrayPointer(yB);
         for (int i = 0; i < NEQ; ++i)
-          lam[i] = args.seed[(n_out_b - 1) + (size_t)n_out_b * i +
+          lam[i] = args.cotangent[(n_out_b - 1) + (size_t)n_out_b * i +
                              (size_t)n_out_b * NEQ * c];
       }
       { double* q = N_VGetArrayPointer(qB);
@@ -1748,7 +1748,7 @@ def _asa_plain(asa_seg, reverse, **_):
         double* lam = N_VGetArrayPointer(yB);
         bool jumped = false;
         for (int i = 0; i < NEQ; ++i) {
-          const double w = args.seed[k + (size_t)n_out_b * i +
+          const double w = args.cotangent[k + (size_t)n_out_b * i +
                                      (size_t)n_out_b * NEQ * c];
           if (w != 0.0) { lam[i] += w; jumped = true; }
         }
@@ -1982,7 +1982,7 @@ struct AsaJump {
     auto add_seed = [&](int k, int c, double* lam) -> bool {
       bool any = false;
       for (int i = 0; i < NEQ; ++i) {
-        const double w = args.seed[k + (size_t)n_out_b * i +
+        const double w = args.cotangent[k + (size_t)n_out_b * i +
                                    (size_t)n_out_b * NEQ * c];
         if (w != 0.0) { lam[i] += w; any = true; }
       }
@@ -2126,11 +2126,11 @@ def _linear_solver(
     # each direction refuses the other rather than ignoring the argument.
     if reverse:
         seed_guard = (
-            '  if (a.seed == nullptr)\n'
+            '  if (a.cotangent == nullptr)\n'
             '    Rf_error("a model compiled with derivMode = reverse needs a cotangent");')
     else:
         seed_guard = (
-            '  if (a.seed != nullptr)\n'
+            '  if (a.cotangent != nullptr)\n'
             '    Rf_error("this cvode model was compiled with derivMode = forward; '
             'recompile with derivMode = reverse");')
 
@@ -2264,6 +2264,8 @@ def _asa_restart(
     if (CVodeSetUserData(cvode_mem, &ud) < 0) {_fail_seg("", "CVodeSetUserData failed")}
     CVodeSetMaxNumSteps(cvode_mem, maxsteps);
     if (hini > 0.0) CVodeSetInitStep(cvode_mem, hini);
+    if (maxord > 0) CVodeSetMaxOrd(cvode_mem, maxord);
+    if (stald) CVodeSetStabLimDet(cvode_mem, SUNTRUE);
 {ls_setup_for(_fail_seg)}{rootfunc_init(_fail_seg)}    if (CVodeAdjInit(cvode_mem, ASA_CHECKPOINTS, {asa_interp}) < 0) {_fail_seg("", "CVodeAdjInit failed")}
     return 0;
   }};
@@ -2596,7 +2598,7 @@ static int solve_impl(const cppde::rbatch::solve_args& args,
 try {{
   cppde::ndf_detail::trace_scope _cppde_trace_scope(res.trace);
 
-  if (args.sens2ini != nullptr)
+  if (args.hessian != nullptr)
     return res.fail(cppde::RC_ILL_INPUT, "hessian not supported by CVODES backend");
 
   constexpr bool deriv = {deriv_flag};
@@ -2606,8 +2608,10 @@ try {{
   const double abstol = args.abstol;
   const double reltol = args.reltol;
   const double hini   = args.hini;
-  const double root_tol = args.root_tol; (void)root_tol;
+  const double root_tol = args.roottol; (void)root_tol;
   const long   maxsteps = static_cast<long>(args.maxsteps);
+  const int    maxord   = args.max_order;
+  const bool   stald    = args.stald;
 
   UserData ud;
   ud.params.assign(args.params, args.params + NPARMS);
@@ -2623,7 +2627,7 @@ try {{
   // entries; Ns_active = M, and M = 0 skips the sensitivity integration.
   int Ns_active_tmp = 0;
   if (deriv) {{
-    if (args.sens1ini == nullptr)
+    if (args.tangent == nullptr)
       return res.fail(cppde::RC_ILL_INPUT, "tangent is required when deriv = TRUE");
     Ns_active_tmp = args.n_sens1_cols;
   }}
@@ -2685,6 +2689,8 @@ try {{
   if (CVodeSetUserData(cvode_mem, &ud) < 0) {{ cleanup(); return res.fail(cppde::RC_LINIT_FAIL, "CVodeSetUserData failed"); }}
   CVodeSetMaxNumSteps(cvode_mem, maxsteps);
   if (hini > 0.0) CVodeSetInitStep(cvode_mem, hini);
+  if (maxord > 0 && CVodeSetMaxOrd(cvode_mem, maxord) < 0) {{ cleanup(); return res.fail(cppde::RC_ILL_INPUT, "CVodeSetMaxOrd failed"); }}
+  if (stald && CVodeSetStabLimDet(cvode_mem, SUNTRUE) < 0) {{ cleanup(); return res.fail(cppde::RC_ILL_INPUT, "CVodeSetStabLimDet failed"); }}
 {ls_setup}
 {rootfunc_init_block}
   // --- sensitivities ---
@@ -2797,23 +2803,15 @@ try {{
 }}
 }}
 
-extern "C" SEXP solve_{modelname}(
-    SEXP timesSEXP, SEXP paramsSEXP, SEXP sens1iniSEXP, SEXP sens2iniSEXP,
-    SEXP fixedSEXP, SEXP abstolSEXP, SEXP reltolSEXP, SEXP maxprogressSEXP,
-    SEXP maxstepsSEXP, SEXP hiniSEXP, SEXP root_tolSEXP, SEXP maxrootSEXP,
-    SEXP forcingTimesSEXP, SEXP forcingValuesSEXP, SEXP seedSEXP,
-    SEXP dimnamesSEXP)
+extern "C" SEXP solve_{modelname}(SEXP argsSEXP)
 {{
-  cppde::rbatch::solve_args a = cppde::rbatch::read_solve_args(
-      timesSEXP, paramsSEXP, sens1iniSEXP, sens2iniSEXP, fixedSEXP,
-      abstolSEXP, reltolSEXP, maxprogressSEXP, maxstepsSEXP, hiniSEXP,
-      root_tolSEXP, maxrootSEXP, forcingTimesSEXP, forcingValuesSEXP, seedSEXP);
+  cppde::rbatch::solve_args a = cppde::rbatch::read_solve_args(argsSEXP);
   // Nothing is protected yet, so the longjmp is safe here.
 {seed_guard}
-  return cppde::rbatch::solve_one(a, NEQ, {deriv_flag}, false, &solve_impl, dimnamesSEXP);
+  return cppde::rbatch::solve_one(a, NEQ, {deriv_flag}, false, &solve_impl);
 }}
 
-{cv_event_times_fn}extern "C" SEXP solve_{modelname}_batch(SEXP condsSEXP, SEXP nthreadsSEXP, SEXP dimnamesSEXP)
+{cv_event_times_fn}extern "C" SEXP solve_{modelname}_batch(SEXP condsSEXP, SEXP nthreadsSEXP)
 {{
   const int K  = Rf_length(condsSEXP);
   const int nt = Rf_isNull(nthreadsSEXP) ? 0 : INTEGER(nthreadsSEXP)[0];
@@ -2822,7 +2820,7 @@ extern "C" SEXP solve_{modelname}(
   std::vector<cppde::rbatch::solve_args> A;
   A.reserve(K);
   for (int k = 0; k < K; ++k)
-    A.push_back(cppde::rbatch::read_cond_args(VECTOR_ELT(condsSEXP, k)));
+    A.push_back(cppde::rbatch::read_solve_args(VECTOR_ELT(condsSEXP, k)));
   std::vector<cppde::rbatch::solve_result> R_(K);
   SEXP out = PROTECT(Rf_allocVector(VECSXP, K));
 {cv_prealloc_block}

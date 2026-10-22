@@ -6,7 +6,8 @@
 
  Layering:
    solve_impl(args, res)          pure C++, no R API, noexcept
-   solve_<model>(SEXP x14)        thin wrapper, one condition
+   solve_<model>(SEXP args)       thin wrapper, one condition; args is the
+                                  named list read_solve_args() reads
    solve_<model>_batch(conds, nt) reads all conditions, runs solve_impl over
                                   them (OpenMP), then builds the result list
 
@@ -45,22 +46,32 @@
 namespace cppde {
 namespace rbatch {
 
-// Per-condition inputs. Raw pointers into R memory, read serially in phase A
-// and valid for the caller's .Call frame.
+// The layout of the named argument list a solve entry takes. A change of
+// meaning or a removed entry raises it; a new optional entry does not, since an
+// older reader refuses a name it does not know.
+constexpr int SOLVE_ABI = 1;
+
+// Per-condition inputs, one field per entry of the argument list. Raw pointers
+// into R memory, read serially in phase A and valid for the caller's .Call
+// frame. Optional entries default to off.
 struct solve_args {
-  const double* times    = nullptr;  int n_times = 0;
-  const double* params   = nullptr;
-  const double* sens1ini = nullptr;  int n_sens1 = 0;  int n_sens1_cols = 0;
-  const double* sens2ini = nullptr;  int n_sens2 = 0;
-  const int*    fixed    = nullptr;  int n_fixed = 0;
-  // The reverse-mode seed, [n_out, n_states, n_seed] as R lays it out. One
-  // sweep per column; n_seed_rows has to be the run's own output row count,
-  // because a root event observes twice more than it was asked to.
-  const double* seed     = nullptr;
+  const double* times     = nullptr;  int n_times = 0;
+  const double* params    = nullptr;
+  const double* tangent   = nullptr;  int n_sens1 = 0;  int n_sens1_cols = 0;
+  const double* hessian   = nullptr;  int n_sens2 = 0;
+  const int*    fixed     = nullptr;  int n_fixed = 0;
+  // [n_out, n_states, n_seed] as R lays it out. One sweep per column;
+  // n_seed_rows has to be the run's own output row count, because a root event
+  // observes twice more than it was asked to.
+  const double* cotangent = nullptr;
   int n_seed_rows = 0, n_seed_states = 0, n_seed_cols = 0;
-  // Whether the sweep also reports the grid it ran on. An attribute of the seed
-  // rather than a sixteenth argument, which every compiled model would need.
-  bool adj_trace = false;
+  // The cotangent's own tangents, [n_out, n_states, n_seed, n_sens]: forward
+  // over reverse takes the cotangent as a dual, and this fills its derivative
+  // slots.
+  const double* curvature = nullptr;
+  int n_seed_tan = 0;
+  // Whether the sweep also reports the grid it ran on.
+  bool adjoint_grid = false;
   // Check each step of the sweep, to this multiple of reltol; 0 is off.
   double refine = 0.0;
   // The absolute tolerance on the gradient: the CVODES backward problem holds
@@ -69,26 +80,24 @@ struct solve_args {
   // A gradient needs two solves at one theta: values, then the sweep. The first
   // hands its checkpoints out, the second takes them back and integrates
   // nothing. Opaque here: only the model knows the store's type.
-  void* store_in  = nullptr;
-  bool  want_store = false;
+  void* store      = nullptr;
+  bool  keep_store = false;
   // Whether the step size, the order and the corrector's convergence test see
   // the tangents. Off makes every control decision read value arithmetic only,
-  // so the step sequence is the one a value run takes. Rides on `times` for the
-  // same reason the store does: it belongs to a solve, seeded or not.
+  // so the step sequence is the one a value run takes.
   bool sens_err_con = true;
-  // The seed's own tangents, [n_out, n_states, n_seed, n_sens]. A cotangent
-  // handed down by a node above the ODE moves with theta, and forward over
-  // reverse has to see that: the sweep takes the seed as a dual, so this is
-  // what fills its derivative slots, and rides on the seed.
-  const double* seed_tan = nullptr;
-  int n_seed_tan = 0;
-  // Step-size bounds, empty for none. Internal: set only by tests, through
-  // attr(times, "hmax").
+  // Step-size bounds, empty for none. Internal: set only by tests.
   cppde::step_limits limits;
-  double abstol = 1e-6, reltol = 1e-6, hini = 0.0, root_tol = 1e-6;
-  int maxprogress = 50, maxsteps = 1000000, maxroot = 1;
+  // The order cap of a multistep method, 0 for the method's own; and stability
+  // limit detection on the BDF family.
+  int  max_order = 0;
+  bool stald     = false;
+  double abstol = 1e-6, reltol = 1e-6, hini = 0.0, roottol = 1e-6;
+  int maxattempts = 50, maxsteps = 1000000, maxroot = 1;
   std::vector<const double*> ftimes, fvalues;
   std::vector<int> flen;
+  // list(variables, sensitivity names) or R_NilValue; read in phases A and C only.
+  SEXP dimnames = R_NilValue;
 };
 
 // Per-condition outputs. double only: AD tangents live in the thread-local
@@ -105,7 +114,7 @@ struct solve_result {
   std::vector<double> adjoint2;
   int n_adj_derivs = 0;
   // The grid the sweep ran on and what the adjoint says about it. Filled only
-  // under args.adj_trace: lambda alone is n_steps * n_states doubles.
+  // under args.adjoint_grid: lambda alone is n_steps * n_states doubles.
   //   step_t, step_h  [n_adj_steps]
   //   eta             [n_adj_steps, n_adj_cols]   lambda^T e_k
   //   lambda          [n_adj_steps, n_states, n_adj_cols]
@@ -113,7 +122,7 @@ struct solve_result {
   std::vector<int> step_m;   // the substeps the sweep took each step in
   int refine_failures = 0;   // checked steps that missed the test, all columns
   int n_adj_steps = 0, n_adj_states = 0;
-  // Set only under args.want_store. `wrap_store` is emitted by the model, the
+  // Set only under args.keep_store. `wrap_store` is emitted by the model, the
   // only place the store's type is known; phase C calls it on the main thread.
   void* store_out = nullptr;
   SEXP (*wrap_store)(void*) = nullptr;
@@ -255,116 +264,169 @@ inline void run_batch(int K, int nthreads, Fn&& fn) {
   (void)nt; (void)sync_in; (void)sync_out;
 }
 
-// ---------------------------------------------------------------------------
-//  Phase A: SEXP -> solve_args
-// ---------------------------------------------------------------------------
-inline solve_args read_solve_args(SEXP timesSEXP, SEXP paramsSEXP,
-                                  SEXP sens1iniSEXP, SEXP sens2iniSEXP,
-                                  SEXP fixedSEXP, SEXP abstolSEXP,
-                                  SEXP reltolSEXP, SEXP maxprogressSEXP,
-                                  SEXP maxstepsSEXP, SEXP hiniSEXP,
-                                  SEXP root_tolSEXP, SEXP maxrootSEXP,
-                                  SEXP forcingTimesSEXP, SEXP forcingValuesSEXP,
-                                  SEXP seedSEXP = R_NilValue) {
-  solve_args a;
-  a.times   = REAL(timesSEXP);
-  a.n_times = Rf_length(timesSEXP);
-  a.params  = REAL(paramsSEXP);
+namespace detail {
 
-  if (!Rf_isNull(sens1iniSEXP)) {
-    a.sens1ini     = REAL(sens1iniSEXP);
-    a.n_sens1      = Rf_length(sens1iniSEXP);
-    a.n_sens1_cols = static_cast<int>(Rf_ncols(sens1iniSEXP));
+// Every name the argument list may hold. Anything else comes from a cppDE newer
+// than the headers this model was compiled against.
+inline bool known_solve_arg(const char* nm) {
+  static const char* const known[] = {
+      "abi",          "times",        "parms",       "tangent",     "hessian",
+      "fixed",        "abstol",       "reltol",      "maxattempts", "maxsteps",
+      "hini",         "roottol",      "maxroot",     "forcing_times",
+      "forcing_values", "cotangent",  "curvature",   "adjoint_grid", "refine",
+      "gradtol",      "store",        "keep_store",  "sens_err_con", "hmax",
+      "max_order",    "stald",        "dimnames"};
+  for (const char* k : known)
+    if (std::strcmp(nm, k) == 0) return true;
+  return false;
+}
+
+struct arg_list {
+  SEXP list, names;
+  int n;
+
+  SEXP get(const char* nm) const {
+    for (int i = 0; i < n; ++i)
+      if (std::strcmp(CHAR(STRING_ELT(names, i)), nm) == 0) return VECTOR_ELT(list, i);
+    return R_NilValue;
   }
-  if (!Rf_isNull(sens2iniSEXP)) {
-    a.sens2ini = REAL(sens2iniSEXP);
-    a.n_sens2  = Rf_length(sens2iniSEXP);
+  SEXP need(const char* nm) const {
+    SEXP v = get(nm);
+    if (Rf_isNull(v)) Rf_error("solve argument '%s' is missing", nm);
+    return v;
   }
-  if (!Rf_isNull(fixedSEXP)) {
-    a.fixed   = INTEGER(fixedSEXP);
-    a.n_fixed = Rf_length(fixedSEXP);
+  SEXP typed(const char* nm, SEXPTYPE type, bool required) const {
+    SEXP v = required ? need(nm) : get(nm);
+    if (!Rf_isNull(v) && TYPEOF(v) != type)
+      Rf_error("solve argument '%s' has type %s, expected %s", nm,
+               Rf_type2char(TYPEOF(v)), Rf_type2char(type));
+    return v;
   }
-  if (!Rf_isNull(seedSEXP)) {
-    a.seed = REAL(seedSEXP);
-    SEXP d = Rf_getAttrib(seedSEXP, R_DimSymbol);
+  SEXP scalar(const char* nm, SEXPTYPE type, bool required) const {
+    SEXP v = typed(nm, type, required);
+    if (!Rf_isNull(v) && Rf_length(v) != 1)
+      Rf_error("solve argument '%s' must have length 1", nm);
+    return v;
+  }
+  double real1(const char* nm) const { return REAL(scalar(nm, REALSXP, true))[0]; }
+  int int1(const char* nm) const { return INTEGER(scalar(nm, INTSXP, true))[0]; }
+  double real1(const char* nm, double dflt) const {
+    SEXP v = scalar(nm, REALSXP, false);
+    return Rf_isNull(v) ? dflt : REAL(v)[0];
+  }
+  int int1(const char* nm, int dflt) const {
+    SEXP v = scalar(nm, INTSXP, false);
+    return Rf_isNull(v) ? dflt : INTEGER(v)[0];
+  }
+  bool lgl1(const char* nm, bool dflt) const {
+    SEXP v = scalar(nm, LGLSXP, false);
+    return Rf_isNull(v) ? dflt : LOGICAL(v)[0] == TRUE;
+  }
+};
+
+}  // namespace detail
+
+// ---------------------------------------------------------------------------
+//  Phase A: the named argument list -> solve_args
+// ---------------------------------------------------------------------------
+inline solve_args read_solve_args(SEXP argsSEXP) {
+  if (TYPEOF(argsSEXP) != VECSXP) Rf_error("solve arguments must be a list");
+  const detail::arg_list L{argsSEXP, Rf_getAttrib(argsSEXP, R_NamesSymbol),
+                           Rf_length(argsSEXP)};
+  if (L.n > 0 && TYPEOF(L.names) != STRSXP) Rf_error("solve arguments must be named");
+  for (int i = 0; i < L.n; ++i) {
+    const char* nm = CHAR(STRING_ELT(L.names, i));
+    if (!detail::known_solve_arg(nm))
+      Rf_error("unknown solve argument '%s': the model was compiled against an "
+               "older cppDE, recompile it", nm);
+  }
+  SEXP abi = L.get("abi");
+  const int abi_in = (TYPEOF(abi) == INTSXP && Rf_length(abi) == 1) ? INTEGER(abi)[0] : -1;
+  if (abi_in != SOLVE_ABI)
+    Rf_error("the model was compiled against cppDE solve ABI %d and called with "
+             "ABI %d: recompile it", SOLVE_ABI, abi_in);
+
+  solve_args a;
+  SEXP times = L.typed("times", REALSXP, true);
+  a.times   = REAL(times);
+  a.n_times = Rf_length(times);
+  a.params  = REAL(L.typed("parms", REALSXP, true));
+
+  if (SEXP v = L.typed("tangent", REALSXP, false); !Rf_isNull(v)) {
+    a.tangent      = REAL(v);
+    a.n_sens1      = Rf_length(v);
+    a.n_sens1_cols = static_cast<int>(Rf_ncols(v));
+  }
+  if (SEXP v = L.typed("hessian", REALSXP, false); !Rf_isNull(v)) {
+    a.hessian = REAL(v);
+    a.n_sens2 = Rf_length(v);
+  }
+  {
+    SEXP v = L.typed("fixed", INTSXP, true);
+    a.fixed   = Rf_length(v) ? INTEGER(v) : nullptr;
+    a.n_fixed = Rf_length(v);
+  }
+  if (SEXP v = L.typed("cotangent", REALSXP, false); !Rf_isNull(v)) {
+    a.cotangent = REAL(v);
+    SEXP d = Rf_getAttrib(v, R_DimSymbol);
     const int nd = Rf_isNull(d) ? 0 : Rf_length(d);
-    a.n_seed_rows   = nd >= 1 ? INTEGER(d)[0] : Rf_length(seedSEXP);
+    a.n_seed_rows   = nd >= 1 ? INTEGER(d)[0] : Rf_length(v);
     a.n_seed_states = nd >= 2 ? INTEGER(d)[1] : 1;
     a.n_seed_cols   = nd >= 3 ? INTEGER(d)[2] : 1;
-    SEXP tr = Rf_getAttrib(seedSEXP, Rf_install("adjointGrid"));
-    a.adj_trace = (!Rf_isNull(tr) && Rf_asLogical(tr) == TRUE);
-    SEXP rf = Rf_getAttrib(seedSEXP, Rf_install("refine"));
-    if (!Rf_isNull(rf) && Rf_length(rf) >= 1) a.refine = Rf_asReal(rf);
-    SEXP gt = Rf_getAttrib(seedSEXP, Rf_install("gradtol"));
-    if (!Rf_isNull(gt) && Rf_length(gt) >= 1) a.gradtol = Rf_asReal(gt);
-    SEXP stg = Rf_getAttrib(seedSEXP, Rf_install("curvature"));
-    if (!Rf_isNull(stg) && TYPEOF(stg) == REALSXP) {
-      SEXP sd = Rf_getAttrib(stg, R_DimSymbol);
-      if (TYPEOF(sd) == INTSXP && Rf_length(sd) == 4) {
-        a.seed_tan   = REAL(stg);
-        a.n_seed_tan = INTEGER(sd)[3];
-      }
-    }
+  }
+  if (SEXP v = L.typed("curvature", REALSXP, false); !Rf_isNull(v)) {
+    SEXP d = Rf_getAttrib(v, R_DimSymbol);
+    if (TYPEOF(d) != INTSXP || Rf_length(d) != 4)
+      Rf_error("solve argument 'curvature' must be a 4-d array");
+    a.curvature  = REAL(v);
+    a.n_seed_tan = INTEGER(d)[3];
+  }
+  a.adjoint_grid = L.lgl1("adjoint_grid", false);
+  a.refine       = L.real1("refine", 0.0);
+  a.gradtol      = L.real1("gradtol", 0.0);
+  if (SEXP v = L.typed("store", EXTPTRSXP, false); !Rf_isNull(v))
+    a.store = R_ExternalPtrAddr(v);
+  a.keep_store   = L.lgl1("keep_store", false);
+  a.sens_err_con = L.lgl1("sens_err_con", true);
+  a.max_order    = L.int1("max_order", 0);
+  a.stald        = L.lgl1("stald", false);
+  if (SEXP hm = L.typed("hmax", VECSXP, false); !Rf_isNull(hm)) {
+    SEXP ht = Rf_length(hm) == 2 ? VECTOR_ELT(hm, 0) : R_NilValue;
+    SEXP hh = Rf_length(hm) == 2 ? VECTOR_ELT(hm, 1) : R_NilValue;
+    if (TYPEOF(ht) != REALSXP || TYPEOF(hh) != REALSXP ||
+        Rf_xlength(hh) != Rf_xlength(ht))
+      Rf_error("solve argument 'hmax' must hold two double vectors of equal length");
+    const R_xlen_t nh = Rf_xlength(ht);
+    a.limits.t.assign(REAL(ht), REAL(ht) + nh);
+    a.limits.h.assign(REAL(hh), REAL(hh) + nh);
   }
 
-  // On `times` rather than on the seed: the call that *makes* a store has no
-  // seed, and it is the one whose integration the seeded call then skips.
-  {
-    SEXP ws = Rf_getAttrib(timesSEXP, Rf_install("keepStore"));
-    a.want_store = (!Rf_isNull(ws) && Rf_asLogical(ws) == TRUE);
-    SEXP st = Rf_getAttrib(timesSEXP, Rf_install("store"));
-    if (!Rf_isNull(st) && TYPEOF(st) == EXTPTRSXP)
-      a.store_in = R_ExternalPtrAddr(st);
-    SEXP se = Rf_getAttrib(timesSEXP, Rf_install("sensErrCon"));
-    if (!Rf_isNull(se)) a.sens_err_con = (Rf_asLogical(se) == TRUE);
-    SEXP hm = Rf_getAttrib(timesSEXP, Rf_install("hmax"));
-    if (!Rf_isNull(hm) && TYPEOF(hm) == VECSXP && Rf_length(hm) == 2) {
-      SEXP ht = VECTOR_ELT(hm, 0), hh = VECTOR_ELT(hm, 1);
-      if (TYPEOF(ht) != REALSXP || TYPEOF(hh) != REALSXP ||
-          Rf_xlength(hh) != Rf_xlength(ht))
-        Rf_error("attr(times, \"hmax\") must hold two double vectors of equal length");
-      const R_xlen_t nh = Rf_xlength(ht);
-      a.limits.t.assign(REAL(ht), REAL(ht) + nh);
-      a.limits.h.assign(REAL(hh), REAL(hh) + nh);
-    }
-  }
+  a.abstol      = L.real1("abstol");
+  a.reltol      = L.real1("reltol");
+  a.hini        = L.real1("hini");
+  a.roottol     = L.real1("roottol");
+  a.maxattempts = L.int1("maxattempts");
+  a.maxsteps    = L.int1("maxsteps");
+  a.maxroot     = L.int1("maxroot");
 
-  a.abstol      = REAL(abstolSEXP)[0];
-  a.reltol      = REAL(reltolSEXP)[0];
-  a.hini        = REAL(hiniSEXP)[0];
-  a.root_tol    = REAL(root_tolSEXP)[0];
-  a.maxprogress = INTEGER(maxprogressSEXP)[0];
-  a.maxsteps    = INTEGER(maxstepsSEXP)[0];
-  a.maxroot     = INTEGER(maxrootSEXP)[0];
-
-  const int nf = Rf_length(forcingTimesSEXP);
+  SEXP ft = L.typed("forcing_times", VECSXP, true);
+  SEXP fv = L.typed("forcing_values", VECSXP, true);
+  const int nf = Rf_length(ft);
+  if (Rf_length(fv) != nf)
+    Rf_error("solve arguments 'forcing_times' and 'forcing_values' differ in length");
   a.ftimes.resize(nf);
   a.fvalues.resize(nf);
   a.flen.resize(nf);
   for (int fi = 0; fi < nf; ++fi) {
-    SEXP ti = VECTOR_ELT(forcingTimesSEXP, fi);
-    SEXP vi = VECTOR_ELT(forcingValuesSEXP, fi);
+    SEXP ti = VECTOR_ELT(ft, fi), vi = VECTOR_ELT(fv, fi);
+    if (TYPEOF(ti) != REALSXP || TYPEOF(vi) != REALSXP || Rf_length(ti) != Rf_length(vi))
+      Rf_error("forcing %d must be two double vectors of equal length", fi + 1);
     a.ftimes[fi]  = REAL(ti);
     a.fvalues[fi] = REAL(vi);
     a.flen[fi]    = Rf_length(ti);
   }
+  a.dimnames = L.typed("dimnames", VECSXP, false);
   return a;
-}
-
-// Read one element of a batch condition list, falling back to R_NilValue.
-inline SEXP cond_elt(SEXP cond, int i) {
-  return (i < Rf_length(cond)) ? VECTOR_ELT(cond, i) : R_NilValue;
-}
-
-inline solve_args read_cond_args(SEXP cond) {
-  return read_solve_args(cond_elt(cond, 0),  cond_elt(cond, 1),
-                         cond_elt(cond, 2),  cond_elt(cond, 3),
-                         cond_elt(cond, 4),  cond_elt(cond, 5),
-                         cond_elt(cond, 6),  cond_elt(cond, 7),
-                         cond_elt(cond, 8),  cond_elt(cond, 9),
-                         cond_elt(cond, 10), cond_elt(cond, 11),
-                         cond_elt(cond, 12), cond_elt(cond, 13),
-                         cond_elt(cond, 14));
 }
 
 // ---------------------------------------------------------------------------
@@ -632,21 +694,6 @@ inline void split_dimnames(SEXP dn, SEXP* var_nm, SEXP* sens_nm) {
   }
 }
 
-// `dn` is either list(variables, sens) shared by every condition, or a list of
-// K such pairs. Conditions rarely agree on their sensitivity labels, a
-// reparametrised chain gives each one its own, and setting them in R
-// afterwards duplicates the whole sensitivity array.
-inline SEXP dimnames_for(SEXP dn, int k, int K) {
-  if (Rf_isNull(dn)) return R_NilValue;
-  if (Rf_length(dn) == K && K != 2) return VECTOR_ELT(dn, k);
-  // length 2 is ambiguous when K == 2: a pair of pairs is per-condition.
-  if (Rf_length(dn) == 2 && K == 2) {
-    SEXP first = VECTOR_ELT(dn, 0);
-    if (!Rf_isNull(first) && TYPEOF(first) == VECSXP) return VECTOR_ELT(dn, k);
-  }
-  return dn;
-}
-
 struct r_out_ctx {
   int n_variables = 0;
   bool deriv = false, deriv2 = false;
@@ -685,13 +732,12 @@ inline bool r_out_acquire(void* vctx, solve_result& r) {
 }
 
 inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool deriv2,
-                      int (*impl)(const solve_args&, solve_result&),
-                      SEXP dn = R_NilValue) {
+                      int (*impl)(const solve_args&, solve_result&)) {
   r_out_ctx ctx;
   ctx.n_variables = n_variables;
   ctx.deriv = deriv;
   ctx.deriv2 = deriv2;
-  split_dimnames(dn, &ctx.var_nm, &ctx.sens_nm);
+  split_dimnames(a.dimnames, &ctx.var_nm, &ctx.sens_nm);
 
   solve_result r;
   r.acquire     = &r_out_acquire;
@@ -824,7 +870,7 @@ inline int processed_time_count(const double* t, int n, bool include_zero,
 // Mirrors the generated code's n_sens: explicit Phi' width, else the
 // compile-time count minus the distinct runtime-fixed indices.
 inline int sens_width(const solve_args& a, int n_sens_total) {
-  if (a.sens1ini != nullptr) return a.n_sens1_cols;
+  if (a.tangent != nullptr) return a.n_sens1_cols;
   if (n_sens_total <= 0) return 0;
   std::vector<char> fixed(n_sens_total, 0);
   for (int i = 0; i < a.n_fixed; ++i)
@@ -834,25 +880,20 @@ inline int sens_width(const solve_args& a, int n_sens_total) {
   return n_sens_total - nf;
 }
 
-  // Builds each condition's result skeleton into `out`, already protected by the
-  // caller, and returns the buffers the workers write into. `dn` is R_NilValue
-  // or list(variables, sens_names); setting the dimnames here rather than in R
-  // avoids duplicating every array, which a refcount above one would force.
-  // `ev_times` is empty or one vector of fixed-event times per condition.
+  // Builds each condition's result skeleton, dimnames included, into `out`,
+  // already protected by the caller, and returns the buffers the workers write
+  // into. `ev_times` is empty or one vector of fixed-event times per condition.
 inline std::vector<pre_ctx> prealloc_batch(SEXP out, const std::vector<solve_args>& A,
                                            int n_variables, int n_sens_total,
                                            bool deriv, bool deriv2, bool include_zero,
-                                           SEXP dn = R_NilValue,
                                            const std::vector<std::vector<double> >* ev_times = nullptr) {
   SEXP var_nm = R_NilValue, sens_nm = R_NilValue;
-  split_dimnames(dn, &var_nm, &sens_nm);
   const int K = static_cast<int>(A.size());
   std::vector<pre_ctx> ctx(K);
   const int n_el = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + 1;
 
   for (int k = 0; k < K; ++k) {
-    SEXP dn_k = dimnames_for(dn, k, K);
-    split_dimnames(dn_k, &var_nm, &sens_nm);
+    split_dimnames(A[k].dimnames, &var_nm, &sens_nm);
     const bool has_ev = ev_times != nullptr && (int) ev_times->size() > k &&
                         !(*ev_times)[k].empty();
     const int n_out  = processed_time_count(

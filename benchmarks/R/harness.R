@@ -366,7 +366,9 @@ grad_error <- function(g, ref) {
 ## The head-to-head the suite is built around: cppDE's NDF/BDF multistep solver
 ## against SUNDIALS CVODE(S). `extra = TRUE` adds cppDE's plain BDF, CVODE's own
 ## formula, so a difference isolates the NDF change, and Rosenbrock4.
-solver_configs <- function(extra = FALSE) {
+## `stald = TRUE` adds the BDF family with stability limit detection on both
+## backends; `opts` are passed to solveODE() on every solve.
+solver_configs <- function(extra = FALSE, stald = FALSE) {
   cfg <- list(
     list(label = "cppDE_ndf", backend = "cppde", method = "bdf", useNDF = TRUE),
     list(label = "CVODE_bdf",  backend = "cvode",  method = "bdf", useNDF = NA)
@@ -374,6 +376,14 @@ solver_configs <- function(extra = FALSE) {
   if (extra) cfg <- c(cfg, list(
     list(label = "cppDE_bdf", backend = "cppde", method = "bdf", useNDF = FALSE),
     list(label = "cppDE_rb4", backend = "cppde", method = "rb4", useNDF = NA)
+  ))
+  if (stald) cfg <- c(cfg, list(
+    list(label = "cppDE_ndf_stald", backend = "cppde", method = "bdf", useNDF = TRUE,
+         opts = list(stald = TRUE)),
+    list(label = "cppDE_bdf_stald", backend = "cppde", method = "bdf", useNDF = FALSE,
+         opts = list(stald = TRUE)),
+    list(label = "CVODE_bdf_stald", backend = "cvode", method = "bdf", useNDF = NA,
+         opts = list(stald = TRUE))
   ))
   cfg
 }
@@ -541,9 +551,9 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
       ## A problem may pin its absolute tolerance; the relative one
       ## is still swept, which is how the IVP test set treats E5.
       atol <- prob$atol %||% tolerances$atol[ti]
-      run <- function() solveODE(m, prob$times, prob$parms, abstol = atol,
-                                 reltol = rtol, cotangent = cotangent,
-                                 onFailure = "silent")
+      run <- function() do.call(solveODE, c(
+        list(m, prob$times, prob$parms, abstol = atol, reltol = rtol,
+             cotangent = cotangent, onFailure = "silent"), cfg$opts))
       res <- tryCatch(run(), error = function(e) NULL)
       ok  <- !is.null(res) && !is.null(res$diagnostics) &&
              res$diagnostics$return_code == 0L

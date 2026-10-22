@@ -102,6 +102,7 @@ measurement isolates the integrator and nothing else:
 | `CVODE_bdf` | SUNDIALS CVODE / CVODES, BDF: the reference implementation |
 | `cppDE_bdf` | cppDE with `useNDF = FALSE`, i.e. CVODE's own BDF formula, so a difference isolates the NDF change (`--extra-solvers`) |
 | `cppDE_rb4` | Rosenbrock4, a one-step alternative (`--extra-solvers`) |
+| `cppDE_ndf_stald` / `cppDE_bdf_stald` / `CVODE_bdf_stald` | the BDF family with stability limit detection, `stald = TRUE` (`--stald`) |
 | `cppDE_dense` / `cppDE_sparse` / `CVODE_dense` / `CVODE_sparse` | the same two backends with the linear solver **pinned** instead of auto-detected, the sparse sweep, see below |
 
 ### The sparse sweep is part of the run
@@ -283,49 +284,70 @@ Rscript benchmarks/run-benchmarks.R --tol wp --nrep 7
 ## Running it somewhere else
 
 A full sweep is long and wants an idle machine, so there are two
-submitters. Both parse the problems **here** and ship them inside the
-transferred workspace, so the remote side needs neither this repository
-nor the PEtab collection, only cppDE with the CVODE backend, a C++
-compiler, and R. Both split the work with the same cost-balanced
-sharding (`R/shards.R`), so their results are comparable with each other
-and with a local run.
+submitters, both built on `dMod2::distributedComputing()`. Both parse the
+problems **here** and ship them inside the transferred workspace, so the
+remote side needs neither this repository nor the PEtab collection, only
+R with dMod2 and cppDE (CVODE backend) and a C++ compiler. Both split the
+work with the same cost-balanced sharding (`R/shards.R`), one task per
+shard, so their results are comparable with each other and with a local
+run.
 
 | script | via | placement |
 |---|---|---|
-| `run-on-cluster.R` | `dMod2::distributedComputing()` | a SLURM array; the scheduler reserves cores and memory |
-| `run-with-runbg.R` | `dMod2::runbg()` | plain ssh; one background `R CMD BATCH` per shard, placed by you |
+| `run-on-cluster.R` | `distributedComputing(slurm = TRUE)` | a SLURM array job; the scheduler reserves cores and memory |
+| `run-on-hosts.R` | `distributedComputing()` | this machine or plain ssh hosts; a host runs its shards in turn in the background, placed by you |
 
 ```sh
-Rscript benchmarks/run-with-runbg.R --dry-run --tier full --shards 4
-Rscript benchmarks/run-with-runbg.R --submit  --machines you@box --tier full --shards 4
-Rscript benchmarks/run-with-runbg.R --check   --jobname cppde_bg
-Rscript benchmarks/run-with-runbg.R --log     --jobname cppde_bg
-Rscript benchmarks/run-with-runbg.R --collect --jobname cppde_bg
-Rscript benchmarks/run-with-runbg.R --purge   --jobname cppde_bg
+Rscript benchmarks/run-on-hosts.R --dry-run --tier full --shards 4
+Rscript benchmarks/run-on-hosts.R --submit  --machines box1,box2 --bench-cores 12 --tier full --shards 4
+Rscript benchmarks/run-on-hosts.R --check   --jobname cppde_bg
+Rscript benchmarks/run-on-hosts.R --log     --jobname cppde_bg
+Rscript benchmarks/run-on-hosts.R --collect --jobname cppde_bg
+Rscript benchmarks/run-on-hosts.R --purge   --jobname cppde_bg
+
+Rscript benchmarks/run-on-cluster.R --dry-run --tier full --shards 8
+Rscript benchmarks/run-on-cluster.R --submit  --machine you@helix --partition cpu-single
+Rscript benchmarks/run-on-cluster.R --collect --jobname cppde_bench
 ```
 
-`--collect` replays the submission's options from
-`results/.jobs/<jobname>.runbg.rds`, so it needs nothing but the job
-name. It merges the shards into a normal results folder (CSV, README
-and figures) tagged `_runbg_`.
+Both scripts run `distributedComputing()` from `results/.jobs/`, which
+holds the job's manifest (`<jobname>_folder/job.rds`) and, for
+`localhost`, its job folder. `--collect` recovers the job from there and
+replays the submission's options from `results/.jobs/<jobname>.hosts.rds`
+(`<jobname>.rds` for the cluster), so it needs nothing but the job name.
+It merges the shards into a normal results folder (CSV, README and
+figures) tagged `_hosts_` or `_cluster_`.
 
-Without a scheduler, **placement is entirely yours**. `--machines` is a
-pool of hosts and `--shards n` deals *n* jobs round-robin over it, so one
-host named once with `--shards 4` gets four concurrent R processes;
-`--submit` prints the resulting `jobs × workers` per host. Keep that
-product inside the machine, remembering that a worker can peak in the
-gigabytes while it compiles. Nothing reserves the host either, so
-co-tenants land in the timings: ratios stay valid, both solvers of a
-matched cell run in the same process, while absolute milliseconds are
-only comparable within one host. Every row records `node` and `cpu`.
+`run-on-cluster.R` submits through a job script template: by default
+dMod2's Helix template, `system.file("slurm", "helix.sh", package =
+"dMod2")`, with its `#SBATCH --partition=` line set to `--partition` and
+written to `results/.jobs/<jobname>.sh`. `--jobscript` names a template
+of your own, see `?dMod2::distributedComputing`.
 
-`--submit` first probes each host over ssh for R, cppDE, the CVODE
+Without a scheduler, **placement is entirely yours**. `--machines` names
+each host once and `--shards n` deals *n* shards over them in turn. A
+host gets `--bench-cores` cores and runs its shards one after the other,
+each with one worker per core, so one host with `--shards 4` runs four
+shards in sequence; `--submit` prints the shards and workers per host.
+Keep `--bench-cores` inside the machine, remembering that a worker can
+peak in the gigabytes while it compiles. `distributedComputing()` cuts a host
+with fewer free cores to those, with a warning, and the `cores` column
+of `results.csv` records the workers a shard ran with. Nothing reserves
+the host either, so co-tenants land in the timings: ratios stay valid,
+both solvers of a matched cell run in the same process, while absolute
+milliseconds are only comparable within one host. Every row records
+`node` and `cpu`.
+
+`--submit` first probes each host for R, dMod2, cppDE, the CVODE
 backend, KLU and a C++ compiler, and refuses to send anything if one is
-missing. runbg starts `R CMD BATCH --vanilla` through a *non-login* ssh
-shell, so whatever a module system or `~/.profile` sets up has to be
-reachable from `~/.bashrc`. Authentication must be non-interactive:
-unlike `distributedComputing()`, `runbg()` has no `ssh_passwd`, so a key
-or an agent is required, including for `--machines localhost`.
+missing. `localhost` runs on this machine without ssh. Every other host
+runs `Rscript` through a *non-login* ssh shell, so whatever a module
+system or `~/.profile` sets up has to be reachable from `~/.bashrc`, and
+`--libs` puts library paths in front. Authentication must be
+non-interactive, a key or an agent. Each shard writes its output to
+`<jobname>_folder/<k>/task_<i>.out`, below `results/.jobs/` for
+`localhost` and below the home directory on a remote host; `--log` tails
+these files. `--walltime` ends a shard through `timeout`.
 
 ---
 
@@ -339,7 +361,7 @@ them at once does not merely swap, the kernel goes into reclaim and
 stops answering, and the job dies with the machine.
 
 Three guards bound that, each covering what the others cannot. They apply
-to every route (local, runbg, SLURM) with the same flag names:
+to every route (local, ssh hosts, SLURM) with the same flag names:
 
 | flag | bounds | default |
 |---|---|---|
@@ -363,11 +385,11 @@ which `--submit` prints before it sends anything.
 on the hosts; without it the run says so and continues, since the
 compiler cap is the one that always applies.
 
-For the ssh route the preflight reads each host's cores, total and
+For `run-on-hosts.R` the preflight reads each host's cores, total and
 available RAM and load, and **refuses to submit** unless three things
 hold on every host:
 
-* not more workers than cores, `jobs × --bench-cores ≤ nproc`
+* not more workers than cores, `--bench-cores ≤ nproc`
 * at least `--mem-per-worker` (6 GB) of available RAM per worker
 * a build ceiling of `min(--compile-slots, workers) × --max-compile-gb`
   that stays under `--mem-budget` (0.5) of what is free
@@ -381,10 +403,12 @@ and the co-tenant who logs in next has to fit somewhere too. `--force`
 turns any of these refusals into a warning.
 
 ```
-  knecht5   R 4.5.0 | cppDE yes | CVODE yes | KLU yes | C++ yes | solve yes
-            12 cores, 504 GB RAM (498 GB available), load 0.14 -> 6 job(s) x 8 = 48 worker(s)
-            TOO MANY WORKERS: 48 workers on 12 cores
-            build ceiling 32 GB (4 compiler(s) x 8 GB) vs 249 GB budget (50% of free)
+  localhost                R 4.6.1 | cppDE yes | CVODE yes | KLU yes | C++ yes | solve yes
+                           22 cores, 62 GB RAM (45 GB available), load 1.35 -> 2 shard(s) in turn x 32 worker(s)
+                           TOO MANY WORKERS: 32 workers on 22 cores
+                           TOO LITTLE MEMORY: 1.4 GB per worker, floor is 6.0
+                           build ceiling 32 GB (4 compiler(s) x 8 GB) vs 23 GB budget (50% of free)
+                           CEILING EXCEEDS BUDGET: 32 GB planned, 50% of 45 GB free is 23 GB
 ```
 
 Under SLURM the allocation already reserves memory, so there the guards
@@ -401,7 +425,7 @@ benchmarks/
   fetch-models.R        download / update the PEtab collection
   run-benchmarks.R      the driver, start here
   run-on-cluster.R      submit to SLURM     (dMod2::distributedComputing)
-  run-with-runbg.R      submit over ssh     (dMod2::runbg)
+  run-on-hosts.R        submit to hosts     (dMod2::distributedComputing)
   validate-models.R     check the SBML translation against the
                         simulated data shipped with the collection
   R/

@@ -18,8 +18,12 @@ BENCH_COLS <- c(
   cppDE_ndf = "#2a78d6",
   CVODE_bdf  = "#eb6834",
   cppDE_bdf = "#1baf7a",
-  cppDE_rb4 = "#4a3aa7")
-BENCH_SHAPES <- c(cppDE_ndf = 16, CVODE_bdf = 17, cppDE_bdf = 15, cppDE_rb4 = 18)
+  cppDE_rb4 = "#4a3aa7",
+  cppDE_ndf_stald = "#86b6ee",
+  CVODE_bdf_stald  = "#f5b08f",
+  cppDE_bdf_stald = "#8fd9bc")
+BENCH_SHAPES <- c(cppDE_ndf = 16, CVODE_bdf = 17, cppDE_bdf = 15, cppDE_rb4 = 18,
+                  cppDE_ndf_stald = 1, CVODE_bdf_stald = 2, cppDE_bdf_stald = 0)
 
 ## Keyed by backend, for the sparse-sweep figures.
 BACKEND_COLS <- c(cppde = "#2a78d6", cvode = "#eb6834")
