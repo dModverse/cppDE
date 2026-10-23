@@ -178,7 +178,7 @@ if (tf(OPT$collect)) {
   job <- dMod2::distributedComputing(NULL, jobname = OPT$jobname, recover = TRUE)
   if (!job$check()) message("note: the cluster reports the job as incomplete; ",
                             "merging whatever has arrived")
-  res <- job$get()
+  res <- job$get(combine = FALSE)
   for (k in seq_along(res)) {
     if (is.null(res[[k]]))
       cat(sprintf("  shard %d: no result\n", k))
@@ -362,12 +362,10 @@ job <- dMod2::distributedComputing(
     out
   },
   tasks      = seq_len(n_shards),
-  machine    = setNames(cores, OPT$machine),
+  on         = dMod2::slurmCluster(OPT$machine, cores = cores, walltime = OPT$walltime,
+                                   memPerCore = as.numeric(OPT$`mem-per-core`),
+                                   jobscript = jobscript),
   jobname    = OPT$jobname,
-  slurm      = TRUE,
-  jobscript  = jobscript,
-  memPerCore = as.numeric(OPT$`mem-per-core`),
-  walltime   = OPT$walltime,
   libs       = if (nzchar(OPT$libs)) strsplit(OPT$libs, ",")[[1L]] else NULL)
 
 saveRDS(OPT[setdiff(names(OPT), c("dry-run", "submit", "collect", "help"))],

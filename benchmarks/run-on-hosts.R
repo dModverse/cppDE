@@ -53,7 +53,6 @@ OPT <- list(
   tol          = "default",
   nrep         = "5",
   `min-time`   = "0.25",
-  walltime     = "",              # HH:MM:SS per shard; "" = no limit
   `log-lines`  = "40",
   `sparse-sweep` = "TRUE",
   `max-density` = "0.25",
@@ -113,7 +112,6 @@ if (tf(OPT$help)) {
       "\n  --collect    fetch an earlier --submit and merge it",
       "\n  --purge      delete the job folders on the hosts and here",
       "\n  --terminate  stop the shards of this job",
-      "\n  --walltime   HH:MM:SS, ends a shard through `timeout` on the host",
       "\n  --libs       library paths put in front on the hosts, comma separated",
       "\n  --no-sparse-sweep  leave out the dense/sparse sweep.  On by",
       "\n               default: every model where the linear solver is a",
@@ -481,7 +479,7 @@ if (tf(OPT$collect)) {
   job <- job_handle()
   if (!job$check())
     message("note: not every shard is done; merging whatever has arrived")
-  merge_results(job$get(), deal)
+  merge_results(job$get(combine = FALSE), deal)
   quit(save = "no")
 }
 
@@ -596,7 +594,7 @@ dir.create(JOBDIR, showWarnings = FALSE, recursive = TRUE)
 saveRDS(OPT[setdiff(names(OPT), FLAGS)], REC)
 
 setwd(JOBDIR)
-res <- dMod2::distributedComputing(
+job <- dMod2::distributedComputing(
   {
     ## Runs on a host. `taskId` is this task's shard index and `cores` the cores
     ## of its host, one worker each; `shards` and the benchmark functions arrive
@@ -641,17 +639,17 @@ res <- dMod2::distributedComputing(
     out
   },
   tasks    = seq_len(n_shards),
-  machine  = setNames(rep(bench_cores, length(machines)), machines),
+  on       = dMod2::sshNodes(machines, cores = bench_cores),
   jobname  = OPT$jobname,
-  walltime = if (nzchar(OPT$walltime)) OPT$walltime,
   input    = payload,
-  libs     = LIBS,
-  wait     = WAIT)
+  libs     = LIBS)
 
 if (WAIT) {
-  merge_results(res)
+  done <- job$wait()
+  merge_results(job$get(combine = FALSE), deal)
+  if (done) job$purge(local = TRUE)
 } else {
-  print(res)
+  print(job)
   cat("\nstarted. Poll, inspect and fetch with:\n",
       sprintf("  Rscript benchmarks/run-on-hosts.R --check   --jobname %s\n", OPT$jobname),
       sprintf("  Rscript benchmarks/run-on-hosts.R --log     --jobname %s\n", OPT$jobname),

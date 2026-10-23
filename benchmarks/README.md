@@ -294,8 +294,8 @@ run.
 
 | script | via | placement |
 |---|---|---|
-| `run-on-cluster.R` | `distributedComputing(slurm = TRUE)` | a SLURM array job; the scheduler reserves cores and memory |
-| `run-on-hosts.R` | `distributedComputing()` | this machine or plain ssh hosts; a host runs its shards in turn in the background, placed by you |
+| `run-on-cluster.R` | `distributedComputing()` on `slurmCluster()` | a SLURM array job; the scheduler reserves cores and memory |
+| `run-on-hosts.R` | `distributedComputing()` on `sshNodes()` | this machine or plain ssh hosts; a host runs its shards in turn in the background, placed by you |
 
 ```sh
 Rscript benchmarks/run-on-hosts.R --dry-run --tier full --shards 4
@@ -322,7 +322,7 @@ figures) tagged `_hosts_` or `_cluster_`.
 dMod2's Helix template, `system.file("slurm", "helix.sh", package =
 "dMod2")`, with its `#SBATCH --partition=` line set to `--partition` and
 written to `results/.jobs/<jobname>.sh`. `--jobscript` names a template
-of your own, see `?dMod2::distributedComputing`.
+of your own, see `?dMod2::slurmTemplate`.
 
 Without a scheduler, **placement is entirely yours**. `--machines` names
 each host once and `--shards n` deals *n* shards over them in turn. A
@@ -347,7 +347,7 @@ system or `~/.profile` sets up has to be reachable from `~/.bashrc`, and
 non-interactive, a key or an agent. Each shard writes its output to
 `<jobname>_folder/<k>/task_<i>.out`, below `results/.jobs/` for
 `localhost` and below the home directory on a remote host; `--log` tails
-these files. `--walltime` ends a shard through `timeout`.
+these files.
 
 ---
 
