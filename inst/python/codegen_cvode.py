@@ -1976,7 +1976,7 @@ struct AsaJump {
 
     // Rows at one time within rounding, such as the row before a root and the
     // root time itself, are added together.
-    auto near = [](double a, double b) {
+    auto same_time = [](double a, double b) {
       return std::abs(a - b) <= 1e-13 * std::max(1.0, std::abs(b));
     };
     auto add_seed = [&](int k, int c, double* lam) -> bool {
@@ -1994,7 +1994,7 @@ struct AsaJump {
       AsaSeg& S = asa_segs[s];
 @USE_MODES@
       void* mem = (s == n_seg - 1) ? cvode_mem : S.mem;
-      const bool flows = mem != nullptr && S.used && S.t1 > S.t0 && !near(S.t0, S.t1);
+      const bool flows = mem != nullptr && S.used && S.t1 > S.t0 && !same_time(S.t0, S.t1);
       SUNMatrix&       AB  = S.AB;
       SUNLinearSolver& LSB = S.LSB;
       for (int c = 0; c < n_seed && return_code == 0; ++c) {
@@ -2002,7 +2002,7 @@ struct AsaJump {
         double* q_c   = q_all.data() + (size_t)n_q * c;
         int k = S.row1 - 1;
         double tB = S.t1;
-        while (k >= S.row0 && near(out_t[k], tB)) { add_seed(k, c, lam_c); --k; }
+        while (k >= S.row0 && same_time(out_t[k], tB)) { add_seed(k, c, lam_c); --k; }
 
         if (!flows) {
           // Nothing to integrate: every row here is at the stretch's one time.
@@ -2052,7 +2052,7 @@ struct AsaJump {
           // seeded row re-initialises the backward problem, as without events.
           while (return_code == 0) {
             const double tk = (k >= S.row0) ? std::max(out_t[k], S.t0) : S.t0;
-            if (tk < tB && !near(tk, tB)) {
+            if (tk < tB && !same_time(tk, tB)) {
               int fb = CVodeB(mem, tk, CV_NORMAL);
               if (fb < 0) { return_code = fb; solver_msg = "CVodeB failed"; break; }
               sunrealtype tret_b;
@@ -2064,11 +2064,11 @@ struct AsaJump {
             }
             if (k < S.row0) break;
             bool jumped = false;
-            while (k >= S.row0 && near(std::max(out_t[k], S.t0), tB)) {
+            while (k >= S.row0 && same_time(std::max(out_t[k], S.t0), tB)) {
               jumped = add_seed(k, c, lam) || jumped;
               --k;
             }
-            if (jumped && !near(tB, S.t0)) {
+            if (jumped && !same_time(tB, S.t0)) {
               sunrealtype tq_;
               if ((NPAR_ADJ > 0 && CVodeGetQuadB(mem, S.indexB, &tq_, qB) < 0) ||
                   CVodeReInitB(mem, S.indexB, tB, yB) < 0 ||

@@ -16,9 +16,8 @@ directory of the first source. Default \code{NULL}: one library per object.}
 \item{args}{Optional additional compiler or linker arguments appended
 after the flags from \code{"compileArgs"}. Default \code{NULL}.}
 
-\item{cores}{Number of parallel compilation jobs (Unix only): separate
-libraries are built side by side, a combined \code{output} with \code{make -j}.
-Default \code{1}.}
+\item{cores}{Number of parallel compilation jobs: separate libraries are
+built side by side, a combined \code{output} with \code{make -j}. Default \code{1}.}
 
 \item{verbose}{Logical; if \code{TRUE}, show compiler commands. Default \code{FALSE}.}
 }

@@ -1,3 +1,10 @@
+# cppDE 0.13.3
+
+* `compile()` builds in parallel on Windows too: separate libraries side by side on
+  `cores` workers, a combined `output` with `make -j`.
+
+* Models of the Sundials backend with events compile on Windows.
+
 # cppDE 0.13.2
 
 * Breaking: the generated solve entries take one named argument list. Models

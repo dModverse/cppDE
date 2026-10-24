@@ -102,9 +102,8 @@ clearNativeSymbols <- function() {
 #'   directory of the first source. Default `NULL`: one library per object.
 #' @param args Optional additional compiler or linker arguments appended
 #'   after the flags from `"compileArgs"`. Default `NULL`.
-#' @param cores Number of parallel compilation jobs (Unix only): separate
-#'   libraries are built side by side, a combined `output` with `make -j`.
-#'   Default `1`.
+#' @param cores Number of parallel compilation jobs: separate libraries are
+#'   built side by side, a combined `output` with `make -j`. Default `1`.
 #' @param verbose Logical; if `TRUE`, show compiler commands. Default `FALSE`.
 #'
 #' @return Invisibly returns `TRUE` on successful compilation.
@@ -154,7 +153,6 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   extra_libs <- paste(obj_linkargs, collapse = " ")
 
   # --- compiler flags ---
-  if (.Platform$OS.type == "windows") cores <- 1
   pic  <- if (.Platform$OS.type == "windows") "" else "-fPIC"
   base <- paste("-O2 -DNDEBUG -w", pic)
 
@@ -304,6 +302,8 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
       shlib(c("CMD", "SHLIB", shQuote(f)), sub("\\.[^.]+$", "", basename(f)))
     logs <- if (.Platform$OS.type == "unix" && cores > 1)
       parallel::mclapply(files, build1, mc.cores = cores)
+    else if (cores > 1 && length(files) > 1L)
+      .shlibOnCluster(files, Rbin, cores)
     else
       lapply(files, build1)
     built_or_stop(paste0(roots_full, so), logs)
@@ -329,6 +329,31 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   }
 
   invisible(TRUE)
+}
+
+
+## R CMD SHLIB of each of `files` on a PSOCK cluster, for Windows, which cannot
+## fork. The workers inherit the PKG_* flags of this process, run no package
+## code and build in a directory of their own, where SHLIB writes tmp.def.
+.shlibOnCluster <- function(files, Rbin, cores) {
+  build <- function(f, Rbin) {
+    wd <- tempfile("cppDE_build_")
+    dir.create(wd)
+    old <- setwd(wd)
+    on.exit({
+      setwd(old)
+      unlink(wd, recursive = TRUE)
+    })
+    suppressWarnings(system2(Rbin, c("CMD", "SHLIB", shQuote(f)), stdout = TRUE, stderr = TRUE))
+  }
+  environment(build) <- globalenv()
+  cl <- parallel::makeCluster(min(as.integer(cores), length(files)))
+  on.exit(parallel::stopCluster(cl))
+  logs <- parallel::parLapplyLB(cl, files, build, Rbin = Rbin)
+  bad <- vapply(logs, function(l) !is.null(attr(l, "status")) && attr(l, "status") != 0, NA)
+  if (any(bad))
+    stop("Compilation failed:\n", paste(logs[[which(bad)[1L]]], collapse = "\n"), call. = FALSE)
+  logs
 }
 
 
