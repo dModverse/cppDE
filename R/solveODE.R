@@ -452,6 +452,10 @@
   if (maxsteps    <= 0L) stop("'maxsteps' must be positive")
   if (maxroot     <= 0L) stop("'maxroot' must be positive")
 
+  ## The second-order layer is seeded from Phi'' alone; with a tangent and no
+  ## hessian the inputs are affine, so Phi'' is zero.
+  if (deriv2 && !is.null(tangent) && is.null(hessian))
+    hessian <- numeric(n_phi_rows * n_theta_active^2)
   if (!is.null(tangent)) storage.mode(tangent) <- "double"
   if (!is.null(hessian)) storage.mode(hessian) <- "double"
   args <- c(

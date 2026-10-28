@@ -1,3 +1,8 @@
+# cppDE 0.13.4
+
+* `solveODE()` with `deriv2 = TRUE` and a `tangent` but no `hessian` takes the
+  second derivative of the inputs as zero; it crashed R before.
+
 # cppDE 0.13.3
 
 * `compile()` builds in parallel on Windows too: separate libraries side by side on

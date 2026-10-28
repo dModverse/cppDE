@@ -349,6 +349,21 @@ test_that("native deriv2: a theta subset integrates a partial Phi''", {
                tolerance = 1e-6)
 })
 
+test_that("native deriv2: a tangent without hessian has a zero Phi''", {
+  pars <- c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)
+  tvec <- c(0, 1, 2)
+  Phi <- matrix(0, 4, 2, dimnames = list(names(pars), c("v1", "v2")))
+  Phi["k1", "v1"] <- 1; Phi[c("k1", "k2"), "v2"] <- 1
+  zero <- solveODE(mod_AB_d2, tvec, pars, tangent = Phi, hessian = array(0, c(4, 2, 2)))
+  none <- solveODE(mod_AB_d2, tvec, pars, tangent = Phi)
+  expect_equal(none$tangent, zero$tangent)
+  expect_equal(none$hessian, zero$hessian)
+  full <- solveODE(mod_AB_d2, tvec, pars, abstol = 1e-10, reltol = 1e-10)
+  chain <- solveODE(mod_AB_d2, tvec, pars, tangent = Phi, abstol = 1e-10, reltol = 1e-10)
+  expect_equal(chain$tangent[3, , ], full$tangent[3, , c("k1", "k2")] %*% Phi[c("k1", "k2"), ],
+               tolerance = 1e-6, ignore_attr = TRUE)
+})
+
 test_that("CVODE: a theta subset matches the native reparam", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
