@@ -253,17 +253,6 @@ struct multistep_probe {
   }
 };
 
-/// One-shot form, for a caller that has no sweep to hang a probe on.
-template<class Stepper, class Carry, class TailFn>
-multistep_operators<Stepper> build_multistep_operators(
-    const Carry& carry, double dt, TailFn&& tail)
-{
-  multistep_operators<Stepper> ops;
-  multistep_probe<Stepper> probe;
-  probe.build(carry, dt, 0.0, tail, ops);
-  return ops;
-}
-
 // ---------------------------------------------------------------------------
 //  The adjoint of one step: w_pred = B' w_out, mu = (I - gamma J)^-T w_y for
 //  the corrector, w_in = A' w_pred. `solver`'s transposed apply includes the

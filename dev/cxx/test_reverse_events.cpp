@@ -66,6 +66,15 @@ struct model {
     d[1] =  p[0] * x[0] - p[1] * x[1] * x[2] - p[2] * x[1] * x[1];
     d[2] =  p[2] * x[1] * x[1] * cppde::cos(t) - p[3] * x[2];
   }
+  // J v + df/dt, which the first-step size reads.
+  void ydd(const std::vector<V>& x, const std::vector<V>& v, const V& t,
+           std::vector<V>& out) const {
+    const V w = v[1] * x[2] + x[1] * v[2];
+    out[0] = -p[0] * v[0] + p[1] * w;
+    out[1] =  p[0] * v[0] - p[1] * w - V(2.0) * p[2] * x[1] * v[1];
+    out[2] =  V(2.0) * p[2] * x[1] * v[1] * cppde::cos(t) - p[3] * v[2]
+            - p[2] * x[1] * x[1] * cppde::sin(t);
+  }
 };
 
 template<class V>
@@ -103,7 +112,7 @@ static const double G_LEVEL = 0.70;
 static const std::vector<double> TIMES = {0.0, 0.3, 0.9, 1.0, 1.4, 2.0, 3.0};
 
 static constexpr unsigned ND = NX + NP;
-using D = dual<double, ND>;
+using D = dual<double>;
 
 // ---------------------------------------------------------------------------
 //  The events, on whichever scalar type the caller runs.
@@ -146,6 +155,18 @@ static event_set<V> make_events(const std::vector<V>& p) {
     g.assign(x.size(), V(0)); g[0] = V(1);
   };
   r.dg_dt       = [](const state&, const V&) { return V(0); };
+  // G_tt along the right-hand side, which every root that is not terminal needs.
+  const std::vector<V> pc = p;
+  r.g_dot_dot   = [pc](const state& x, const V& t) -> double {
+    double xv[NX], pv[NP];
+    for (std::size_t i = 0; i < NX; ++i) xv[i] = cppde::ad_traits::scalar_value(x[i]);
+    for (std::size_t j = 0; j < NP; ++j) pv[j] = cppde::ad_traits::scalar_value(pc[j]);
+    const double tv = cppde::ad_traits::scalar_value(t);
+    const double f0 = -pv[0] * xv[0] + pv[1] * xv[1] * xv[2];
+    const double f1 =  pv[0] * xv[0] - pv[1] * xv[1] * xv[2] - pv[2] * xv[1] * xv[1];
+    const double f2 =  pv[2] * xv[1] * xv[1] * std::cos(tv) - pv[3] * xv[2];
+    return -pv[0] * f0 + pv[1] * (xv[2] * f1 + xv[1] * f2);
+  };
   ev.root.push_back(r);
   return ev;
 }
@@ -266,13 +287,13 @@ struct event_adjoint_terms {
 
 template<class S> struct pipeline;
 
-template<cppde::multistep_method M, class V, class J, class R>
-struct pipeline<cppde::multistepper<M, V, J, R>> {
-  using controller = cppde::multistepper_controller<cppde::multistepper<M, V, J, R>>;
+template<cppde::multistep_method M, class V, class J>
+struct pipeline<cppde::multistepper<M, V, J>> {
+  using controller = cppde::multistepper_controller<cppde::multistepper<M, V, J>>;
   using dense      = cppde::multistepper_dense_output<controller>;
 };
-template<class V, class R> struct pipeline<cppde::tsit5<V, R>> {
-  using controller = cppde::onestep_controller<cppde::tsit5<V, R>>;
+template<class V> struct pipeline<cppde::tsit5<V>> {
+  using controller = cppde::onestep_controller<cppde::tsit5<V>>;
   using dense      = cppde::onestep_dense_output<controller>;
 };
 template<class V, class R> struct pipeline<cppde::rosenbrock4<V, R>> {
@@ -333,7 +354,7 @@ static void forward_sens(const store_of<S>& store, std::vector<double>& S_obs,
   for (std::size_t j = 0; j < NP; ++j) {
     scale[NX + j] = std::max(std::fabs(P[j]), 1e-2);
     p[j] = D(P[j]);
-    p[j].diff(static_cast<unsigned>(NX + j));
+    p[j].diff(static_cast<unsigned>(NX + j), ND);
     p[j].d(static_cast<unsigned>(NX + j)) = scale[NX + j];
   }
   auto sys = make_system<D>(p);
@@ -351,7 +372,7 @@ static void forward_sens(const store_of<S>& store, std::vector<double>& S_obs,
   for (std::size_t i = 0; i < NX; ++i) {
     scale[i] = std::max(std::fabs(cp0.start_state()[i]), 1e-2);
     x[i] = D(cp0.start_state()[i]);
-    x[i].diff(static_cast<unsigned>(i));
+    x[i].diff(static_cast<unsigned>(i), ND);
     x[i].d(static_cast<unsigned>(i)) = scale[i];
   }
 

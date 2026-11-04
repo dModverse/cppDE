@@ -424,8 +424,8 @@ class OdeModel:
 # Statements of ode_system and jacobian
 # ---------------------------------------------------------------------------
 
-_CLOCKED = (cg.F_STATE | cg.F_TIME | cg.F_FORCING | cg.F_FRATE | cg.F_VEC
-            | cg.F_LINROW | cg.F_MODE)
+_CLOCKED = (cg.F_STATE | cg.F_TIME | cg.F_FORCING | cg.F_FRATE | cg.F_FRATE2
+            | cg.F_VEC | cg.F_LINROW | cg.F_MODE)
 
 
 _AXPY_VEC = {"cpp": "cppde::axpy_row_dense(linmap_, {0}, %s, out);",
@@ -476,13 +476,22 @@ def ode_statements(model, T="double"):
     return lin_prelude(model, model.rhs, T) + [block(model.g, stores, "_t")]
 
 
-def block(g, stores, prefix, known=None):
+def ydd_statements(model, T="double"):
+    """Body of ode_system::ydd(): out[i] = (J v)_i + df_i/dt, with v = f it is the second
+    time derivative of the solution."""
+    g = model.g
+    stores = [(("vec", "out", i), g.add(a, b), "=")
+              for i, (a, b) in enumerate(zip(model.jv(), model.dfdt()))]
+    return stores_prelude(model, stores, T) + [block(g, stores, "_y")]
+
+
+def block(g, stores, prefix):
     """Stores as one ('block', names, statements), with loops over classes
     of equal structure where cppde_struct.vector_block finds them."""
-    loops = cs.vector_block(g, stores, prefix, known)
+    loops = cs.vector_block(g, stores, prefix)
     if loops is not None:
-        return ("block", dict(known or {}), loops)
-    stmts, names = em.schedule(g, stores, prefix=prefix, known=known)
+        return ("block", {}, loops)
+    stmts, names = em.schedule(g, stores, prefix=prefix)
     return ("block", names, stmts)
 
 
@@ -871,7 +880,7 @@ class Scalar:
     """C++ scalar of a generated model.
 
     Args:
-        name: type spelling, e.g. 'cppde::dual<double, 0>'.
+        name: type spelling, e.g. 'cppde::dual<double>'.
         ad_level: derivative layers (0, 1, 2).
         arena: tangents live in cppde::dual_arena.
     """
@@ -895,13 +904,6 @@ class Scalar:
             return []
         return ["    cppde::ad_traits::arm_outputs(%s, %s, x, params);" % (out, out),
                 "    cppde::dual_arena::scope _rhs_arena_scope;"]
-
-
-def cpp_statements(model, stores, scalar, prefix="_t", indent="    "):
-    stmts, names = em.schedule(model.g, stores, prefix=prefix)
-    pr = em.Printer(model.g, model.slot("cpp"), style=scalar.style,
-                    names=names, ad_level=scalar.level)
-    return em.render_cpp(stmts, pr, scalar.name, indent=indent)
 
 
 def _struct_head(name, T):
@@ -982,6 +984,14 @@ def cpp_ode_system(model, scalar):
               "    (void)x; (void)t;"]
     lines += scalar.output_scope("dxdt")
     lines += cpp_statements_raw(model, ode_statements(model, T), scalar)
+    lines += ["  }", "",
+              "  void ydd(const std::vector<%s>& x," % T,
+              "           const std::vector<%s>& v," % T,
+              "           const %s& t," % T,
+              "           std::vector<%s>& out) {" % T,
+              "    (void)x; (void)v; (void)t;"]
+    lines += scalar.output_scope("out")
+    lines += cpp_statements_raw(model, ydd_statements(model, T), scalar)
     lines += ["  }", "};"]
     return lines
 
@@ -1094,13 +1104,11 @@ class EventCode:
     Args:
         model: OdeModel (its right-hand side feeds g_dot and G_tt).
         scalar: Scalar.
-        has_rhs: False emits no G_tt.
     """
 
-    def __init__(self, model, scalar, has_rhs=True):
+    def __init__(self, model, scalar):
         self.m = model
         self.s = scalar
-        self.has_rhs = has_rhs
         self.T = scalar.name
         self.V = "std::vector<%s>" % self.T
         self.lslot = model.slot("cpp", params="full_params")
@@ -1114,8 +1122,8 @@ class EventCode:
         pr = self._printer(slot, style, names)
         return em.render_cpp(stmts, pr, scalar or self.T, indent=indent)
 
-    def inline(self, node, slot=None, style=None):
-        return self._printer(slot, style).expr(node)
+    def inline(self, node, style=None):
+        return self._printer(style=style).expr(node)
 
     def value_lambda(self, node, comment, indent="    "):
         head = "%s[full_params, &F](const %s& x, const %s& t) -> %s {" % (
@@ -1139,8 +1147,8 @@ class EventCode:
     def gtt_node(self, g_node):
         """Second total time derivative of g along the right-hand side."""
         m = self.m
-        gdot = m.ad.lie([g_node], m.rhs_plain, forcings=False)[0]
-        return m.ad.lie([gdot], m.rhs_plain, forcings=False)[0]
+        gdot = m.ad.lie([g_node], m.rhs_plain, forcings=True)[0]
+        return m.ad.lie([gdot], m.rhs_plain, forcings=True)[0]
 
     def gdot_node(self, g_node):
         return self.m.ad.lie([g_node], self.m.rhs_plain, forcings=True)[0]
@@ -1158,6 +1166,41 @@ class EventCode:
         g = m.g
         sc = m.sc()
         _, ps, inits = _grad(m, node, cg.F_PARAM | cg.F_INIT)
+        stores = [(("vec", "out", m.n + k), g.mul(sc, ps[k]), "+=") for k in sorted(ps)]
+        return stores + [(("vec", "out", i), g.mul(sc, inits[i]), "+=")
+                         for i in sorted(inits)]
+
+    def _grad_along(self, node, mask, along):
+        """The gradient of `node` in the leaves of `mask`, differentiated along v in the state
+        (`along` "v") or in t at fixed state ("t"): (state, param, init) dicts."""
+        m = self.m
+        g = m.g
+        parts = _grad(m, node, mask)
+        flat = [(w, i, n) for w, d in enumerate(parts) for i, n in sorted(d.items())]
+        if along == "v":
+            tan = m.ad.jvp([n for _, _, n in flat],
+                           {g.state(j): g.vec("v", j) for j in range(m.n)})
+        else:
+            tan = m.ad.time_derivative([n for _, _, n in flat])
+        out = ({}, {}, {})
+        for (w, i, _), d in zip(flat, tan):
+            if not g.is_zero(d):
+                out[w][i] = d
+        return out
+
+    def case_xd_stores(self, node, along):
+        if node is None:
+            return []
+        xs, _, _ = self._grad_along(node, cg.F_STATE, along)
+        return [(("vec", "out", j), xs[j], "=") for j in sorted(xs)]
+
+    def case_pd_stores(self, node, along):
+        if node is None:
+            return []
+        m = self.m
+        g = m.g
+        sc = m.sc()
+        _, ps, inits = self._grad_along(node, cg.F_PARAM | cg.F_INIT, along)
         stores = [(("vec", "out", m.n + k), g.mul(sc, ps[k]), "+=") for k in sorted(ps)]
         return stores + [(("vec", "out", i), g.mul(sc, inits[i]), "+=")
                          for i in sorted(inits)]
@@ -1186,11 +1229,25 @@ class EventCode:
         lines = ["%s// dg/dt for root event %s" % (indent, i)]
         return lines + self.value_lambda(self.dg_dt_node(g_node), "dg_dt", indent)
 
+    def rate_dx(self, g_node, i, indent="    "):
+        """The gradient of r' = dg/dt + grad g . f in the state."""
+        lines = ["%s// d r'/dx for root event %s" % (indent, i),
+                 "%s[full_params, &F](const %s& x, const %s& t, %s& out) {"
+                 % (indent, self.V, self.T, self.V),
+                 indent + "  (void)x; (void)t;"]
+        lines += self.body(self.dg_dx_stores(self.gdot_node(g_node)), indent + "  ")
+        lines.append(indent + "},  // rate_dx")
+        return lines
+
+    def rate_dt(self, g_node, i, indent="    "):
+        """The partial of r' in t at fixed state."""
+        node = self.m.ad.time_derivative([self.gdot_node(g_node)])[0]
+        lines = ["%s// d r'/dt for root event %s" % (indent, i)]
+        return lines + self.value_lambda(node, "rate_dt", indent)
+
     def g_dot_dot(self, g_node, i, indent="    ", tail=""):
         m = self.m
         g = m.g
-        if m.forcings or not self.has_rhs:
-            return [indent + "nullptr" + tail + "  // g_dot_dot (FD fallback)"]
         gtt = self.gtt_node(g_node)
         lvl = self.s.level
         peel = (lambda e: e) if lvl == 0 else (
@@ -1210,6 +1267,12 @@ class EventCode:
                 name, src = "_gi%d" % at[1], "full_params[%d]" % at[1]
             elif k == cg.TIME:
                 name, src = "_gt", "t"
+            elif k == cg.FORCING:
+                name, src = "_gf%d" % at[1], "(*F[%d])(t)" % at[1]
+            elif k == cg.FRATE:
+                name, src = "_gr%d" % at[1], "F[%d]->derivative(t)" % at[1]
+            elif k == cg.FRATE2:
+                name, src = "_gs%d" % at[1], "F[%d]->second_derivative(t)" % at[1]
             elif k == cg.MODE:
                 local[at] = "cppde::switch_mode(%s)" % at[1]
                 continue
@@ -1303,8 +1366,10 @@ class EventCode:
             out += self.dg_dt(gnode, i)
             out += self.g_dot_dot(gnode, i, tail=",")
             out += ["    %d,  // mode" % k,
-                    "    %s  // closed" % ("true" if closed else "false"),
-                    "  });", ""]
+                    "    %s,  // closed" % ("true" if closed else "false")]
+            out += self.rate_dx(gnode, i)
+            out += self.rate_dt(gnode, i)
+            out += ["  });", ""]
         return out
 
     # -- event_adjoint_terms ---------------------------------------------
@@ -1346,12 +1411,19 @@ class EventCode:
                 rgdp.append((nr, self._case_p(gdot)))
                 rht.append((nr, self._case_t(h)))
                 nr += 1
-        # The switches follow the table's root events, as in forward().
+        # The switches follow the table's root events, as in forward(). Where they
+        # slide, the second order of the pullback differentiates their rate's
+        # gradient along v and in t.
+        sxv, sxt, spv, spt = [], [], [], []
         for gnode, _ in m.switches:
             gdot = self.gdot_node(gnode)
             rgp.append((nr, self._case_p(gnode)))
             rgdx.append((nr, self._case_x(gdot)))
             rgdp.append((nr, self._case_p(gdot)))
+            sxv.append((nr, self._case(self.case_xd_stores(gdot, "v"))))
+            sxt.append((nr, self._case(self.case_xd_stores(gdot, "t"))))
+            spv.append((nr, self._case(self.case_pd_stores(gdot, "v"))))
+            spt.append((nr, self._case(self.case_pd_stores(gdot, "t"))))
             nr += 1
         xargs = "int ev, const %s& x, const %s& t, %s& out" % (V, T, V)
         pargs = "int ev, const %s& x, const %s& t, const %s& sc, %s* out" % (V, T, T, T)
@@ -1368,6 +1440,15 @@ class EventCode:
         out += _switch("root_dg_dp_axpy", rgp, pargs, phead)
         out += _switch("root_gdot_dx", rgdx, xargs, xhead)
         out += _switch("root_gdot_dp_axpy", rgdp, pargs, phead)
+        xvargs = "int ev, const %s& x, const %s& v, const %s& t, %s& out" % (V, V, T, V)
+        pvargs = "int ev, const %s& x, const %s& v, const %s& t, const %s& sc, %s* out" % (
+            V, V, T, T, T)
+        xvhead = ["    (void)x; (void)v; (void)t;", xhead[1]]
+        pvhead = ["    (void)x; (void)v; (void)t;"]
+        out += _switch("root_gdot_dx_jvp", sxv, xvargs, xvhead)
+        out += _switch("root_gdot_dx_dt", sxt, xargs, xhead)
+        out += _switch("root_gdot_dp_jvp_axpy", spv, pvargs, pvhead)
+        out += _switch("root_gdot_dp_dt_axpy", spt, pargs, phead)
         out += _switch("fixed_dh_dt_axpy", fht, pargs, phead)
         out += _switch("root_dh_dt_axpy", rht, pargs, phead)
         out += ["};", "// event_adjoint_terms writes into %d slots"
@@ -1402,6 +1483,16 @@ def empty_event_adjoint_terms(n_states, n_params, T):
     phead = ["    (void)x; (void)t; (void)ev; (void)sc; (void)out;"]
     out = ["// Derivatives of the jump expressions, by event and kind."]
     out += _struct_head("event_adjoint_terms", T)
+    xvargs = "int ev, const %s& x, const %s& v, const %s& t, %s& out" % (V, V, T, V)
+    pvargs = "int ev, const %s& x, const %s& v, const %s& t, const %s& sc, %s* out" % (
+        V, V, T, T, T)
+    xvhead = ["    (void)x; (void)v; (void)t; (void)ev;", xhead[1]]
+    pvhead = ["    (void)x; (void)v; (void)t; (void)ev; (void)sc; (void)out;"]
+    for name, args, head in (("root_gdot_dx_jvp", xvargs, xvhead),
+                             ("root_gdot_dx_dt", xargs, xhead),
+                             ("root_gdot_dp_jvp_axpy", pvargs, pvhead),
+                             ("root_gdot_dp_dt_axpy", pargs, phead)):
+        out += ["  void %s(%s) const {" % (name, args)] + head + ["  }", ""]
     for name, args, head in (("fixed_dh_dx", xargs, xhead),
                              ("fixed_dh_dp_axpy", pargs, phead),
                              ("root_dh_dx", xargs, xhead),

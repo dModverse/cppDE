@@ -394,7 +394,7 @@ def _write_eval_ad_impl(buf, out_names, ctx, modelname):
     n_params = len(ctx.parameters)
     n_out = len(out_names)
 
-    ad_t = "cppde::dual<double, 0>"
+    ad_t = "cppde::dual<double>"
 
     # Called by the .C, .Call and batch entries, the last from worker threads.
     buf.write(
@@ -408,7 +408,7 @@ def _write_eval_ad_impl(buf, out_names, ctx, modelname):
     buf.write("    (void)n_vars; (void)n_params; (void)n_out;\n")
     buf.write("    (void)dX; (void)dP;\n\n")
 
-    # dual<double, 0> tangent buffers come from the thread-local arena, freed by one
+    # dual<double> tangent buffers come from the thread-local arena, freed by one
     # outer scope guard at function exit. A per-obs scope would leave the AD vectors,
     # which persist across iterations, holding dangling tan_ pointers after the pop.
     buf.write("    cppde::dual_arena::scope _eval_ad_scope;\n")
@@ -445,7 +445,7 @@ def _write_eval_ad_impl(buf, out_names, ctx, modelname):
     buf.write("        for (int i = 0; i < n_out; ++i) {\n")
     buf.write("            y[obs + (size_t)n_obs * i] = y_ad[i].val();\n")
     buf.write("            for (int k = 0; k < n_theta; ++k) {\n")
-    # .d(k) on cppde::dual<double, 0> returns the k-th tangent, or a thread-local
+    # .d(k) on cppde::dual<double> returns the k-th tangent, or a thread-local
     # zero when the dual is non-depend. Raw operator[] would dereference tan_
     # unconditionally and fault for an output constant in all parameters.
     buf.write("                dy[obs + (size_t)n_obs * (i + (size_t)n_out * k)] = y_ad[i].d(k);\n")
@@ -895,7 +895,7 @@ def _write_eval_ad2_batch(buf, modelname):
 
 def _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=False):
     """`<model>_eval_ad2_impl` (`as_impl`) or its .C wrapper `<model>_eval_ad2`:
-    y, dy and d2y in one pass on cppde::dual2nd<double, 0>. The seeds dX2, dP2
+    y, dy and d2y in one pass on cppde::dual2nd<double>. The seeds dX2, dP2
     are optional: nullptr in the impl, has_dX2 / has_dP2 == 0 in the wrapper.
 
     Layouts (R column-major):
@@ -913,8 +913,8 @@ def _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=False):
     n_params = len(ctx.parameters)
     n_out = len(out_names)
 
-    inner_t = "cppde::dual<double, 0>"
-    outer_t = "cppde::dual2nd<double, 0>"
+    inner_t = "cppde::dual<double>"
+    outer_t = "cppde::dual2nd<double>"
 
     # Called by the .C, .Call and batch entries, the last from worker threads.
     if as_impl:

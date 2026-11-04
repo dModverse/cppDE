@@ -186,7 +186,7 @@ def emit_sample_text(corpus):
         stmts, names = em.schedule(m.g, stores)
         pr = em.Printer(m.g, m.slot("cpp"), style="ad", names=names)
         try:
-            parts += em.render_cpp(stmts, pr, "cppde::dual<double, 0>")
+            parts += em.render_cpp(stmts, pr, "cppde::dual<double>")
         except em.EmitError:
             continue
     return "\n".join(parts)
@@ -210,8 +210,8 @@ def check_determinism(corpus):
 
 
 SCALARS = (("double", "double", 0),
-           ("ad", "cppde::dual<double, 0>", 1),
-           ("ad", "cppde::dual2nd<double, 0>", 2))
+           ("ad", "cppde::dual<double>", 1),
+           ("ad", "cppde::dual2nd<double>", 2))
 
 CXX_HEAD = """#define R_NO_REMAP
 #include <R.h>
@@ -815,7 +815,7 @@ EV_ARGS = ["x", "t", "params", "full_params", "F", "sc", "out"]
 
 
 def event_specs(corpus):
-    """(label, rhs, params, forcings, rows, has_rhs) per event set."""
+    """(label, rhs, params, forcings, rows) per event set."""
     import cppde_model as CM
     out = []
     for i, e in enumerate(H.EVENT_MODELS + corpus.get("event", [])):
@@ -825,11 +825,9 @@ def event_specs(corpus):
         if not rows:
             continue
         states = H.as_list(e.get("states_list"))
-        rhs = e.get("rhs_dict")
-        has_rhs = rhs is not None
-        rhs = {s: (rhs[s] if has_rhs else "0") for s in states}
+        rhs = {s: e["rhs_dict"][s] for s in states}
         out.append((e.get("name") or "event[%d]" % i, rhs, e.get("params_list"),
-                    e.get("forcings_list"), rows, has_rhs))
+                    e.get("forcings_list"), rows))
     return out
 
 
@@ -850,10 +848,10 @@ def check_events(corpus):
     t = H.Tally("events: lambdas and adjoint cases vs SymPy")
     tf = H.Tally("events: dg/dx vs finite differences")
     rng = random.Random(31)
-    for label, rhs, params, forcings, rows, has_rhs in event_specs(corpus):
+    for label, rhs, params, forcings, rows in event_specs(corpus):
         try:
             m = H.OdeModel(rhs, params, forcings)
-            code = CM.EventCode(m, CM.Scalar("double"), has_rhs=has_rhs)
+            code = CM.EventCode(m, CM.Scalar("double"))
             local = H.sym_table(m.names())
             f_ref = [H.legacy_parse(str(rhs[s]), local) for s in m.states]
             xs = [local[s] for s in m.states]
@@ -923,7 +921,7 @@ def check_events(corpus):
                                {j: H.replace_dirac(sp.diff(gdot, x)) for j, x in enumerate(xs)}, m.n))
                 checks.append(("gdot_dp", code.case_p_stores(gd), p_slots(gdot),
                                m.n + len(m.params)))
-                if has_rhs and not m.forcings:
+                if not m.forcings:
                     g1 = sp.diff(g_ref, tt) + sum(
                         (sp.diff(g_ref, x) * fi for x, fi in zip(xs, f_ref)), sp.Integer(0))
                     gtt = sp.diff(g1, tt) + sum(
@@ -1157,7 +1155,7 @@ def check_linear_codegen(corpus):
     m = CM.model_for(rhs, params, [])
     print("  parse and map: %.2f s, %d rows, %d coefficients, W_ent %d"
           % (time.time() - t0, m.nlin, m.linmap.nnz(), m.entry_work()[0]))
-    runs = [("forward dual, dense", dict(num_type="cppde::dual<double, 0>",
+    runs = [("forward dual, dense", dict(num_type="cppde::dual<double>",
                                          ad_level=1, arena=True, sparse=False)),
             ("reverse rb4, double", dict(num_type="double", sparse=False,
                                          emit_contractions=True, emit_jvp=True)),
@@ -1442,7 +1440,7 @@ def _check_cvode_events(corpus):
     import cppde_model as CM
     t = H.Tally("cvode: event partials vs SymPy")
     rng = random.Random(62)
-    for label, rhs, params, forcings, rows, has_rhs in event_specs(corpus):
+    for label, rhs, params, forcings, rows in event_specs(corpus):
         try:
             m = H.OdeModel(rhs, params, forcings)
             local = H.sym_table(m.names())

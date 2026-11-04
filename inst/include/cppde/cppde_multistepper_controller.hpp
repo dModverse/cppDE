@@ -68,13 +68,10 @@ public:
   typedef typename stepper_type::state_type    state_type;
   typedef typename stepper_type::deriv_type    deriv_type;
   typedef value_type                           time_type;   // external: matches value_type for API compat
-  typedef typename stepper_type::time_type     scalar_time_type; // internal: scalar for stepper calls
   typedef typename stepper_type::resizer_type  resizer_type;
 
   typedef state_wrapper<state_type>            wrapped_state_type;
 
-  typedef controlled_stepper_tag               stepper_category;
-  typedef multistepper_controller<Stepper>     controller_type;
   // ====================================================================
   //  Constructor
   // ====================================================================
@@ -348,12 +345,11 @@ public:
         continue;   // retry
       }
 
-  // --- At order 1: full restart with a fresh initial step estimate ---
+  // --- At order 1: full restart with a fresh step estimate ---
   //
-  // Rather than applying ETAMIN blindly, the step is re-estimated with the
-  // cvHin port, whose finite-difference curvature needs no Jacobian on this
-  // rare path. The result is clamped below the step that just failed and above
-  // the floor.
+  // Rather than applying ETAMIN blindly, the step is the one the curvature of
+  // the solution allows, clamped below the step that just failed and above the
+  // floor.
       {
         using odeint_utils::scalar_value;
 
@@ -364,11 +360,8 @@ public:
 
         auto& deriv_func = system.first;
         state_type& x_cur = const_cast<state_type&>(x);
-        double h_est = odeint_utils::cppde_hin<value_type>(
-            deriv_func,
-            x_cur, t, tn_abs,  // no t_final known here: use |t0| as upper hint
-            m_atol, m_rtol,
-            m_stepper.sens_err_con());
+        double h_est = odeint_utils::curvature_step<value_type>(
+            deriv_func, x_cur, t, m_atol, m_rtol, m_stepper.sens_err_con());
 
         // Clamp: don't exceed the h that just failed, stay above floor.
         h_est = std::min(h_est, h_cur);
@@ -539,7 +532,6 @@ public:
     m_stepper.set_tolerances(atol, rtol);
   }
 
-  int  max_order() const { return stepper_type::max_order; }
   int  current_method_order() const { return m_stepper.current_order(); }
 
   // --- Diagnostics ---
@@ -548,10 +540,6 @@ public:
   int n_fevals()   const { return m_stepper.n_fevals(); }
   int n_jevals()   const { return m_stepper.n_jevals(); }
   int n_setups()   const { return m_stepper.n_setups(); }
-  void reset_counters() {
-    m_n_accepted = 0; m_n_rejected = 0;
-    m_stepper.reset_counters();
-  }
 
   // Whether the last try_step failed at the step floor, and the signed size of
   // the last attempt that failed the error test or the corrector.

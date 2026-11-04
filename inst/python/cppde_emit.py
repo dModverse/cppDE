@@ -59,8 +59,7 @@ def _twice(g, n):
     return ()
 
 
-def schedule(g, stores, prefix="_t", max_inline=MAX_INLINE, groups=True,
-             known=None):
+def schedule(g, stores, prefix="_t", known=None):
     """Statements for `stores`, a list of (target, node, op).
 
     Args:
@@ -105,10 +104,10 @@ def schedule(g, stores, prefix="_t", max_inline=MAX_INLINE, groups=True,
                 c += cost[a]
                 if g.op[a] not in _ATOMIC:
                     kids.append(a)
-        if c > max_inline:
+        if c > MAX_INLINE:
             kids.sort(key=lambda a: -cost[a])
             for a in kids:
-                if c <= max_inline:
+                if c <= MAX_INLINE:
                     break
                 if g.op[a] == cg.SELECT and uses.get(a, 0) == 1:
                     continue
@@ -124,7 +123,7 @@ def schedule(g, stores, prefix="_t", max_inline=MAX_INLINE, groups=True,
             continue
         name = "%s%d" % (prefix, counter)
         counter += 1
-        decls.append((_group(g, n) if groups else 0, len(decls), name, n))
+        decls.append((_group(g, n), len(decls), name, n))
     decls.sort()
     stmts = []
     for _, _, name, n in decls:
@@ -136,7 +135,7 @@ def schedule(g, stores, prefix="_t", max_inline=MAX_INLINE, groups=True,
 
 
 _STATIC = cg.F_PARAM | cg.F_INIT
-_CLOCK = _STATIC | cg.F_TIME | cg.F_FORCING | cg.F_FRATE
+_CLOCK = _STATIC | cg.F_TIME | cg.F_FORCING | cg.F_FRATE | cg.F_FRATE2
 
 
 def _group(g, n):
@@ -650,6 +649,10 @@ def model_slots(n_states, params_base=None, style="cpp", params="params",
             if py:
                 return "%s[%s].derivative(%s)" % (forcing, at[1], time)
             return "%s[%s]->derivative(%s)" % (forcing, at[1], time)
+        if k == cg.FRATE2:
+            if py:
+                return "%s[%s].second_derivative(%s)" % (forcing, at[1], time)
+            return "%s[%s]->second_derivative(%s)" % (forcing, at[1], time)
         if k == cg.LINROW:
             return "_lin[%s]" % at[1]
         if k == cg.MODE:

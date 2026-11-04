@@ -1,5 +1,5 @@
 /*
- Non-arithmetic free functions and comparisons for cppde::dual2nd<T, N>.
+ Non-arithmetic free functions and comparisons for cppde::dual2nd<T>.
 
  Arithmetic and transcendental operators live in cppde_dual2nd_expr.hpp as
  expression templates. This header holds:
@@ -25,92 +25,92 @@ namespace cppde {
 // ============================================================================
 //  min / max / clamp
 // ============================================================================
-template<class T, unsigned N>
-inline dual2nd<T, N> min(const dual2nd<T, N>& a, const dual2nd<T, N>& b) {
+template<class T>
+inline dual2nd<T> min(const dual2nd<T>& a, const dual2nd<T>& b) {
   return (a.scalar() < b.scalar()) ? a : b;
 }
-template<class T, unsigned N>
-inline dual2nd<T, N> max(const dual2nd<T, N>& a, const dual2nd<T, N>& b) {
+template<class T>
+inline dual2nd<T> max(const dual2nd<T>& a, const dual2nd<T>& b) {
   return (a.scalar() < b.scalar()) ? b : a;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual2nd<T, N> min(const dual2nd<T, N>& a, const U& b) {
-  return (a.scalar() < static_cast<T>(b)) ? a : dual2nd<T, N>(b);
+inline dual2nd<T> min(const dual2nd<T>& a, const U& b) {
+  return (a.scalar() < static_cast<T>(b)) ? a : dual2nd<T>(b);
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual2nd<T, N> min(const U& a, const dual2nd<T, N>& b) {
-  return (static_cast<T>(a) < b.scalar()) ? dual2nd<T, N>(a) : b;
+inline dual2nd<T> min(const U& a, const dual2nd<T>& b) {
+  return (static_cast<T>(a) < b.scalar()) ? dual2nd<T>(a) : b;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual2nd<T, N> max(const dual2nd<T, N>& a, const U& b) {
-  return (a.scalar() < static_cast<T>(b)) ? dual2nd<T, N>(b) : a;
+inline dual2nd<T> max(const dual2nd<T>& a, const U& b) {
+  return (a.scalar() < static_cast<T>(b)) ? dual2nd<T>(b) : a;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual2nd<T, N> max(const U& a, const dual2nd<T, N>& b) {
-  return (static_cast<T>(a) < b.scalar()) ? b : dual2nd<T, N>(a);
+inline dual2nd<T> max(const U& a, const dual2nd<T>& b) {
+  return (static_cast<T>(a) < b.scalar()) ? b : dual2nd<T>(a);
 }
 
-template<class T, unsigned N, class L, class H>
-inline dual2nd<T, N> clamp(const dual2nd<T, N>& a, const L& lo, const H& hi) {
+template<class T, class L, class H>
+inline dual2nd<T> clamp(const dual2nd<T>& a, const L& lo, const H& hi) {
   return min(max(a, lo), hi);
 }
 
 // ============================================================================
 //  Comparisons (act on the innermost scalar)
 // ============================================================================
-template<class T, unsigned N>
-inline bool operator==(const dual2nd<T, N>& a, const dual2nd<T, N>& b) { return a.scalar() == b.scalar(); }
-template<class T, unsigned N>
-inline bool operator!=(const dual2nd<T, N>& a, const dual2nd<T, N>& b) { return a.scalar() != b.scalar(); }
-template<class T, unsigned N>
-inline bool operator< (const dual2nd<T, N>& a, const dual2nd<T, N>& b) { return a.scalar() <  b.scalar(); }
-template<class T, unsigned N>
-inline bool operator<=(const dual2nd<T, N>& a, const dual2nd<T, N>& b) { return a.scalar() <= b.scalar(); }
-template<class T, unsigned N>
-inline bool operator> (const dual2nd<T, N>& a, const dual2nd<T, N>& b) { return a.scalar() >  b.scalar(); }
-template<class T, unsigned N>
-inline bool operator>=(const dual2nd<T, N>& a, const dual2nd<T, N>& b) { return a.scalar() >= b.scalar(); }
+template<class T>
+inline bool operator==(const dual2nd<T>& a, const dual2nd<T>& b) { return a.scalar() == b.scalar(); }
+template<class T>
+inline bool operator!=(const dual2nd<T>& a, const dual2nd<T>& b) { return a.scalar() != b.scalar(); }
+template<class T>
+inline bool operator< (const dual2nd<T>& a, const dual2nd<T>& b) { return a.scalar() <  b.scalar(); }
+template<class T>
+inline bool operator<=(const dual2nd<T>& a, const dual2nd<T>& b) { return a.scalar() <= b.scalar(); }
+template<class T>
+inline bool operator> (const dual2nd<T>& a, const dual2nd<T>& b) { return a.scalar() >  b.scalar(); }
+template<class T>
+inline bool operator>=(const dual2nd<T>& a, const dual2nd<T>& b) { return a.scalar() >= b.scalar(); }
 
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator==(const dual2nd<T, N>& a, const U& b) { return a.scalar() == static_cast<T>(b); }
-template<class T, unsigned N, class U,
+inline bool operator==(const dual2nd<T>& a, const U& b) { return a.scalar() == static_cast<T>(b); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator==(const U& a, const dual2nd<T, N>& b) { return static_cast<T>(a) == b.scalar(); }
-template<class T, unsigned N, class U,
+inline bool operator==(const U& a, const dual2nd<T>& b) { return static_cast<T>(a) == b.scalar(); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator!=(const dual2nd<T, N>& a, const U& b) { return a.scalar() != static_cast<T>(b); }
-template<class T, unsigned N, class U,
+inline bool operator!=(const dual2nd<T>& a, const U& b) { return a.scalar() != static_cast<T>(b); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator!=(const U& a, const dual2nd<T, N>& b) { return static_cast<T>(a) != b.scalar(); }
-template<class T, unsigned N, class U,
+inline bool operator!=(const U& a, const dual2nd<T>& b) { return static_cast<T>(a) != b.scalar(); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator< (const dual2nd<T, N>& a, const U& b) { return a.scalar() <  static_cast<T>(b); }
-template<class T, unsigned N, class U,
+inline bool operator< (const dual2nd<T>& a, const U& b) { return a.scalar() <  static_cast<T>(b); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator< (const U& a, const dual2nd<T, N>& b) { return static_cast<T>(a) <  b.scalar(); }
-template<class T, unsigned N, class U,
+inline bool operator< (const U& a, const dual2nd<T>& b) { return static_cast<T>(a) <  b.scalar(); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator<=(const dual2nd<T, N>& a, const U& b) { return a.scalar() <= static_cast<T>(b); }
-template<class T, unsigned N, class U,
+inline bool operator<=(const dual2nd<T>& a, const U& b) { return a.scalar() <= static_cast<T>(b); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator<=(const U& a, const dual2nd<T, N>& b) { return static_cast<T>(a) <= b.scalar(); }
-template<class T, unsigned N, class U,
+inline bool operator<=(const U& a, const dual2nd<T>& b) { return static_cast<T>(a) <= b.scalar(); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator> (const dual2nd<T, N>& a, const U& b) { return a.scalar() >  static_cast<T>(b); }
-template<class T, unsigned N, class U,
+inline bool operator> (const dual2nd<T>& a, const U& b) { return a.scalar() >  static_cast<T>(b); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator> (const U& a, const dual2nd<T, N>& b) { return static_cast<T>(a) >  b.scalar(); }
-template<class T, unsigned N, class U,
+inline bool operator> (const U& a, const dual2nd<T>& b) { return static_cast<T>(a) >  b.scalar(); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator>=(const dual2nd<T, N>& a, const U& b) { return a.scalar() >= static_cast<T>(b); }
-template<class T, unsigned N, class U,
+inline bool operator>=(const dual2nd<T>& a, const U& b) { return a.scalar() >= static_cast<T>(b); }
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator>=(const U& a, const dual2nd<T, N>& b) { return static_cast<T>(a) >= b.scalar(); }
+inline bool operator>=(const U& a, const dual2nd<T>& b) { return static_cast<T>(a) >= b.scalar(); }
 
 } // namespace cppde
 

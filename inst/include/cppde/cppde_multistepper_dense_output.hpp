@@ -34,7 +34,7 @@ namespace cppde {
 // ============================================================================
 //  multistepper_dense_output<ControlledStepper>
 //
-//  ControlledStepper = multistepper_controller<multistepper<M, V, J, R>>
+//  ControlledStepper = multistepper_controller<multistepper<M, V, J>>
 //  with value type V in { double, dual, dual2nd } and method
 //  M in { bdf, adams }.
 // ============================================================================
@@ -53,7 +53,6 @@ public:
   typedef typename controlled_stepper_type::resizer_type   resizer_type;
 
   typedef state_wrapper<state_type>  wrapped_state_type;
-  typedef dense_output_stepper_tag   stepper_category;
   // ====================================================================
   //  Constructor
   // ====================================================================
@@ -273,7 +272,6 @@ public:
   int n_jevals()   const { return m_stepper.n_jevals(); }
   int n_setups()   const { return m_stepper.n_setups(); }
   int current_method_order() const { return m_stepper.current_method_order(); }
-  void reset_counters() { m_stepper.reset_counters(); }
 
   template<class StateType>
   void adjust_size(const StateType& x)

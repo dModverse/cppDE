@@ -350,7 +350,8 @@ test_that("the second-order forward mode is repeatable on every method", {
   # the two state buffers a single-step method reads and writes, and while it
   # went unprimed those buffers took their tangents from the arena: values and
   # first derivatives were bit-identical between repeats, second derivatives
-  # were not. Found through cppODE's CPPDE_POISON_ARENA switch.
+  # were not. The compiler macro CPPDE_POISON_ARENA, set through
+  # CPPDE_EXTRA_CXXFLAGS, exposes such reads.
   for (m in methods) {
     mm <- models$ff[[m]]
     a <- do.call(solveODE, c(list(mm, times, pars), tol))

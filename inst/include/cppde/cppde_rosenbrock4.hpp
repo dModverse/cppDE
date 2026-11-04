@@ -114,19 +114,16 @@ struct default_rosenbrock_coefficients
 
 enum class jacobian_hint : unsigned char {
   recompute_all   = 0,
-    reuse_jacobian  = 1,
-    reuse_lu        = 2
+  reuse_jacobian  = 1
 };
 
 // ============================================================================
-//  rosenbrock4<Value, JacobianPattern, Coefficients, Resizer>
+//  rosenbrock4<Value, JacobianPattern>
 // ============================================================================
 
 template<
   class Value,
-  class JacobianPattern = dense_lu_tag,
-  class Coefficients = default_rosenbrock_coefficients<Value>,
-  class Resizer = initially_resizer
+  class JacobianPattern = dense_lu_tag
 >
 class rosenbrock4
 {
@@ -138,25 +135,19 @@ public:
   typedef ad_lu::scalar_type_t<value_type>   time_type;
   typedef dense_matrix<value_type>           matrix_type;
   typedef csc_matrix<value_type>             sparse_matrix_type;
-  typedef Resizer                            resizer_type;
-  typedef Coefficients                       rosenbrock_coefficients;
-  typedef stepper_tag                        stepper_category;
+  typedef initially_resizer                  resizer_type;
+  typedef default_rosenbrock_coefficients<Value> rosenbrock_coefficients;
   typedef unsigned short                     order_type;
 
   typedef state_wrapper<state_type>          wrapped_state_type;
   typedef state_wrapper<deriv_type>          wrapped_deriv_type;
-  typedef state_wrapper<matrix_type>         wrapped_matrix_type;
 
-  typedef rosenbrock4<Value, JacobianPattern, Coefficients, Resizer> stepper_type;
+  typedef rosenbrock4<Value, JacobianPattern> stepper_type;
 
-  // Same method on another scalar type. The coefficients follow Value2, so a
-  // hand-supplied set does not survive the rebind.
-  template<class Value2> using rebind_value =
-    rosenbrock4<Value2, JacobianPattern,
-                default_rosenbrock_coefficients<Value2>, Resizer>;
+  // Same method on another scalar type.
+  template<class Value2> using rebind_value = rosenbrock4<Value2, JacobianPattern>;
 
   static constexpr bool is_sparse = is_sparse_tag<JacobianPattern>::value;
-  static constexpr bool is_dense = !is_sparse;
 
   using lu_type = lu_W<Value, is_sparse>;
 
@@ -222,14 +213,11 @@ public:
     }
   }
 
-  unsigned n_sens() const noexcept { return m_n_sens; }
-
   order_type order() const { return stepper_order; }
 
   int n_fevals() const { return m_n_fevals; }
   int n_jevals() const { return m_n_jevals; }
   int n_setups() const { return m_n_lu_setups; }
-  void reset_counters() { m_n_fevals = 0; m_n_jevals = 0; m_n_lu_setups = 0; }
 
   // ====================================================================
   //  stages: the six Rosenbrock stages, with the linear solve left open.
@@ -414,16 +402,12 @@ public:
     static_cast<value_type>(1) / (m_coef.gamma * dt_s);
 
     // --- Jacobian / LU ---
-    if (hint == jacobian_hint::reuse_lu && m_lu.has_valid_lu())
-    {
-      // Reuse everything
-    }
-    else if (hint == jacobian_hint::reuse_jacobian && m_lu.has_valid_jacobian())
+    if (hint == jacobian_hint::reuse_jacobian && m_lu.has_valid_jacobian())
     {
       { auto _tp = m_prof.timer(prof_cat::lu_factor);
         m_lu.refactorize_W_from_cache(n, inv_gamma_dt); }
       ++m_n_lu_setups;
-      m_lu.set_lu_valid(dt_s);
+      m_lu.set_lu_valid();
     }
     else
     {
@@ -435,7 +419,7 @@ public:
         m_lu.factorize_W(n, inv_gamma_dt); }
       ++m_n_lu_setups;
       m_lu.set_jacobian_valid();
-      m_lu.set_lu_valid(dt_s);
+      m_lu.set_lu_valid();
     }
     auto lu_solve = [this](state_type& v) { m_lu.solve(v); };
     stages(deriv_func, x, t_s, dt_s, xout, xerr, m_lu.dfdt_mut(), lu_solve);
@@ -605,12 +589,6 @@ public:
     }
   }
 
-  /// 1 / (gamma h), the diagonal W is built with.
-  static double inv_gamma_dt_of(double dt_s) {
-    const rosenbrock_coefficients c;
-    return 1.0 / (ad_lu::scalar_value(c.gamma) * dt_s);
-  }
-
   /// Stage vector i, one-based, valid after do_step.
   const state_type& stage_g(int i) const {
     switch (i) {
@@ -622,12 +600,6 @@ public:
   /// W^-T b on the factorisation the step itself used. The stage solves are
   /// direct, so the adjoint has to transpose that matrix and no other.
   void stage_solve_transposed(state_type& b) { m_lu.solve_transposed(b); }
-
-  /// f(x, t) at the step start, valid after do_step.
-  const state_type& stage_f0() const { return m_dxdt.m_v; }
-
-  /// df/dt at the step start, as the Jacobian evaluation filled it.
-  const state_type& stage_dfdt() const { return m_lu.dfdt(); }
 
   /// The continuous extension's four weights at theta, over
   /// (x_old, x_new, cont3, cont4). One statement of the basis, two readers:
@@ -663,10 +635,6 @@ public:
   void invalidate_lu() { m_lu.invalidate(); }
   bool has_valid_jacobian() const { return m_lu.has_valid_jacobian(); }
   bool has_valid_lu() const { return m_lu.has_valid_lu(); }
-  double last_factorized_dt() const {
-    using ad_lu::scalar_value;
-    return static_cast<double>(scalar_value(m_lu.last_factorized_dt()));
-  }
 
   lu_type& lu() { return m_lu; }
   const lu_type& lu() const { return m_lu; }

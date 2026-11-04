@@ -50,8 +50,6 @@ class nordsieck_block<T, K, true> {
 public:
   using inner_type = typename T::value_type;
 
-  static constexpr unsigned K_slots = K;
-
   nordsieck_block() = default;
   nordsieck_block(const nordsieck_block&)            = delete;
   nordsieck_block& operator=(const nordsieck_block&) = delete;
@@ -73,16 +71,6 @@ public:
   inner_type*       tangent_block_data()       noexcept { return storage_.data(); }
   const inner_type* tangent_block_data() const noexcept { return storage_.data(); }
 
-  // Pointer to slot j's tangent block (n_rows × n_cols).
-  inner_type* slot_data(unsigned j) noexcept {
-    assert(j < K);
-    return storage_.data() + j * slot_stride();
-  }
-  const inner_type* slot_data(unsigned j) const noexcept {
-    assert(j < K);
-    return storage_.data() + j * slot_stride();
-  }
-
   // Slot j's slab view (a tangent_slab bound to the slice via
   // prime_external()), on which the vec_*_with_slab helpers operate.
   tangent_slab<T>&       slab(unsigned j)       noexcept { assert(j < K); return slabs_[j]; }
@@ -94,9 +82,6 @@ public:
   // j vector with v[i].tan_ to be rebound into the buffer.
   void prime(std::array<std::vector<T>*, K> facades,
              unsigned n_rows, unsigned n_cols) {
-    if constexpr (T::static_size > 0) {
-      n_cols = T::static_size;
-    }
     const bool reshape = (n_rows != n_rows_ || n_cols != n_cols_);
     if (reshape) {
       n_rows_ = n_rows;
@@ -109,17 +94,6 @@ public:
       slabs_[j].prime_external(*facades[j],
                                storage_.data() + j * slot_stride(),
                                n_rows_, n_cols_);
-    }
-  }
-
-  // Re-bind the K facade tan_ pointers without reallocating. Used after a
-  // resize that may have moved the dual elements; the unified storage is
-  // unchanged.
-  void rebind(std::array<std::vector<T>*, K> facades) {
-    if (n_cols_ == 0) return;
-    for (unsigned j = 0; j < K; ++j) {
-      if (facades[j] == nullptr) continue;
-      slabs_[j].rebind_only(*facades[j]);
     }
   }
 
@@ -136,8 +110,6 @@ private:
 template<class T, unsigned K>
 class nordsieck_block<T, K, false> {
 public:
-  static constexpr unsigned K_slots = K;
-
   unsigned n_rows() const noexcept { return 0; }
   unsigned n_cols() const noexcept { return 0; }
   bool     primed() const noexcept { return false; }
@@ -145,7 +117,6 @@ public:
   std::size_t total_size() const noexcept  { return 0; }
 
   void prime(std::array<std::vector<T>*, K>, unsigned, unsigned) noexcept {}
-  void rebind(std::array<std::vector<T>*, K>) noexcept {}
 
   tangent_slab<T>&       slab(unsigned)       noexcept { return stub_; }
   const tangent_slab<T>& slab(unsigned) const noexcept { return stub_; }
@@ -156,19 +127,17 @@ private:
 };
 
 // =============================================================================
-//  nordsieck_block specialisation for dual2nd<S, N>: K-slot two-block storage
+//  nordsieck_block specialisation for dual2nd<S>: K-slot two-block storage
 //
-//    outer_block_ : K * n_rows * n_cols              dual<S, N>
+//    outer_block_ : K * n_rows * n_cols              dual<S>
 //    hess_block_  : K * n_rows * n_cols * n_cols     S
 // =============================================================================
-template<class S, unsigned N, unsigned K>
-class nordsieck_block<cppde::dual2nd<S, N>, K, true> {
+template<class S, unsigned K>
+class nordsieck_block<cppde::dual2nd<S>, K, true> {
 public:
-  using value_type    = cppde::dual2nd<S, N>;
-  using outer_inner_t = cppde::dual<S, N>;
+  using value_type    = cppde::dual2nd<S>;
+  using outer_inner_t = cppde::dual<S>;
   using inner_type    = outer_inner_t;
-
-  static constexpr unsigned K_slots = K;
 
   nordsieck_block() = default;
   nordsieck_block(const nordsieck_block&)            = delete;
@@ -194,21 +163,11 @@ public:
     return static_cast<std::size_t>(n_rows_) * n_cols_ * n_cols_;
   }
 
-  outer_inner_t* slot_data(unsigned j) noexcept {
-    assert(j < K);
-    return outer_block_.data() + j * slot_stride();
-  }
-  const outer_inner_t* slot_data(unsigned j) const noexcept {
-    assert(j < K);
-    return outer_block_.data() + j * slot_stride();
-  }
-
   tangent_slab<value_type>&       slab(unsigned j)       noexcept { assert(j < K); return slabs_[j]; }
   const tangent_slab<value_type>& slab(unsigned j) const noexcept { assert(j < K); return slabs_[j]; }
 
   void prime(std::array<std::vector<value_type>*, K> facades,
              unsigned n_rows, unsigned n_cols) {
-    if constexpr (N > 0) n_cols = N;
     const bool reshape = (n_rows != n_rows_ || n_cols != n_cols_);
     if (reshape) {
       n_rows_ = n_rows;
@@ -224,14 +183,6 @@ public:
                                static_cast<S*>(nullptr),  // unused
                                hess_block_.data()  + j * hess_slot_stride(),
                                n_rows_, n_cols_);
-    }
-  }
-
-  void rebind(std::array<std::vector<value_type>*, K> facades) {
-    if (n_cols_ == 0) return;
-    for (unsigned j = 0; j < K; ++j) {
-      if (facades[j] == nullptr) continue;
-      slabs_[j].rebind_only(*facades[j]);
     }
   }
 

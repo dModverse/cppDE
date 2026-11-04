@@ -76,8 +76,6 @@ namespace ndf_constants {
 
 // --- Newton / error-test / step-size parameters ---
 static constexpr double CORTES  = 0.1;      // Newton convergence rate threshold (tq4 = CORTES/tq[2])
-static constexpr double CRDOWN  = 0.3;      // crate damping: crate = max(CRDOWN*crate, del/delp)
-static constexpr double RDIV    = 2.0;      // divergence ratio: fail Newton if del > RDIV*delp (m>=2)
 static constexpr double DGMAX   = 0.3;      // |gamrat-1| threshold for forcing LU refactorization
 static constexpr double THRESH  = 1.5;      // min eta to bother changing h (eta < THRESH keeps eta = 1)
 static constexpr double ADDON   = 1e-6;     // small constant in eta denominator to avoid division by zero
@@ -94,7 +92,6 @@ static constexpr double ETAMX3  = 10.0;     // max eta after SMALL_NST steps
 static constexpr double ETAMXF  = 0.2;      // max eta after SMALL_NEF error test failures
 static constexpr double ETAMIN  = 0.1;      // min eta (floor for step size reduction)
 static constexpr double ETACF   = 0.25;     // eta on Newton convergence failure
-static constexpr double ONEPSM  = 1.000001; // 1 + epsilon for floating-point guard
 static constexpr int    SMALL_NST = 10;     // steps before switching etamax from ETAMX2 to ETAMX3
 static constexpr int    NLS_MAXCOR = 3;     // max Newton corrector iterations per step
 static constexpr int    MSBP    = 20;       // max steps between periodic LU setup calls
@@ -119,12 +116,6 @@ static constexpr double NDF_KAPPA[6] = {
 };
 
 } // namespace ndf_constants
-
-namespace adams_constants {
-
-static constexpr int max_order_adams = 12;
-
-} // namespace adams_constants
 
   // ============================================================================
   //  Adams coefficient routines (cvSetAdams port from Sundials/cvode.c)
@@ -299,7 +290,7 @@ constexpr int method_max_order(multistep_method m) {
 
 
 // ============================================================================
-//  multistepper<Method, Value, JacobianPattern, Resizer>
+//  multistepper<Method, Value, JacobianPattern>
 // ============================================================================
 
 // ============================================================================
@@ -342,8 +333,7 @@ using history_log = std::vector<history_entry>;
 template<
   multistep_method Method = multistep_method::bdf,
   class Value = double,
-  class JacobianPattern = cppde::dense_lu_tag,
-  class Resizer = initially_resizer
+  class JacobianPattern = cppde::dense_lu_tag
 >
 class multistepper
 {
@@ -361,20 +351,18 @@ public:
   typedef ad_lu::scalar_type_t<Value>      time_type;
   typedef dense_matrix<value_type>         matrix_type;
   typedef csc_matrix<value_type>           sparse_matrix_type;
-  typedef Resizer                          resizer_type;
+  typedef initially_resizer                resizer_type;
 
   typedef state_wrapper<state_type>        wrapped_state_type;
   typedef state_wrapper<deriv_type>        wrapped_deriv_type;
-  typedef state_wrapper<matrix_type>       wrapped_matrix_type;
 
-  typedef cppde::stepper_tag              stepper_category;
-  typedef multistepper<Method, Value, JacobianPattern, Resizer> stepper_type;
+  typedef multistepper<Method, Value, JacobianPattern> stepper_type;
 
   // Same method on another scalar type.
   template<class Value2> using rebind_value =
-    multistepper<Method, Value2, JacobianPattern, Resizer>;
+    multistepper<Method, Value2, JacobianPattern>;
 
-  template<multistep_method, class, class, class> friend class multistepper;
+  template<multistep_method, class, class> friend class multistepper;
 
   static constexpr bool is_sparse = is_sparse_tag<JacobianPattern>::value;
 
@@ -493,8 +481,6 @@ public:
     }
   }
 
-  unsigned n_sens() const noexcept { return m_n_sens; }
-
   // ====================================================================
   //  NDF kappa control (runtime)
   //
@@ -512,7 +498,6 @@ public:
   // sequence is the one a scalar run takes whatever the tangent count is.
   void set_sens_err_con(bool v) { m_sens_err_con = v; }
   bool sens_err_con() const { return m_sens_err_con; }
-  bool use_ndf_kappa() const { return m_use_ndf_kappa; }
 
   // ====================================================================
   //  convfail enum: mirrors the convfail parameter of lsetup
@@ -544,8 +529,6 @@ public:
 
   // Stability limit detection, BDF family only; a no-op on Adams.
   void set_stald(bool v) { m_stald = v && Method != multistep_method::adams; }
-  bool stald() const { return m_stald; }
-  int  n_stald_reductions() const { return m_n_stald; }
 
   // After complete_step, before any order change: the scaled derivatives of
   // degree q-1, q and q+1 that stald_detect() reads, as cvBDFStab saves them.
@@ -565,9 +548,7 @@ public:
   bool stald_violation()
   {
     if (!m_stald || m_q < 3 || m_nscon < m_q + 5) return false;
-    if (stald_detect(m_ssdat, m_q) <= 3) return false;
-    ++m_n_stald;
-    return true;
+    return stald_detect(m_ssdat, m_q) > 3;
   }
 
   // ====================================================================
@@ -589,14 +570,6 @@ public:
   {
     step_newton(system, x, t, x_out, dt, xerr, force_setup, convfail);
   }
-
-  // ====================================================================
-  //  on_step_accepted: called by the controller after a successful step.
-  //  A no-op for this stepper.
-  // ====================================================================
-
-  template<class System, class TimeArg>
-  void on_step_accepted(System& /*system*/, TimeArg /*t*/) {}
 
   // ====================================================================
   //  step_newton: one BDF/NDF or Adams-Moulton step, the corrector solved by
@@ -776,7 +749,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       }
     }
     m_lu.set_jacobian_valid();
-    m_lu.set_lu_valid(m_gamma);
+    m_lu.set_lu_valid();
     callSetup = false;
     jcur = need_new_jacobian;
     m_gammap = m_gamma;
@@ -983,11 +956,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     return rl1;
   }
 
-  // The correction coefficients the tail maps acor back through, valid after
-  // replay_predict.
-  const time_type* nordsieck_l() const { return m_l.data(); }
-
-
   // The step's own gamma, valid after replay_predict. The residual's derivative in
   // y is gamma * W, so the transposed solve is scaled by it.
   time_type gamma() const { return m_gamma; }
@@ -1192,8 +1160,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         }
 
   // Tangent layer: one rank-one update over the whole block when the slabs are
-  // primed and the inner type is double; a nested dual falls back to per-slot axpy. For a
-  // static-N dual the trailing inactive columns are zero and propagate as such.
+  // primed and the inner type is double; a nested dual falls back to per-slot axpy.
         if constexpr (std::is_same_v<inner_t, double>) {
           if (m_zn_block.primed() && m_acor_slab.primed() && m_n_sens > 0
               && m_zn_block.slot_stride() == m_acor_slab.tangent_size())
@@ -1419,12 +1386,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // ====================================================================
 
   int current_order() const { return m_q; }
-  int steps_at_current_order() const { return m_nscon; }
   bool newton_converged() const { return m_newton_converged; }
   bool is_initialized() const { return m_initialized; }
-  double acnrm() const { return m_acnrm; }
-  const state_type& acor() const { return m_acor.m_v; }
-  const std::array<double, 6>& tq() const { return m_tq; }
   int qwait() const { return m_qwait; }
   int nst() const { return m_nst; }
   double etamax() const { return m_etamax; }
@@ -1441,10 +1404,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     log_history(history_op::hscale,
                 static_cast<double>(ndf_detail::scalar_value(m_hscale)));
   }
-  double saved_tq5() const { return m_saved_tq5; }
   const state_type& zn(int j) const { return m_zn[j].m_v; }
   int current_L() const { return m_L; }
-  const std::array<time_type, max_order + 1>& tau() const { return m_tau; }
 
   template<class TimeArg> void set_tn_current(TimeArg tn) {
     m_tn_current = static_cast<time_type>(ndf_detail::scalar_value(tn));
@@ -1466,7 +1427,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   int n_fevals() const { return m_n_fevals; }
   int n_jevals() const { return m_n_jevals; }
   int n_setups() const { return m_n_setup_total; }
-  void reset_counters() { m_n_fevals = 0; m_n_jevals = 0; }
 
   void report_setup_triggers() const {
     // Setup-trigger breakdown: only meaningful for methods that call
@@ -1569,12 +1529,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 #endif
   }
 
-  int max_achievable_order() const { return max_order; }
-  void increment_step_counter() { }
-  template<class TimeArg> void push_history(const state_type&, TimeArg, TimeArg) { }
   value_type error_constant() const { return value_type(m_tq[2]); }
-  value_type error_constant_km1() const { return value_type(m_tq[1]); }
-  value_type error_constant_kp1() const { return value_type(m_tq[3]); }
 
   // LU access (for controller invalidation)
   void invalidate_lu() {
@@ -1582,9 +1537,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   }
   bool has_valid_jacobian() const { return m_lu.has_valid_jacobian(); }
   bool has_valid_lu() const { return m_lu.has_valid_lu(); }
-  double last_factorized_dt() const {
-    return static_cast<double>(ndf_detail::scalar_value(m_lu.last_factorized_dt()));
-  }
 
   // Save acor to zn[qmax]
   void save_acor_to_zn_qmax()
@@ -1609,13 +1561,6 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   template<class StateType>
   void adjust_size(const StateType& x) { resize_impl(x); }
-
-  // Dense output accessors
-  bool has_dense_output() const { return m_dense_valid; }
-  int dense_order() const { return m_q_dense; }
-  time_type dense_h() const { return m_h_dense; }
-  time_type dense_tn() const { return m_tn_dense; }
-  const state_type& dense_zn(int j) const { return m_zn_dense[j].m_v; }
 
   // ====================================================================
   //  eval_dense_into
@@ -1820,10 +1765,8 @@ private:
         }
       }
 
-      // Tangent layer: one triangular product across the (n*slab_cols) × (q+1)
-      // block. Static-N: slab cols = N (≥ m_n_sens); dynamic-N: = M.
-      // The Pascal P is unit lower-triangular so trailing inactive
-      // tangent columns (which are zero by construction) stay zero.
+      // Tangent layer: one triangular product across the (n*n_sens) × (q+1)
+      // block.
       if constexpr (std::is_same_v<inner_t, double>) {
         if (m_zn_block.primed() && m_n_sens > 0) {
           const auto& P = restore ? pascal_restore_table_()
@@ -2172,7 +2115,7 @@ public:
   int m_n_setup_retry = 0;
 
   // Order change diagnostics
-  int m_n_order_up = 0, m_n_order_down = 0, m_n_order_same = 0;
+  int m_n_order_up = 0, m_n_order_down = 0;
   // Per-order step counts: m_steps_at_order[q] = # steps completed at order q
   std::array<int, max_order + 1> m_steps_at_order = {};
 
@@ -2180,7 +2123,6 @@ public:
   bool m_sens_err_con = true;    // tangents count in the error and corrector tests
   int  m_maxord_user = 0;        // order cap, 0 for the method's own
   bool m_stald = false;          // stability limit detection
-  int  m_n_stald = 0;            // order reductions STALD made
   cppde::stald_data m_ssdat;
 
 #ifdef CPPDE_STEP_TRACE
@@ -2194,20 +2136,6 @@ public:
 public:
   mutable cppde::profiler m_prof;
 };
-
-// ============================================================================
-//  User-facing type aliases
-//
-//  Templated aliases over <Value, JacobianPattern, Resizer> that fix
-//  the multistep_method.  These are the names user code and codegen
-//  output should reference.
-// ============================================================================
-
-template<class Value, class JacobianPattern = cppde::dense_lu_tag, class Resizer = initially_resizer>
-using bdf_stepper_t   = multistepper<multistep_method::bdf,   Value, JacobianPattern, Resizer>;
-
-template<class Value, class JacobianPattern = cppde::dense_lu_tag, class Resizer = initially_resizer>
-using adams_stepper_t = multistepper<multistep_method::adams, Value, JacobianPattern, Resizer>;
 
 } // namespace cppde
 

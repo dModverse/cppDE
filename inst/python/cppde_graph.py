@@ -30,14 +30,15 @@ OP_NAMES = ("NUM", "NAMED", "BOOL", "LEAF", "ADD", "MUL", "POW", "CALL",
 
 # Leaf kinds. A leaf's attr is a tuple whose first entry is the kind.
 # A MODE leaf is the held value of a comparison that reads a state, a boolean.
+# FRATE and FRATE2 are the first and second time derivatives of a forcing.
 STATE, PARAM, INIT, TIME, FORCING, FRATE, VEC, LINROW, TABLE, LOOPVAR, \
-    MODE = range(11)
+    MODE, FRATE2 = range(12)
 KIND_NAMES = ("STATE", "PARAM", "INIT", "TIME", "FORCING", "FRATE", "VEC",
-              "LINROW", "TABLE", "LOOPVAR", "MODE")
+              "LINROW", "TABLE", "LOOPVAR", "MODE", "FRATE2")
 
 # Dependency flags, one bit per leaf kind.
 F_STATE, F_PARAM, F_INIT, F_TIME, F_FORCING, F_FRATE, F_VEC, F_LINROW, \
-    F_TABLE, F_LOOPVAR, F_MODE = (1 << k for k in range(11))
+    F_TABLE, F_LOOPVAR, F_MODE, F_FRATE2 = (1 << k for k in range(12))
 
 BOOL_OPS = frozenset((BOOL, CMP, AND, OR, NOT))
 CMP_OPS = ("<", "<=", ">", ">=", "==", "!=")
@@ -81,10 +82,6 @@ def as_number(v):
 
 def is_integer(v):
     return type(v) is Fraction and v.denominator == 1
-
-
-def num_float(v):
-    return float(v)
 
 
 def _mulnum(a, b):
@@ -233,17 +230,11 @@ class Graph:
 
     # -- queries ----------------------------------------------------------
 
-    def is_num(self, n):
-        return self.op[n] == NUM
-
     def value(self, n):
         return self.attr[n]
 
     def is_zero(self, n):
         return self.op[n] == NUM and self.attr[n] == 0
-
-    def is_one(self, n):
-        return self.op[n] == NUM and self.attr[n] == 1
 
     def is_bool(self, n):
         o = self.op[n]
@@ -255,20 +246,13 @@ class Graph:
     def depends(self, n, mask):
         return bool(self.flags[n] & mask)
 
-    def bits(self, n, kind):
-        """Bitset of the indices of `kind` leaves below node n."""
-        return self._fold_bits(n, kind, ("s", kind), self._kids)
-
     def dbits(self, n, kind):
         """Bitset of `kind` leaves node n depends on differentiably.
 
         Conditions of selects, comparisons and logic, and the arguments of
         floor, ceiling and delta do not count.
         """
-        return self._fold_bits(n, kind, ("d", kind), self._dkids)
-
-    def _kids(self, m):
-        return self.args[m]
+        return self._fold_bits(n, kind)
 
     def _dkids(self, m):
         o = self.op[m]
@@ -280,8 +264,9 @@ class Graph:
             return ()
         return self.args[m]
 
-    def _fold_bits(self, n, kind, key, kids):
-        memo = self._bits.setdefault(key, {})
+    def _fold_bits(self, n, kind):
+        memo = self._bits.setdefault(kind, {})
+        kids = self._dkids
         hit = memo.get(n)
         if hit is not None:
             return hit
@@ -354,6 +339,9 @@ class Graph:
 
     def frate(self, j):
         return self.leaf(FRATE, j)
+
+    def frate2(self, j):
+        return self.leaf(FRATE2, j)
 
     def vec(self, name, i):
         return self.leaf(VEC, name, i)
@@ -438,19 +426,6 @@ class Graph:
         if self.op[n] == NUM:
             return self.attr[n], self.ONE
         return Fraction(1), n
-
-    def add_const(self, n):
-        return self.attr[n][0] if self.op[n] == ADD else 0
-
-    def add_items(self, n):
-        """(const, [(c, t), ...]) of node n read as a sum."""
-        o = self.op[n]
-        if o == ADD:
-            c0, cs = self.attr[n]
-            return c0, list(zip(cs, self.args[n]))
-        if o == NUM:
-            return self.attr[n], []
-        return Fraction(0), [(Fraction(1), n)]
 
     # -- products ---------------------------------------------------------
 
@@ -628,20 +603,6 @@ class Graph:
         if self.op[n] != MUL:
             return n
         return self._node(CALL, (n,), "_prod")
-
-    def pow_split(self, n):
-        if self.op[n] == POW:
-            return self.args[n]
-        return n, self.ONE
-
-    def mul_items(self, n):
-        """(c, [(base, exponent node), ...]) of node n read as a product."""
-        coef, t = self.split_scale(n)
-        if t == self.ONE:
-            return coef, []
-        if self.op[t] == MUL:
-            return coef, [self.pow_split(a) for a in self.args[t]]
-        return coef, [self.pow_split(t)]
 
     # -- powers -----------------------------------------------------------
 
@@ -1645,6 +1606,8 @@ class AD:
         for n in g.topo(roots):
             if g.op[n] == LEAF and g.attr[n][0] == FORCING:
                 seeds[n] = g.frate(g.attr[n][1])
+            elif g.op[n] == LEAF and g.attr[n][0] == FRATE:
+                seeds[n] = g.frate2(g.attr[n][1])
         return self.jvp(roots, seeds)
 
     def lie(self, roots, rhs, forcings=True):
@@ -1659,6 +1622,8 @@ class AD:
                 seeds[n] = rhs[g.attr[n][1]]
             elif k == FORCING and forcings:
                 seeds[n] = g.frate(g.attr[n][1])
+            elif k == FRATE and forcings:
+                seeds[n] = g.frate2(g.attr[n][1])
         return self.jvp(roots, seeds)
 
     # -- reverse ------------------------------------------------------------

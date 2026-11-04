@@ -2,9 +2,8 @@
  Centralized AD type traits for cppDE.
 
  is_ad / is_dual2nd / inner_type / scalar_type / scalar_value plus the bulk
- value/derivative extraction helpers (extract_values, extract_derivs,
- max_deriv_size, bulk_extract_derivs, bulk_inject_results). Specialised for
- cppde::dual<T,N> and cppde::dual2nd<T,N>.
+ helpers max_deriv_size and bulk_inject_results. Specialised for
+ cppde::dual<T> and cppde::dual2nd<T>.
 
  The bulk helpers are written generically over any AD type that exposes the
  accessor surface: `.x()`, `.d(j)`, `.size()`, `.depend()`,
@@ -24,8 +23,8 @@
 // Forward declaration for the dual backend so traits can specialise without
 // pulling in the full headers from every call site.
 namespace cppde {
-  template<class T, unsigned N> class dual;
-  template<class T, unsigned N> class dual2nd;
+  template<class T> class dual;
+  template<class T> class dual2nd;
 }
 
 namespace cppde {
@@ -35,35 +34,35 @@ namespace ad_traits {
 //  is_ad<T>
 // ============================================================================
 
-template<class T>           struct is_ad : std::false_type {};
-template<class T, unsigned N>     struct is_ad<cppde::dual<T, N>>    : std::true_type {};
-template<class T, unsigned N>     struct is_ad<cppde::dual2nd<T, N>> : std::true_type {};
+template<class T> struct is_ad : std::false_type {};
+template<class T> struct is_ad<cppde::dual<T>>    : std::true_type {};
+template<class T> struct is_ad<cppde::dual2nd<T>> : std::true_type {};
 
-// is_dual2nd<T>: matches only cppde::dual2nd<S, N>, not its base class. The
+// is_dual2nd<T>: matches only cppde::dual2nd<S>, not its base class. The
 // LU, slab and multistepper paths dispatch on it to extraction routines that
 // read the gradient from outer.tan_[k].x().
-template<class T>           struct is_dual2nd : std::false_type {};
-template<class T, unsigned N>     struct is_dual2nd<cppde::dual2nd<T, N>> : std::true_type {};
+template<class T> struct is_dual2nd : std::false_type {};
+template<class T> struct is_dual2nd<cppde::dual2nd<T>> : std::true_type {};
 
 // ============================================================================
 //  inner_type<T>: strip one layer of AD wrapping.
 //
-//  dual2nd peels to dual<T,N>, which holds value and gradient; the LU IFT
-//  recursion runs dual2nd<T,N> -> dual<T,N> -> T.
+//  dual2nd peels to dual<T>, which holds value and gradient; the LU IFT
+//  recursion runs dual2nd<T> -> dual<T> -> T.
 // ============================================================================
 
-template<class T>           struct inner_type                    { using type = T; };
-template<class T, unsigned N>     struct inner_type<cppde::dual<T, N>>    { using type = T; };
-template<class T, unsigned N>     struct inner_type<cppde::dual2nd<T, N>> { using type = cppde::dual<T, N>; };
+template<class T> struct inner_type                    { using type = T; };
+template<class T> struct inner_type<cppde::dual<T>>    { using type = T; };
+template<class T> struct inner_type<cppde::dual2nd<T>> { using type = cppde::dual<T>; };
 template<class T> using inner_type_t = typename inner_type<T>::type;
 
 // ============================================================================
 //  scalar_type<T>: recursively unwrap to innermost non-AD scalar
 // ============================================================================
 
-template<class T>           struct scalar_type                    { using type = T; };
-template<class T, unsigned N>     struct scalar_type<cppde::dual<T, N>>     : scalar_type<T> {};
-template<class T, unsigned N>     struct scalar_type<cppde::dual2nd<T, N>>  : scalar_type<T> {};
+template<class T> struct scalar_type                    { using type = T; };
+template<class T> struct scalar_type<cppde::dual<T>>     : scalar_type<T> {};
+template<class T> struct scalar_type<cppde::dual2nd<T>>  : scalar_type<T> {};
 template<class T> using scalar_type_t = typename scalar_type<T>::type;
 
 // ============================================================================
@@ -74,13 +73,13 @@ template<class T>
 inline typename std::enable_if<std::is_arithmetic<T>::value, double>::type
 scalar_value(const T& v) { return static_cast<double>(v); }
 
-template<class T, unsigned N>
-inline double scalar_value(const cppde::dual<T, N>& v) {
+template<class T>
+inline double scalar_value(const cppde::dual<T>& v) {
   return scalar_value(v.x());
 }
 
-template<class T, unsigned N>
-inline double scalar_value(const cppde::dual2nd<T, N>& v) {
+template<class T>
+inline double scalar_value(const cppde::dual2nd<T>& v) {
   return scalar_value(v.x());
 }
 
@@ -106,8 +105,8 @@ inline double scalar_value(const cppde::dual2nd<T, N>& v) {
 template<class T>
 inline void arm_tangents(T&) {}
 
-template<class S, unsigned N>
-inline void arm_tangents(cppde::dual<S, N>& v) { v.arm(); }
+template<class S>
+inline void arm_tangents(cppde::dual<S>& v) { v.arm(); }
 
 // ============================================================================
 //  arm_outputs(a, b, x, p): binds the tangent storage of a and b, as wide as x
@@ -118,18 +117,18 @@ template<class T>
 inline unsigned tangent_count(const T&) { return 0; }
 
 template<class S>
-inline unsigned tangent_count(const cppde::dual<S, 0>& v) { return v.size(); }
+inline unsigned tangent_count(const cppde::dual<S>& v) { return v.size(); }
 
 template<class T>
 inline void arm_width(T&, unsigned) {}
 
 template<class T> struct is_heap_dual : std::false_type {};
-template<class S> struct is_heap_dual<cppde::dual<S, 0>> : std::true_type {};
+template<class S> struct is_heap_dual<cppde::dual<S>> : std::true_type {};
 
 // A second-order dual also binds the rows of its second derivatives, as wide as
 // the first.
 template<class S>
-inline void arm_width(cppde::dual<S, 0>& v, unsigned w) {
+inline void arm_width(cppde::dual<S>& v, unsigned w) {
   if (w == 0) return;
   if (v.size() == 0) {
     v.set_depend_size(w);
@@ -139,28 +138,16 @@ inline void arm_width(cppde::dual<S, 0>& v, unsigned w) {
     for (unsigned i = 0; i < v.size(); ++i) arm_width(v[i], w);
 }
 
-template<class S, unsigned N>
-inline void arm_width(cppde::dual<S, N>& v, unsigned) {
-  if (!v.depend()) v.arm();
-}
-
 // dual2nd derives from the nested dual, so the templates for that base lose to
 // the generic ones by their conversion; these take it exactly and bind both
 // layers zeroed, so that an entry the body does not write reads as zero.
-template<class S, unsigned N>
-inline unsigned tangent_count(const cppde::dual2nd<S, N>& v) { return v.width(); }
+template<class S>
+inline unsigned tangent_count(const cppde::dual2nd<S>& v) { return v.width(); }
 
-template<class S, unsigned N>
-inline void arm_width(cppde::dual2nd<S, N>& v, unsigned w) {
-  auto& b = static_cast<typename cppde::dual2nd<S, N>::base&>(v);
-  if constexpr (N == 0) {
-    arm_width(b, w);
-  } else {
-    (void)w;
-    if (!b.depend()) b.arm();
-    for (unsigned i = 0; i < N; ++i)
-      if (!b[i].depend()) b[i].arm();
-  }
+template<class S>
+inline void arm_width(cppde::dual2nd<S>& v, unsigned w) {
+  auto& b = static_cast<typename cppde::dual2nd<S>::base&>(v);
+  arm_width(b, w);
 }
 
 template<class T>
@@ -196,62 +183,6 @@ inline double step_coef_of(const TimeArg& dt) { return scalar_value(dt); }
 //  Bulk extraction / injection helpers (generic over any AD type with the
 //  standard accessor surface).
 // ============================================================================
-
-// Extract value (.x()) from each element: vector<AD> -> vector<inner>
-template<class AD,
-         std::enable_if_t<is_ad<AD>::value, int> = 0>
-inline std::vector<inner_type_t<AD>>
-extract_values(const std::vector<AD>& v)
-{
-  using Inner = inner_type_t<AD>;
-  const std::size_t n = v.size();
-  std::vector<Inner> out(n);
-  for (std::size_t i = 0; i < n; ++i)
-    out[i] = const_cast<AD&>(v[i]).x();
-  return out;
-}
-
-// Extract value (.x()) from each element: dense_matrix<AD> -> dense_matrix<inner>
-template<class AD,
-         std::enable_if_t<is_ad<AD>::value, int> = 0>
-inline dense_matrix<inner_type_t<AD>>
-extract_values(const dense_matrix<AD>& M)
-{
-  using Inner = inner_type_t<AD>;
-  dense_matrix<Inner> out(M.rows(), M.cols());
-  const std::size_t sz = M.data.size();
-  for (std::size_t k = 0; k < sz; ++k)
-    out.data[k] = const_cast<AD&>(M.data[k]).x();
-  return out;
-}
-
-// Extract derivative .d(j) from each element of a vector
-template<class AD,
-         std::enable_if_t<is_ad<AD>::value, int> = 0>
-inline std::vector<inner_type_t<AD>>
-extract_derivs(const std::vector<AD>& v, unsigned j)
-{
-  using Inner = inner_type_t<AD>;
-  const std::size_t n = v.size();
-  std::vector<Inner> out(n);
-  for (std::size_t i = 0; i < n; ++i)
-    out[i] = const_cast<AD&>(v[i]).d(j);
-  return out;
-}
-
-// Extract derivative .d(j) from each element of a dense_matrix
-template<class AD,
-         std::enable_if_t<is_ad<AD>::value, int> = 0>
-inline dense_matrix<inner_type_t<AD>>
-extract_derivs(const dense_matrix<AD>& M, unsigned j)
-{
-  using Inner = inner_type_t<AD>;
-  dense_matrix<Inner> out(M.rows(), M.cols());
-  const std::size_t sz = M.data.size();
-  for (std::size_t k = 0; k < sz; ++k)
-    out.data[k] = const_cast<AD&>(M.data[k]).d(j);
-  return out;
-}
 
 // Max number of active derivative directions in a vector
 template<class AD,
@@ -294,68 +225,15 @@ inline unsigned max_deriv_size(const csc_matrix<AD>& M)
   return mx;
 }
 
-// Whether any element has active derivative directions, returning on the
-// first hit unlike max_deriv_size(). A static width needs only that
-// distinction: a reparametrisation without sensitivity columns seeds nothing.
-template<class AD,
-         std::enable_if_t<is_ad<AD>::value, int> = 0>
-inline bool any_deriv(const std::vector<AD>& v)
-{
-  for (std::size_t i = 0; i < v.size(); ++i)
-    if (const_cast<AD&>(v[i]).size() > 0) return true;
-  return false;
-}
-
-template<class AD,
-         std::enable_if_t<is_ad<AD>::value, int> = 0>
-inline bool any_deriv(const dense_matrix<AD>& M)
-{
-  for (std::size_t k = 0; k < M.data.size(); ++k)
-    if (const_cast<AD&>(M.data[k]).size() > 0) return true;
-  return false;
-}
-
-//    bulk_extract_derivs: one pass over the vector into a column-major
-//      n by n_derivs scratch, in place of n_derivs separate extractions.
-//    bulk_inject_results: one pass back, activating dependence where it is not
-//      yet set and overwriting every tangent slot.
-
-template<class AD,
-         std::enable_if_t<is_ad<AD>::value, int> = 0>
-inline void bulk_extract_derivs(
-    const std::vector<AD>& v,
-    std::vector<inner_type_t<AD>>& out,
-    int n, unsigned n_derivs)
-{
-  using Inner = inner_type_t<AD>;
-  out.resize(static_cast<std::size_t>(n) * n_derivs);
-  for (int i = 0; i < n; ++i) {
-    auto& vi = const_cast<AD&>(v[i]);
-    unsigned sz = vi.size();
-    for (unsigned j = 0; j < n_derivs; ++j) {
-      if (j < sz) out[j * n + i] = vi.d(j);
-      else out[j * n + i] = Inner(0.0);
-    }
-  }
-}
-
-namespace detail {
-// Compile-time width: for AD types that expose a static size (dual's
-// static_size). Defaults to 0 = dynamic.
-template<class AD> struct ad_static_size : std::integral_constant<unsigned, 0> {};
-template<class T, unsigned N>
-struct ad_static_size<cppde::dual<T, N>>    : std::integral_constant<unsigned, N> {};
-template<class T, unsigned N>
-struct ad_static_size<cppde::dual2nd<T, N>> : std::integral_constant<unsigned, N> {};
-} // namespace detail
-
 // The value layer of b from v; for a dual2nd through set_value_layer, which
 // binds no tangents there.
 template<class AD, class V>
 inline void set_value(AD& b, const V& v) { b.x() = v; }
-template<class S, unsigned N, class V>
-inline void set_value(cppde::dual2nd<S, N>& b, const V& v) { b.set_value_layer(v); }
+template<class S, class V>
+inline void set_value(cppde::dual2nd<S>& b, const V& v) { b.set_value_layer(v); }
 
+// One pass from a column-major n by n_derivs scratch into b, activating
+// dependence where it is not yet set and overwriting every tangent slot.
 template<class AD,
          std::enable_if_t<is_ad<AD>::value, int> = 0>
 inline void bulk_inject_results(
@@ -364,18 +242,11 @@ inline void bulk_inject_results(
     const std::vector<inner_type_t<AD>>& dx_all,
     int n, unsigned n_derivs)
 {
-  constexpr unsigned StaticN = detail::ad_static_size<AD>::value;
   for (int i = 0; i < n; ++i) {
     set_value(b[i], b_val[i]);
     if (n_derivs > 0) {
-      // Activate dependence (sets internal flag / allocates tangent vec).
-      // Static N: diff(0) seeds m_diff[0] = 1; every slot is overwritten below.
-      // Dynamic N==0: diff(0, n_derivs) sizes the tangent buffer.
-      if constexpr (StaticN > 0) {
-        if (!b[i].depend()) b[i].diff(0);
-      } else {
-        if (!b[i].depend()) b[i].diff(0, n_derivs);
-      }
+      // diff(0, n_derivs) sizes the tangent buffer; every slot is overwritten below.
+      if (!b[i].depend()) b[i].diff(0, n_derivs);
       for (unsigned j = 0; j < n_derivs; ++j)
         b[i][j] = dx_all[j * n + i];
     }
@@ -388,7 +259,6 @@ namespace detail {
 
 // The names the rest of the library reaches for.
 using ad_traits::scalar_value;
-template<class T> using is_ad_type = ad_traits::is_ad<T>;
 
 } // namespace detail
 } // namespace cppde

@@ -199,6 +199,15 @@ struct PchipForcing {
     return b[i] + dt * (2.0 * c[i] + dt * 3.0 * d[i]);
   }
 
+  // The second time derivative inside the interval of `time`, 0 outside the data.
+  T second_derivative(const T& time) const {
+    double td = extract_double(time);
+    if (td < t.front() || td > t.back() || t.size() < 2) return T(0.0);
+    int i = find_interval(td);
+    T dt = time - t[i];
+    return 2.0 * c[i] + dt * 6.0 * d[i];
+  }
+
   /**
    * Get the minimum time in the forcing data.
    * @return First time point

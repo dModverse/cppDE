@@ -133,9 +133,6 @@ public:
       sw.m[i] = m_modes[k * m_n_modes + i];
   }
 
-  // Where the store's own time went. Empty and free unless CPPDE_PROFILE.
-  const cppde::profiler& prof() const { return m_prof; }
-
   // A checkpoint the collector filled itself, for a family whose carry cannot be
   // read off the stepper after the step.
   void push(const checkpoint_type& cp) { m_steps.push_back(cp); }

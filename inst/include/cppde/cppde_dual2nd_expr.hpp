@@ -1,5 +1,5 @@
 /*
- Expression Templates for cppde::dual2nd<T, N>.
+ Expression Templates for cppde::dual2nd<T>.
 
  Mirrors the structure of cppde_dual_expr.hpp (first-order ETs) lifted to
  second order. Each ET node exposes:
@@ -7,12 +7,12 @@
    - eval_d1(i)          -> T  (gradient component i)
    - eval_d2(i, j)       -> T  (Hessian component, j <= i in callers)
    - any_depend()        -> bool
-   - width()             -> unsigned (= N for static, runtime else)
+   - width()             -> unsigned, the runtime tangent width
 
- Operators on dual2nd<T,N> values, scalar mixes, and Expr2nd<D> trees all
+ Operators on dual2nd<T> values, scalar mixes, and Expr2nd<D> trees all
  build BinExpr2 / BinScalarRight2 / BinScalarLeft2 / UnaryExpr2 / pow*
  nodes, never materialising an intermediate dual2nd. The full tree is
- materialised exactly once on assignment into a dual2nd<T,N> via
+ materialised exactly once on assignment into a dual2nd<T> via
  dual2nd::operator=(const Expr2nd<D>&) (declared in cppde_dual2nd.hpp,
  defined here below).
 
@@ -75,24 +75,23 @@ template<class X>
 constexpr bool is_expr2nd_v = is_expr2nd<X>::value;
 
 template<class X> struct is_dual2nd_t : std::false_type {};
-template<class T, unsigned N>
-struct is_dual2nd_t<dual2nd<T, N>> : std::true_type {};
+template<class T>
+struct is_dual2nd_t<dual2nd<T>> : std::true_type {};
 
 // ===========================================================================
-// Leaf: dual2nd<T, N> reference. Snapshots scalar at ctor, reads tangents
+// Leaf: dual2nd<T> reference. Snapshots scalar at ctor, reads tangents
 // through the source on demand.
 // ===========================================================================
-template<class T, unsigned N>
-struct Dual2ndLeaf : Expr2nd<Dual2ndLeaf<T, N>> {
+template<class T>
+struct Dual2ndLeaf : Expr2nd<Dual2ndLeaf<T>> {
   using value_type = T;
-  static constexpr unsigned static_N = N;
 
-  const dual2nd<T, N>& src_;
+  const dual2nd<T>& src_;
   T x_;
   bool depend_;
   unsigned m_;
 
-  CPPDE_ET2_INLINE explicit Dual2ndLeaf(const dual2nd<T, N>& d)
+  CPPDE_ET2_INLINE explicit Dual2ndLeaf(const dual2nd<T>& d)
     : src_(d), x_(d.scalar()), depend_(d.depend()),
       m_(d.depend() ? d.width() : 0u) {}
 
@@ -104,17 +103,13 @@ struct Dual2ndLeaf : Expr2nd<Dual2ndLeaf<T, N>> {
     return depend_ ? src_.dd_at(i, j) : T(0);
   }
   CPPDE_ET2_INLINE bool any_depend() const { return depend_; }
-  CPPDE_ET2_INLINE unsigned width() const {
-    if constexpr (N > 0) return N;
-    else                  return m_;
-  }
+  CPPDE_ET2_INLINE unsigned width() const { return m_; }
 };
 
 // Scalar leaf: arithmetic constant.
 template<class T>
 struct ScalarLeaf2 : Expr2nd<ScalarLeaf2<T>> {
   using value_type = T;
-  static constexpr unsigned static_N = 0;
   T v_;
   CPPDE_ET2_INLINE explicit ScalarLeaf2(T v) : v_(v) {}
   CPPDE_ET2_INLINE T eval_value() const { return v_; }
@@ -191,8 +186,6 @@ struct DivOp2 {
 template<class L, class R, class Op>
 struct BinExpr2 : Expr2nd<BinExpr2<L, R, Op>> {
   using value_type = typename L::value_type;
-  static constexpr unsigned static_N =
-    (L::static_N > R::static_N) ? L::static_N : R::static_N;
 
   L l_;
   R r_;
@@ -227,7 +220,6 @@ struct BinExpr2 : Expr2nd<BinExpr2<L, R, Op>> {
 template<class L, class Op, class T>
 struct BinScalarRight2 : Expr2nd<BinScalarRight2<L, Op, T>> {
   using value_type = T;
-  static constexpr unsigned static_N = L::static_N;
   L l_;
   T s_;
   T y_;
@@ -267,7 +259,6 @@ struct BinScalarRight2 : Expr2nd<BinScalarRight2<L, Op, T>> {
 template<class R, class Op, class T>
 struct BinScalarLeft2 : Expr2nd<BinScalarLeft2<R, Op, T>> {
   using value_type = T;
-  static constexpr unsigned static_N = R::static_N;
   R r_;
   T s_;
   T y_;
@@ -318,9 +309,9 @@ struct NegOp2 {
   }
 };
 
-#define CPPDE_DEFINE_ET2_UNARY(NAME, VAL_EXPR, FP_EXPR, FPP_EXPR)            \
+#define CPPDE_DEFINE_ET2_UNARY(NAME, VAL_EXPR, FP_EXPR, FPP_EXPR)             \
   struct NAME ## Op2 {                                                        \
-    template<class T> static void compute(const T& xv, T& y, T& fp, T& fpp) {  \
+    template<class T> static void compute(const T& xv, T& y, T& fp, T& fpp) { \
       using std::exp;   using std::log;   using std::sqrt;                    \
       using std::sin;   using std::cos;   using std::tan;                     \
       using std::asin;  using std::acos;  using std::atan;                    \
@@ -386,7 +377,6 @@ struct AbsOp2 {
 template<class A, class Op>
 struct UnaryExpr2 : Expr2nd<UnaryExpr2<A, Op>> {
   using value_type = typename A::value_type;
-  static constexpr unsigned static_N = A::static_N;
   A a_;
   value_type y_;
   value_type fp_;
@@ -415,8 +405,6 @@ struct UnaryExpr2 : Expr2nd<UnaryExpr2<A, Op>> {
 template<class L, class R>
 struct PowExpr2DD : Expr2nd<PowExpr2DD<L, R>> {
   using value_type = typename L::value_type;
-  static constexpr unsigned static_N =
-    (L::static_N > R::static_N) ? L::static_N : R::static_N;
 
   L l_; R r_;
   value_type y_, pa_, pb_, paa_, pbb_, pab_;
@@ -461,7 +449,6 @@ struct PowExpr2DD : Expr2nd<PowExpr2DD<L, R>> {
 template<class L>
 struct PowExpr2DS : Expr2nd<PowExpr2DS<L>> {
   using value_type = typename L::value_type;
-  static constexpr unsigned static_N = L::static_N;
   L l_;
   value_type bv_, y_, pa_, paa_;
 
@@ -487,7 +474,6 @@ struct PowExpr2DS : Expr2nd<PowExpr2DS<L>> {
 template<class R>
 struct PowExpr2SD : Expr2nd<PowExpr2SD<R>> {
   using value_type = typename R::value_type;
-  static constexpr unsigned static_N = R::static_N;
   R r_;
   value_type av_, y_, pb_, pbb_;
 
@@ -518,8 +504,8 @@ template<class X>
 struct expr2_value_type<X, std::enable_if_t<is_expr2nd_v<X>>> {
   using type = typename X::value_type;
 };
-template<class T, unsigned N>
-struct expr2_value_type<dual2nd<T, N>> { using type = T; };
+template<class T>
+struct expr2_value_type<dual2nd<T>> { using type = T; };
 template<class S>
 struct expr2_value_type<S, std::enable_if_t<std::is_arithmetic<S>::value>> {
   using type = S;
@@ -538,9 +524,9 @@ template<class TT, class X,
          std::enable_if_t<is_expr2nd_v<X>, int> = 0>
 CPPDE_ET2_INLINE X make_leaf2(const X& x, TT* = nullptr) { return x; }
 
-template<class TT, class T, unsigned N>
-CPPDE_ET2_INLINE Dual2ndLeaf<T, N> make_leaf2(const dual2nd<T, N>& d, TT* = nullptr) {
-  return Dual2ndLeaf<T, N>(d);
+template<class TT, class T>
+CPPDE_ET2_INLINE Dual2ndLeaf<T> make_leaf2(const dual2nd<T>& d, TT* = nullptr) {
+  return Dual2ndLeaf<T>(d);
 }
 
 template<class TT, class S,
@@ -573,59 +559,59 @@ struct et2_pair_enabled
   // ordering prefers them to the eager nested-dual operators, which would
   // otherwise match dual2nd through its base class.
   // ===========================================================================
-#define CPPDE_DEFINE_ET2_BINOP(SYM, OPTAG)                                   \
+#define CPPDE_DEFINE_ET2_BINOP(SYM, OPTAG)                                    \
   /* dual2nd op dual2nd */                                                    \
-  template<class T, unsigned N>                                               \
-  CPPDE_ET2_INLINE auto operator SYM(const dual2nd<T, N>& a,                 \
-                                      const dual2nd<T, N>& b) {               \
-    return BinExpr2<Dual2ndLeaf<T, N>, Dual2ndLeaf<T, N>, OPTAG>(              \
-                Dual2ndLeaf<T, N>(a), Dual2ndLeaf<T, N>(b));                  \
-  }                                                                            \
+  template<class T>                                                           \
+  CPPDE_ET2_INLINE auto operator SYM(const dual2nd<T>& a,                     \
+                                      const dual2nd<T>& b) {                  \
+    return BinExpr2<Dual2ndLeaf<T>, Dual2ndLeaf<T>, OPTAG>(                   \
+                Dual2ndLeaf<T>(a), Dual2ndLeaf<T>(b));                        \
+  }                                                                           \
   /* dual2nd op Expr2nd */                                                    \
-  template<class T, unsigned N, class D>                                      \
-  CPPDE_ET2_INLINE auto operator SYM(const dual2nd<T, N>& a,                 \
+  template<class T, class D>                                                  \
+  CPPDE_ET2_INLINE auto operator SYM(const dual2nd<T>& a,                     \
                                       const Expr2nd<D>& b) {                  \
-    return BinExpr2<Dual2ndLeaf<T, N>, D, OPTAG>(                             \
-                Dual2ndLeaf<T, N>(a), b.self());                              \
-  }                                                                            \
+    return BinExpr2<Dual2ndLeaf<T>, D, OPTAG>(                                \
+                Dual2ndLeaf<T>(a), b.self());                                 \
+  }                                                                           \
   /* Expr2nd op dual2nd */                                                    \
-  template<class D, class T, unsigned N>                                      \
-  CPPDE_ET2_INLINE auto operator SYM(const Expr2nd<D>& a,                    \
-                                      const dual2nd<T, N>& b) {               \
-    return BinExpr2<D, Dual2ndLeaf<T, N>, OPTAG>(                             \
-                a.self(), Dual2ndLeaf<T, N>(b));                              \
-  }                                                                            \
+  template<class D, class T>                                                  \
+  CPPDE_ET2_INLINE auto operator SYM(const Expr2nd<D>& a,                     \
+                                      const dual2nd<T>& b) {                  \
+    return BinExpr2<D, Dual2ndLeaf<T>, OPTAG>(                                \
+                a.self(), Dual2ndLeaf<T>(b));                                 \
+  }                                                                           \
   /* Expr2nd op Expr2nd */                                                    \
   template<class L, class R>                                                  \
-  CPPDE_ET2_INLINE auto operator SYM(const Expr2nd<L>& a,                    \
+  CPPDE_ET2_INLINE auto operator SYM(const Expr2nd<L>& a,                     \
                                       const Expr2nd<R>& b) {                  \
     return BinExpr2<L, R, OPTAG>(a.self(), b.self());                         \
-  }                                                                            \
+  }                                                                           \
   /* dual2nd op scalar */                                                     \
-  template<class T, unsigned N, class U,                                      \
+  template<class T, class U,                                                  \
            std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>           \
-  CPPDE_ET2_INLINE auto operator SYM(const dual2nd<T, N>& a, U b) {          \
-    return BinScalarRight2<Dual2ndLeaf<T, N>, OPTAG, T>(                      \
-                Dual2ndLeaf<T, N>(a), static_cast<T>(b));                     \
-  }                                                                            \
+  CPPDE_ET2_INLINE auto operator SYM(const dual2nd<T>& a, U b) {              \
+    return BinScalarRight2<Dual2ndLeaf<T>, OPTAG, T>(                         \
+                Dual2ndLeaf<T>(a), static_cast<T>(b));                        \
+  }                                                                           \
   /* scalar op dual2nd */                                                     \
-  template<class T, unsigned N, class U,                                      \
+  template<class T, class U,                                                  \
            std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>           \
-  CPPDE_ET2_INLINE auto operator SYM(U a, const dual2nd<T, N>& b) {          \
-    return BinScalarLeft2<Dual2ndLeaf<T, N>, OPTAG, T>(                       \
-                static_cast<T>(a), Dual2ndLeaf<T, N>(b));                     \
-  }                                                                            \
+  CPPDE_ET2_INLINE auto operator SYM(U a, const dual2nd<T>& b) {              \
+    return BinScalarLeft2<Dual2ndLeaf<T>, OPTAG, T>(                          \
+                static_cast<T>(a), Dual2ndLeaf<T>(b));                        \
+  }                                                                           \
   /* Expr2nd op scalar */                                                     \
   template<class D, class U,                                                  \
            std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>           \
-  CPPDE_ET2_INLINE auto operator SYM(const Expr2nd<D>& a, U b) {             \
+  CPPDE_ET2_INLINE auto operator SYM(const Expr2nd<D>& a, U b) {              \
     using T = typename D::value_type;                                         \
     return BinScalarRight2<D, OPTAG, T>(a.self(), static_cast<T>(b));         \
-  }                                                                            \
+  }                                                                           \
   /* scalar op Expr2nd */                                                     \
   template<class U, class D,                                                  \
            std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>           \
-  CPPDE_ET2_INLINE auto operator SYM(U a, const Expr2nd<D>& b) {             \
+  CPPDE_ET2_INLINE auto operator SYM(U a, const Expr2nd<D>& b) {              \
     using T = typename D::value_type;                                         \
     return BinScalarLeft2<D, OPTAG, T>(static_cast<T>(a), b.self());          \
   }
@@ -640,31 +626,31 @@ CPPDE_DEFINE_ET2_BINOP(/, DivOp2)
 // ===========================================================================
 // Unary +/- on dual2nd / Expr2nd.
 // ===========================================================================
-template<class T, unsigned N>
-CPPDE_ET2_INLINE auto operator+(const dual2nd<T, N>& a) {
-  return Dual2ndLeaf<T, N>(a);
+template<class T>
+CPPDE_ET2_INLINE auto operator+(const dual2nd<T>& a) {
+  return Dual2ndLeaf<T>(a);
 }
 template<class D>
 CPPDE_ET2_INLINE auto operator+(const Expr2nd<D>& a) {
   return a.self();
 }
 
-template<class T, unsigned N>
-CPPDE_ET2_INLINE auto operator-(const dual2nd<T, N>& a) {
-  return UnaryExpr2<Dual2ndLeaf<T, N>, NegOp2>(Dual2ndLeaf<T, N>(a));
+template<class T>
+CPPDE_ET2_INLINE auto operator-(const dual2nd<T>& a) {
+  return UnaryExpr2<Dual2ndLeaf<T>, NegOp2>(Dual2ndLeaf<T>(a));
 }
 template<class D>
 CPPDE_ET2_INLINE auto operator-(const Expr2nd<D>& a) {
   return UnaryExpr2<D, NegOp2>(a.self());
 }
 
-#define CPPDE_DEFINE_ET2_UNARY_FN(NAME, OPTAG)                               \
-  template<class T, unsigned N>                                               \
-  CPPDE_ET2_INLINE auto NAME(const dual2nd<T, N>& a) {                       \
-    return UnaryExpr2<Dual2ndLeaf<T, N>, OPTAG>(Dual2ndLeaf<T, N>(a));        \
-  }                                                                            \
+#define CPPDE_DEFINE_ET2_UNARY_FN(NAME, OPTAG)                                \
+  template<class T>                                                           \
+  CPPDE_ET2_INLINE auto NAME(const dual2nd<T>& a) {                           \
+    return UnaryExpr2<Dual2ndLeaf<T>, OPTAG>(Dual2ndLeaf<T>(a));              \
+  }                                                                           \
   template<class D>                                                           \
-  CPPDE_ET2_INLINE auto NAME(const Expr2nd<D>& a) {                          \
+  CPPDE_ET2_INLINE auto NAME(const Expr2nd<D>& a) {                           \
     return UnaryExpr2<D, OPTAG>(a.self());                                    \
   }
 
@@ -692,27 +678,27 @@ CPPDE_DEFINE_ET2_UNARY_FN(abs,   AbsOp2)
 // ===========================================================================
 // pow: three forms with explicit dual2nd/Expr2nd parameters.
 // ===========================================================================
-template<class T, unsigned N>
-CPPDE_ET2_INLINE auto pow(const dual2nd<T, N>& a, const dual2nd<T, N>& b) {
-  return PowExpr2DD<Dual2ndLeaf<T, N>, Dual2ndLeaf<T, N>>(
-              Dual2ndLeaf<T, N>(a), Dual2ndLeaf<T, N>(b));
+template<class T>
+CPPDE_ET2_INLINE auto pow(const dual2nd<T>& a, const dual2nd<T>& b) {
+  return PowExpr2DD<Dual2ndLeaf<T>, Dual2ndLeaf<T>>(
+              Dual2ndLeaf<T>(a), Dual2ndLeaf<T>(b));
 }
-template<class T, unsigned N, class D>
-CPPDE_ET2_INLINE auto pow(const dual2nd<T, N>& a, const Expr2nd<D>& b) {
-  return PowExpr2DD<Dual2ndLeaf<T, N>, D>(Dual2ndLeaf<T, N>(a), b.self());
+template<class T, class D>
+CPPDE_ET2_INLINE auto pow(const dual2nd<T>& a, const Expr2nd<D>& b) {
+  return PowExpr2DD<Dual2ndLeaf<T>, D>(Dual2ndLeaf<T>(a), b.self());
 }
-template<class D, class T, unsigned N>
-CPPDE_ET2_INLINE auto pow(const Expr2nd<D>& a, const dual2nd<T, N>& b) {
-  return PowExpr2DD<D, Dual2ndLeaf<T, N>>(a.self(), Dual2ndLeaf<T, N>(b));
+template<class D, class T>
+CPPDE_ET2_INLINE auto pow(const Expr2nd<D>& a, const dual2nd<T>& b) {
+  return PowExpr2DD<D, Dual2ndLeaf<T>>(a.self(), Dual2ndLeaf<T>(b));
 }
 template<class L, class R>
 CPPDE_ET2_INLINE auto pow(const Expr2nd<L>& a, const Expr2nd<R>& b) {
   return PowExpr2DD<L, R>(a.self(), b.self());
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>
-CPPDE_ET2_INLINE auto pow(const dual2nd<T, N>& a, U b) {
-  return PowExpr2DS<Dual2ndLeaf<T, N>>(Dual2ndLeaf<T, N>(a), static_cast<T>(b));
+CPPDE_ET2_INLINE auto pow(const dual2nd<T>& a, U b) {
+  return PowExpr2DS<Dual2ndLeaf<T>>(Dual2ndLeaf<T>(a), static_cast<T>(b));
 }
 template<class D, class U,
          std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>
@@ -720,10 +706,10 @@ CPPDE_ET2_INLINE auto pow(const Expr2nd<D>& a, U b) {
   using T = typename D::value_type;
   return PowExpr2DS<D>(a.self(), static_cast<T>(b));
 }
-template<class U, class T, unsigned N,
+template<class U, class T,
          std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>
-CPPDE_ET2_INLINE auto pow(U a, const dual2nd<T, N>& b) {
-  return PowExpr2SD<Dual2ndLeaf<T, N>>(static_cast<T>(a), Dual2ndLeaf<T, N>(b));
+CPPDE_ET2_INLINE auto pow(U a, const dual2nd<T>& b) {
+  return PowExpr2SD<Dual2ndLeaf<T>>(static_cast<T>(a), Dual2ndLeaf<T>(b));
 }
 template<class U, class D,
          std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>
@@ -738,28 +724,28 @@ CPPDE_ET2_INLINE auto pow(U a, const Expr2nd<D>& b) {
 // only. The dual2nd-only overloads in cppde_dual2nd_math.hpp keep covering two
 // dual2nds or a dual2nd and a scalar.
 // ===========================================================================
-#define CPPDE_DEFINE_ET2_CMP(SYM)                                            \
+#define CPPDE_DEFINE_ET2_CMP(SYM)                                             \
   template<class L, class R>                                                  \
   CPPDE_ET2_INLINE bool operator SYM(const Expr2nd<L>& a,                     \
                                       const Expr2nd<R>& b) {                  \
     return a.self().eval_value() SYM b.self().eval_value();                   \
-  }                                                                            \
-  template<class D, class T, unsigned N>                                      \
+  }                                                                           \
+  template<class D, class T>                                                  \
   CPPDE_ET2_INLINE bool operator SYM(const Expr2nd<D>& a,                     \
-                                      const dual2nd<T, N>& b) {               \
+                                      const dual2nd<T>& b) {                  \
     return a.self().eval_value() SYM b.scalar();                              \
-  }                                                                            \
-  template<class T, unsigned N, class D>                                      \
-  CPPDE_ET2_INLINE bool operator SYM(const dual2nd<T, N>& a,                  \
+  }                                                                           \
+  template<class T, class D>                                                  \
+  CPPDE_ET2_INLINE bool operator SYM(const dual2nd<T>& a,                     \
                                       const Expr2nd<D>& b) {                  \
     return a.scalar() SYM b.self().eval_value();                              \
-  }                                                                            \
+  }                                                                           \
   template<class D, class U,                                                  \
            std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>           \
   CPPDE_ET2_INLINE bool operator SYM(const Expr2nd<D>& a, U b) {              \
     using T = typename D::value_type;                                         \
     return a.self().eval_value() SYM static_cast<T>(b);                       \
-  }                                                                            \
+  }                                                                           \
   template<class U, class D,                                                  \
            std::enable_if_t<std::is_arithmetic<U>::value, int> = 0>           \
   CPPDE_ET2_INLINE bool operator SYM(U a, const Expr2nd<D>& b) {              \
@@ -784,8 +770,6 @@ CPPDE_DEFINE_ET2_CMP(!=)
 template<class L, class R>
 struct Select2 : Expr2nd<Select2<L, R>> {
   using value_type = typename L::value_type;
-  static constexpr unsigned static_N =
-    (L::static_N > R::static_N) ? L::static_N : R::static_N;
 
   L    l_;
   R    r_;
@@ -868,7 +852,7 @@ inline auto value_of(const dual2nd_expr::Expr2nd<D>& e) {
 }
 
   // ===========================================================================
-  // Materialise an Expr2nd<D> tree into a dual2nd<T, N> at assignment.
+  // Materialise an Expr2nd<D> tree into a dual2nd<T> at assignment.
   //
   // Aliasing-safe order:
   //   1. scalar layer
@@ -878,9 +862,9 @@ inline auto value_of(const dual2nd_expr::Expr2nd<D>& e) {
   // ===========================================================================
 namespace dual2nd_expr {
 
-template<class T, unsigned N, class E,
+template<class T, class E,
          std::enable_if_t<is_expr2nd_v<E>, int> = 0>
-CPPDE_ET2_INLINE void materialise(dual2nd<T, N>& lhs, const E& e) {
+CPPDE_ET2_INLINE void materialise(dual2nd<T>& lhs, const E& e) {
   // 1. Scalar.
   lhs.scalar() = e.eval_value();
 
@@ -890,9 +874,7 @@ CPPDE_ET2_INLINE void materialise(dual2nd<T, N>& lhs, const E& e) {
     return;
   }
 
-  unsigned m;
-  if constexpr (N > 0) m = N;
-  else                  m = e.width();
+  const unsigned m = e.width();
   if (m == 0) return;
 
   lhs.arm_full(m);
@@ -920,74 +902,74 @@ CPPDE_ET2_INLINE void materialise(dual2nd<T, N>& lhs, const E& e) {
 // take the inherited base class operators via overload resolution.
 // ===========================================================================
 
-template<class T, unsigned N>
+template<class T>
 template<class D>
 CPPDE_ET2_INLINE
-dual2nd<T, N>&
-dual2nd<T, N>::operator=(const dual2nd_expr::Expr2nd<D>& e) {
+dual2nd<T>&
+dual2nd<T>::operator=(const dual2nd_expr::Expr2nd<D>& e) {
   dual2nd_expr::materialise(*this, e.self());
   return *this;
 }
 
-template<class T, unsigned N>
+template<class T>
 template<class D>
 CPPDE_ET2_INLINE
-dual2nd<T, N>::dual2nd(const dual2nd_expr::Expr2nd<D>& e) : base() {
+dual2nd<T>::dual2nd(const dual2nd_expr::Expr2nd<D>& e) : base() {
   dual2nd_expr::materialise(*this, e.self());
 }
 
 // Compound assignment helpers: build (*this op other) as a BinExpr2 and
 // materialise the whole tree back into *this.
-template<class T, unsigned N>
+template<class T>
 template<class D>
-CPPDE_ET2_INLINE dual2nd<T, N>&
-dual2nd<T, N>::operator+=(const dual2nd_expr::Expr2nd<D>& e) {
+CPPDE_ET2_INLINE dual2nd<T>&
+dual2nd<T>::operator+=(const dual2nd_expr::Expr2nd<D>& e) {
   *this = *this + e;
   return *this;
 }
-template<class T, unsigned N>
+template<class T>
 template<class D>
-CPPDE_ET2_INLINE dual2nd<T, N>&
-dual2nd<T, N>::operator-=(const dual2nd_expr::Expr2nd<D>& e) {
+CPPDE_ET2_INLINE dual2nd<T>&
+dual2nd<T>::operator-=(const dual2nd_expr::Expr2nd<D>& e) {
   *this = *this - e;
   return *this;
 }
-template<class T, unsigned N>
+template<class T>
 template<class D>
-CPPDE_ET2_INLINE dual2nd<T, N>&
-dual2nd<T, N>::operator*=(const dual2nd_expr::Expr2nd<D>& e) {
+CPPDE_ET2_INLINE dual2nd<T>&
+dual2nd<T>::operator*=(const dual2nd_expr::Expr2nd<D>& e) {
   *this = *this * e;
   return *this;
 }
-template<class T, unsigned N>
+template<class T>
 template<class D>
-CPPDE_ET2_INLINE dual2nd<T, N>&
-dual2nd<T, N>::operator/=(const dual2nd_expr::Expr2nd<D>& e) {
+CPPDE_ET2_INLINE dual2nd<T>&
+dual2nd<T>::operator/=(const dual2nd_expr::Expr2nd<D>& e) {
   *this = *this / e;
   return *this;
 }
 
-template<class T, unsigned N>
-template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T, N>>, int>>
-CPPDE_ET2_INLINE dual2nd<T, N>& dual2nd<T, N>::operator+=(const U& o) {
+template<class T>
+template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T>>, int>>
+CPPDE_ET2_INLINE dual2nd<T>& dual2nd<T>::operator+=(const U& o) {
   *this = *this + o;
   return *this;
 }
-template<class T, unsigned N>
-template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T, N>>, int>>
-CPPDE_ET2_INLINE dual2nd<T, N>& dual2nd<T, N>::operator-=(const U& o) {
+template<class T>
+template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T>>, int>>
+CPPDE_ET2_INLINE dual2nd<T>& dual2nd<T>::operator-=(const U& o) {
   *this = *this - o;
   return *this;
 }
-template<class T, unsigned N>
-template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T, N>>, int>>
-CPPDE_ET2_INLINE dual2nd<T, N>& dual2nd<T, N>::operator*=(const U& o) {
+template<class T>
+template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T>>, int>>
+CPPDE_ET2_INLINE dual2nd<T>& dual2nd<T>::operator*=(const U& o) {
   *this = *this * o;
   return *this;
 }
-template<class T, unsigned N>
-template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T, N>>, int>>
-CPPDE_ET2_INLINE dual2nd<T, N>& dual2nd<T, N>::operator/=(const U& o) {
+template<class T>
+template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T>>, int>>
+CPPDE_ET2_INLINE dual2nd<T>& dual2nd<T>::operator/=(const U& o) {
   *this = *this / o;
   return *this;
 }

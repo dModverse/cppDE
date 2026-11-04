@@ -341,9 +341,9 @@ $$
 turns the two into a step. The exponent is that of a first-order
 method for both: $\|\ddot x\|$ stands in for the derivative of order
 $p+1$, which it is only at $p = 1$, and a method of higher order raises
-its step within a few steps. `rb4` obtains
-$\ddot x = \partial f/\partial t + J f$ from the generated Jacobian,
-`tsit5` from a finite difference of $f$. The norms are weighted
+its step within a few steps. Both methods obtain
+$\ddot x = \partial f/\partial t + J f$ from generated code, a
+directional derivative of $f$ along $(f, 1)$. The norms are weighted
 maximum norms with weights $\mathtt{abstol} + \mathtt{reltol}\,|x_0|$;
 with `sensErrCon = TRUE` they include the sensitivity components.
 The step is $\min(100\,h_0,\, h_1,\, h_{\mathrm{ub}})$: the upper bound
@@ -352,13 +352,16 @@ step from changing any component by more than a fraction of its own
 scale, and a lower bound keeps $t_0 + h$ distinct from $t_0$ in double
 precision.
 
-The multistep methods use a port of the CVODES routine
-`cvHin`, which starts from $\sqrt{h_{\mathrm{lb}} h_{\mathrm{ub}}}$,
-with $h_{\mathrm{lb}}$ above the rounding of the time variable, and
-refines it by a finite-difference curvature until two successive estimates agree
-within a factor of two, so the first step equals the one CVODES takes
-on the same problem. After every event each method estimates its step
-again with this port, from the post-event state.
+The multistep methods use the bounds of the CVODES routine `cvHin`:
+$h_{\mathrm{lb}}$ above the rounding of the time variable, the same
+$h_{\mathrm{ub}}$, and the step $\sqrt{2/\|\ddot x\|}$ in the weighted
+RMS norm where that lies below $h_{\mathrm{ub}}$, else
+$h_{\mathrm{lb}}^{1/4} h_{\mathrm{ub}}^{3/4}$, halved and kept between the
+bounds. `cvHin` estimates
+$\ddot x$ by a difference of $f$ over trial steps and refines it until
+two estimates agree; with $\ddot x$ exact from generated code that
+refinement ends in one round. After every event each method estimates
+its step again in the same way, from the post-event state.
 
 ## Dense output
 

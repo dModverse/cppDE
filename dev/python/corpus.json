@@ -763,7 +763,7 @@
 },
 "forcings_list": "u",
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -880,7 +880,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1052,7 +1052,7 @@
 "events_df": null,
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1101,7 +1101,7 @@
 },
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "A_add"
@@ -1150,7 +1150,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1250,7 +1250,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "p",
 "rhs_dict": {
 "C": "0",
@@ -1292,7 +1292,7 @@
 },
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "dpdt",
 "rhs_dict": {
 "p": "1*(piecewise(dpdt, p <= 500, 0))"
@@ -1384,7 +1384,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "p",
 "rhs_dict": {
 "C": "0",
@@ -1480,7 +1480,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "p",
 "rhs_dict": {
 "C": "0",
@@ -1502,7 +1502,7 @@
 },
 "forcings_list": "u",
 "n_states": 2,
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1529,7 +1529,7 @@
 },
 "forcings_list": "u",
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1557,7 +1557,7 @@
 },
 "forcings_list": "u",
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1584,7 +1584,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1611,7 +1611,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1639,7 +1639,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1667,7 +1667,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1695,7 +1695,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1724,7 +1724,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1767,7 +1767,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1811,7 +1811,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1856,7 +1856,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1885,7 +1885,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1913,7 +1913,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1942,7 +1942,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1970,7 +1970,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -1998,7 +1998,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -2027,7 +2027,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -2055,7 +2055,7 @@
 },
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "dose",
@@ -2078,7 +2078,7 @@
 },
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "dose",
@@ -2147,7 +2147,7 @@
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "a",
 "b",
@@ -2233,7 +2233,7 @@ null
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "b",
 "d",
@@ -2275,7 +2275,7 @@ true
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "b",
 "d",
@@ -2343,7 +2343,7 @@ true
 },
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k1",
 "rhs_dict": {
 "A": "-k1 * A"
@@ -2453,7 +2453,7 @@ true
 },
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -2505,7 +2505,7 @@ true
 "events_df": null,
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -2531,7 +2531,7 @@ true
 },
 "forcings_list": [],
 "n_states": 5,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "medium",
 "beta",
@@ -2842,7 +2842,7 @@ true
 },
 "forcings_list": [],
 "n_states": 51,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "Italy",
 "theta",
@@ -2994,7 +2994,7 @@ true
 },
 "forcings_list": [],
 "n_states": 8,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "p11",
@@ -5861,7 +5861,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "thr"
@@ -5880,7 +5880,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "kf",
 "ts",
@@ -5901,7 +5901,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "kf",
 "thr",
@@ -5921,7 +5921,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "ks",
 "ts"
@@ -6000,7 +6000,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [],
 "rhs_dict": {
 "A": "-k*A ** * A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A + 0*A"
@@ -6016,7 +6016,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "-k * A * Heaviside(A - 0.5)",
@@ -6033,7 +6033,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6075,7 +6075,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": "u",
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6144,7 +6144,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": "u",
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6190,7 +6190,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6259,7 +6259,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": "u",
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -6388,7 +6388,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6451,7 +6451,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6493,7 +6493,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6607,7 +6607,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6629,7 +6629,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6650,7 +6650,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6671,7 +6671,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6692,7 +6692,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6713,7 +6713,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -6734,7 +6734,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [],
 "rhs_dict": {
 "x": "-x"
@@ -6750,7 +6750,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "x": "-k*x"
@@ -6766,7 +6766,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -6786,7 +6786,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": "k",
 "rhs_dict": {
 "x": "-k*x"
@@ -6802,7 +6802,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2"
@@ -6822,7 +6822,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "-k*A"
@@ -6854,7 +6854,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "-1*(k*A)"
@@ -6893,7 +6893,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "import_Tca",
 "export_Tca_baso",
@@ -6937,7 +6937,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -6977,7 +6977,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "A_add"
@@ -7012,7 +7012,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": "F",
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "1*(F) -1*(k * A)"
@@ -7044,7 +7044,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "-1*(k * A)"
@@ -7097,7 +7097,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "-1*(k*A)",
@@ -7135,7 +7135,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7176,7 +7176,7 @@ true
 "fixed_params": "compartment",
 "fixed_states": "B",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "compartment",
 "k2"
@@ -7228,7 +7228,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "Epo_degradation_BaF3",
@@ -7292,7 +7292,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "Epo_degradation_BaF3",
@@ -7341,7 +7341,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "p",
 "rhs_dict": {
 "C": "0",
@@ -7374,7 +7374,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "dpdt",
 "rhs_dict": {
 "p": "1*(piecewise(dpdt, p <= 500, 0))"
@@ -7390,7 +7390,7 @@ true
 "fixed_params": "dpdt",
 "fixed_states": "p",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "dpdt",
 "rhs_dict": {
 "p": "1*(piecewise(dpdt, p <= 500, 0))"
@@ -7423,7 +7423,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "p",
 "rhs_dict": {
 "C": "0",
@@ -7440,7 +7440,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": "u",
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7462,7 +7462,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": "u",
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7484,7 +7484,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": "u",
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7506,7 +7506,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": "u",
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7528,7 +7528,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7550,7 +7550,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7572,7 +7572,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7594,7 +7594,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7616,7 +7616,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7638,7 +7638,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7660,7 +7660,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7682,7 +7682,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7705,7 +7705,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7728,7 +7728,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7751,7 +7751,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7774,7 +7774,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7797,7 +7797,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7819,7 +7819,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7841,7 +7841,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7863,7 +7863,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7885,7 +7885,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7907,7 +7907,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7928,7 +7928,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -7988,7 +7988,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -8024,7 +8024,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "-1*(2*k*A)"
@@ -8056,7 +8056,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "-k*A"
@@ -8072,7 +8072,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -8092,7 +8092,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -8152,7 +8152,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2"
@@ -8172,7 +8172,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "dose",
@@ -8192,7 +8192,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "dose",
@@ -8229,7 +8229,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "a",
 "b",
@@ -8268,7 +8268,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "b",
 "d",
@@ -8329,7 +8329,7 @@ true
 "fixed_params": "k2",
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -8349,7 +8349,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": "k",
 "rhs_dict": {
 "x": "-k * 10^x"
@@ -8365,7 +8365,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "std",
 "operator"
@@ -8385,7 +8385,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "b0"
@@ -8405,7 +8405,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": "u",
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -8425,7 +8425,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "-k * A",
@@ -8459,7 +8459,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "-k * A",
@@ -8476,7 +8476,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "r",
 "rhs_dict": {
 "S1": "-r * S1",
@@ -8501,7 +8501,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": "u",
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "u - k * A"
@@ -8517,7 +8517,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k1",
 "rhs_dict": {
 "A": "-k1 * A"
@@ -8585,7 +8585,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "x": "-k * x"
@@ -8601,7 +8601,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": "k",
 "rhs_dict": {
 "x": "-k * x"
@@ -8636,7 +8636,7 @@ true
 "fixed_params": [],
 "fixed_states": "x",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "s"
@@ -8655,7 +8655,7 @@ true
 "fixed_params": [],
 "fixed_states": "x",
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k",
 "s"
@@ -8693,7 +8693,7 @@ true
 "fixed_params": [],
 "fixed_states": "x",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "s"
@@ -8712,7 +8712,7 @@ true
 "fixed_params": [],
 "fixed_states": "x",
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k",
 "s"
@@ -8789,7 +8789,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -8833,7 +8833,7 @@ true
 "fixed_params": [],
 "fixed_states": "A",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k_in",
 "k_out"
@@ -8852,7 +8852,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -8872,7 +8872,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k1",
 "k2"
@@ -8949,7 +8949,7 @@ true
 "Wip1_G2"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "kt",
 "init_Space",
@@ -9062,7 +9062,7 @@ true
 "Sphinga"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k0",
 "k1",
@@ -9129,7 +9129,7 @@ true
 "SOCS3"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "Epo",
@@ -9210,7 +9210,7 @@ true
 "pwsw1"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "medium",
 "beta",
@@ -9257,7 +9257,7 @@ true
 "x_4ac"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "a_basal",
 "d",
@@ -9311,7 +9311,7 @@ true
 "nucpBpB"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "Epo_degradation_BaF3",
@@ -9350,7 +9350,7 @@ true
 "A_state"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cytosol",
 "v0",
@@ -9402,7 +9402,7 @@ true
 "Xp"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "k1aBasic",
@@ -9460,7 +9460,7 @@ true
 "zea"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "kb1",
@@ -9502,7 +9502,7 @@ true
 "Pathogen"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "mu_N",
 "delta_NE",
@@ -9545,7 +9545,7 @@ true
 "GFP_mRNA"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cell",
 "eff",
@@ -9591,7 +9591,7 @@ true
 "pERK"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "K_1",
@@ -9642,7 +9642,7 @@ true
 "EGF_EGFR"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "Cell",
 "EGF_rate",
@@ -9735,7 +9735,7 @@ true
 "pwsw41"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "Italy",
 "theta",
@@ -9877,7 +9877,7 @@ true
 "pPDE"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "Fsk_level",
@@ -10248,7 +10248,7 @@ true
 "X_Nuc__CCNE_CDKN1A_B_1__CDKN1B_CCNE_A_1_Thr187p_"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "kImImCCND_1",
 "Num",
@@ -10682,7 +10682,7 @@ true
 "B_att_Hi"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "compartment",
 "k_att_Hi",
@@ -10850,7 +10850,7 @@ true
 "geneL"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cell",
 "Rec_act",
@@ -11014,7 +11014,7 @@ true
 "detected_cumulative"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "Lagos",
 "transmission_rate_effective",
@@ -11062,7 +11062,7 @@ true
 "Vni"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "K0",
 "T0",
@@ -11107,7 +11107,7 @@ true
 "treated_weak"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "recruitment_rate",
 "infected_normal_transmission_rate_relative",
@@ -11168,7 +11168,7 @@ true
 "CD274mRNA"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "il13_level",
@@ -11263,7 +11263,7 @@ true
 "pAKT"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "ksyn_EGFR__MKN1_fm",
@@ -11471,7 +11471,7 @@ true
 "species_75"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "kp_EGF",
 "km_EGF",
@@ -11593,7 +11593,7 @@ true
 "BoundUnspec"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "ExtracellularMedium",
 "ka1",
@@ -12099,7 +12099,7 @@ true
 "Proteasome"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "Ins",
@@ -12607,7 +12607,7 @@ true
 "IPR_I2"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k_2",
 "l_4",
@@ -12662,7 +12662,7 @@ true
 "pwsw1"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "cyt",
 "p11",
@@ -12735,7 +12735,7 @@ true
 "Confirmed_Infected"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "China",
 "Trigger_Wuhan",
@@ -12806,7 +12806,7 @@ true
 "K27me3K36me2"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "default",
 "inflowp",
@@ -12884,7 +12884,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -12906,7 +12906,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "c1",
 "c2"
@@ -12932,7 +12932,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "s",
 "q",
@@ -12954,7 +12954,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "A",
 "B",
@@ -12978,7 +12978,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "mu",
 "rhs_dict": {
 "x": "y",
@@ -12995,7 +12995,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k10",
@@ -13056,7 +13056,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "A",
 "B",
@@ -13123,7 +13123,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "A",
 "B",
@@ -13270,7 +13270,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "Iext",
 "eps",
@@ -13339,7 +13339,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "Iext",
 "eps",
@@ -13488,7 +13488,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k_act",
 "k_deact",
@@ -13511,7 +13511,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k_act",
 "k_deact",
@@ -13807,7 +13807,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -13838,7 +13838,7 @@ true
 "fixed_params": [],
 "fixed_states": [],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -13889,7 +13889,7 @@ true
 "fixed_params": [],
 "fixed_states": "B",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "km"
@@ -13940,7 +13940,7 @@ true
 "Bp"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "ka",
 "kap",
@@ -13994,7 +13994,7 @@ true
 "D"
 ],
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -14038,7 +14038,7 @@ true
 "fixed_params": [],
 "fixed_states": "M",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "ka",
 "kd"
@@ -14077,7 +14077,7 @@ true
 "fixed_params": [],
 "fixed_states": "A",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "kdg1"
@@ -14115,7 +14115,7 @@ true
 "fixed_params": [],
 "fixed_states": "B",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k2",
 "kdg2"
@@ -14150,7 +14150,7 @@ true
 "fixed_params": [],
 "fixed_states": "A",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rhs_dict": {
 "A": "k * A"
@@ -14185,7 +14185,7 @@ true
 "fixed_params": [],
 "fixed_states": "R",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k_pr_R",
 "k_dg_R"
@@ -14224,7 +14224,7 @@ true
 "fixed_params": [],
 "fixed_states": "pERK",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -14264,7 +14264,7 @@ true
 "fixed_params": "ERK",
 "fixed_states": "pERK",
 "forcings_list": [],
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "ERK",
@@ -14318,7 +14318,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "compartment",
 "k2"
@@ -14344,7 +14344,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "dpdt",
 "rootfunc": "equilibrate",
 "states_list": "p"
@@ -14380,7 +14380,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "s"
@@ -14393,7 +14393,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual2nd<double, 0>",
+"num_type": "cppde::dual2nd<double>",
 "params_list": [
 "k",
 "s"
@@ -14406,7 +14406,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k_in",
 "k_out"
@@ -14419,7 +14419,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 3,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k_act",
 "k_deact",
@@ -14454,7 +14454,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k",
 "km"
@@ -14493,7 +14493,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 5,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "ka",
 "kap",
@@ -14536,7 +14536,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 4,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2",
@@ -14572,7 +14572,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "ka",
 "kd"
@@ -14601,7 +14601,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "kdg1"
@@ -14627,7 +14627,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k2",
 "kdg2"
@@ -14650,7 +14650,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": "k",
 "rootfunc": "equilibrate",
 "states_list": "A"
@@ -14673,7 +14673,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k_pr_R",
 "k_dg_R"
@@ -14702,7 +14702,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 2,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "k2"
@@ -14732,7 +14732,7 @@ true
 "arena": true,
 "forcings_list": [],
 "n_states": 1,
-"num_type": "cppde::dual<double, 0>",
+"num_type": "cppde::dual<double>",
 "params_list": [
 "k1",
 "ERK",

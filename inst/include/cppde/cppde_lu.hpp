@@ -50,7 +50,6 @@ struct detail_null_sparse_lu {
   template<class W> void factorize(const W&) {}
   template<class B> void solve(B&) const {}
   template<class B> void solve_transposed(B&) const {}
-  void solve_scalar(std::vector<double>&) const {}
   void reset_pattern() {}
 };
 } // namespace ad_lu
@@ -62,7 +61,7 @@ struct detail_null_sparse_lu {
   //    refactorize_W_gamma_only(n, val)  O(n) diagonal update, sparse only
   //    refactorize_W_from_cache(n, val)  restore the cached J, factorise again
   //    cache_jacobian(n)                 snapshot J for later reuse
-  //    solve(b) / solve_scalar(b)        W^-1 b, with or without the IFT
+  //    solve(b)                          W^-1 b
   //    invalidate() / has_valid_*()      state tracking
   //    resize(x)                         allocate or reallocate the buffers
 
@@ -210,19 +209,6 @@ public:
   }
 
   // ====================================================================
-  //  solve_scalar: W_val⁻¹ b  (doubles only, no IFT overhead)
-  // ====================================================================
-
-  void solve_scalar(std::vector<double>& b)
-  {
-    if constexpr (is_sparse) {
-      m_sparse_lu.solve_scalar(b);
-    } else {
-      m_dense_lu.solve_scalar(b);
-    }
-  }
-
-  // ====================================================================
   //  solve_transposed: W^-T b, the reverse mode's half of the same
   //  factorisation. Value type only, the derivative side of an implicit
   //  equation being the caller's own sweep.
@@ -241,7 +227,6 @@ public:
   //  dfdt accessor (needed by Rosenbrock stages)
   // ====================================================================
 
-  const deriv_type& dfdt() const { return m_dfdt.m_v; }
   deriv_type& dfdt_mut() { return m_dfdt.m_v; }
 
   // ====================================================================
@@ -292,14 +277,9 @@ public:
 
   bool has_valid_jacobian() const { return m_has_valid_jac; }
   bool has_valid_lu()       const { return m_has_valid_lu; }
-  time_type last_factorized_dt() const { return m_last_dt; }
 
   void set_jacobian_valid() { m_has_valid_jac = true; }
-  void set_lu_valid(time_type dt)
-  {
-    m_has_valid_lu = true;
-    m_last_dt = dt;
-  }
+  void set_lu_valid() { m_has_valid_lu = true; }
 
   // ====================================================================
   //  resize: allocate / reallocate all buffers
@@ -334,16 +314,6 @@ public:
 
     return resized;
   }
-
-  // ====================================================================
-  //  Direct access to Jacobian storage (for codegen and benchmarks)
-  //
-  //  Dense:  codegen writes −J to m_W_temp  (dense_matrix<T>)
-  //  Sparse: codegen writes −J to m_W_sparse (csc_matrix<T>)
-  // ====================================================================
-
-  matrix_type&        jac_dense()  { return m_W_temp; }
-  sparse_matrix_type& jac_sparse() { return m_W_sparse; }
 
 private:
 
@@ -490,7 +460,6 @@ private:
   // Lagged state
   bool      m_has_valid_jac = false;
   bool      m_has_valid_lu  = false;
-  time_type m_last_dt       = time_type(0);
 
   // Caches for Jacobian reuse
   wrapped_matrix_type  m_jac_cache;
@@ -505,12 +474,8 @@ private:
 template<class Tag>
 struct is_sparse_tag : std::false_type {};
 
-                     template<>
-                     struct is_sparse_tag<sparse_lu_tag> : std::true_type {};
-
-                     // Convenience: lu_W from tag
-                     template<class Value, class Tag>
-                     using lu_W_from_tag = lu_W<Value, is_sparse_tag<Tag>::value>;
+template<>
+struct is_sparse_tag<sparse_lu_tag> : std::true_type {};
 
 } // namespace cppde
 

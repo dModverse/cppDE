@@ -59,47 +59,12 @@ struct newton_result {
   // ============================================================================
   //  WRMS norm helpers
   //
-  //    wrms_norm_scalar     : double vectors, for scalar Newton convergence
-  //    wrms_norm_correction : value components only, for Newton convergence
   //    wrms_norm            : all derivative components, for error control.
   //                           sens_err_con = false drops them, which makes the
   //                           step sequence independent of the tangent count.
   // ============================================================================
 
 namespace newton_detail {
-
-// WRMS norm on plain double vectors.  Used in the scalar Newton phase.
-inline double wrms_norm_scalar(const std::vector<double>& b,
-                               const std::vector<double>& y,
-                               size_t n, double atol, double rtol)
-{
-  double sumsq = 0.0;
-  for (size_t i = 0; i < n; ++i) {
-    double bi = std::abs(b[i]);
-    double yi = std::abs(y[i]);
-    double r = bi / (atol + rtol * yi);
-    sumsq += r * r;
-  }
-  return (n > 0) ? std::sqrt(sumsq / n) : 0.0;
-}
-
-// WRMS norm of correction b, weighted against iterate y: SCALAR ONLY.
-// Used for Newton convergence test (del, crate, dcon).
-template<class T>
-double wrms_norm_correction(const std::vector<T>& b,
-                            const std::vector<T>& y,
-                            size_t n, double atol, double rtol)
-{
-  double sumsq = 0.0;
-
-  for (size_t i = 0; i < n; ++i) {
-    double bi = std::abs(scalar_value(b[i]));
-    double yi = std::abs(scalar_value(y[i]));
-    double r = bi / (atol + rtol * yi);
-    sumsq += r * r;
-  }
-  return (n > 0) ? std::sqrt(sumsq / n) : 0.0;
-}
 
   // AD-aware WRMS of v against the reference y0: the maximum over the state and
   // each sensitivity slice, the CVODES cvSensUpdateNorm convention, so a large
@@ -257,7 +222,6 @@ newton_result ndf_newton_solve(
     bool sens_err_con = true,
     bool scale_solution = true)
 {
-  using newton_detail::wrms_norm_correction;
   using newton_detail::wrms_norm;
   using newton_detail::wrms_max_ewt;
   using newton_detail::scalar_value;

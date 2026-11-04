@@ -161,8 +161,8 @@ def state_switch_count(rhs_dict, params_list, forcings_list=None):
     return cppde_model.n_switches(model)
 
 
-def generate_event_code(events_df, states_list, params_list, n_states,
-                        num_type="double", forcings_list=None, rhs_dict=None,
+def generate_event_code(events_df, states_list, params_list, n_states, rhs_dict,
+                        num_type="double", forcings_list=None,
                         ad_level=0, arena=False, emit_adjoint=False):
     """C++ lines filling `fixed_events` and `root_events`, or with
     `emit_adjoint` the struct `event_adjoint_terms`. The root events of the
@@ -171,7 +171,7 @@ def generate_event_code(events_df, states_list, params_list, n_states,
     Args:
         events_df: table with var, value, time or root, method, terminal,
             direction.
-        rhs_dict: right-hand side; without it root events get no G_tt.
+        rhs_dict: state name -> right-hand side string.
         num_type, ad_level, arena: the C++ scalar (see cppde_model.Scalar).
 
     Returns:
@@ -179,15 +179,13 @@ def generate_event_code(events_df, states_list, params_list, n_states,
     """
     scalar = cppde_model.Scalar(num_type, ad_level, arena)
     rows = cppde_model.event_rows(events_df)
-    model = None
-    if rows or rhs_dict is not None:
-        model = _event_model(states_list, params_list, forcings_list, rhs_dict)
-    if not rows and not (model and model.switches):
+    model = _event_model(states_list, params_list, forcings_list, rhs_dict)
+    if not rows and not model.switches:
         if emit_adjoint:
             return cppde_model.empty_event_adjoint_terms(
                 n_states, len(cppde_model.as_list(params_list)), scalar.name)
         return []
-    code = cppde_model.EventCode(model, scalar, has_rhs=rhs_dict is not None)
+    code = cppde_model.EventCode(model, scalar)
     return code.adjoint(rows) if emit_adjoint else code.forward(rows)
 
 

@@ -1,5 +1,5 @@
 /*
- Arithmetic operators, math functions, and comparisons for cppde::dual<T, N>,
+ Arithmetic operators, math functions, and comparisons for cppde::dual<T>,
  plus the scalar (arithmetic-type) overloads of the same math functions.
 
  All defined in namespace cppde so generated codegen output `cppde::exp(x)`
@@ -99,25 +99,25 @@ inline std::common_type_t<A, B> max(A a, B b) {
 
 // =============================================================================
 // Eager against ET routing. The expression overlay covers every dual over a
-// non-AD scalar, heap and static-N alike. Eager stays only where T is itself an
+// non-AD scalar. Eager stays only where T is itself an
 // AD type, that is the outer layer of a nested dual2nd.
 // =============================================================================
 namespace detail {
-template<class T, unsigned /*N*/>
+template<class T>
 struct eager_dual_active
   : std::bool_constant<ad_traits::is_ad<T>::value> {};
 } // namespace detail
 
-#define CPPDE_EAGER_GATE(T, N) \
-  std::enable_if_t<::cppde::detail::eager_dual_active<T, N>::value, int> = 0
+#define CPPDE_EAGER_GATE(T) \
+  std::enable_if_t<::cppde::detail::eager_dual_active<T>::value, int> = 0
 
 // =============================================================================
 // Arithmetic operators (dual op dual)
 // =============================================================================
 
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> operator+(const dual<T, N>& a, const dual<T, N>& b) {
-  dual<T, N> r(a.x() + b.x());
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> operator+(const dual<T>& a, const dual<T>& b) {
+  dual<T> r(a.x() + b.x());
   if (!a.depend() && !b.depend()) return r;
   if (a.depend() && b.depend()) {
     r.set_depend_from(a, b);
@@ -132,9 +132,9 @@ inline dual<T, N> operator+(const dual<T, N>& a, const dual<T, N>& b) {
   return r;
 }
 
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> operator-(const dual<T, N>& a, const dual<T, N>& b) {
-  dual<T, N> r(a.x() - b.x());
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> operator-(const dual<T>& a, const dual<T>& b) {
+  dual<T> r(a.x() - b.x());
   if (!a.depend() && !b.depend()) return r;
   if (a.depend() && b.depend()) {
     r.set_depend_from(a, b);
@@ -149,9 +149,9 @@ inline dual<T, N> operator-(const dual<T, N>& a, const dual<T, N>& b) {
   return r;
 }
 
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> operator*(const dual<T, N>& a, const dual<T, N>& b) {
-  dual<T, N> r(a.x() * b.x());
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> operator*(const dual<T>& a, const dual<T>& b) {
+  dual<T> r(a.x() * b.x());
   if (!a.depend() && !b.depend()) return r;
   if (a.depend() && b.depend()) {
     r.set_depend_from(a, b);
@@ -166,10 +166,10 @@ inline dual<T, N> operator*(const dual<T, N>& a, const dual<T, N>& b) {
   return r;
 }
 
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> operator/(const dual<T, N>& a, const dual<T, N>& b) {
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> operator/(const dual<T>& a, const dual<T>& b) {
   T inv = T(1) / b.x();
-  dual<T, N> r(a.x() * inv);
+  dual<T> r(a.x() * inv);
   if (!a.depend() && !b.depend()) return r;
   if (a.depend() && b.depend()) {
     r.set_depend_from(a, b);
@@ -186,12 +186,12 @@ inline dual<T, N> operator/(const dual<T, N>& a, const dual<T, N>& b) {
 }
 
 // Unary
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> operator+(const dual<T, N>& a) { return a; }
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> operator+(const dual<T>& a) { return a; }
 
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> operator-(const dual<T, N>& a) {
-  dual<T, N> r;
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> operator-(const dual<T>& a) {
+  dual<T> r;
   r.x() = -a.x();
   if (a.depend()) {
     r.set_depend_from(a);
@@ -204,11 +204,11 @@ inline dual<T, N> operator-(const dual<T, N>& a) {
 // Arithmetic operators (dual op scalar U / U op dual)
 // =============================================================================
 
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>
-                          && detail::eager_dual_active<T, N>::value, int> = 0>
-inline dual<T, N> operator+(const dual<T, N>& a, const U& b) {
-  dual<T, N> r;
+                          && detail::eager_dual_active<T>::value, int> = 0>
+inline dual<T> operator+(const dual<T>& a, const U& b) {
+  dual<T> r;
   r.x() = a.x() + static_cast<T>(b);
   if (a.depend()) {
     r.set_depend_from(a);
@@ -216,16 +216,16 @@ inline dual<T, N> operator+(const dual<T, N>& a, const U& b) {
   }
   return r;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>
-                          && detail::eager_dual_active<T, N>::value, int> = 0>
-inline dual<T, N> operator+(const U& a, const dual<T, N>& b) { return b + a; }
+                          && detail::eager_dual_active<T>::value, int> = 0>
+inline dual<T> operator+(const U& a, const dual<T>& b) { return b + a; }
 
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>
-                          && detail::eager_dual_active<T, N>::value, int> = 0>
-inline dual<T, N> operator-(const dual<T, N>& a, const U& b) {
-  dual<T, N> r;
+                          && detail::eager_dual_active<T>::value, int> = 0>
+inline dual<T> operator-(const dual<T>& a, const U& b) {
+  dual<T> r;
   r.x() = a.x() - static_cast<T>(b);
   if (a.depend()) {
     r.set_depend_from(a);
@@ -233,11 +233,11 @@ inline dual<T, N> operator-(const dual<T, N>& a, const U& b) {
   }
   return r;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>
-                          && detail::eager_dual_active<T, N>::value, int> = 0>
-inline dual<T, N> operator-(const U& a, const dual<T, N>& b) {
-  dual<T, N> r;
+                          && detail::eager_dual_active<T>::value, int> = 0>
+inline dual<T> operator-(const U& a, const dual<T>& b) {
+  dual<T> r;
   r.x() = static_cast<T>(a) - b.x();
   if (b.depend()) {
     r.set_depend_from(b);
@@ -246,11 +246,11 @@ inline dual<T, N> operator-(const U& a, const dual<T, N>& b) {
   return r;
 }
 
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>
-                          && detail::eager_dual_active<T, N>::value, int> = 0>
-inline dual<T, N> operator*(const dual<T, N>& a, const U& b) {
-  dual<T, N> r;
+                          && detail::eager_dual_active<T>::value, int> = 0>
+inline dual<T> operator*(const dual<T>& a, const U& b) {
+  dual<T> r;
   T tb = static_cast<T>(b);
   r.x() = a.x() * tb;
   if (a.depend()) {
@@ -259,16 +259,16 @@ inline dual<T, N> operator*(const dual<T, N>& a, const U& b) {
   }
   return r;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>
-                          && detail::eager_dual_active<T, N>::value, int> = 0>
-inline dual<T, N> operator*(const U& a, const dual<T, N>& b) { return b * a; }
+                          && detail::eager_dual_active<T>::value, int> = 0>
+inline dual<T> operator*(const U& a, const dual<T>& b) { return b * a; }
 
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>
-                          && detail::eager_dual_active<T, N>::value, int> = 0>
-inline dual<T, N> operator/(const dual<T, N>& a, const U& b) {
-  dual<T, N> r;
+                          && detail::eager_dual_active<T>::value, int> = 0>
+inline dual<T> operator/(const dual<T>& a, const U& b) {
+  dual<T> r;
   T inv = T(1) / static_cast<T>(b);
   r.x() = a.x() * inv;
   if (a.depend()) {
@@ -277,11 +277,11 @@ inline dual<T, N> operator/(const dual<T, N>& a, const U& b) {
   }
   return r;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>
-                          && detail::eager_dual_active<T, N>::value, int> = 0>
-inline dual<T, N> operator/(const U& a, const dual<T, N>& b) {
-  dual<T, N> r;
+                          && detail::eager_dual_active<T>::value, int> = 0>
+inline dual<T> operator/(const U& a, const dual<T>& b) {
+  dual<T> r;
   T inv = T(1) / b.x();
   r.x() = static_cast<T>(a) * inv;
   if (b.depend()) {
@@ -295,37 +295,20 @@ inline dual<T, N> operator/(const U& a, const dual<T, N>& b) {
 // Compound assignment (member declarations resolve here)
 // =============================================================================
 
-template<class T, unsigned N>
-inline dual<T, N>& dual<T, N>::operator+=(const dual<T, N>& o) {
-  *this = *this + o; return *this;
-}
-template<class T, unsigned N>
-inline dual<T, N>& dual<T, N>::operator-=(const dual<T, N>& o) {
-  *this = *this - o; return *this;
-}
-template<class T, unsigned N>
-inline dual<T, N>& dual<T, N>::operator*=(const dual<T, N>& o) {
-  *this = *this * o; return *this;
-}
-template<class T, unsigned N>
-inline dual<T, N>& dual<T, N>::operator/=(const dual<T, N>& o) {
-  *this = *this / o; return *this;
-}
-
 template<class T>
-inline dual<T, 0>& dual<T, 0>::operator+=(const dual<T, 0>& o) {
+inline dual<T>& dual<T>::operator+=(const dual<T>& o) {
   *this = *this + o; return *this;
 }
 template<class T>
-inline dual<T, 0>& dual<T, 0>::operator-=(const dual<T, 0>& o) {
+inline dual<T>& dual<T>::operator-=(const dual<T>& o) {
   *this = *this - o; return *this;
 }
 template<class T>
-inline dual<T, 0>& dual<T, 0>::operator*=(const dual<T, 0>& o) {
+inline dual<T>& dual<T>::operator*=(const dual<T>& o) {
   *this = *this * o; return *this;
 }
 template<class T>
-inline dual<T, 0>& dual<T, 0>::operator/=(const dual<T, 0>& o) {
+inline dual<T>& dual<T>::operator/=(const dual<T>& o) {
   *this = *this / o; return *this;
 }
 
@@ -337,22 +320,22 @@ inline dual<T, 0>& dual<T, 0>::operator/=(const dual<T, 0>& o) {
 // derivative needs sqrt). Bringing the whole std-math suite into scope keeps
 // ADL working for both T=double (resolves to std::) and T=user-namespace
 // (resolves to that namespace via ADL).
-#define CPPDE_DEFINE_UNARY(NAME, VAL_EXPR, DERIV_EXPR)                       \
-  template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>                      \
-  inline dual<T, N> NAME(const dual<T, N>& a) {                               \
+#define CPPDE_DEFINE_UNARY(NAME, VAL_EXPR, DERIV_EXPR)                        \
+  template<class T, CPPDE_EAGER_GATE(T)>                                      \
+  inline dual<T> NAME(const dual<T>& a) {                                     \
     using std::exp;   using std::log;   using std::sqrt;                      \
     using std::sin;   using std::cos;   using std::tan;                       \
     using std::asin;  using std::acos;  using std::atan;                      \
     using std::sinh;  using std::cosh;  using std::tanh;                      \
     using std::asinh; using std::acosh; using std::atanh;                     \
     using std::erf;   using std::erfc;                                        \
-    dual<T, N> r;                                                             \
+    dual<T> r;                                                                \
     const T xv = a.x();                                                       \
     r.x() = (VAL_EXPR);                                                       \
     if (a.depend()) {                                                         \
       const T fp = (DERIV_EXPR);                                              \
       r.set_depend_from(a);                                                   \
-      for (unsigned i = 0; i < r.loop_size(); ++i) r[i] = fp * a[i];               \
+      for (unsigned i = 0; i < r.loop_size(); ++i) r[i] = fp * a[i];          \
     }                                                                         \
     return r;                                                                 \
   }
@@ -362,10 +345,10 @@ CPPDE_DEFINE_UNARY(log,  log(xv),    T(1) / xv)
 CPPDE_DEFINE_UNARY(sqrt, sqrt(xv),   T(1) / (T(2) * r.x()))
 
 // trig
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> sin(const dual<T, N>& a) {
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> sin(const dual<T>& a) {
   using std::sin; using std::cos;
-  dual<T, N> r;
+  dual<T> r;
   const T xv = a.x();
   r.x() = sin(xv);
   if (a.depend()) {
@@ -375,10 +358,10 @@ inline dual<T, N> sin(const dual<T, N>& a) {
   }
   return r;
 }
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> cos(const dual<T, N>& a) {
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> cos(const dual<T>& a) {
   using std::sin; using std::cos;
-  dual<T, N> r;
+  dual<T> r;
   const T xv = a.x();
   r.x() = cos(xv);
   if (a.depend()) {
@@ -388,10 +371,10 @@ inline dual<T, N> cos(const dual<T, N>& a) {
   }
   return r;
 }
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> tan(const dual<T, N>& a) {
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> tan(const dual<T>& a) {
   using std::tan;
-  dual<T, N> r;
+  dual<T> r;
   const T xv = a.x();
   const T tv = tan(xv);
   r.x() = tv;
@@ -408,10 +391,10 @@ CPPDE_DEFINE_UNARY(acos, acos(xv), -T(1) / sqrt(T(1) - xv * xv))
 CPPDE_DEFINE_UNARY(atan, atan(xv),  T(1) / (T(1) + xv * xv))
 
 // hyperbolic
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> sinh(const dual<T, N>& a) {
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> sinh(const dual<T>& a) {
   using std::sinh; using std::cosh;
-  dual<T, N> r;
+  dual<T> r;
   const T xv = a.x();
   r.x() = sinh(xv);
   if (a.depend()) {
@@ -421,10 +404,10 @@ inline dual<T, N> sinh(const dual<T, N>& a) {
   }
   return r;
 }
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> cosh(const dual<T, N>& a) {
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> cosh(const dual<T>& a) {
   using std::sinh; using std::cosh;
-  dual<T, N> r;
+  dual<T> r;
   const T xv = a.x();
   r.x() = cosh(xv);
   if (a.depend()) {
@@ -434,10 +417,10 @@ inline dual<T, N> cosh(const dual<T, N>& a) {
   }
   return r;
 }
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> tanh(const dual<T, N>& a) {
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> tanh(const dual<T>& a) {
   using std::tanh;
-  dual<T, N> r;
+  dual<T> r;
   const T xv = a.x();
   const T tv = tanh(xv);
   r.x() = tv;
@@ -462,10 +445,10 @@ CPPDE_DEFINE_UNARY(erfc,  erfc(xv), -T(1.1283791670955126) * exp(-xv * xv))
 // =============================================================================
 // abs: piecewise linear, derivative sign(x); at x=0 we return 0
 // =============================================================================
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> abs(const dual<T, N>& a) {
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> abs(const dual<T>& a) {
   using std::abs;
-  dual<T, N> r;
+  dual<T> r;
   const T xv = a.x();
   r.x() = abs(xv);
   if (a.depend()) {
@@ -480,10 +463,10 @@ inline dual<T, N> abs(const dual<T, N>& a) {
 // pow: dual^dual, dual^scalar, scalar^dual
 // y = a^b ⇒  dy = b * a^(b-1) * da + log(a) * a^b * db
 // =============================================================================
-template<class T, unsigned N, CPPDE_EAGER_GATE(T, N)>
-inline dual<T, N> pow(const dual<T, N>& a, const dual<T, N>& b) {
+template<class T, CPPDE_EAGER_GATE(T)>
+inline dual<T> pow(const dual<T>& a, const dual<T>& b) {
   using std::pow; using std::log;
-  dual<T, N> r;
+  dual<T> r;
   const T av = a.x();
   const T bv = b.x();
   const T y  = pow(av, bv);
@@ -503,12 +486,12 @@ inline dual<T, N> pow(const dual<T, N>& a, const dual<T, N>& b) {
   }
   return r;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>
-                          && detail::eager_dual_active<T, N>::value, int> = 0>
-inline dual<T, N> pow(const dual<T, N>& a, const U& b) {
+                          && detail::eager_dual_active<T>::value, int> = 0>
+inline dual<T> pow(const dual<T>& a, const U& b) {
   using std::pow;
-  dual<T, N> r;
+  dual<T> r;
   const T av = a.x();
   const T bv = static_cast<T>(b);
   r.x() = pow(av, bv);
@@ -519,12 +502,12 @@ inline dual<T, N> pow(const dual<T, N>& a, const U& b) {
   }
   return r;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>
-                          && detail::eager_dual_active<T, N>::value, int> = 0>
-inline dual<T, N> pow(const U& a, const dual<T, N>& b) {
+                          && detail::eager_dual_active<T>::value, int> = 0>
+inline dual<T> pow(const U& a, const dual<T>& b) {
   using std::pow; using std::log;
-  dual<T, N> r;
+  dual<T> r;
   const T av = static_cast<T>(a);
   const T bv = b.x();
   const T y  = pow(av, bv);
@@ -541,123 +524,92 @@ inline dual<T, N> pow(const U& a, const dual<T, N>& b) {
 // min / max / clamp: select-by-value, derivatives = winner's derivatives; a tie
 // goes to the first argument of max and to the second of min
 // =============================================================================
-template<class T, unsigned N>
-inline dual<T, N> min(const dual<T, N>& a, const dual<T, N>& b) {
+template<class T>
+inline dual<T> min(const dual<T>& a, const dual<T>& b) {
   return (a.x() < b.x()) ? a : b;
 }
-template<class T, unsigned N>
-inline dual<T, N> max(const dual<T, N>& a, const dual<T, N>& b) {
+template<class T>
+inline dual<T> max(const dual<T>& a, const dual<T>& b) {
   return (a.x() < b.x()) ? b : a;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual<T, N> min(const dual<T, N>& a, const U& b) {
-  return (a.x() < static_cast<T>(b)) ? a : dual<T, N>(b);
+inline dual<T> min(const dual<T>& a, const U& b) {
+  return (a.x() < static_cast<T>(b)) ? a : dual<T>(b);
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual<T, N> min(const U& a, const dual<T, N>& b) {
-  return (static_cast<T>(a) < b.x()) ? dual<T, N>(a) : b;
+inline dual<T> min(const U& a, const dual<T>& b) {
+  return (static_cast<T>(a) < b.x()) ? dual<T>(a) : b;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual<T, N> max(const dual<T, N>& a, const U& b) {
-  return (a.x() < static_cast<T>(b)) ? dual<T, N>(b) : a;
+inline dual<T> max(const dual<T>& a, const U& b) {
+  return (a.x() < static_cast<T>(b)) ? dual<T>(b) : a;
 }
-template<class T, unsigned N, class U,
+template<class T, class U,
          std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline dual<T, N> max(const U& a, const dual<T, N>& b) {
-  return (static_cast<T>(a) < b.x()) ? b : dual<T, N>(a);
+inline dual<T> max(const U& a, const dual<T>& b) {
+  return (static_cast<T>(a) < b.x()) ? b : dual<T>(a);
 }
 
-template<class T, unsigned N, class L, class H>
-inline dual<T, N> clamp(const dual<T, N>& a, const L& lo, const H& hi) {
+template<class T, class L, class H>
+inline dual<T> clamp(const dual<T>& a, const L& lo, const H& hi) {
   return min(max(a, lo), hi);
 }
 
 // =============================================================================
 // Comparisons (always on .x())
 // =============================================================================
-template<class T, unsigned N>
-inline bool operator==(const dual<T, N>& a, const dual<T, N>& b) { return a.x() == b.x(); }
-template<class T, unsigned N>
-inline bool operator!=(const dual<T, N>& a, const dual<T, N>& b) { return a.x() != b.x(); }
-template<class T, unsigned N>
-inline bool operator< (const dual<T, N>& a, const dual<T, N>& b) { return a.x() <  b.x(); }
-template<class T, unsigned N>
-inline bool operator<=(const dual<T, N>& a, const dual<T, N>& b) { return a.x() <= b.x(); }
-template<class T, unsigned N>
-inline bool operator> (const dual<T, N>& a, const dual<T, N>& b) { return a.x() >  b.x(); }
-template<class T, unsigned N>
-inline bool operator>=(const dual<T, N>& a, const dual<T, N>& b) { return a.x() >= b.x(); }
-
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator==(const dual<T, N>& a, const U& b) { return a.x() == static_cast<T>(b); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator==(const U& a, const dual<T, N>& b) { return static_cast<T>(a) == b.x(); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator!=(const dual<T, N>& a, const U& b) { return a.x() != static_cast<T>(b); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator!=(const U& a, const dual<T, N>& b) { return static_cast<T>(a) != b.x(); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator< (const dual<T, N>& a, const U& b) { return a.x() <  static_cast<T>(b); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator< (const U& a, const dual<T, N>& b) { return static_cast<T>(a) <  b.x(); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator<=(const dual<T, N>& a, const U& b) { return a.x() <= static_cast<T>(b); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator<=(const U& a, const dual<T, N>& b) { return static_cast<T>(a) <= b.x(); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator> (const dual<T, N>& a, const U& b) { return a.x() >  static_cast<T>(b); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator> (const U& a, const dual<T, N>& b) { return static_cast<T>(a) >  b.x(); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator>=(const dual<T, N>& a, const U& b) { return a.x() >= static_cast<T>(b); }
-template<class T, unsigned N, class U,
-         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-inline bool operator>=(const U& a, const dual<T, N>& b) { return static_cast<T>(a) >= b.x(); }
-
-// =============================================================================
-// max_abs_all_levels(v): recursive absolute-value sweep over a value and all of
-// its tangent slots, so a nested dual is covered down to the second-order
-// tangents.
-// =============================================================================
-
 template<class T>
-inline std::enable_if_t<std::is_arithmetic_v<T>, double>
-max_abs_all_levels(const T& v) { return std::abs(static_cast<double>(v)); }
+inline bool operator==(const dual<T>& a, const dual<T>& b) { return a.x() == b.x(); }
+template<class T>
+inline bool operator!=(const dual<T>& a, const dual<T>& b) { return a.x() != b.x(); }
+template<class T>
+inline bool operator< (const dual<T>& a, const dual<T>& b) { return a.x() <  b.x(); }
+template<class T>
+inline bool operator<=(const dual<T>& a, const dual<T>& b) { return a.x() <= b.x(); }
+template<class T>
+inline bool operator> (const dual<T>& a, const dual<T>& b) { return a.x() >  b.x(); }
+template<class T>
+inline bool operator>=(const dual<T>& a, const dual<T>& b) { return a.x() >= b.x(); }
 
-template<class T, unsigned N>
-inline double max_abs_all_levels(const dual<T, N>& v) {
-  auto& vm = const_cast<dual<T, N>&>(v);
-  double m = max_abs_all_levels(vm.x());
-  unsigned nd = vm.size();
-  for (unsigned i = 0; i < nd; ++i)
-    m = std::max(m, max_abs_all_levels(vm.d(i)));
-  return m;
-}
-
-// max_abs_all_levels_vec(v): vector wrapper. Used by integrate_times to
-// evaluate the equilibrate stop condition across both states and all AD
-// levels of dxdt.
-template<class State>
-inline double max_abs_all_levels_vec(const State& v) {
-  double m = 0.0;
-  for (std::size_t i = 0; i < v.size(); ++i)
-    m = std::max(m, max_abs_all_levels(v[i]));
-  return m;
-}
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator==(const dual<T>& a, const U& b) { return a.x() == static_cast<T>(b); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator==(const U& a, const dual<T>& b) { return static_cast<T>(a) == b.x(); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator!=(const dual<T>& a, const U& b) { return a.x() != static_cast<T>(b); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator!=(const U& a, const dual<T>& b) { return static_cast<T>(a) != b.x(); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator< (const dual<T>& a, const U& b) { return a.x() <  static_cast<T>(b); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator< (const U& a, const dual<T>& b) { return static_cast<T>(a) <  b.x(); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator<=(const dual<T>& a, const U& b) { return a.x() <= static_cast<T>(b); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator<=(const U& a, const dual<T>& b) { return static_cast<T>(a) <= b.x(); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator> (const dual<T>& a, const U& b) { return a.x() >  static_cast<T>(b); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator> (const U& a, const dual<T>& b) { return static_cast<T>(a) >  b.x(); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator>=(const dual<T>& a, const U& b) { return a.x() >= static_cast<T>(b); }
+template<class T, class U,
+         std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
+inline bool operator>=(const U& a, const dual<T>& b) { return static_cast<T>(a) >= b.x(); }
 
 // steady_all_levels(f, x, tol, atol): every |f| <= tol |x| + atol over a value
 // and all of its tangent slots, with f the time derivative of x. The steady-state
@@ -668,10 +620,10 @@ steady_all_levels(const T& f, const T& x, double tol, double atol) {
   return std::abs(static_cast<double>(f)) <= tol * std::abs(static_cast<double>(x)) + atol;
 }
 
-template<class T, unsigned N>
-inline bool steady_all_levels(const dual<T, N>& f, const dual<T, N>& x, double tol, double atol) {
-  auto& fm = const_cast<dual<T, N>&>(f);
-  auto& xm = const_cast<dual<T, N>&>(x);
+template<class T>
+inline bool steady_all_levels(const dual<T>& f, const dual<T>& x, double tol, double atol) {
+  auto& fm = const_cast<dual<T>&>(f);
+  auto& xm = const_cast<dual<T>&>(x);
   if (!steady_all_levels(fm.x(), xm.x(), tol, atol)) return false;
   unsigned nd = fm.size(), nx = xm.size();
   for (unsigned i = 0; i < nd; ++i)

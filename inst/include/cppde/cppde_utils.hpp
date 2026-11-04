@@ -2,11 +2,10 @@
  Utility functions for ODE integration and sensitivity calculation with automatic differentiation
 
  This header provides:
- - Safe scalar extraction from nested AD types (cppde::dual2nd<T,N>)
+ - Safe scalar extraction from nested AD types (cppde::dual2nd<T>)
  - Weighted sup-norms for step-size control
- - estimate_initial_dt: unified initial step-size estimator used by all cppDE solvers.
-   Combines an HNW-style phase-1 rough h with caller-supplied ÿ (analytic via J·f + dfdt,
-   or finite-difference when no Jacobian is available) and CVODE-style hlb/hub bounds.
+ - estimate_initial_dt and cppde_hin: the first step of the single-step and the
+   multistep methods, from y'' = J f + df/dt by the system's generated ydd().
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -208,16 +207,16 @@ inline double min_first_step(double t0, double t_final)
          std::max({std::abs(t0), std::abs(t_final), 1.0});
 }
 
-template<class Value, class System, class YddFn>
+// The first step of a single-step method (HNW II.4), from y'' = J f + df/dt
+// at the start, which the system's generated ydd() gives exactly.
+template<class Value, class System>
 inline double estimate_initial_dt(
     System      system,
-    YddFn       compute_ydd,
     std::vector<Value>& x0,
     Value       t0,
     double      t_final,
     double      atol,
     double      rtol,
-    int         order,
     bool        sens_err_con = true)
 {
   const std::size_t n = x0.size();
@@ -227,7 +226,7 @@ inline double estimate_initial_dt(
   std::vector<Value> f0(n);
   system(x0, f0, t0);
 
-  // --- 2. phase-1 rough h0 for FD trial step (HNW §II.4) ---
+  // --- 2. phase-1 rough h0 (HNW §II.4) ---
   double d0 = weighted_sup_norm(x0, x0, atol, rtol, sens_err_con);
   double d1 = weighted_sup_norm(f0, x0, atol, rtol, sens_err_con);
 
@@ -238,23 +237,23 @@ inline double estimate_initial_dt(
     h0 = 0.01 * d0 / d1;
   }
 
-  // --- 3. ÿ estimate (analytic or FD: caller's choice) ---
+  // --- 3. y'' = J f0 + df/dt ---
   std::vector<Value> ydd(n);
-  compute_ydd(x0, t0, f0, h0, ydd);
+  system.ydd(x0, f0, t0, ydd);
 
   double d2 = weighted_sup_norm(ydd, x0, atol, rtol, sens_err_con);
 
   // --- 4. HNW phase-2 h1 formula ---
   //
-  // ||y''|| stands in for ||y^(p+1)||, which is exact only at p = 1, so callers
-  // pass order = 1 whatever the method. The multistep methods start at q = 1
-  // anyway, and a single-step method ramps up within a few steps.
+  // ||y''|| stands in for ||y^(p+1)||, which is exact only at p = 1, so the
+  // formula is that of p = 1 whatever the method; a single-step method ramps
+  // up within a few steps.
   double h1;
   double max_d = std::max(d1, d2);
   if (max_d <= 1e-15) {
     h1 = std::max(1e-6, h0 * 1e-3);
   } else {
-    h1 = std::pow(0.01 / max_d, 1.0 / (order + 1));
+    h1 = std::sqrt(0.01 / max_d);
   }
 
   // --- 5. Hub cap on the relative Euler change ---
@@ -301,43 +300,12 @@ inline double estimate_initial_dt(
   return h;
 }
 
-// ---------------------------------------------------------------------------
-//  Default FD ÿ-computer: used by explicit methods that have no Jacobian.
-//
-//  Computes  ÿ ≈ [f(t0 + h0, x0 + h0·f0) - f0] / h0  via one extra f-call.
-//  This is the classical Hairer-Nørsett-Wanner phase-2 estimate.
-// ---------------------------------------------------------------------------
-
-template<class System>
-struct fd_ydd {
-  System sys;
-  explicit fd_ydd(System s) : sys(s) {}
-
-  template<class Value>
-  void operator()(
-      const std::vector<Value>& x0,
-      Value       t0,
-      const std::vector<Value>& f0,
-      double      h0,
-      std::vector<Value>& ydd)
-  {
-    const std::size_t n = x0.size();
-    std::vector<Value> y1(n), f1(n);
-    for (std::size_t i = 0; i < n; ++i) y1[i] = x0[i] + Value(h0) * f0[i];
-    sys(y1, f1, Value(scalar_value(t0) + h0));
-    for (std::size_t i = 0; i < n; ++i) ydd[i] = (f1[i] - f0[i]) / Value(h0);
-  }
-};
-
-template<class System>
-inline fd_ydd<System> make_fd_ydd(System sys) { return fd_ydd<System>(sys); }
-
 // =========================================================================================
 //  cppde_hin: port of CVODES cvHin (sundials/src/cvodes/cvodes.c).
 //
-//  Used by the multistep methods so that the first step cppDE takes is the one
-//  CVODES would take on the same problem. The refinement and its two bounds are
-//  in "The first step" of
+//  Used by the multistep methods: the bounds of CVODES's first step, with y''
+//  from the system's generated ydd() instead of cvHin's secant, so its
+//  refinement ends in one round. See "The first step" of
 //  https://dmodverse.github.io/cppDE/articles/methods-stepping.html. The WRMS
 //  norm sweeps AD components unless sens_err_con is off, which makes the first
 //  step value-only too.
@@ -360,7 +328,6 @@ inline double cppde_hin(
   constexpr double HLB_F    = 100.0;
   constexpr double HUB_F    = 0.1;
   constexpr double H_BIAS   = 0.5;
-  constexpr int    MAX_ITER = 4;
 
   // --- 1. signed / tdist / tround / too-close guard ---
   double tdiff  = t_final - t0_s;
@@ -393,37 +360,43 @@ inline double cppde_hin(
     return sign * std::max(std::sqrt(hlb * hub), min_first_step(t0_s, t_final));
   }
 
-  // --- 4. Geometric-mean seed ---
-  double hg   = std::sqrt(hlb * hub);
-  double hnew = hg;
+  // --- 4. The refinement from the geometric-mean seed ---
+  //
+  // cvHin refines a secant estimate of y'' over trial steps. With y'' exact at
+  // the start its iteration ends after one round at what follows.
+  const double hg = std::sqrt(hlb * hub);
+  std::vector<Value> ydd(n);
+  system.ydd(x0, f0, t0, ydd);
+  const double yddnrm = weighted_rms_norm(ydd, x0, atol, rtol, sens_err_con);
+  const double hnew = (yddnrm * hub * hub > 2.0) ? std::sqrt(2.0 / yddnrm)
+                                                 : std::sqrt(hg * hub);
 
-  // --- 5. Iterative refinement ---
-  std::vector<Value> y1(n), f1(n), ydd(n);
-  for (int iter = 1; iter <= MAX_ITER; ++iter) {
-    double hgs = hg * sign;
-    for (std::size_t i = 0; i < n; ++i) y1[i] = x0[i] + Value(hgs) * f0[i];
-    system(y1, f1, Value(t0_s + hgs));
-    for (std::size_t i = 0; i < n; ++i) ydd[i] = (f1[i] - f0[i]) / Value(hgs);
-
-    double yddnrm = weighted_rms_norm(ydd, x0, atol, rtol, sens_err_con);
-
-    hnew = (yddnrm * hub * hub > 2.0)
-         ? std::sqrt(2.0 / yddnrm)
-         : std::sqrt(hg * hub);
-
-    if (iter == MAX_ITER) break;
-    double hrat = hnew / hg;
-    if (hrat > 0.5 && hrat < 2.0) break;
-    if (iter >= 2 && hnew > hg) { hnew = hg; break; }
-    hg = hnew;
-  }
-
-  // --- 6. Bias + bounds + sign ---
+  // --- 5. Bias + bounds + sign ---
   double h0 = H_BIAS * hnew;
   if (h0 < hlb) h0 = hlb;
   if (h0 > hub) h0 = hub;
   h0 = std::max(h0, min_first_step(t0_s, t_final));
   return sign * h0;
+}
+
+// The step a restart takes where no end of the interval is in view: the one
+// the curvature of the solution allows, half of sqrt(2 / ||y''||) as the first
+// step takes it, infinite where y'' is zero.
+template<class Value, class System>
+inline double curvature_step(
+    System      system,
+    std::vector<Value>& x,
+    Value       t,
+    double      atol,
+    double      rtol,
+    bool        sens_err_con = true)
+{
+  const std::size_t n = x.size();
+  std::vector<Value> f(n), ydd(n);
+  system(x, f, t);
+  system.ydd(x, f, t, ydd);
+  const double nrm = weighted_rms_norm(ydd, x, atol, rtol, sens_err_con);
+  return nrm > 0.0 ? 0.5 * std::sqrt(2.0 / nrm) : std::numeric_limits<double>::infinity();
 }
 
 } // namespace odeint_utils

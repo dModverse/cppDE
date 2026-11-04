@@ -1,5 +1,5 @@
 /*
- Expression Templates for cppde::dual<T, N>  (any N, T non-AD).
+ Expression Templates for cppde::dual<T>  (T non-AD).
 
  Eliminates intermediate temporaries / allocations in deep RHS expressions like
    dxdt[i] = a*b + c*d - e/f;
@@ -11,10 +11,8 @@
    3. for (i)  lhs.tan_[i] = root.tan(i);    // one fused chain-rule loop
 
  Coverage:
-   - dual<T, 0>: no arena bump and no temporary dual per binary operation.
-   - dual<T, N> with N > 0: the same, with the constant N as the loop bound,
-     which the optimiser unrolls and vectorises.
-   - Nested AD (T = dual<U, M>): SKIPPED. The eager_dual_active gate
+   - dual<T>: no arena bump and no temporary dual per binary operation.
+   - Nested AD (T = dual<U>): SKIPPED. The eager_dual_active gate
      (cppde_dual_math.hpp) keeps eager active when T itself is AD, so the
      outer layer of dual2nd uses the recursive eager path while the inner
      layer (T = double) routes through ETs.
@@ -82,10 +80,10 @@ constexpr bool is_dual_expr_v = is_dual_expr<X>::value;
 #endif
 
 // =============================================================================
-// Trait: is X a dual<T, N> with non-AD T (= ET-eligible operand)?
+// Trait: is X a dual<T> with non-AD T (= ET-eligible operand)?
 // =============================================================================
 template<class X> struct is_dual_nonad : std::false_type {};
-template<class T, unsigned N> struct is_dual_nonad<dual<T, N>>
+template<class T> struct is_dual_nonad<dual<T>>
   : std::bool_constant<!ad_traits::is_ad<T>::value> {};
 
 // =============================================================================
@@ -95,36 +93,18 @@ template<class X> struct is_et_operand
   : std::bool_constant<is_dual_expr_v<X> || is_dual_nonad<X>::value> {};
 
   // =============================================================================
-  // Leaf: dual<T, N> reference. Snapshots .x() and the tan_ pointer at
+  // Leaf: dual<T> reference. Snapshots .x() and the tan_ pointer at
   // construction, so a compound assignment such as *this = *this + o still reads
   // the old value and the old buffer after materialisation has replaced them.
   // =============================================================================
-template<class T, unsigned N = 0>
-struct DualLeaf : Expr<DualLeaf<T, N>> {
-  using value_type = T;
-  T        val_;
-  const T* tan_;     // nullptr if the source dual was non-depend at ctor
-
-  CPPDE_ET_INLINE explicit DualLeaf(const dual<T, N>& d)
-    : val_(d.x()),
-      tan_(d.depend() ? &d[0] : nullptr)
-  {}
-
-  CPPDE_ET_INLINE T val() const { return val_; }
-  static constexpr unsigned tan_size() { return N; }
-  CPPDE_ET_INLINE bool depends() const { return tan_ != nullptr; }
-  CPPDE_ET_INLINE T tan(unsigned i) const { return tan_ ? tan_[i] : T(); }
-};
-
-// Partial specialisation for N == 0: tan_size is runtime, captured at ctor.
 template<class T>
-struct DualLeaf<T, 0> : Expr<DualLeaf<T, 0>> {
+struct DualLeaf : Expr<DualLeaf<T>> {
   using value_type = T;
   T        val_;
   const T* tan_;     // nullptr if the source dual was non-depend at ctor
   unsigned sz_;
 
-  CPPDE_ET_INLINE explicit DualLeaf(const dual<T, 0>& d)
+  CPPDE_ET_INLINE explicit DualLeaf(const dual<T>& d)
     : val_(d.x()),
       tan_(d.size() > 0 ? &d[0] : nullptr),
       sz_(d.size())
@@ -259,7 +239,7 @@ struct NegOp {
   }
 };
 
-#define CPPDE_DEFINE_ET_UNARY_OP(NAME, VAL_EXPR, FP_EXPR)                    \
+#define CPPDE_DEFINE_ET_UNARY_OP(NAME, VAL_EXPR, FP_EXPR)                     \
   struct NAME ## Op {                                                         \
     template<class T> static void compute(const T& xv, T& y, T& fp) {         \
       using std::exp;   using std::log;   using std::sqrt;                    \
@@ -400,8 +380,8 @@ struct expr_value_type<X, std::enable_if_t<is_dual_expr_v<X>>> {
   using type = typename X::value_type;
 };
 
-template<class T, unsigned N>
-struct expr_value_type<dual<T, N>> { using type = T; };
+template<class T>
+struct expr_value_type<dual<T>> { using type = T; };
 
 template<class S>
 struct expr_value_type<S, std::enable_if_t<std::is_arithmetic<S>::value>> {
@@ -421,9 +401,9 @@ CPPDE_ET_INLINE const X& make_leaf(const X& x, TT* /*target_tag*/ = nullptr) {
   return x;
 }
 
-template<class TT, class T, unsigned N>
-CPPDE_ET_INLINE DualLeaf<T, N> make_leaf(const dual<T, N>& d, TT* /*tag*/ = nullptr) {
-  return DualLeaf<T, N>(d);
+template<class TT, class T>
+CPPDE_ET_INLINE DualLeaf<T> make_leaf(const dual<T>& d, TT* /*tag*/ = nullptr) {
+  return DualLeaf<T>(d);
 }
 
 template<class TT, class S,
@@ -468,10 +448,10 @@ struct et_pair_enabled
 // (Expr op scalar), (scalar op Expr): eight cases per arithmetic op.
 // =============================================================================
 // make_leaf's result goes straight into the node constructor.
-#define CPPDE_DEFINE_ET_BINOP(SYM, OPTAG)                                     \
+#define CPPDE_DEFINE_ET_BINOP(SYM, OPTAG)                                      \
   template<class A, class B,                                                   \
            std::enable_if_t<et_pair_enabled<A, B>::value, int> = 0>            \
-  CPPDE_ET_INLINE auto operator SYM(const A& a, const B& b) {                 \
+  CPPDE_ET_INLINE auto operator SYM(const A& a, const B& b) {                  \
     using TT = typename et_pair_target<A, B>::type;                            \
     return BinExpr<nested_node_t<TT, A>, nested_node_t<TT, B>, OPTAG>(         \
              make_leaf<TT>(a), make_leaf<TT>(b));                              \
@@ -507,10 +487,10 @@ CPPDE_ET_INLINE auto operator-(const A& a) {
 // Math functions: same shape as the binary operators, wrap the operand via
 // make_leaf and return a UnaryExpr templated on the matching Op tag.
 // =============================================================================
-#define CPPDE_DEFINE_ET_MATH_FN(NAME, OPTAG)                                 \
+#define CPPDE_DEFINE_ET_MATH_FN(NAME, OPTAG)                                  \
   template<class A,                                                           \
            std::enable_if_t<is_et_operand<A>::value, int> = 0>                \
-  CPPDE_ET_INLINE auto NAME(const A& a) {                                    \
+  CPPDE_ET_INLINE auto NAME(const A& a) {                                     \
     using TT = expr_value_type_t<A>;                                          \
     return UnaryExpr<nested_node_t<TT, A>, OPTAG>(make_leaf<TT>(a));          \
   }
@@ -575,17 +555,17 @@ CPPDE_ET_INLINE auto pow(const S& s, const B& b) {
 // Taking the CRTP base Expr<A> keeps these clear of the dual-only overloads in
 // cppde_dual_math.hpp, which stay the only match where no node is involved.
 // =============================================================================
-#define CPPDE_DEFINE_ET_CMP(SYM)                                              \
+#define CPPDE_DEFINE_ET_CMP(SYM)                                               \
   template<class A, class B>                                                   \
   CPPDE_ET_INLINE bool operator SYM(const Expr<A>& a, const Expr<B>& b) {      \
     return a.self().val() SYM b.self().val();                                  \
   }                                                                            \
-  template<class A, class T, unsigned N>                                       \
-  CPPDE_ET_INLINE bool operator SYM(const Expr<A>& a, const dual<T, N>& b) {   \
+  template<class A, class T>                                                   \
+  CPPDE_ET_INLINE bool operator SYM(const Expr<A>& a, const dual<T>& b) {      \
     return a.self().val() SYM b.x();                                           \
   }                                                                            \
-  template<class T, unsigned N, class B>                                       \
-  CPPDE_ET_INLINE bool operator SYM(const dual<T, N>& a, const Expr<B>& b) {   \
+  template<class T, class B>                                                   \
+  CPPDE_ET_INLINE bool operator SYM(const dual<T>& a, const Expr<B>& b) {      \
     return a.x() SYM b.self().val();                                           \
   }                                                                            \
   template<class A, class S,                                                   \
@@ -655,7 +635,7 @@ using dual_expr::operator/;
 
 // Math functions: codegen emits cppde::exp(...) etc., so make the ET
 // overloads visible at namespace cppde (alongside the eager overloads in
-// cppde_dual_math.hpp; SFINAE on the eager side keeps the (non-AD T, N=0)
+// cppde_dual_math.hpp; SFINAE on the eager side keeps the non-AD T
 // slice unambiguous).
 using dual_expr::exp;
 using dual_expr::log;
@@ -693,7 +673,7 @@ inline auto value_of(const dual_expr::Expr<D>& e) { return value_of(e.self().val
 } // namespace cppde
 
   // =============================================================================
-  // Out-of-line definitions of dual<T, 0>'s ET assignment and copy ctor, declared
+  // Out-of-line definitions of dual<T>'s ET assignment and copy ctor, declared
   // in cppde_dual.hpp and defined here where Expr<D> is complete. They are only
   // selected for a CRTP Expr<D>, deduction failing for any other operand.
   // =============================================================================
@@ -701,7 +681,7 @@ namespace cppde {
 
 template<class T>
 template<class D>
-inline dual<T, 0>& dual<T, 0>::operator=(const dual_expr::Expr<D>& e) {
+inline dual<T>& dual<T>::operator=(const dual_expr::Expr<D>& e) {
   const D& d = e.self();
   val_ = d.val();
   if (d.depends()) {
@@ -715,7 +695,7 @@ inline dual<T, 0>& dual<T, 0>::operator=(const dual_expr::Expr<D>& e) {
 
 template<class T>
 template<class D>
-inline dual<T, 0>::dual(const dual_expr::Expr<D>& e)
+inline dual<T>::dual(const dual_expr::Expr<D>& e)
   : tan_(nullptr), size_(0), val_()
 {
   *this = e;
@@ -728,7 +708,7 @@ inline dual<T, 0>::dual(const dual_expr::Expr<D>& e)
 
 template<class T>
 template<class D>
-inline dual<T, 0>& dual<T, 0>::operator+=(const dual_expr::Expr<D>& e) {
+inline dual<T>& dual<T>::operator+=(const dual_expr::Expr<D>& e) {
   const D& d = e.self();
   val_ += d.val();
   if (d.depends()) {
@@ -736,7 +716,7 @@ inline dual<T, 0>& dual<T, 0>::operator+=(const dual_expr::Expr<D>& e) {
       set_depend_size(d.tan_size());
       for (unsigned i = 0; i < size_; ++i) tan_[i] = d.tan(i);
     } else {
-      assert(size_ == d.tan_size() && "dual<T,0>::operator+=(Expr): tan size mismatch");
+      assert(size_ == d.tan_size() && "dual<T>::operator+=(Expr): tan size mismatch");
       for (unsigned i = 0; i < size_; ++i) tan_[i] += d.tan(i);
     }
   }
@@ -745,7 +725,7 @@ inline dual<T, 0>& dual<T, 0>::operator+=(const dual_expr::Expr<D>& e) {
 
 template<class T>
 template<class D>
-inline dual<T, 0>& dual<T, 0>::operator-=(const dual_expr::Expr<D>& e) {
+inline dual<T>& dual<T>::operator-=(const dual_expr::Expr<D>& e) {
   const D& d = e.self();
   val_ -= d.val();
   if (d.depends()) {
@@ -753,7 +733,7 @@ inline dual<T, 0>& dual<T, 0>::operator-=(const dual_expr::Expr<D>& e) {
       set_depend_size(d.tan_size());
       for (unsigned i = 0; i < size_; ++i) tan_[i] = -d.tan(i);
     } else {
-      assert(size_ == d.tan_size() && "dual<T,0>::operator-=(Expr): tan size mismatch");
+      assert(size_ == d.tan_size() && "dual<T>::operator-=(Expr): tan size mismatch");
       for (unsigned i = 0; i < size_; ++i) tan_[i] -= d.tan(i);
     }
   }
@@ -762,11 +742,11 @@ inline dual<T, 0>& dual<T, 0>::operator-=(const dual_expr::Expr<D>& e) {
 
 template<class T>
 template<class D>
-inline dual<T, 0>& dual<T, 0>::operator*=(const dual_expr::Expr<D>& e) {
+inline dual<T>& dual<T>::operator*=(const dual_expr::Expr<D>& e) {
   const D& d = e.self();
   const T new_val = val_ * d.val();
   if (size_ > 0 && d.depends()) {
-    assert(size_ == d.tan_size() && "dual<T,0>::operator*=(Expr): tan size mismatch");
+    assert(size_ == d.tan_size() && "dual<T>::operator*=(Expr): tan size mismatch");
     // (a*b)' = a'*b + a*b' : uses CURRENT val_ in tan_, then update val_.
     for (unsigned i = 0; i < size_; ++i)
       tan_[i] = tan_[i] * d.val() + val_ * d.tan(i);
@@ -782,12 +762,12 @@ inline dual<T, 0>& dual<T, 0>::operator*=(const dual_expr::Expr<D>& e) {
 
 template<class T>
 template<class D>
-inline dual<T, 0>& dual<T, 0>::operator/=(const dual_expr::Expr<D>& e) {
+inline dual<T>& dual<T>::operator/=(const dual_expr::Expr<D>& e) {
   const D& d = e.self();
   const T inv = T(1) / d.val();
   const T new_val = val_ * inv;
   if (size_ > 0 && d.depends()) {
-    assert(size_ == d.tan_size() && "dual<T,0>::operator/=(Expr): tan size mismatch");
+    assert(size_ == d.tan_size() && "dual<T>::operator/=(Expr): tan size mismatch");
     // (a/b)' = (a' - (a/b)*b') / b
     for (unsigned i = 0; i < size_; ++i)
       tan_[i] = (tan_[i] - new_val * d.tan(i)) * inv;
@@ -796,107 +776,6 @@ inline dual<T, 0>& dual<T, 0>::operator/=(const dual_expr::Expr<D>& e) {
   } else if (d.depends()) {
     set_depend_size(d.tan_size());
     for (unsigned i = 0; i < size_; ++i) tan_[i] = -new_val * d.tan(i) * inv;
-  }
-  val_ = new_val;
-  return *this;
-}
-
-  // =============================================================================
-  // Out-of-line definitions for the static-N dual<T, N>. The loop bound is the
-  // compile-time N, which the optimiser unrolls and vectorises at the usual
-  // widths, and the tree materialises straight into the inline slots.
-  // =============================================================================
-
-template<class T, unsigned N>
-template<class D>
-inline dual<T, N>& dual<T, N>::operator=(const dual_expr::Expr<D>& e) {
-  const D& d = e.self();
-  val_ = d.val();
-  if (d.depends()) {
-    set_depend_size();   // alloc tan_ if not yet bound; sets depend_ = true
-    for (unsigned i = 0; i < N; ++i) tan_[i] = d.tan(i);
-  } else if (depend_) {
-    // tan_ is bound (slab or arena); preserve binding, zero tangents.
-    for (unsigned i = 0; i < N; ++i) tan_[i] = T();
-    depend_ = false;
-  }
-  return *this;
-}
-
-template<class T, unsigned N>
-template<class D>
-inline dual<T, N>::dual(const dual_expr::Expr<D>& e)
-  : val_(), tan_(nullptr), depend_(false)
-{
-  *this = e;
-}
-
-template<class T, unsigned N>
-template<class D>
-inline dual<T, N>& dual<T, N>::operator+=(const dual_expr::Expr<D>& e) {
-  const D& d = e.self();
-  val_ += d.val();
-  if (d.depends()) {
-    if (depend_) {
-      for (unsigned i = 0; i < N; ++i) tan_[i] += d.tan(i);
-    } else {
-      set_depend_size();
-      for (unsigned i = 0; i < N; ++i) tan_[i] = d.tan(i);
-    }
-  }
-  return *this;
-}
-
-template<class T, unsigned N>
-template<class D>
-inline dual<T, N>& dual<T, N>::operator-=(const dual_expr::Expr<D>& e) {
-  const D& d = e.self();
-  val_ -= d.val();
-  if (d.depends()) {
-    if (depend_) {
-      for (unsigned i = 0; i < N; ++i) tan_[i] -= d.tan(i);
-    } else {
-      set_depend_size();
-      for (unsigned i = 0; i < N; ++i) tan_[i] = -d.tan(i);
-    }
-  }
-  return *this;
-}
-
-template<class T, unsigned N>
-template<class D>
-inline dual<T, N>& dual<T, N>::operator*=(const dual_expr::Expr<D>& e) {
-  const D& d = e.self();
-  const T new_val = val_ * d.val();
-  if (depend_ && d.depends()) {
-    // (a*b)' = a'*b + a*b' : uses CURRENT val_ in tan_, then update val_.
-    for (unsigned i = 0; i < N; ++i)
-      tan_[i] = tan_[i] * d.val() + val_ * d.tan(i);
-  } else if (depend_) {
-    for (unsigned i = 0; i < N; ++i) tan_[i] *= d.val();
-  } else if (d.depends()) {
-    set_depend_size();
-    for (unsigned i = 0; i < N; ++i) tan_[i] = val_ * d.tan(i);
-  }
-  val_ = new_val;
-  return *this;
-}
-
-template<class T, unsigned N>
-template<class D>
-inline dual<T, N>& dual<T, N>::operator/=(const dual_expr::Expr<D>& e) {
-  const D& d = e.self();
-  const T inv = T(1) / d.val();
-  const T new_val = val_ * inv;
-  if (depend_ && d.depends()) {
-    // (a/b)' = (a' - (a/b)*b') / b
-    for (unsigned i = 0; i < N; ++i)
-      tan_[i] = (tan_[i] - new_val * d.tan(i)) * inv;
-  } else if (depend_) {
-    for (unsigned i = 0; i < N; ++i) tan_[i] *= inv;
-  } else if (d.depends()) {
-    set_depend_size();
-    for (unsigned i = 0; i < N; ++i) tan_[i] = -new_val * d.tan(i) * inv;
   }
   val_ = new_val;
   return *this;

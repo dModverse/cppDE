@@ -138,12 +138,8 @@ public:
   using state_type         = typename stepper_type::state_type;
   using value_type         = typename stepper_type::value_type;
   using time_type          = typename stepper_type::value_type;   // external: value_type for API compat
-  using scalar_time_type   = typename stepper_type::time_type;     // internal: scalar for stepper
   using wrapped_state_type = typename stepper_type::wrapped_state_type;
   using resizer_type       = typename stepper_type::resizer_type;
-
-  using stepper_category = controlled_stepper_tag;
-  using controller_type  = onestep_controller<Stepper>;
 
   // Error order from the embedded pair (drives PI gain defaults)
   static constexpr double order = static_cast<double>(stepper_type::error_order);
@@ -410,9 +406,6 @@ public:
     resize_m_xnew(x);
   }
 
-  double last_error() const { return m_err_old; }
-  bool first_step() const { return m_first_step; }
-  bool last_rejected() const { return m_last_rejected; }
   double dt_old() const { return m_dt_old; }
 
   // --- Diagnostics ---
@@ -422,7 +415,6 @@ public:
   int n_jevals()   const { return m_stepper.n_jevals(); }
   int n_setups()   const { return m_stepper.n_setups(); }
   static constexpr int current_method_order() { return static_cast<int>(stepper_type::stepper_order); }
-  void reset_counters() { m_n_accepted = 0; m_n_rejected = 0; m_stepper.reset_counters(); }
 
   // Tolerance accessors
   double atol() const { return m_atol; }
@@ -434,20 +426,6 @@ public:
   // count is.
   void set_sens_err_con(bool v) { m_sens_err_con = v; }
   bool sens_err_con() const { return m_sens_err_con; }
-
-  // PI controller parameter accessors
-  double alpha() const { return m_alpha; }
-  double beta() const { return m_beta; }
-  double safety() const { return m_safety; }
-  double max_factor() const { return m_max_factor; }
-  double min_factor() const { return m_min_factor; }
-  void set_pi_gains(double alpha, double beta) { m_alpha = alpha; m_beta = beta; }
-  void set_pi_parameters(double alpha, double beta, double safety,
-                         double max_factor, double min_factor)
-  {
-    m_alpha = alpha; m_beta = beta; m_safety = safety;
-    m_max_factor = max_factor; m_min_factor = min_factor;
-  }
 
 private:
 

@@ -4,10 +4,10 @@
  Provides:
  - state_wrapper<T> for std::vector and dense_matrix
  - Resizeable trait and resize helpers
- - Stepper tags, step result enum
+ - Step result enum
  - Comparison utilities
 
- The state_wrapper / Resizeable / stepper-tag patterns and naming
+ The state_wrapper / Resizeable patterns and naming
  follow Boost.Odeint conventions (Boost Software License, Version
  1.0).  See inst/COPYRIGHTS for the full license text and original
  copyright notice.
@@ -29,14 +29,6 @@
 #include <cppde/cppde_step_checker.hpp>
 
 namespace cppde {
-
-// ============================================================================
-//  Stepper category tags
-// ============================================================================
-
-struct stepper_tag {};
-struct controlled_stepper_tag {};
-struct dense_output_stepper_tag {};
 
 // ============================================================================
 //  Step result enum
@@ -192,10 +184,6 @@ private:
 // ============================================================================
 
 namespace detail {
-
-template<class T>
-inline bool less_with_sign(T a, T b, T dt)
-{ return (dt > 0) ? (a < b) : (a > b); }
 
 template<class T>
 inline bool less_eq_with_sign(T a, T b, T dt)

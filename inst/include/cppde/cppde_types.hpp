@@ -129,18 +129,6 @@ struct csc_matrix
   // Direct access to value array (for codegen: Ax[k] = expr)
   T&       val(int k)       { return Ax[k]; }
   const T& val(int k) const { return Ax[k]; }
-
-  // Raw pointer access (for KLU)
-  int*     ap_ptr()       { return Ap.data(); }
-  int*     ai_ptr()       { return Ai.data(); }
-  T*       ax_ptr()       { return Ax.data(); }
-  const int* ap_ptr() const { return Ap.data(); }
-  const int* ai_ptr() const { return Ai.data(); }
-  const T*   ax_ptr() const { return Ax.data(); }
-
-  // Iterate over column j: entries Ai[Ap[j]..Ap[j+1]), Ax[Ap[j]..Ap[j+1])
-  int col_begin(int j) const { return Ap[j]; }
-  int col_end(int j) const   { return Ap[j + 1]; }
 };
 
 // ============================================================================
@@ -193,70 +181,6 @@ inline void vec_axpy(std::vector<double>& y, double alpha, const std::vector<dou
   int inc = 1;
   F77_CALL(daxpy)(&n, &alpha, const_cast<double*>(x.data()), &inc,
            y.data(), &inc);
-}
-
-// ============================================================================
-//  Dense matrix-vector product: y = A * x  (column-major)
-// ============================================================================
-
-template<class T>
-inline void matvec(const dense_matrix<T>& A,
-                   const std::vector<T>& x,
-                   std::vector<T>& y)
-{
-  const int m = A.rows(), k = A.cols();
-  y.assign(m, T(0));
-  for (int j = 0; j < k; ++j) {
-    const T xj = x[j];
-    for (int i = 0; i < m; ++i)
-      y[i] += A(i, j) * xj;
-  }
-}
-
-// y = A * x: BLAS dgemv specialization for double
-inline void matvec(const dense_matrix<double>& A,
-                   const std::vector<double>& x,
-                   std::vector<double>& y)
-{
-  int m = A.rows(), n = A.cols();
-  y.assign(m, 0.0);
-  if (m == 0 || n == 0) return;
-  double alpha = 1.0, beta = 0.0;
-  int inc = 1;
-  char trans = 'N';
-  F77_CALL(dgemv)(&trans, &m, &n, &alpha,
-           const_cast<double*>(A.ptr()), &m,
-           const_cast<double*>(x.data()), &inc,
-           &beta, y.data(), &inc  FCONE);
-}
-
-// ============================================================================
-//  CSC matrix-vector product: y += W * x
-// ============================================================================
-
-template<class T>
-inline void csc_matvec_add(const csc_matrix<T>& W,
-                           const std::vector<T>& x,
-                           std::vector<T>& y)
-{
-  for (int j = 0; j < W.n; ++j) {
-    const T xj = x[j];
-    for (int p = W.Ap[j]; p < W.Ap[j + 1]; ++p)
-      y[W.Ai[p]] += W.Ax[p] * xj;
-  }
-}
-
-// y -= W * x
-template<class T>
-inline void csc_matvec_sub(const csc_matrix<T>& W,
-                           const std::vector<T>& x,
-                           std::vector<T>& y)
-{
-  for (int j = 0; j < W.n; ++j) {
-    const T xj = x[j];
-    for (int p = W.Ap[j]; p < W.Ap[j + 1]; ++p)
-      y[W.Ai[p]] -= W.Ax[p] * xj;
-  }
 }
 
 } // namespace cppde

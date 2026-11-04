@@ -32,16 +32,13 @@
 namespace cppde {
 
 // ============================================================================
-//  tsit5<Value, Resizer>
+//  tsit5<Value>
 //
 //  Explicit Runge-Kutta 5(4) method with FSAL.
 //  No Jacobian / linear algebra needed.
 // ============================================================================
 
-template<
-  class Value,
-  class Resizer = initially_resizer
->
+template<class Value>
 class tsit5
 {
 public:
@@ -50,17 +47,16 @@ public:
   typedef std::vector<value_type>            state_type;
   typedef state_type                         deriv_type;
   typedef ad_lu::scalar_type_t<value_type>   time_type;
-  typedef Resizer                            resizer_type;
-  typedef stepper_tag                        stepper_category;
+  typedef initially_resizer                  resizer_type;
   typedef unsigned short                     order_type;
 
   typedef state_wrapper<state_type>          wrapped_state_type;
   typedef state_wrapper<deriv_type>          wrapped_deriv_type;
 
-  typedef tsit5<Value, Resizer>              stepper_type;
+  typedef tsit5<Value>                       stepper_type;
 
   // Same method on another scalar type, for the reverse replay.
-  template<class Value2> using rebind_value = tsit5<Value2, Resizer>;
+  template<class Value2> using rebind_value = tsit5<Value2>;
 
   static constexpr order_type stepper_order = 5;
   static constexpr order_type error_order   = 4;
@@ -83,12 +79,10 @@ public:
   int n_fevals() const { return m_n_fevals; }
   int n_jevals() const { return 0; }
   int n_setups() const { return 0; }
-  void reset_counters() { m_n_fevals = 0; }
 
   // No-op Jacobian/LU interface for controller compatibility
   void invalidate_lu() { m_fsal_valid = false; }
   bool has_valid_lu() const { return false; }
-  double last_factorized_dt() const { return 0.0; }
 
   // ====================================================================
   //  prepare_sensitivities
@@ -125,8 +119,6 @@ public:
                           static_cast<unsigned>(m_xtmp.m_v.size()), n_sens);
     }
   }
-
-  unsigned n_sens() const noexcept { return m_n_sens; }
 
   // ====================================================================
   //  do_step (with error output)

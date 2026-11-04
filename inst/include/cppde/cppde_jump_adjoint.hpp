@@ -281,8 +281,7 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   // a tangent in the second order.
   const std::size_t idx = triggered[src].index;
   const double c2 = cppde::detail::root_ift_curvature(
-      x_before, t_ad, sys, ws.fb, root_events[idx],
-      ad_traits::scalar_value(g_dot));
+      x_before, t_ad, root_events[idx], ad_traits::scalar_value(g_dot));
   const T c = (T(0.0) - w_s / g_dot) * (T(1.0) + T(2.0 * c2) * s);
   zero_armed(ws.g, n);
   root_events[idx].dg_dx(x_before, t, ws.g);

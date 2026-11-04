@@ -10,7 +10,8 @@
  * a = r'_off / (r'_off - r'_on). A slide ends where its weight reaches 0 or 1,
  * a root of its own, and the solution leaves to that side; f is continuous
  * there. a is formed in the model's scalar type, so dual sensitivities take
- * its dependence on x and the parameters.
+ * its dependence on x and the parameters; its derivatives in x and t come from
+ * the implicit function theorem on the generated gradients of the rates r'.
  *
  * Copyright (C) 2026 Simon Beyer
  */
@@ -187,6 +188,108 @@ struct sliding_core {
     return root_rate(roots[root_of[k]], x, t, f_tmp, terms);
   }
 
+  // The derivatives of the weights a of the slides S at (x, t), solve() having
+  // given a and the rates r: Ga[k * n + j] = da_k/dx_j and at[k] = da_k/dt,
+  // -R_a^{-1} times the derivatives of the rates' mixes (implicit function theorem).
+  void weight_derivatives(const std::vector<int>& S, const State& x, const Time& t,
+                          const std::vector<V>& a, const std::vector<std::vector<V>>& r,
+                          std::vector<V>& Ga, std::vector<V>& at) {
+    const std::size_t ns = S.size(), M = std::size_t(1) << ns, n = x.size();
+    std::vector<V> Ra(ns * ns, V(0.0)), Rx(ns * n, V(0.0)), Rt(ns, V(0.0));
+    for (std::size_t k = 0; k < ns; ++k)
+      for (std::size_t c = 0; c < M; ++c)
+        for (std::size_t j = 0; j < ns; ++j)
+          Ra[k * ns + j] = Ra[k * ns + j] + r[k][c] * combo_weight(a, c, static_cast<int>(j));
+    signed char* md = switch_mode_sink().m;
+    State gk(n);
+    for (std::size_t c = 0; c < M; ++c) {
+      for (std::size_t q = 0; q < ns; ++q) md[S[q]] = ((c >> q) & 1u) ? 1 : 0;
+      const V w = combo_weight(a, c);
+      for (std::size_t k = 0; k < ns; ++k) {
+        const auto& ev = roots[root_of[S[k]]];
+        if (!ev.rate_dx || !ev.rate_dt)
+          throw std::logic_error("a sliding switch without the derivatives of its rate");
+        for (auto& v : gk) {
+          v = V(0.0);
+          ad_traits::arm_tangents(v);
+        }
+        ev.rate_dx(x, t, gk);
+        for (std::size_t i = 0; i < n; ++i) Rx[k * n + i] = Rx[k * n + i] + w * gk[i];
+        Rt[k] = Rt[k] + w * ev.rate_dt(x, t);
+      }
+    }
+    for (int k : S) md[k] = sliding_mode;
+    auto val = [](const auto& v) { return cppde::detail::scalar_value(v); };
+    Ga.assign(ns * n, V(0.0));
+    std::vector<V> b(ns);
+    for (std::size_t i = 0; i < n; ++i) {
+      for (std::size_t k = 0; k < ns; ++k) b[k] = Rx[k * n + i];
+      small_solve(Ra, b, val);
+      for (std::size_t k = 0; k < ns; ++k) Ga[k * n + i] = V(0.0) - b[k];
+    }
+    at = Rt;
+    small_solve(Ra, at, val);
+    for (auto& v : at) v = V(0.0) - v;
+  }
+
+  // The gradient in x and the partial in t of the weight of slide k at (x, t),
+  // zero where k does not slide; both bound before the arena scope of the weights.
+  void weight_grad(int k, const State& x, const Time& t, State& gx, V& gt) {
+    unsigned w = 0;
+    for (const V& v : x) w = std::max(w, ad_traits::tangent_count(v));
+    for (V& v : gx) ad_traits::arm_width(v, w);
+    ad_traits::arm_width(gt, w);
+    for (V& v : gx) v = V(0.0);
+    gt = V(0.0);
+    if (!is_sliding(k)) return;
+    dual_arena::scope scope;
+    const std::vector<int> S = sliding_switches();
+    std::vector<V> a, Ga, at;
+    std::vector<std::vector<V>> r;
+    if (!solve(S, x, t, a, &r)) no_mix();
+    weight_derivatives(S, x, t, a, r, Ga, at);
+    for (std::size_t q = 0; q < S.size(); ++q) {
+      if (S[q] != k) continue;
+      for (std::size_t i = 0; i < x.size(); ++i) gx[i] = Ga[q * x.size() + i];
+      gt = at[q];
+    }
+  }
+
+  // J v + df/dt of the mix f = sum_c w_c(a) f_c where the switches in S slide:
+  // the combinations' own, and the change of the weights,
+  // sum_k df/da_k (grad a_k . v + da_k/dt).
+  void slide_ydd(const std::vector<int>& S, const State& x, const State& v, const Time& t,
+                 State& out) {
+    std::vector<V> a, Ga, at;
+    std::vector<std::vector<V>> r;
+    if (!solve(S, x, t, a, &r)) no_mix();
+    weight_derivatives(S, x, t, a, r, Ga, at);
+    const std::size_t n = x.size(), M = fm.size(), ns = S.size();
+    for (std::size_t i = 0; i < n; ++i) out[i] = V(0.0);
+    signed char* md = switch_mode_sink().m;
+    State yc(n);
+    for (std::size_t c = 0; c < M; ++c) {
+      for (std::size_t q = 0; q < ns; ++q) md[S[q]] = ((c >> q) & 1u) ? 1 : 0;
+      for (auto& y : yc) {
+        y = V(0.0);
+        ad_traits::arm_tangents(y);
+      }
+      rhs.ydd(x, v, t, yc);
+      const V w = combo_weight(a, c);
+      for (std::size_t i = 0; i < n; ++i) out[i] = out[i] + w * yc[i];
+    }
+    for (int k : S) md[k] = sliding_mode;
+    for (std::size_t k = 0; k < ns; ++k) {
+      V da = at[k];
+      for (std::size_t j = 0; j < n; ++j) da = da + Ga[k * n + j] * v[j];
+      for (std::size_t i = 0; i < n; ++i) {
+        V s(0.0);
+        for (std::size_t c = 0; c < M; ++c) s = s + combo_weight(a, c, static_cast<int>(k)) * fm[c][i];
+        out[i] = out[i] + s * da;
+      }
+    }
+  }
+
   // The weight of slide k at (x, t); k slides. The result is bound before the
   // arena scope the Newton iteration of the weights allocates in.
   V weight(int k, const State& x, const Time& t) {
@@ -206,9 +309,9 @@ struct sliding_core {
 
 // The pair (right-hand side, Jacobian) the steppers take, sliding where
 // switches slide. A dense Jacobian is that of the slide,
-// sum_c w_c J_c + sum_k df/da_k grad a_k', grad a by central differences,
-// since the reverse mode reads it as exact; a sparse one keeps the combination
-// with the largest weight, enough for the Newton iteration.
+// sum_c w_c J_c + sum_k df/da_k grad a_k', exact, since the reverse mode and
+// the Rosenbrock stages read it; a sparse one keeps the combination with the
+// largest weight, enough for the Newton iteration.
 template<class System, class State, class Time>
 struct sliding_system {
   using core_type = sliding_core<System, State, Time>;
@@ -226,6 +329,18 @@ struct sliding_system {
       ad_traits::arm_outputs(dxdt, dxdt, x, x);
       dual_arena::scope scope;
       c->slide(S, x, dxdt, t);
+    }
+
+    // J v + df/dt of the field as it stands, sliding where switches slide.
+    void ydd(const State& x, const State& v, const Time& t, State& out) const {
+      const std::vector<int> S = sliding_switches();
+      if (S.empty()) {
+        c->rhs.ydd(x, v, t, out);
+        return;
+      }
+      ad_traits::arm_outputs(out, out, x, x);
+      dual_arena::scope scope;
+      c->slide_ydd(S, x, v, t, out);
     }
   };
 
@@ -247,13 +362,14 @@ struct sliding_system {
       const std::size_t n = x.size(), ns = S.size();
       signed char* md = switch_mode_sink().m;
       if constexpr (std::is_same_v<Matrix, dense_matrix<V>>) {
-        // J and dfdt are bound before the scope the weights and differences allocate in
+        // J and dfdt are bound before the scope the weights allocate in
         ad_traits::arm_outputs(J.data, dfdt, x, x);
         dual_arena::scope scope;
         std::vector<V> a;
-        if (!c->solve(S, x, t, a)) core_type::no_mix();
+        std::vector<std::vector<V>> r;
+        if (!c->solve(S, x, t, a, &r)) core_type::no_mix();
         const std::size_t M = c->fm.size();
-        // df/da_k from the combinations at x, before the differences overwrite them.
+        // df/da_k from the combinations at x.
         std::vector<State> dfda(ns, State(n));
         for (std::size_t k = 0; k < ns; ++k)
           for (std::size_t i = 0; i < n; ++i) {
@@ -277,31 +393,16 @@ struct sliding_system {
           }
         }
         for (int k : S) md[k] = sliding_mode;
-        // grad a and da/dt by central differences of the weights.
-        State xh = x;
-        std::vector<V> up, dn;
-        for (std::size_t j = 0; j < n; ++j) {
-          const double h = 1e-6 * std::max(1.0, std::abs(scalar_value(x[j])));
-          xh[j] = x[j] + V(h);
-          if (!c->solve(S, xh, t, up)) core_type::no_mix();
-          xh[j] = x[j] - V(h);
-          if (!c->solve(S, xh, t, dn)) core_type::no_mix();
-          xh[j] = x[j];
-          // J holds -J: subtract df/da_k grad a_k'.
-          for (std::size_t k = 0; k < ns; ++k) {
-            const V g = (up[k] - dn[k]) / V(2.0 * h);
-            for (std::size_t i = 0; i < n; ++i)
+        std::vector<V> Ga, at;
+        c->weight_derivatives(S, x, t, a, r, Ga, at);
+        // J holds -J: subtract df/da_k grad a_k'.
+        for (std::size_t k = 0; k < ns; ++k)
+          for (std::size_t i = 0; i < n; ++i) {
+            for (std::size_t j = 0; j < n; ++j)
               J(static_cast<int>(i), static_cast<int>(j)) =
-                  J(static_cast<int>(i), static_cast<int>(j)) - dfda[k][i] * g;
+                  J(static_cast<int>(i), static_cast<int>(j)) - dfda[k][i] * Ga[k * n + j];
+            dfdt[i] = dfdt[i] + dfda[k][i] * at[k];
           }
-        }
-        const double ht = 1e-6 * std::max(1.0, std::abs(scalar_value(t)));
-        if (!c->solve(S, x, t + Time(ht), up) || !c->solve(S, x, t - Time(ht), dn))
-          core_type::no_mix();
-        for (std::size_t k = 0; k < ns; ++k) {
-          const V da = (up[k] - dn[k]) / V(2.0 * ht);
-          for (std::size_t i = 0; i < n; ++i) dfdt[i] = dfdt[i] + dfda[k][i] * da;
-        }
         c->wrote_full = true;
       } else {
         std::size_t best = 0;
@@ -388,24 +489,23 @@ make_sliding_system(const System& system, const std::vector<RootEvent<State, Tim
       };
       ex.func = g;
       // The exit time moves with the parameters, which the second order takes
-      // through a saltation: central differences of g in x and t, in the
-      // model's scalar type so they have their own sensitivities.
-      ex.dg_dx = [g](const State& x, const Time& t, State& out) {
-        State xh = x;
-        for (std::size_t i = 0; i < x.size(); ++i) {
-          const double h = 1e-6 * std::max(1.0, std::abs(scalar_value(x[i])));
-          xh[i] = x[i] + V(h);
-          const V up = g(xh, t);
-          xh[i] = x[i] - V(h);
-          const V dn = g(xh, t);
-          xh[i] = x[i];
-          out[i] = (up - dn) / V(2.0 * h);
-        }
+      // through a saltation: the derivatives of g are those of the weight, in
+      // the model's scalar type so they have their own sensitivities.
+      ex.dg_dx = [cp, k, on](const State& x, const Time& t, State& out) {
+        V gt(0.0);
+        cp->weight_grad(k, x, t, out, gt);
+        if (!on)
+          for (auto& v : out) v = V(0.0) - v;
       };
-      ex.dg_dt = [g](const State& x, const Time& t) -> V {
-        const double h = 1e-6 * std::max(1.0, std::abs(scalar_value(t)));
-        return (g(x, t + Time(h)) - g(x, t - Time(h))) / V(2.0 * h);
+      ex.dg_dt = [cp, k, on](const State& x, const Time& t) -> V {
+        State gx(x.size());
+        V gt(0.0);
+        cp->weight_grad(k, x, t, gx, gt);
+        return on ? gt : V(0.0) - gt;
       };
+      // f is continuous where a slide ends, so the curvature of the exit time
+      // enters the transport across it only scaled by the jump of f, zero.
+      ex.g_dot_dot = [](const State&, const Time&) { return 0.0; };
       ex.state_index = -1;
       ex.value_func = nullptr;
       ex.method = EventMethod::Replace;

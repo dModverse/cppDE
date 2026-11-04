@@ -15,7 +15,7 @@
 #include <vector>
 
 #include <cppde/cppde_types.hpp>
-#include <cppde/cppde_ad_lu.hpp>   // for is_ad, extract_values, etc.
+#include <cppde/cppde_ad_lu.hpp>   // for is_ad, inner_type_t, etc.
 
 #ifdef KLU
 #include <cppde/cppde_klu_solver.hpp>
@@ -23,34 +23,6 @@
 
 namespace cppde {
 namespace ad_lu {
-
-// ============================================================================
-//  extract_csc_values: csc_matrix<dual<Inner>> to csc_matrix<Inner>
-//
-//  Copies the CSC structure (Ap, Ai) and extracts value part of Ax.
-// ============================================================================
-
-// Generic over any AD type with the standard accessor surface
-// (cppde::dual, cppde::dual2nd).
-template<class AD,
-         std::enable_if_t<is_ad<AD>::value, int> = 0>
-inline csc_matrix<inner_type_t<AD>>
-extract_csc_values(const csc_matrix<AD>& W)
-{
-  using Inner = inner_type_t<AD>;
-  csc_matrix<Inner> out;
-  out.n   = W.n;
-  out.nnz = W.nnz;
-  out.Ap  = W.Ap;
-  out.Ai  = W.Ai;
-  out.Ax.resize(W.nnz);
-  out.pattern_built = W.pattern_built;
-
-  for (int k = 0; k < W.nnz; ++k)
-    out.Ax[k] = const_cast<AD&>(W.Ax[k]).x();
-
-  return out;
-}
 
 // ============================================================================
 //  sparse_lu_solver<T>: Base case: T is a non-AD scalar
@@ -82,11 +54,6 @@ public:
     m_solver.analyze_pattern(W.n, W.Ap.data(), W.Ai.data());
   }
 
-  void factorize_numeric(const csc_matrix<Scalar>& W)
-  {
-    m_solver.factorize(W.n, W.Ap.data(), W.Ai.data(), W.Ax.data());
-  }
-
   void solve(std::vector<Scalar>& b) const
   { m_solver.solve(b); }
 
@@ -96,17 +63,6 @@ public:
   // Batched solve: B ← W⁻¹ B (column-major n × nrhs)
   void solve_batch(std::vector<Scalar>& B, int nrhs) const
   { m_solver.solve_batch(B.data(), nrhs); }
-
-  std::vector<Scalar> solve_copy(const std::vector<Scalar>& b) const
-  {
-    std::vector<Scalar> x = b;
-    m_solver.solve(x);
-    return x;
-  }
-
-  // Scalar-only solve (identity for base case: same as solve)
-  void solve_scalar(std::vector<double>& b) const
-  { m_solver.solve(b); }
 
   void reset_pattern() { m_solver.reset_pattern(); }
 
@@ -132,13 +88,12 @@ private:
   //  copied once, and the solve buffers persist across calls.
   // ============================================================================
 
-// Generic AD specialization for cppde::dual<Inner,N>.
+// Generic AD specialization for cppde::dual<Inner>.
 template<class AD_T>
 class sparse_lu_solver<AD_T, std::enable_if_t<is_ad<AD_T>::value>>
 {
   using F = AD_T;
   using Inner = inner_type_t<AD_T>;
-  static constexpr unsigned N = ad_traits::detail::ad_static_size<AD_T>::value;
 
   // Re-adopt W's CSC structure into the persistent buffers whenever it is not
   // the one already held.  Keying this on nnz alone would reuse a stale Ap/Ai
@@ -181,21 +136,11 @@ public:
   //  reads each CSC entry's derivatives contiguously. m_W_stored is not needed.
   // ============================================================
 
-      // Determine n_derivs
-      // Static width is claimed only when some entry of W is seeded; see
-      // the dense factorize() in cppde_ad_lu.hpp.
-      unsigned nd;
-      if constexpr (N > 0) {
-        nd = 0u;
-        for (int k = 0; k < nnz; ++k) {
-          if (const_cast<F&>(W.Ax[k]).size() > 0) { nd = N; break; }
-        }
-      } else {
-        nd = 0;
-        for (int k = 0; k < nnz; ++k) {
-          unsigned sz = const_cast<F&>(W.Ax[k]).size();
-          if (sz > nd) nd = sz;
-        }
+      // Determine n_derivs from the seeded entries of W.
+      unsigned nd = 0;
+      for (int k = 0; k < nnz; ++k) {
+        unsigned sz = const_cast<F&>(W.Ax[k]).size();
+        if (sz > nd) nd = sz;
       }
       m_n_derivs_cached = nd;
 
@@ -270,24 +215,13 @@ public:
     }
     m_inner.solve(m_b_val);
 
-    // 2. Determine derivative directions
-    // Static width is claimed only when b or W is seeded; see
-    // dense_lu_solver::solve() in cppde_ad_lu.hpp.
+    // 2. Determine derivative directions from the seeded b and W.
     unsigned n_derivs;
     if constexpr (!is_ad<Inner>::value) {
-      if constexpr (N > 0) {
-        n_derivs = (m_n_derivs_cached > 0 || max_deriv_size(b) > 0) ? N : 0u;
-      } else {
-        n_derivs = std::max(m_n_derivs_cached, max_deriv_size(b));
-      }
+      n_derivs = std::max(m_n_derivs_cached, max_deriv_size(b));
     } else {
-      if constexpr (N > 0) {
-        n_derivs = (max_deriv_size(b) > 0 || max_deriv_size(m_W_stored) > 0)
-                     ? N : 0u;
-      } else {
-        n_derivs = max_deriv_size(b);
-        n_derivs = std::max(n_derivs, max_deriv_size(m_W_stored));
-      }
+      n_derivs = max_deriv_size(b);
+      n_derivs = std::max(n_derivs, max_deriv_size(m_W_stored));
     }
 
     if (n_derivs == 0) {
@@ -333,24 +267,13 @@ public:
     }
     m_inner.solve_transposed(m_b_val);
 
-    // 2. Determine derivative directions
-    // Static width is claimed only when b or W is seeded; see
-    // dense_lu_solver::solve() in cppde_ad_lu.hpp.
+    // 2. Determine derivative directions from the seeded b and W.
     unsigned n_derivs;
     if constexpr (!is_ad<Inner>::value) {
-      if constexpr (N > 0) {
-        n_derivs = (m_n_derivs_cached > 0 || max_deriv_size(b) > 0) ? N : 0u;
-      } else {
-        n_derivs = std::max(m_n_derivs_cached, max_deriv_size(b));
-      }
+      n_derivs = std::max(m_n_derivs_cached, max_deriv_size(b));
     } else {
-      if constexpr (N > 0) {
-        n_derivs = (max_deriv_size(b) > 0 || max_deriv_size(m_W_stored) > 0)
-                     ? N : 0u;
-      } else {
-        n_derivs = max_deriv_size(b);
-        n_derivs = std::max(n_derivs, max_deriv_size(m_W_stored));
-      }
+      n_derivs = max_deriv_size(b);
+      n_derivs = std::max(n_derivs, max_deriv_size(m_W_stored));
     }
 
     if (n_derivs == 0) {
@@ -411,38 +334,22 @@ public:
     // 2. Batched value-layer solve.
     m_inner.solve_batch(m_b_val_batch, nrhs);
 
-    // 3. Determine n_derivs.
-    // Static width is claimed only when b or W is seeded; see
-    // dense_lu_solver::solve() in cppde_ad_lu.hpp.
-    auto any_seeded_rhs = [&]() {
-      for (int col = 0; col < nrhs; ++col)
-        for (int i = 0; i < n; ++i)
-          if (const_cast<F&>(B_flat[col * n + i]).size() > 0) return true;
-      return false;
-    };
+    // 3. Determine n_derivs from the seeded right-hand sides and W.
     unsigned n_derivs;
     if constexpr (!is_ad<Inner>::value) {
-      if constexpr (N > 0) {
-        n_derivs = (m_n_derivs_cached > 0 || any_seeded_rhs()) ? N : 0u;
-      } else {
-        n_derivs = m_n_derivs_cached;
-        for (int col = 0; col < nrhs; ++col)
-          for (int i = 0; i < n; ++i) {
-            unsigned sz = const_cast<F&>(B_flat[col * n + i]).size();
-            if (sz > n_derivs) n_derivs = sz;
-          }
-      }
+      n_derivs = m_n_derivs_cached;
+      for (int col = 0; col < nrhs; ++col)
+        for (int i = 0; i < n; ++i) {
+          unsigned sz = const_cast<F&>(B_flat[col * n + i]).size();
+          if (sz > n_derivs) n_derivs = sz;
+        }
     } else {
-      if constexpr (N > 0) {
-        n_derivs = (any_seeded_rhs() || max_deriv_size(m_W_stored) > 0) ? N : 0u;
-      } else {
-        n_derivs = max_deriv_size(m_W_stored);
-        for (int col = 0; col < nrhs; ++col)
-          for (int i = 0; i < n; ++i) {
-            unsigned sz = const_cast<F&>(B_flat[col * n + i]).size();
-            if (sz > n_derivs) n_derivs = sz;
-          }
-      }
+      n_derivs = max_deriv_size(m_W_stored);
+      for (int col = 0; col < nrhs; ++col)
+        for (int i = 0; i < n; ++i) {
+          unsigned sz = const_cast<F&>(B_flat[col * n + i]).size();
+          if (sz > n_derivs) n_derivs = sz;
+        }
     }
 
     if (n_derivs == 0) {
@@ -473,16 +380,11 @@ public:
                         static_cast<int>(n_derivs * nrhs));
 
     // 7. Bulk-inject results.
-    constexpr unsigned StaticN = N;
     for (int col = 0; col < nrhs; ++col) {
       for (int i = 0; i < n; ++i) {
         auto& bi = B_flat[col * n + i];
         cppde::ad_traits::set_value(bi, m_b_val_batch[col * n + i]);
-        if constexpr (StaticN > 0) {
-          if (!bi.depend()) bi.diff(0);
-        } else {
-          if (!bi.depend()) bi.diff(0, n_derivs);
-        }
+        if (!bi.depend()) bi.diff(0, n_derivs);
         for (unsigned j = 0; j < n_derivs; ++j)
           bi[j] = m_rhs_all_batch[col * per_col + j * n + i];
       }
@@ -490,12 +392,6 @@ public:
   }
 
   void reset_pattern() { m_inner.reset_pattern(); }
-
-  // Scalar-only solve: forward to inner solver, no IFT
-  void solve_scalar(std::vector<double>& b) const
-  {
-    m_inner.solve_scalar(b);
-  }
 
 private:
 
@@ -615,7 +511,7 @@ private:
       // =============================================================
       //  Generic path: nested AD types (Inner = dual<...>)
       //
-      //  Single pass over W_stored: each dual<Inner,N> element is
+      //  Single pass over W_stored: each dual<Inner> element is
       //  touched exactly once.
       // =============================================================
 
@@ -653,18 +549,6 @@ private:
   mutable std::vector<Inner> m_b_val_batch;    // n × nrhs: value part (batched)
   mutable std::vector<Inner> m_rhs_all_batch;  // n × n_derivs × nrhs (batched)
 };
-
-// ============================================================================
-//  Sparse Jacobian matrix-vector product: y += W * x
-// ============================================================================
-
-template<class T>
-void sparse_jac_matvec(const csc_matrix<T>& W,
-                       const std::vector<T>& x,
-                       std::vector<T>& y)
-{
-  csc_matvec_add(W, x, y);
-}
 
 } // namespace ad_lu
 } // namespace cppde

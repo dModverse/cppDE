@@ -66,9 +66,11 @@ class LinMap:
         """True if every row has a coefficient for every state."""
         return all(len(r) == self.n_cols for r in self.rows)
 
-    def cpp(self, name="linmap_"):
-        """Namespace-scope tables and the map object `name`; frequently
-        repeated coefficients are stored once, in a pool."""
+    def cpp(self):
+        """Namespace-scope tables and the map object `linmap_` the generated
+        statements read; frequently repeated coefficients are stored once, in
+        a pool."""
+        name = "linmap_"
         vals = [em.cpp_literal(c) for row in self.rows for _, c in row]
         out = ["// Constant linear map: %d rows over %d states, %d coefficients."
                % (len(self.rows), self.n_cols, len(vals))]
@@ -192,18 +194,11 @@ def linear_rows(g, roots, n_states, min_terms):
 # Loops over statements of equal structure
 # ===========================================================================
 
-# Fewest instances of a class, or terms of a sum, emitted as a loop.
+# Fewest instances of a class, or terms of a sum, emitted as a loop; 0 disables loops.
 VEC_MIN_INSTANCES = 16
 
 _ATOMIC = frozenset((cg.NUM, cg.NAMED, cg.BOOL, cg.LEAF))
 _MULTI = ("m",)
-
-
-def vector_min_instances(value=None):
-    """Loop threshold: `value`, else VEC_MIN_INSTANCES; 0 disables."""
-    if value is None:
-        value = VEC_MIN_INSTANCES
-    return max(0, int(value))
 
 
 def _target_split(t):
@@ -234,8 +229,8 @@ def _target_join(shape, idx):
 
 
 class _Cone:
-    """Key of one cone: its structure with leaves, value points and known
-    nodes as slots numbered by first occurrence. A sum with at least `lim`
+    """Key of one cone: its structure with leaves and value points as slots
+    numbered by first occurrence. A sum with at least `lim`
     terms of one structure becomes a reduction: those terms are keyed once,
     in a cone of their own each."""
 
@@ -260,8 +255,6 @@ class _Cone:
         o = g.op[n]
         if o == cg.NUM or o == cg.NAMED or o == cg.BOOL:
             return ("c", o, g.attr[n])
-        if n in an.known:
-            return self.ref(n, ("k",))
         if o == cg.LEAF:
             at = g.attr[n]
             k = at[0]
@@ -312,13 +305,12 @@ class _Analysis:
     An instance is a store ('s', index) or a value point ('v', node).
     """
 
-    def __init__(self, g, stores, known, lim):
+    def __init__(self, g, stores, lim):
         self.g = g
         self.stores = stores
-        self.known = known
         self.lim = lim
         roots = [n for _, n, _ in stores]
-        self.order = [n for n in g.topo(roots) if n not in known]
+        self.order = list(g.topo(roots))
         self.value = self._values(roots)
         self.keyid = {}
         self.slots = {}
@@ -425,20 +417,19 @@ class _Tables:
         return [("table", name, list(vals)) for vals, name in self.names.items()]
 
 
-def vector_block(g, stores, prefix, known=None, min_instances=None):
+def vector_block(g, stores, prefix):
     """Statements computing `stores` with loops, or None if nothing loops.
 
     Statements whose cones have equal structure form a class; a class of at
-    least `min_instances` (default: vector_min_instances()) runs as one loop
-    that reads the differing leaves and shared values through index tables.
+    least VEC_MIN_INSTANCES runs as one loop that reads the differing leaves
+    and shared values through index tables.
     A sum with that many terms of one structure runs as an inner loop.
     Shared values of a class live in the array `<prefix>v<class>`.
     """
-    lim = vector_min_instances(min_instances)
+    lim = max(0, int(VEC_MIN_INSTANCES))
     if not lim or not stores:
         return None
-    known = dict(known or {})
-    an = _Analysis(g, stores, known, lim)
+    an = _Analysis(g, stores, lim)
     loops = {k for k, inst in an.classes.items()
              if len(inst) >= lim or an.reds[inst[0]]}
     if not loops:
@@ -452,7 +443,7 @@ def vector_block(g, stores, prefix, known=None, min_instances=None):
         if an.is_value_class(kid) and not _self_reading(an, kid):
             inst.sort(key=lambda i: _slot_indices(an, i, rank))
 
-    names = dict(known)
+    names = {}
     arrays = {}
     pos = {}
     for kid, inst in an.classes.items():

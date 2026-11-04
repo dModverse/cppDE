@@ -266,8 +266,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   # The scalar the model body is written in, spelled out, plus its derivative
   # layer count and arena flag, so the codegen never infers them from the name.
-  numType <- if (deriv2) "cppde::dual2nd<double, 0>"
-             else if (deriv) "cppde::dual<double, 0>"
+  numType <- if (deriv2) "cppde::dual2nd<double>"
+             else if (deriv) "cppde::dual<double>"
              else "double"
   numLevel <- if (deriv2) 2L else if (deriv) 1L else 0L
   numArena <- deriv || deriv2
@@ -411,7 +411,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   )
 
   # --- Using declarations ---
-  # No scalar alias: the emitted code spells cppde::dual<double, N> out.
+  # No scalar alias: the emitted code spells cppde::dual<double> out.
   usings <- "using namespace cppde;"
 
   # --- Observer ---
@@ -846,7 +846,6 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # --- Integration setup ---
   # Dense or sparse LU, Rosenbrock4 or one of the two multistep methods, which
   # instantiate the same cppde::multistepper. NDF against BDF is a runtime flag.
-  resizer_tag   <- "cppde::initially_resizer"
 
   # Generate the C++ stepper type for value type V and LU pattern J.
   # Only meaningful for is_multistep(method), callers on the rb4 path
@@ -857,14 +856,13 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "adams" = "cppde::multistep_method::adams",
       stop(sprintf("internal: unhandled multistep method '%s'", method))
     )
-    sprintf("cppde::multistepper<%s, %s, %s, %s>",
-            method_enum, V, J, resizer_tag)
+    sprintf("cppde::multistepper<%s, %s, %s>", method_enum, V, J)
   }
 
   # The AD scalars a stepper may be instantiated on. Multistep types are built
   # only for is_multistep(method), since make_stepper_type() errors otherwise.
-  ad1 <- "cppde::dual<double, 0>"
-  ad2 <- "cppde::dual2nd<double, 0>"
+  ad1 <- "cppde::dual<double>"
+  ad2 <- "cppde::dual2nd<double>"
 
   ms_double <- ms_AD <- ms_AD2 <- NULL
   if (use_sparse) {
@@ -920,9 +918,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
               sens_err_con_arg),
       "  controlledStepper.stepper().set_max_order(args.max_order);",
       "  controlledStepper.stepper().set_stald(args.stald);",
-      # Slab priming for any AD path (heap dual<T,0> or static-N dual<T,N>),
-      # a no-op for non-AD and nested-AD types. Emitted before the
-      # std::move into denseStepper.
+      # Slab priming for any AD path, a no-op for non-AD and nested-AD types.
+      # Emitted before the std::move into denseStepper.
       if (deriv) {
         "  controlledStepper.prepare_sensitivities(static_cast<unsigned>(n_sens));"
       } else {
@@ -1037,72 +1034,20 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   # --- Initial step size estimation ---
   # The multistep methods use the cvHin port, the single-step ones
-  # estimate_initial_dt. order = 1 suits all of them, see cppde_utils.hpp.
-  method_order <- 1L
-
-  if (is_multistep(method)) {
-    # cppde_hin, needs only `sys`; no compute_ydd closure, no order param.
-    estimate_dt_block <- c(
-      sprintf("  // --- Determine initial dt (%s, CVODES cvHin port) ---", method),
-      sprintf("  %s dt;", numType),
-      "  if (hini == 0.0) {",
-      sprintf("    dt = odeint_utils::cppde_hin<%s>(", numType),
-      "      sys, x, times.front(),",
-      "      odeint_utils::scalar_value(times.back()),",
-      sprintf("      abstol, reltol, /*sens_err_con=*/%s);", sens_err_con_arg),
-      "  } else {",
-      "    dt = hini;",
-      "  }"
-    )
-  } else {
-    if (is_explicit(method)) {
-      compute_ydd_lines <- c(
-        sprintf("  // --- compute_ydd (FD fallback for explicit method) ---"),
-        "  auto compute_ydd = odeint_utils::make_fd_ydd(sys);"
-      )
-    } else if (use_sparse) {
-      compute_ydd_lines <- c(
-        "  // --- compute_ydd (analytic: dfdt + sparse J*f; jac writes -J) ---",
-        "  auto compute_ydd = [&](const auto& x_, auto t_, const auto& f_,",
-        "                          double /*h_trial*/, auto& ydd_) {",
-        sprintf("    cppde::csc_matrix<%s> J_init;", numType),
-        sprintf("    std::vector<%s> dfdt_(x_.size());", numType),
-        "    jac(x_, J_init, t_, dfdt_);",
-        "    ydd_ = dfdt_;",
-        "    cppde::csc_matvec_sub(J_init, f_, ydd_);",
-        "  };"
-      )
-    } else {
-      compute_ydd_lines <- c(
-        "  // --- compute_ydd (analytic: dfdt + dense J*f; jac writes -J) ---",
-        "  auto compute_ydd = [&](const auto& x_, auto t_, const auto& f_,",
-        "                          double /*h_trial*/, auto& ydd_) {",
-        sprintf("    cppde::dense_matrix<%s> J_init(x_.size(), x_.size());", numType),
-        sprintf("    std::vector<%s> dfdt_(x_.size());", numType),
-        "    jac(x_, J_init, t_, dfdt_);",
-        "    ydd_ = dfdt_;",
-        "    for (std::size_t i = 0; i < x_.size(); ++i)",
-        "      for (std::size_t j = 0; j < x_.size(); ++j)",
-        "        ydd_[i] -= J_init(i,j) * f_[j];",
-        "  };"
-      )
-    }
-
-    estimate_dt_block <- c(
-      compute_ydd_lines,
-      sprintf("  // --- Determine initial dt (%s, order=%d) ---", method, method_order),
-      sprintf("  %s dt;", numType),
-      "  if (hini == 0.0) {",
-      sprintf("    dt = odeint_utils::estimate_initial_dt<%s>(", numType),
-      "      sys, compute_ydd, x, times.front(),",
-      "      odeint_utils::scalar_value(times.back()),",
-      sprintf("      abstol, reltol, /*order=*/%d, /*sens_err_con=*/%s);",
-              method_order, sens_err_con_arg),
-      "  } else {",
-      "    dt = hini;",
-      "  }"
-    )
-  }
+  # estimate_initial_dt; both take y'' from the generated sys.ydd().
+  estimator <- if (is_multistep(method)) "cppde_hin" else "estimate_initial_dt"
+  estimate_dt_block <- c(
+    sprintf("  // --- Determine initial dt (%s, %s) ---", method, estimator),
+    sprintf("  %s dt;", numType),
+    "  if (hini == 0.0) {",
+    sprintf("    dt = odeint_utils::%s<%s>(", estimator, numType),
+    "      sys, x, times.front(),",
+    "      odeint_utils::scalar_value(times.back()),",
+    sprintf("      abstol, reltol, /*sens_err_con=*/%s);", sens_err_con_arg),
+    "  } else {",
+    "    dt = hini;",
+    "  }"
+  )
 
   # --- Multistep methods: dt re-estimator lambda for event restarts ---
   # Handed to integrate_times as the DtEstimator, called on every restart.

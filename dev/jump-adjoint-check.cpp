@@ -182,7 +182,7 @@ static void report(const char* what,
 template<bool Generated>
 static void run_reverse(const std::vector<cppde::detail::TriggeredEvent>& trig,
                         double* grad_rv, double (*hess_rv)[ND]) {
-  using T1 = cppde::dual<double, 0>;
+  using T1 = cppde::dual<double>;
   Sys<T1> sys;
   sys.p.resize(NP);
   const double pv[NP] = {P0, P1, P2};
@@ -234,7 +234,7 @@ int main() {
   const std::vector<cppde::detail::TriggeredEvent> trig{{0, -1.0, 1.0}};
 
   // ---- oracle: the sandwich over a nested dual -----------------------------
-  using T2 = cppde::dual2nd<double, 0>;
+  using T2 = cppde::dual2nd<double>;
   double grad_ff[ND] = {0}, hess_ff[ND][ND] = {{0}};
   {
     Sys<T2> sys;

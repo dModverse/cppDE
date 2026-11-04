@@ -18,8 +18,8 @@ reparametrisations $p = \Phi(\theta)$, whose Jacobian is the tangent of
 
 The expressions are parsed into the [expression graph](methods-codegen.html#codegen), from which the generator emits one function template
 over the scalar type that evaluates $g$ for one observation, instantiated
-on `double`, on `cppde::dual<double, 0>` and on the nested
-dual `cppde::dual2nd<double, 0>`. The vector-Jacobian product is
+on `double`, on `cppde::dual<double>` and on the nested
+dual `cppde::dual2nd<double>`. The vector-Jacobian product is
 a reverse sweep on the same graph, emitted as a second template and
 instantiated on `double` and on the dual.
 

@@ -360,17 +360,23 @@ def apply_t_add(m, w, y):
 
 
 class Forcing:
-    """PchipForcing stand-in: f(t) and derivative(t)."""
+    """PchipForcing stand-in: f(t), derivative(t) and second_derivative(t)."""
 
-    def __init__(self, f, df):
+    def __init__(self, f, df, ddf=None):
         self.f = f
         self.df = df
+        self.ddf = ddf
 
     def __call__(self, t):
         return self.f(t)
 
     def derivative(self, t):
         return self.df(t)
+
+    def second_derivative(self, t):
+        if self.ddf is None:
+            raise ValueError("this forcing has no second derivative")
+        return self.ddf(t)
 
 
 class DenseMatrix:

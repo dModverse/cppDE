@@ -129,7 +129,7 @@ static const double DT = 0.13;
 // the step size.
 static constexpr unsigned ND = NX + NP;
 
-using D = dual<double, ND>;
+using D = dual<double>;
 
 // ---------------------------------------------------------------------------
 //  Forward reference: n steps under dual, seeded with the identity, so the
@@ -143,13 +143,13 @@ static void forward_steps(unsigned n_steps,
                           std::vector<double>& S, std::vector<double>& x_end)
 {
   std::vector<D> p(NP);
-  for (std::size_t j = 0; j < NP; ++j) { p[j] = D(P[j]); p[j].diff(NX + j); }
+  for (std::size_t j = 0; j < NP; ++j) { p[j] = D(P[j]); p[j].diff(NX + j, ND); }
   auto sys = make_system<D>(p);
 
   D t0(T0), h(DT);
 
   std::vector<D> x(NX), xout(NX), xerr(NX);
-  for (std::size_t i = 0; i < NX; ++i) { x[i] = D(X0[i]); x[i].diff(i); }
+  for (std::size_t i = 0; i < NX; ++i) { x[i] = D(X0[i]); x[i].diff(i, ND); }
 
   cppde::tsit5<D> st;
   // The controller does this; driving do_step directly must too, or the FSAL

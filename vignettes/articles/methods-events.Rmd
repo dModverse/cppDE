@@ -218,8 +218,9 @@ $$
             g_e\bigl(x(t), t\bigr)\bigg|_{*}
 $$
 is the second total time derivative of $g_e$ along the trajectory,
-taken from generated code or, where that is not available, from a
-forward finite difference of $\dot g_e$. The correction
+taken from generated code, the second time derivatives of the forcings
+included. Where a slide ends, $f$ is continuous, and $G_{tt}$ enters
+only scaled by the jump of $f$, which is zero. The correction
 [(21)](#eq-dt-star-second) changes only the second-order components of
 $\delta t^{*}$.
 

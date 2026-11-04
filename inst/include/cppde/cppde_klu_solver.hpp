@@ -224,14 +224,6 @@ public:
               const_cast<klu_common*>(&m_common));
   }
 
-  void report_fillin() const {
-    if (m_numeric) {
-      std::fprintf(stderr, "  KLU fill-in: L_nnz = %d, U_nnz = %d (ratio vs original: %.1fx)\n",
-                   m_numeric->lnz, m_numeric->unz,
-                   (double)(m_numeric->lnz + m_numeric->unz) / (double)m_n);
-    }
-  }
-
   void reset_pattern()
   {
     free_numeric();

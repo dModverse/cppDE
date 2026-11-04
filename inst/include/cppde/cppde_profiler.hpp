@@ -197,13 +197,6 @@ public:
     m_counts.fill(0);
   }
 
-  // Accessors for R-side diagnostics
-  double cumulative_us(prof_cat c) const { return m_cumulative[static_cast<unsigned>(c)]; }
-  int    count(prof_cat c) const { return m_counts[static_cast<unsigned>(c)]; }
-  double total_us() const {
-    double s = 0; for (unsigned i = 0; i < PROF_N; ++i) s += m_cumulative[i]; return s;
-  }
-
 private:
   friend class scoped_timer;
   std::array<double, PROF_N>  m_cumulative;  // microseconds
@@ -229,10 +222,6 @@ public:
   void merge(const profiler&) const {}
   void report(const char* = nullptr) const {}
   void reset() const {}
-
-  double cumulative_us(prof_cat) const { return 0.0; }
-  int    count(prof_cat) const { return 0; }
-  double total_us() const { return 0.0; }
 };
 
 #endif // CPPDE_PROFILE

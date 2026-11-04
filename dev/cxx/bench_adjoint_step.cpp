@@ -51,6 +51,15 @@ struct model {
     d[1] =  p[0] * x[0] - p[1] * x[1] * x[2] - p[2] * x[1] * x[1];
     d[2] =  p[2] * x[1] * x[1] * cppde::cos(t);
   }
+  // J v + df/dt, which the first-step size reads.
+  void ydd(const std::vector<V>& x, const std::vector<V>& v, const V& t,
+           std::vector<V>& out) const {
+    const V w = v[1] * x[2] + x[1] * v[2];
+    out[0] = -p[0] * v[0] + p[1] * w;
+    out[1] =  p[0] * v[0] - p[1] * w - V(2.0) * p[2] * x[1] * v[1];
+    out[2] =  V(2.0) * p[2] * x[1] * v[1] * cppde::cos(t)
+            - p[2] * x[1] * x[1] * cppde::sin(t);
+  }
 };
 
 // Minus the Jacobian, which is what the solver's iteration matrix is built from:
@@ -118,11 +127,9 @@ static const double T0   = 0.1;
 static const double ATOL = 1e-6;
 static const double RTOL = 1e-6;
 
-// Directions: every Nordsieck slot a warm-up can produce, plus the parameters.
-// Fixed at compile time so the reference runs on a static dual; the slots a case
-// does not reach stay zero.
-static constexpr unsigned ND_MAX = (12 + 1) * NX + NP;
-using D = dual<double, ND_MAX>;
+// The reference dual; a case seeds the Nordsieck slots its warm-up reaches,
+// plus the parameters.
+using D = dual<double>;
 
 template<cppde::multistep_method M>
 using stepper_d = cppde::multistepper<M, double, cppde::dense_lu_tag>;
@@ -202,7 +209,7 @@ static void forward_step(const checkpoint<M>& cp, int q_next, double eta,
   std::vector<D> p(NP);
   for (std::size_t j = 0; j < NP; ++j) {
     p[j] = D(P[j]);
-    p[j].diff(static_cast<unsigned>(nz + j));
+    p[j].diff(static_cast<unsigned>(nz + j), nd);
     p[j].d(static_cast<unsigned>(nz + j)) = scale[nz + j];
   }
   auto sys = make_system<D>(p);
@@ -216,7 +223,7 @@ static void forward_step(const checkpoint<M>& cp, int q_next, double eta,
     for (std::size_t i = 0; i < n; ++i) {
       const std::size_t k = static_cast<std::size_t>(j) * n + i;
       slot[i] = D(cp.zn[k]);
-      slot[i].diff(static_cast<unsigned>(k));
+      slot[i].diff(static_cast<unsigned>(k), nd);
       slot[i].d(static_cast<unsigned>(k)) = scale[k];
     }
   }

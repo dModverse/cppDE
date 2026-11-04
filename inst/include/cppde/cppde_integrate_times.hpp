@@ -48,8 +48,7 @@ size_t integrate_times(
    const std::vector<RootEvent<State, Time>>& root,
    StepChecker& checker, double root_tol = 1e-8, size_t max_trigger_root = 1,
    DtEstimator dt_est = DtEstimator(),
-   undeduced_t<std::function<bool(const State&, const Time&)>> termination = nullptr,
-   cppde::controlled_stepper_tag = cppde::controlled_stepper_tag())
+   undeduced_t<std::function<bool(const State&, const Time&)>> termination = nullptr)
 {
  // Pin BLAS to one thread for this solve, see cppde_blas_threads.hpp. The
  // guard sits here because every stepper reaches one of these two overloads,
@@ -86,8 +85,7 @@ size_t integrate_times_dense(
    DtEstimator dt_est = DtEstimator(),
    undeduced_t<std::function<bool(const State&, const Time&)>> termination = nullptr,
    std::function<void()> step_obs = nullptr,
-   undeduced_t<std::function<void(const event_note<State>&)>> event_obs = nullptr,
-   cppde::dense_output_stepper_tag = cppde::dense_output_stepper_tag())
+   undeduced_t<std::function<void(const event_note<State>&)>> event_obs = nullptr)
 {
  // Pin BLAS to one thread for this solve, see cppde_blas_threads.hpp. The
  // guard sits here because every stepper reaches one of these two overloads,

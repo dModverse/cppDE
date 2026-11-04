@@ -16,6 +16,7 @@
 #include <functional>
 #include <cmath>
 #include <limits>
+#include <stdexcept>
 #include <type_traits>
 #include <cppde/cppde_switch_surface.hpp>
 #include <cppde/cppde_events.hpp>
@@ -39,37 +40,16 @@ namespace detail {
 /// c2 = -g_ddot / (2 g_dot). Its own function because the backward sweep needs
 /// the same coefficient: ds/ds_lin is 1 + 2 c2 s_lin, one in value and a
 /// tangent in the second order.
-template<class state_type, class time_type, class System>
+template<class state_type, class time_type>
 inline double root_ift_curvature(
     const state_type& x_before,
     const time_type& t_event,
-    System& sys,
-    const state_type& f_before,
     const RootEvent<state_type, time_type>& evt,
     double g_dot_s)
 {
-  using value_type = typename state_type::value_type;
-  const size_t n = x_before.size();
-
-  if (evt.g_dot_dot)
-    return -0.5 * evt.g_dot_dot(x_before, t_event) / g_dot_s;
-
-  // No analytical g_ddot: difference g_dot along the flow.
-  constexpr double eps = 1e-8;
-  state_type x_fwd(n);
-  for (size_t i = 0; i < n; ++i)
-    x_fwd[i] = x_before[i] + f_before[i] * value_type(eps);
-
-  state_type f_fwd(n);
-  sys.first(x_fwd, f_fwd, t_event + time_type(eps));
-
-  state_type grad_g_fwd(n);
-  evt.dg_dx(x_fwd, t_event + time_type(eps), grad_g_fwd);
-  value_type g_dot_fwd = evt.dg_dt(x_fwd, t_event + time_type(eps));
-  for (size_t i = 0; i < n; ++i)
-    g_dot_fwd += grad_g_fwd[i] * f_fwd[i];
-
-  return -0.5 * ((scalar_value(g_dot_fwd) - g_dot_s) / eps) / g_dot_s;
+  if (!evt.g_dot_dot)
+    throw std::logic_error("a root event without the second time derivative of its condition");
+  return -0.5 * evt.g_dot_dot(x_before, t_event) / g_dot_s;
 }
 
 // r' = dg/dt + sum_i dg/dx_i f_i at (x, t), and the sum of its terms' sizes.
@@ -94,11 +74,10 @@ inline typename state_type::value_type root_rate(
 }
 
 // --- Helper: compute dt* for a root event (IFT + 2nd-order correction) ---
-template<class state_type, class time_type, class System>
+template<class state_type, class time_type>
 inline typename state_type::value_type compute_dt_star(
     const state_type& x_before,
     const time_type& t_event,
-    System& sys,
     const state_type& f_before,
     const RootEvent<state_type, time_type>& evt)
 {
@@ -117,8 +96,7 @@ inline typename state_type::value_type compute_dt_star(
   g_val = g_val - value_type(scalar_value(g_val));
   value_type dt_star = -g_val / g_dot;
 
-  const double c2 =
-      root_ift_curvature(x_before, t_event, sys, f_before, evt, g_dot_s);
+  const double c2 = root_ift_curvature(x_before, t_event, evt, g_dot_s);
   return dt_star + value_type(c2) * dt_star * dt_star;
 }
 
@@ -165,7 +143,7 @@ inline void saltation_root_analytical_batch(
       double terms = 0.0;
       const value_type g_dot = root_rate(evt, x_before, t_event, f_before, terms);
       if (!negligible(scalar_value(g_dot), terms)) {
-        dt_star = compute_dt_star(x_before, t_event, sys, f_before, evt);
+        dt_star = compute_dt_star(x_before, t_event, f_before, evt);
         have_dt_star = true;
       }
       break;

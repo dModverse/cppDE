@@ -91,7 +91,7 @@ static const double T0 = 0.1;
 static const double DT = 0.05;
 
 static constexpr unsigned ND = NX + NP;
-using D = dual<double, ND>;
+using D = dual<double>;
 
 using StepD = cppde::rosenbrock4<double>;
 using cp_type = cppde::reverse::step_checkpoint<StepD, double>;
@@ -105,11 +105,11 @@ static void forward_steps(unsigned n_steps, std::vector<double>& S,
                           std::vector<double>& x_end)
 {
   std::vector<D> p(NP);
-  for (std::size_t j = 0; j < NP; ++j) { p[j] = D(P[j]); p[j].diff(NX + j); }
+  for (std::size_t j = 0; j < NP; ++j) { p[j] = D(P[j]); p[j].diff(NX + j, ND); }
   auto sys = make_system<D>(p);
 
   std::vector<D> x(NX), xout(NX), xerr(NX);
-  for (std::size_t i = 0; i < NX; ++i) { x[i] = D(X0[i]); x[i].diff(i); }
+  for (std::size_t i = 0; i < NX; ++i) { x[i] = D(X0[i]); x[i].diff(i, ND); }
 
   cppde::rosenbrock4<D> st;
   st.prepare_sensitivities(ND);

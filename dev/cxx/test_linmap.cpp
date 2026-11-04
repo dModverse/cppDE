@@ -1,7 +1,7 @@
 /*
  Constant linear maps (cppde_linmap.hpp) against written-out sums.
 
- Every helper runs over double, dual<double, 3> and dual2nd<double, 3>, for a
+ Every helper runs over double, dual<double> and dual2nd<double> of width 3, for a
  compressed and a dense map with the same coefficients. The reference is the
  plain loop over the full coefficient matrix in the same element type, so the
  results must agree exactly. Values, first and some second derivatives are
@@ -41,13 +41,13 @@ static const cppde::linmap_dense DENSE{R, C, FULL};
 
 static double val(double x) { return x; }
 static double tan1(double, int) { return 0.0; }
-static double val(const dual<double, 3>& x) { return x.x(); }
-static double tan1(const dual<double, 3>& x, int k) { return x.d(k); }
-static double val(const dual2nd<double, 3>& x) { return x.x().x(); }
-static double tan1(const dual2nd<double, 3>& x, int k) { return x.d1_at(k); }
+static double val(const dual<double>& x) { return x.x(); }
+static double tan1(const dual<double>& x, int k) { return x.d(k); }
+static double val(const dual2nd<double>& x) { return x.x().x(); }
+static double tan1(const dual2nd<double>& x, int k) { return x.d1_at(k); }
 static double tan2(double, int) { return 0.0; }
-static double tan2(const dual<double, 3>&, int) { return 0.0; }
-static double tan2(const dual2nd<double, 3>& x, int k) { return x.dd_at(k, (k + 1) % 3); }
+static double tan2(const dual<double>&, int) { return 0.0; }
+static double tan2(const dual2nd<double>& x, int k) { return x.dd_at(k, (k + 1) % 3); }
 
 template<class T>
 static bool same(const T& a, const T& b) {
@@ -69,8 +69,8 @@ static void emit(const char* tag, const std::vector<T>& y) {
 }
 
 template<class T> static void seed(T&, int) {}
-static void seed(dual<double, 3>& x, int k) { x.diff(k % 3); }
-static void seed(dual2nd<double, 3>& x, int k) { x.x().diff(k % 3); x.diff(k % 3); }
+static void seed(dual<double>& x, int k) { x.diff(k % 3, 3); }
+static void seed(dual2nd<double>& x, int k) { x.x().diff(k % 3, 3); x.diff(k % 3, 3); }
 
 template<class T>
 static std::vector<T> inputs(int n, double base) {
@@ -147,16 +147,16 @@ static void run(const char* type, const char* kind, const Map& m) {
 int main() {
   run<double>("double", "csr", CSR);
   run<double>("double", "dense", DENSE);
-  run<dual<double, 3>>("dual", "csr", CSR);
-  run<dual<double, 3>>("dual", "dense", DENSE);
-  run<dual2nd<double, 3>>("dual2nd", "csr", CSR);
-  run<dual2nd<double, 3>>("dual2nd", "dense", DENSE);
+  run<dual<double>>("dual", "csr", CSR);
+  run<dual<double>>("dual", "dense", DENSE);
+  run<dual2nd<double>>("dual2nd", "csr", CSR);
+  run<dual2nd<double>>("dual2nd", "dense", DENSE);
 
   // a double map applied to a pointer target of an AD type
-  std::vector<dual<double, 3>> w = inputs<dual<double, 3>>(R, 1.5);
-  std::vector<dual<double, 3>> out(C + 2, dual<double, 3>(0.0));
+  std::vector<dual<double>> w = inputs<dual<double>>(R, 1.5);
+  std::vector<dual<double>> out(C + 2, dual<double>(0.0));
   cppde::apply_t_add(CSR, w, out);
-  dual<double, 3>* p = out.data();
+  dual<double>* p = out.data();
   cppde::axpy_row_dense(CSR, 0, w[2], p);
   emit("dual pointer target", out);
 

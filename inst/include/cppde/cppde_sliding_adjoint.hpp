@@ -10,9 +10,11 @@
  *   u = R_a^{-T} q,  q_j = df/da_j . lambda,
  *
  * and the same in the parameters. grad r'_{k,c} is the generated gradient of
- * root k's rate with the slides held at combination c. The terms of
- * the second order the Rosenbrock and refined sweeps read are central
- * differences of these pullbacks.
+ * root k's rate with the slides held at combination c. The terms of the
+ * second order the Rosenbrock and refined sweeps read differentiate these
+ * pullbacks along v or in t: the weights through da = grad a . v or da/dt,
+ * the multipliers through du = R_a^{-T} (dq - dR_a' u), and the generated
+ * second derivatives of the rates.
  *
  * Copyright (C) 2026 Simon Beyer
  */
@@ -152,7 +154,7 @@ struct sliding_adjoint {
     dfdp_t_vec_axpy(x, lam, t, sc, outp);
   }
 
-  // df/dt . lambda; da/dt by a central difference of the weights at fixed x.
+  // df/dt . lambda: the combinations' own and the change of the weights in t.
   T dfdt_dot(const Vec& x, const Vec& lam, const T& t) const {
     mix m;
     if (!prepare(x, t, m)) return adj.dfdt_dot(x, lam, t);
@@ -161,38 +163,144 @@ struct sliding_adjoint {
       const T w = cppde::detail::combo_weight(m.a, cc);
       held(m.S, cc, [&] { out = out + w * adj.dfdt_dot(x, lam, t); });
     }
-    const double h = 1e-6 * std::max(1.0, std::abs(cppde::detail::scalar_value(t)));
-    std::vector<T> up, dn;
-    if (!c->solve(m.S, x, t + T(h), up) || !c->solve(m.S, x, t - T(h), dn))
-      core_type::no_mix();
+    std::vector<T> Ga, at;
+    c->weight_derivatives(m.S, x, t, m.a, m.r, Ga, at);
     for (std::size_t j = 0; j < m.S.size(); ++j) {
       T q(0.0);
       for (std::size_t cc = 0; cc < m.fm.size(); ++cc)
         q = q + cppde::detail::combo_weight(m.a, cc, static_cast<int>(j)) * dot(m.fm[cc], lam);
-      out = out + q * (up[j] - dn[j]) / T(2.0 * h);
+      out = out + q * at[j];
     }
     return out;
   }
 
-  // The terms of the second order where a switch slides: central differences
-  // of the exact pullbacks above along v, or in t.
-  static double step(const Vec& x, const Vec& v) {
-    double n = 0.0, s = 1.0;
-    for (std::size_t i = 0; i < x.size(); ++i) {
-      n = std::max(n, std::abs(cppde::detail::scalar_value(v[i])));
-      s = std::max(s, std::abs(cppde::detail::scalar_value(x[i])));
+  // The change of the mix along v in the state (v non-null) or in t: of the
+  // weights da, of the combination weights dw[c], and of the multipliers du,
+  // with u the multipliers of lambda.
+  struct dmix {
+    std::vector<T> u, da, dw, du;
+  };
+
+  void change(const Vec& x, const Vec* v, const Vec& lam, const T& t, const mix& m,
+              dmix& d) const {
+    const std::size_t ns = m.S.size(), M = m.fm.size(), n = x.size();
+    d.u = multipliers(m, lam);
+    std::vector<T> Ga, at;
+    c->weight_derivatives(m.S, x, t, m.a, m.r, Ga, at);
+    d.da.assign(ns, T(0.0));
+    for (std::size_t k = 0; k < ns; ++k) {
+      if (!v) {
+        d.da[k] = at[k];
+        continue;
+      }
+      for (std::size_t j = 0; j < n; ++j) d.da[k] = d.da[k] + Ga[k * n + j] * (*v)[j];
     }
-    return n == 0.0 ? 0.0 : 1e-6 * s / n;
+    d.dw.assign(M, T(0.0));
+    std::vector<T> dwj(M * ns, T(0.0));
+    for (std::size_t cc = 0; cc < M; ++cc)
+      for (std::size_t i = 0; i < ns; ++i) {
+        d.dw[cc] = d.dw[cc] + cppde::detail::combo_weight(m.a, cc, static_cast<int>(i)) * d.da[i];
+        for (std::size_t j = 0; j < ns; ++j)
+          dwj[cc * ns + j] = dwj[cc * ns + j] +
+              cppde::detail::combo_weight2(m.a, cc, static_cast<int>(j), static_cast<int>(i)) * d.da[i];
+      }
+    // per combination: the change of f_c . lambda and of the rates r'_{k,c}
+    std::vector<T> dfl(M, T(0.0)), dr(ns * M, T(0.0));
+    Vec jc, gk;
+    for (std::size_t cc = 0; cc < M; ++cc)
+      held(m.S, cc, [&] {
+        if (v) {
+          zero_armed(jc, n);
+          adj.jac_t_vec(x, lam, t, jc);
+          dfl[cc] = dot(*v, jc);
+        } else {
+          dfl[cc] = adj.dfdt_dot(x, lam, t);
+        }
+        for (std::size_t k = 0; k < ns; ++k) {
+          const int ev = c->root_of[m.S[k]];
+          if (v) {
+            zero_armed(gk, n);
+            eadj.root_gdot_dx(ev, x, t, gk);
+            dr[k * M + cc] = dot(gk, *v);
+          } else {
+            dr[k * M + cc] = c->roots[ev].rate_dt(x, t);
+          }
+        }
+      });
+    // du = R_a^{-T} (dq - dR_a' u)
+    std::vector<T> rhs(ns, T(0.0)), At(ns * ns);
+    for (std::size_t j = 0; j < ns; ++j) {
+      for (std::size_t cc = 0; cc < M; ++cc)
+        rhs[j] = rhs[j] + dwj[cc * ns + j] * dot(m.fm[cc], lam) +
+                 cppde::detail::combo_weight(m.a, cc, static_cast<int>(j)) * dfl[cc];
+      for (std::size_t k = 0; k < ns; ++k) {
+        T dRa(0.0);
+        for (std::size_t cc = 0; cc < M; ++cc)
+          dRa = dRa + dr[k * M + cc] * cppde::detail::combo_weight(m.a, cc, static_cast<int>(j)) +
+                m.r[k][cc] * dwj[cc * ns + j];
+        rhs[j] = rhs[j] - dRa * d.u[k];
+      }
+    }
+    for (std::size_t k = 0; k < ns; ++k)
+      for (std::size_t j = 0; j < ns; ++j) At[j * ns + k] = m.Ra[k * ns + j];
+    cppde::detail::small_solve(At, rhs, [](const auto& q) { return cppde::detail::scalar_value(q); });
+    d.du = rhs;
   }
 
-  static Vec shifted(const Vec& x, const Vec& v, double h) {
-    Vec y(x);
-    for (std::size_t i = 0; i < x.size(); ++i) y[i] = x[i] + T(h) * v[i];
-    return y;
+  // The change of J' lambda along v (v non-null) or in t.
+  void jac_t_vec_change(const Vec& x, const Vec* v, const Vec& lam, const T& t, Vec& out) const {
+    mix m;
+    prepare(x, t, m);
+    dmix d;
+    change(x, v, lam, t, m, d);
+    const std::size_t n = x.size(), ns = m.S.size();
+    out.assign(n, T(0.0));
+    Vec jc, djc, gk, dgk;
+    for (std::size_t cc = 0; cc < m.fm.size(); ++cc) {
+      const T w = cppde::detail::combo_weight(m.a, cc);
+      held(m.S, cc, [&] {
+        zero_armed(jc, n);
+        adj.jac_t_vec(x, lam, t, jc);
+        zero_armed(djc, n);
+        if (v) adj.jvp_x_t_vec(x, *v, lam, t, djc);
+        else adj.dfdt_x_t_vec(x, lam, t, djc);
+        for (std::size_t i = 0; i < n; ++i) out[i] = out[i] + d.dw[cc] * jc[i] + w * djc[i];
+        for (std::size_t k = 0; k < ns; ++k) {
+          const int ev = c->root_of[m.S[k]];
+          zero_armed(gk, n);
+          eadj.root_gdot_dx(ev, x, t, gk);
+          zero_armed(dgk, n);
+          if (v) eadj.root_gdot_dx_jvp(ev, x, *v, t, dgk);
+          else eadj.root_gdot_dx_dt(ev, x, t, dgk);
+          for (std::size_t i = 0; i < n; ++i)
+            out[i] = out[i] - (d.du[k] * w + d.u[k] * d.dw[cc]) * gk[i] - d.u[k] * w * dgk[i];
+        }
+      });
+    }
   }
 
-  static double tstep(const T& t) {
-    return 1e-6 * std::max(1.0, std::abs(cppde::detail::scalar_value(t)));
+  // sc times the change of (df/dp)' lambda along v (v non-null) or in t, added to out.
+  void dfdp_t_vec_change(const Vec& x, const Vec* v, const Vec& lam, const T& t, const T& sc,
+                         T* out) const {
+    mix m;
+    prepare(x, t, m);
+    dmix d;
+    change(x, v, lam, t, m, d);
+    const std::size_t ns = m.S.size();
+    for (std::size_t cc = 0; cc < m.fm.size(); ++cc) {
+      const T w = cppde::detail::combo_weight(m.a, cc);
+      held(m.S, cc, [&] {
+        adj.dfdp_t_vec_axpy(x, lam, t, sc * d.dw[cc], out);
+        if (v) adj.jvp_p_t_vec_axpy(x, *v, lam, t, sc * w, out);
+        else adj.dfdt_p_t_vec_axpy(x, lam, t, sc * w, out);
+        for (std::size_t k = 0; k < ns; ++k) {
+          const int ev = c->root_of[m.S[k]];
+          eadj.root_gdot_dp_axpy(ev, x, t, T(0.0) - sc * (d.du[k] * w + d.u[k] * d.dw[cc]), out);
+          if (v) eadj.root_gdot_dp_jvp_axpy(ev, x, *v, t, T(0.0) - sc * d.u[k] * w, out);
+          else eadj.root_gdot_dp_dt_axpy(ev, x, t, T(0.0) - sc * d.u[k] * w, out);
+        }
+      });
+    }
   }
 
   void jvp_x_t_vec(const Vec& x, const Vec& v, const Vec& lam, const T& t, Vec& out) const {
@@ -200,13 +308,7 @@ struct sliding_adjoint {
       adj.jvp_x_t_vec(x, v, lam, t, out);
       return;
     }
-    const double h = step(x, v);
-    out.assign(x.size(), T(0.0));
-    if (h == 0.0) return;
-    Vec up, dn;
-    jac_t_vec(shifted(x, v, h), lam, t, up);
-    jac_t_vec(shifted(x, v, -h), lam, t, dn);
-    for (std::size_t i = 0; i < x.size(); ++i) out[i] = (up[i] - dn[i]) / T(2.0 * h);
+    jac_t_vec_change(x, &v, lam, t, out);
   }
 
   void jvp_p_t_vec_axpy(const Vec& x, const Vec& v, const Vec& lam, const T& t, const T& sc,
@@ -215,10 +317,7 @@ struct sliding_adjoint {
       adj.jvp_p_t_vec_axpy(x, v, lam, t, sc, out);
       return;
     }
-    const double h = step(x, v);
-    if (h == 0.0) return;
-    dfdp_t_vec_axpy(shifted(x, v, h), lam, t, sc / T(2.0 * h), out);
-    dfdp_t_vec_axpy(shifted(x, v, -h), lam, t, T(0.0) - sc / T(2.0 * h), out);
+    dfdp_t_vec_change(x, &v, lam, t, sc, out);
   }
 
   void dfdt_x_t_vec(const Vec& x, const Vec& lam, const T& t, Vec& out) const {
@@ -226,12 +325,7 @@ struct sliding_adjoint {
       adj.dfdt_x_t_vec(x, lam, t, out);
       return;
     }
-    const double h = tstep(t);
-    Vec up, dn;
-    jac_t_vec(x, lam, t + T(h), up);
-    jac_t_vec(x, lam, t - T(h), dn);
-    out.assign(x.size(), T(0.0));
-    for (std::size_t i = 0; i < x.size(); ++i) out[i] = (up[i] - dn[i]) / T(2.0 * h);
+    jac_t_vec_change(x, nullptr, lam, t, out);
   }
 
   void dfdt_p_t_vec_axpy(const Vec& x, const Vec& lam, const T& t, const T& sc, T* out) const {
@@ -239,9 +333,7 @@ struct sliding_adjoint {
       adj.dfdt_p_t_vec_axpy(x, lam, t, sc, out);
       return;
     }
-    const double h = tstep(t);
-    dfdp_t_vec_axpy(x, lam, t + T(h), sc / T(2.0 * h), out);
-    dfdp_t_vec_axpy(x, lam, t - T(h), T(0.0) - sc / T(2.0 * h), out);
+    dfdp_t_vec_change(x, nullptr, lam, t, sc, out);
   }
 
   // The fused matrix forms are not offered, so the sweeps take the vector forms.

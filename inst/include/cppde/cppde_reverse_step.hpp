@@ -71,16 +71,6 @@ struct has_step_snapshot<S, std::void_t<decltype(std::declval<S&>().set_step_sna
     std::declval<typename S::step_snapshot>()))>
 > : std::true_type {};
 
-// Whether a stepper scales its embedded estimate into a local error. The
-// multistepper's xerr is the raw correction and the error is that times tq[2],
-// so steps of different order are otherwise not comparable.
-template<class S, class = void>
-struct has_error_constant : std::false_type {};
-
-template<class S>
-struct has_error_constant<S, std::void_t<decltype(std::declval<const S&>().error_constant())>>
-: std::true_type {};
-
 // ----------------------------------------------------------------------------
 //  tsit5: an explicit one-step method keeps nothing across a step boundary.
 //
@@ -116,9 +106,9 @@ struct onestep_checkpoint {
 
 };
 
-template<class Value, class Resizer, class T>
-struct step_checkpoint<cppde::tsit5<Value, Resizer>, T>
-  : onestep_checkpoint<cppde::tsit5<Value, Resizer>, T> {};
+template<class Value, class T>
+struct step_checkpoint<cppde::tsit5<Value>, T>
+  : onestep_checkpoint<cppde::tsit5<Value>, T> {};
 
 // ----------------------------------------------------------------------------
 //  rosenbrock4: a one-step method too, so the same carry. Its stages are linear
@@ -126,9 +116,9 @@ struct step_checkpoint<cppde::tsit5<Value, Resizer>, T>
 //  value from the same factorisation it sweeps with, so none of them is stored.
 // ----------------------------------------------------------------------------
 
-template<class Value, class Resizer, class T>
-struct step_checkpoint<cppde::rosenbrock4<Value, Resizer>, T>
-  : onestep_checkpoint<cppde::rosenbrock4<Value, Resizer>, T>
+template<class Value, class JacobianPattern, class T>
+struct step_checkpoint<cppde::rosenbrock4<Value, JacobianPattern>, T>
+  : onestep_checkpoint<cppde::rosenbrock4<Value, JacobianPattern>, T>
 {
   // Its interpolant is built from the stages rather than read off them, so the
   // snapshot has to be taken before anything is interpolated. tsit5 needs no
@@ -146,11 +136,10 @@ struct step_checkpoint<cppde::rosenbrock4<Value, Resizer>, T>
 //  from the decisions rather than recomputed, since those are control decisions.
 // ----------------------------------------------------------------------------
 
-template<multistep_method Method, class Value, class JacobianPattern,
-         class Resizer, class T>
-struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern, Resizer>, T> {
+template<multistep_method Method, class Value, class JacobianPattern, class T>
+struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern>, T> {
   using scalar_type  = T;
-  using stepper_type = cppde::multistepper<Method, Value, JacobianPattern, Resizer>;
+  using stepper_type = cppde::multistepper<Method, Value, JacobianPattern>;
   using carry_type   = typename stepper_type::carry;
 
   static constexpr int max_order = stepper_type::max_order;
@@ -178,12 +167,6 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern, Resiz
 
   // Nordsieck slot 0, which is the state the step starts from.
   const T* start_state() const { return zn.data(); }
-
-  // The slots beyond the state, whose cotangents the previous step receives on
-  // its own carry out.
-  std::size_t n_history() const {
-    return static_cast<std::size_t>(carry.q) * n_states;
-  }
 
   void capture(const stepper_type& st, const std::vector<Value>& x_in,
                double t_in, double dt_in)

@@ -78,8 +78,6 @@ public:
   typedef typename stepper_type::value_type              time_type;
   typedef typename stepper_type::resizer_type            resizer_type;
 
-  typedef dense_output_stepper_tag stepper_category;
-
   onestep_dense_output()
     : m_stepper()
     , m_x1(), m_x2()
@@ -238,7 +236,6 @@ public:
   int n_jevals()   const { return m_stepper.n_jevals(); }
   int n_setups()   const { return m_stepper.n_setups(); }
   static constexpr int current_method_order() { return static_cast<int>(stepper_type::stepper_order); }
-  void reset_counters() { m_stepper.reset_counters(); }
 
 private:
   state_type&       get_current_state()       { return m_current_state_x1 ? m_x1.m_v : m_x2.m_v; }

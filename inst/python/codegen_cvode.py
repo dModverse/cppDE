@@ -211,12 +211,16 @@ def generate_cvode_cpp(
     # cppde_model.hold_switches).
     n_table_roots = len(root_events)
     for k, (rn, closed) in enumerate(model.switches):
+        # the rate r' = dr/dt + grad r . f, whose gradients the weights of a slide differentiate
+        rate = model.ad.lie([rn], model.rhs_plain, forcings=True)[0]
         root_events.append({
             "var_idx": -1, "mode": k, "closed": closed, "r": rn,
             "r_val": lines(ev.value(rn), " " * 6),
             "dr_dx": [(j, lines(b, " " * 10)) for j, b in ev.cases_x(rn)],
             "dr_dp": [(q, lines(b, " " * 10)) for q, b in ev.cases_p(rn)],
             "dr_dt": lines(ev.partial_t(rn), " " * 6),
+            "rate_dx": [(j, lines(b, " " * 10)) for j, b in ev.cases_x(rate)],
+            "rate_dp": [(q, lines(b, " " * 10)) for q, b in ev.cases_p(rate)],
             "direction": 0, "terminal": False,
         })
 
@@ -620,6 +624,9 @@ struct RootEvent {
   int  mode = -1;
   bool closed = false;
   std::function<double(const double* x, double t)> r_fn;
+  // For a switch, the gradients of its rate r' = dr/dt + grad r . f in x and p.
+  std::function<double(const double* x, double t, int i)> rate_dx_fn;
+  std::function<double(const double* x, double t, int k)> rate_dp_fn;
 };
 
 static std::vector<RootEvent> build_root_events(const double* params,
@@ -648,6 +655,8 @@ static std::vector<RootEvent> build_root_events(const double* params,
       (void)x; (void)t;
 {e['dr_dt']}
     }};
+    e.rate_dx_fn = {_switch_lambda(e['rate_dx'], 'i')};
+    e.rate_dp_fn = {_switch_lambda(e['rate_dp'], 'k')};
     ev.push_back(std::move(e));
   }}""")
                 continue
@@ -2859,6 +2868,12 @@ def _cv_slide_setup(sw0):
         "    if (terms) *terms = m;\n"
         "    return r;\n"
         "  };\n"
+        "  ud.slide_rate_dx = [&event_roots](int k, const double* x, double t, int i) {\n"
+        f"    return event_roots[{sw0} + k].rate_dx_fn(x, t, i);\n"
+        "  };\n"
+        "  ud.slide_rate_dp = [&event_roots](int k, const double* x, double t, int q) {\n"
+        f"    return event_roots[{sw0} + k].rate_dp_fn(x, t, q);\n"
+        "  };\n"
         "  // Whether the slides as they stand have a mix of weights in [0, 1].\n"
         "  auto cv_mixable = [&](N_Vector yv, double t) {\n"
         "    const std::vector<int> S = cppde::detail::sliding_switches();\n"
@@ -2903,6 +2918,8 @@ def _cv_slide_setup(sw0):
 _CV_SLIDE_UD = """  // Sliding (cppde_sliding.hpp): r' of switch k along f, set by the solve, f
   // of each combination of the slides, and scratch.
   std::function<double(int, const double*, double, const double*, double*)> slide_rate;
+  // the gradients of that rate in x and p, the slides as they are held
+  std::function<double(int, const double*, double, int)> slide_rate_dx, slide_rate_dp;
   std::vector<std::vector<double>> slide_fm;
   std::vector<double> slide_y, slide_tmp;
 """
@@ -2911,7 +2928,8 @@ _CV_SLIDE_CORE = """
 // ---- Sliding along switching surfaces (cppde_sliding.hpp) ----
 // While the switches S slide, f = sum_c w_c(a) f_c over the combinations c of
 // their modes, with the weights a such that r' of every root in S is zero; the
-// derivatives of a enter by central differences in x and the parameters.
+// derivatives of a in x and the parameters come from the implicit function
+// theorem on the generated gradients of the rates.
 
 // f of every combination of the slides S at (t, y), into ud->slide_fm.
 static void cv_combos(UserData* ud, const std::vector<int>& S, sunrealtype t, N_Vector y) {
@@ -2971,39 +2989,38 @@ static void cv_mix(UserData* ud, const std::vector<double>& a, double* out, int 
   }
 }
 
-// The weights at (x + h dx, p + h dp); a null direction stays put.
-static bool cv_solve_at(UserData* ud, const std::vector<int>& S, sunrealtype t, N_Vector y,
-                        const double* dx, const double* dp, double h, std::vector<double>& a) {
-  const double* x = N_VGetArrayPointer(y);
-  std::vector<double> xh(x, x + NEQ);
-  if (dx) for (int i = 0; i < NEQ; ++i) xh[i] += h * dx[i];
-  std::vector<double> keep(ud->params.begin() + NEQ, ud->params.end());
-  if (dp) for (int j = 0; j < NPAR_ADJ; ++j) ud->params[NEQ + j] += h * dp[j];
-  N_Vector yh = N_VMake_Serial(NEQ, xh.data(), y->sunctx);
-  const bool ok = cv_solve(ud, S, t, yh, a);
-  N_VDestroy(yh);
-  std::copy(keep.begin(), keep.end(), ud->params.begin() + NEQ);
-  return ok;
-}
-
-// The derivative of the weights along (dx, dp), zero along a zero direction.
+// The derivative of the weights along (dx, dp), zero along a zero direction:
+// -R_a^{-1} sum_c w_c (grad_x r'_{k,c} . dx + grad_p r'_{k,c} . dp), the slides
+// held at each combination c.
 static bool cv_slope(UserData* ud, const std::vector<int>& S, sunrealtype t, N_Vector y,
                      const double* dx, const double* dp, std::vector<double>& da) {
   const double* x = N_VGetArrayPointer(y);
-  double n = 0.0, s = 1.0;
-  if (dx) for (int i = 0; i < NEQ; ++i) {
-    n = std::max(n, std::fabs(dx[i])); s = std::max(s, std::fabs(x[i]));
+  std::vector<double> a;
+  if (!cv_solve(ud, S, t, y, a)) return false;
+  const std::size_t n = S.size(), M = std::size_t(1) << n;
+  std::vector<double> Ra(n * n, 0.0), b(n, 0.0);
+  for (std::size_t k = 0; k < n; ++k)
+    for (std::size_t c = 0; c < M; ++c) {
+      const double r = ud->slide_rate(S[k], x, t, ud->slide_fm[c].data(), nullptr);
+      for (std::size_t j = 0; j < n; ++j) Ra[k * n + j] += r * cppde::detail::combo_weight(a, c, (int)j);
+    }
+  signed char* md = cppde::switch_mode_sink().m;
+  for (std::size_t c = 0; c < M; ++c) {
+    for (std::size_t i = 0; i < n; ++i) md[S[i]] = ((c >> i) & 1u) ? 1 : 0;
+    const double w = cppde::detail::combo_weight(a, c);
+    for (std::size_t k = 0; k < n; ++k) {
+      double s = 0.0;
+      if (dx) for (int i = 0; i < NEQ; ++i)
+        if (dx[i] != 0.0) s += ud->slide_rate_dx(S[k], x, t, i) * dx[i];
+      if (dp) for (int q = 0; q < NPAR_ADJ; ++q)
+        if (dp[q] != 0.0) s += ud->slide_rate_dp(S[k], x, t, q) * dp[q];
+      b[k] += w * s;
+    }
   }
-  if (dp) for (int j = 0; j < NPAR_ADJ; ++j) {
-    n = std::max(n, std::fabs(dp[j])); s = std::max(s, std::fabs(ud->params[NEQ + j]));
-  }
-  da.assign(S.size(), 0.0);
-  if (n == 0.0) return true;
-  const double h = 1e-6 * s / n;
-  std::vector<double> up, dn;
-  if (!cv_solve_at(ud, S, t, y, dx, dp, h, up) || !cv_solve_at(ud, S, t, y, dx, dp, -h, dn))
-    return false;
-  for (std::size_t k = 0; k < S.size(); ++k) da[k] = (up[k] - dn[k]) / (2.0 * h);
+  for (int k : S) md[k] = cppde::sliding_mode;
+  cppde::detail::small_solve(Ra, b);
+  da.assign(n, 0.0);
+  for (std::size_t k = 0; k < n; ++k) da[k] = -b[k];
   return true;
 }
 

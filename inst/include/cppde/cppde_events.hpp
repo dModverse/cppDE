@@ -73,15 +73,21 @@ struct RootEvent {
   std::function<void(const state_type&, const time_type&, state_type&)> dg_dx;
   std::function<value_t(const state_type&, const time_type&)> dg_dt;
 
-  // G_tt, the second total time derivative of g along the trajectory. Scalar,
-  // because it only scales the second-order correction of dt*. A null callback
-  // falls back to a finite difference of g_dot.
+  // G_tt, the second total time derivative of g along the trajectory, by the
+  // codegen. Scalar, because it only scales the second-order correction of dt*;
+  // every root that is not terminal has one.
   std::function<double(const state_type&, const time_type&)> g_dot_dot;
 
   // A state switch of the right-hand side: the index of the mode its root sets,
   // -1 for an event. The mode holds where func > 0, or >= 0 when closed.
   int mode = -1;
   bool closed = false;
+
+  // For a state switch, the gradient in the state and the partial in t of its
+  // rate r' = dg/dt + grad g . f, by the codegen, with the modes as they are
+  // set: what the weights of a slide differentiate.
+  std::function<void(const state_type&, const time_type&, state_type&)> rate_dx;
+  std::function<value_t(const state_type&, const time_type&)> rate_dt;
 
   // The end of a slide along switch `slide_exit`'s surface, -1 otherwise: the
   // root where r' with that mode at `exit_on` reaches 0, and the solution leaves.

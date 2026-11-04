@@ -106,7 +106,6 @@ public:
       m_n_setups(0),
       m_last_dt(0.0),
       m_last_order(0),
-      m_next_order(0),
       m_t_reached(0.0) {}
 
   /**
@@ -147,10 +146,6 @@ public:
     }
   }
 
-  // --- Accessors for step counters ---
-  int no_progress_steps() const { return m_no_progress_steps; }
-  int total_steps() const { return m_total_steps; }
-
   // --- Diagnostics ---
 
   // Return code using the CVODE flag scheme (see cppde_return_codes.hpp):
@@ -158,7 +153,6 @@ public:
   //   -1 = RC_TOO_MUCH_WORK        (max steps)
   //   -4 = RC_CONV_FAILURE         (no-progress / repeated conv failures)
   //   -6 = RC_LSETUP_FAIL          (linear-solver setup failed)
-  //   -8 = RC_RHSFUNC_FAIL         (RHS function returned unrecoverable error)
   //  -99 = RC_UNRECOGNIZED_ERR     (unclassified C++ exception)
   int return_code() const { return m_return_code; }
   void set_return_code(int rc) { m_return_code = rc; }
@@ -193,10 +187,6 @@ public:
   int last_order() const { return m_last_order; }
   void set_last_order(int o) { m_last_order = o; }
 
-  // Method order to be attempted on the next step
-  int next_order() const { return m_next_order; }
-  void set_next_order(int o) { m_next_order = o; }
-
   // Time reached by the solver
   double t_reached() const { return m_t_reached; }
   void set_t_reached(double t) { m_t_reached = t; }
@@ -216,7 +206,6 @@ private:
   int    m_n_setups;
   double m_last_dt;
   int    m_last_order;
-  int    m_next_order;
   double m_t_reached;
 };
 

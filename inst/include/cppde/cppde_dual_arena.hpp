@@ -18,7 +18,7 @@
 
    void rhs(...) {
      cppde::dual_arena::scope guard;
-     // ... allocate dual<double, 0> objects via .diff(idx, n_sens) ...
+     // ... allocate dual<double> objects via .diff(idx, n_sens) ...
    }                       // <- guard destructor pops every alloc since ctor
 
  Copyright (C) 2026 Simon Beyer
@@ -170,7 +170,7 @@ public:
     }
   };
 
-  // How wide a heap dual arms itself when it has no width of its own. Without
+  // How wide a dual arms itself when it has no width of its own. Without
   // one, arm() allocates nothing and every tangent read returns the
   // out-of-bounds zero, which a backward sweep cannot survive: it zero-arms its
   // buffers before writing to them. A scope rather than a global, so the

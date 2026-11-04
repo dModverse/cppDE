@@ -42,8 +42,8 @@ static void emit(const char* tag, const D& d, unsigned n) {
 // Structural assertions: node identity and size.
 // =============================================================================
 
-using D3 = dual<double, 3>;
-using LD = ex::DualLeaf<double, 3>;
+using D3 = dual<double>;
+using LD = ex::DualLeaf<double>;
 using LS = ex::ScalarLeaf<double>;
 using Mul = ex::BinExpr<LD, LD, ex::MulOp>;
 
@@ -68,16 +68,11 @@ static_assert(!std::is_reference<
               "composite by value");
 
 // =============================================================================
-// Numerical checks, run for both materialiser families:
-// dual<T,0> (runtime slab) and dual<T,N> (compile-time slab) are separate code
-// paths in cppde_dual_expr.hpp and must both be covered.
+// Numerical checks at tangent widths 3 and 1.
 // =============================================================================
 
 template <class D>
-static void seed(D& d, unsigned idx, unsigned n) {
-  if constexpr (std::is_same<D, dual<double, 0>>::value) d.diff(idx, n);
-  else                                                   d.diff(idx, n);
-}
+static void seed(D& d, unsigned idx, unsigned n) { d.diff(idx, n); }
 
 template <class D>
 static void arithmetic_suite(const char* label, unsigned N) {
@@ -246,18 +241,14 @@ static void lifetime_stress(const char* label, unsigned N) {
 int main() {
   std::printf("# cppde expression-template harness\n");
 
-  arithmetic_suite<dual<double, 0>>("dyn", 3);
-  arithmetic_suite<dual<double, 3>>("st3", 3);
-  arithmetic_suite<dual<double, 1>>("st1", 1);
+  arithmetic_suite<dual<double>>("dyn", 3);
+  arithmetic_suite<dual<double>>("dyn1", 1);
 
-  select_suite<dual<double, 0>>("dyn", 3);
-  select_suite<dual<double, 3>>("st3", 3);
+  select_suite<dual<double>>("dyn", 3);
 
-  aliasing_suite<dual<double, 0>>("dyn", 3);
-  aliasing_suite<dual<double, 3>>("st3", 3);
+  aliasing_suite<dual<double>>("dyn", 3);
 
-  lifetime_stress<dual<double, 0>>("dyn", 3);
-  lifetime_stress<dual<double, 3>>("st3", 3);
+  lifetime_stress<dual<double>>("dyn", 3);
 
   std::printf("# failures: %d\n", g_failures);
   return g_failures == 0 ? 0 : 1;

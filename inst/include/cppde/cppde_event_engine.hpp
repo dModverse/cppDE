@@ -185,7 +185,6 @@ public:
  // Called at every jump the dense loop applies, with the state on both sides of
  // it. Unset, the state is not even copied.
  void set_event_observer(EventObserver f) { m_event_obs = std::move(f); }
- bool watching_events() const { return static_cast<bool>(m_event_obs); }
 
  cppde::profiler& get_profiler() const {
    if constexpr (has_controlled_stepper_method<Stepper>::value) {

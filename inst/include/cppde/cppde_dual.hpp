@@ -1,22 +1,16 @@
 /*
- cppde::dual<T, N>: first-order forward-mode AD type.
+ cppde::dual<T>: first-order forward-mode AD type with a runtime tangent width.
 
- Both static-N (N > 0) and dynamic-N (N == 0) specs share a single storage
- strategy: `T* tan_;` pointing either at a row of an externally-owned
+ Storage is `T* tan_;` pointing either at a row of an externally-owned
  cppde::detail::tangent_slab block (set via rebind_storage), or at a buffer
  obtained from the thread-local cppde::dual_arena. Per-RHS-eval allocation
  cost for temporaries is a bump-pointer increment; rolled back LIFO via a
  cppde::dual_arena::scope guard at the RHS body level. Storage layout in
- std::vector<dual<T, N>> is therefore SoA at the tangent level (rows of one
+ std::vector<dual<T>> is therefore SoA at the tangent level (rows of one
  contiguous slab), enabling BLAS daxpy/dscal across the tangent block.
 
- The only structural difference between the two specs is that the static-N
- primary template has no runtime size_ field: N is a compile-time constant
- used as the loop bound (constexpr-foldable for unrolling / SIMD).
-
  Provides the standard accessor surface used by codegen output:
- `.x()`, `.diff(idx)`, `.diff(idx, n)`, `.d(j)`, `.size()`, `.depend()`,
- `operator[]`.
+ `.x()`, `.diff(idx, n)`, `.d(j)`, `.size()`, `.depend()`, `operator[]`.
 
  This header defines the data class only. Arithmetic operators and math
  functions (eager path, gated to nested-AD T only) live in
@@ -70,266 +64,17 @@ inline T* arena_alloc_t(std::size_t n) {
 } // namespace detail
 
 // =============================================================================
-// Primary template: static N, the compile-time tangent width (N == 0 below).
-//
-// tan_ points either into a tangent_slab row after rebind_storage, or into an
-// arena buffer for temporaries. N is the loop bound, not inline storage, which
-// is what lets this specialisation share the dynamic one's SoA layout.
+// dual<T>: the tangent width is a runtime size_, set by the first diff(),
+// set_depend_size() or rebind_storage().
 // =============================================================================
-template<class T = double, unsigned N = 0>
+template<class T = double>
 class dual {
-  static_assert(N > 0, "primary template requires N > 0; N == 0 is specialized");
-
-  T    val_;
-  T*   tan_;
-  bool depend_;
-
-public:
-  using value_type   = T;
-  static constexpr unsigned static_size = N;
-
-  // -- constructors -----------------------------------------------------------
-  dual() : val_(), tan_(nullptr), depend_(false) {}
-
-  template<class U,
-           std::enable_if_t<std::is_convertible_v<U, T>, int> = 0>
-  dual(const U& v) : val_(static_cast<T>(v)), tan_(nullptr), depend_(false) {}
-
-  dual(const dual& o) : val_(o.val_), tan_(nullptr), depend_(false) {
-    if (o.depend_) {
-      depend_ = true;
-      tan_    = detail::arena_alloc_t<T>(N);
-      for (unsigned i = 0; i < N; ++i) tan_[i] = o.tan_[i];
-    }
-  }
-
-  dual& operator=(const dual& o) {
-    if (this == &o) return *this;
-    val_ = o.val_;
-    if (o.depend_) {
-      if (tan_ == nullptr) tan_ = detail::arena_alloc_t<T>(N);
-      depend_ = true;
-      for (unsigned i = 0; i < N; ++i) tan_[i] = o.tan_[i];
-    } else {
-      // Non-depend source: zero the tangents but keep the binding, so a later
-      // .diff() or ET assignment reuses the buffer. depend_ goes to false, as in
-      // operator=(const U&).
-      if (tan_ != nullptr) {
-        for (unsigned i = 0; i < N; ++i) tan_[i] = T();
-      }
-      depend_ = false;
-    }
-    return *this;
-  }
-
-  template<class U,
-           std::enable_if_t<std::is_convertible_v<U, T>, int> = 0>
-  dual& operator=(const U& v) {
-    val_ = static_cast<T>(v);
-    // Keep the tan_ buffer and zero its values, as dual<T,0> does. Without it a
-    // slab-bound dual would lose its binding on every `dual = scalar`, which is
-    // what the codegen does when it re-seeds the state.
-    if (tan_ != nullptr) {
-      for (unsigned i = 0; i < N; ++i) tan_[i] = T();
-    }
-    depend_ = false;
-    return *this;
-  }
-
-  // Move steals tan_ instead of allocating and copying, which is what makes
-  // `dxdt[i] = a + b + c` cheap. Both moves are declared explicitly because the
-  // copy assignment operator suppresses the implicit ones.
-  dual(dual&& o) noexcept
-    : val_(std::move(o.val_)), tan_(o.tan_), depend_(o.depend_)
-  {
-    o.tan_    = nullptr;
-    o.depend_ = false;
-  }
-  dual& operator=(dual&& o) noexcept {
-    if (this == &o) return *this;
-    val_ = std::move(o.val_);
-    if (o.depend_) {
-      if (tan_ == nullptr) {
-        // Steal: cheap path, no allocation, no copy.
-        tan_      = o.tan_;
-        depend_   = true;
-        o.tan_    = nullptr;
-        o.depend_ = false;
-      } else {
-        // Pre-existing tangent buffer (likely slab-bound): copy values into
-        // it. This preserves address stability for callers that hold
-        // references to our tangent storage (slab is the canonical case).
-        for (unsigned i = 0; i < N; ++i) tan_[i] = std::move(o.tan_[i]);
-        depend_ = true;
-      }
-    } else if (tan_ != nullptr) {
-      // A non-depend right-hand side zeroes the tangents of an existing buffer,
-      // as copy assignment does, so no stale derivative survives.
-      for (unsigned i = 0; i < N; ++i) tan_[i] = T();
-      depend_ = false;
-    } else {
-      depend_ = false;
-    }
-    return *this;
-  }
-
-  // -- accessors --------------------------------------------------------------
-  const T& x()   const { return val_; }
-  T&       x()         { return val_; }
-  const T& val() const { return val_; }   // .x() alias
-  T&       val()       { return val_; }
-
-  unsigned size()   const { return depend_ ? N : 0u; }
-  bool     depend() const { return depend_; }
-  // Loop bound for use INSIDE arithmetic operators after set_depend_from*().
-  // Returns the compile-time constant N (constexpr-foldable for unrolling /
-  // SIMD vectorisation). The runtime-checked size() is for callers that
-  // need to honour the depend_ state.
-  static constexpr unsigned loop_size() { return N; }
-
-  // Returns mutable reference, even when out-of-bounds or !depend
-  // (returns ref to a thread-local zero). Codegen sometimes does
-  // `dual.d(j) = value` after .diff(idx) seeding.
-  T& d(unsigned j) {
-    if (!depend_ || j >= N) {
-      thread_local T zero{};
-      zero = T();
-      return zero;
-    }
-    return tan_[j];
-  }
-  const T& d(unsigned j) const {
-    if (!depend_ || j >= N) {
-      thread_local T zero{};
-      zero = T();
-      return zero;
-    }
-    return tan_[j];
-  }
-
-  // Direct tangent access (caller must have called .diff() / set_depend_size()
-  // first to ensure tan_ is allocated; otherwise this dereferences nullptr).
-  const T& operator[](unsigned j) const { return tan_[j]; }
-  T&       operator[](unsigned j)       { return tan_[j]; }
-
-  // -- seeding ---------------------------------------------------------------
-  // Activate this dual as the idx-th independent variable: tan_[idx]=1, rest=0.
-  T& diff(unsigned idx) {
-    assert(idx < N && "diff(idx): idx out of compile-time bound N");
-    if (tan_ == nullptr) tan_ = detail::arena_alloc_t<T>(N);
-    depend_ = true;
-    for (unsigned i = 0; i < N; ++i) tan_[i] = T();
-    tan_[idx] = T(1);
-    return tan_[idx];
-  }
-  // 2-arg form (kept for API uniformity with the dynamic spec): n must
-  // equal N at compile time.
-  T& diff(unsigned idx, unsigned n) {
-    assert(n == N && "diff(idx, n): n must equal compile-time N");
-    (void)n;
-    return diff(idx);
-  }
-
-  // Internal: mark this dual as having an active tangent vector without
-  // initializing values (operators / ET fill the tangents themselves). If
-  // tan_ has not been bound yet, allocate a fresh buffer from the arena.
-  void set_depend() {
-    if (tan_ == nullptr) tan_ = detail::arena_alloc_t<T>(N);
-    depend_ = true;
-  }
-
-  // Allocate-without-init helper used by the ET path (mirrors the dual<T,0>
-  // member of the same name). The 0-arg form is the natural one for static-N
-  // (size is the template parameter); the 1-arg form keeps API parity with
-  // the dynamic spec for shared ET callers: n must equal N.
-  void set_depend_size() { set_depend(); }
-  void set_depend_size(unsigned n) {
-    assert(n == N && "dual<T,N>::set_depend_size(n): n must equal compile-time N");
-    (void)n;
-    set_depend();
-  }
-
-  // Bind a zeroed tangent buffer now, without claiming a dependence. A callee
-  // that opens its own dual_arena::scope and writes here would otherwise
-  // allocate inside that scope, and the buffer would be reclaimed when it
-  // pops; with one already bound the write reuses it. The slab does this for
-  // the stepper's own buffers; this is the same guarantee for a caller's.
-  void arm() {
-    if (tan_ == nullptr) tan_ = detail::arena_alloc_t<T>(N);
-    for (unsigned i = 0; i < N; ++i) tan_[i] = T();
-  }
-
-  // Non-allocating bind onto an externally owned buffer, typically a row of
-  // tangent_slab. The dual never frees tan_, so the owner has to outlive it.
-  // depend_ goes to true: a slab-bound dual is always active.
-  void rebind_storage(T* p, unsigned n) noexcept {
-    assert(n == N && "dual<T,N>::rebind_storage: n must equal compile-time N");
-    (void)n;
-    tan_    = p;
-    depend_ = true;
-  }
-
-  void set_depend_from(const dual&)              { set_depend(); }
-  void set_depend_from(const dual&, const dual&) { set_depend(); }
-
-  // Compound assignment operators (defined inline via free + / - / * / /).
-  dual& operator+=(const dual& o);
-  dual& operator-=(const dual& o);
-  dual& operator*=(const dual& o);
-  dual& operator/=(const dual& o);
-  template<class U,
-           std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-  dual& operator+=(const U& v) { val_ += static_cast<T>(v); return *this; }
-  template<class U,
-           std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-  dual& operator-=(const U& v) { val_ -= static_cast<T>(v); return *this; }
-  template<class U,
-           std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-  dual& operator*=(const U& v) {
-    val_ *= static_cast<T>(v);
-    if (depend_) for (unsigned i = 0; i < N; ++i) tan_[i] *= static_cast<T>(v);
-    return *this;
-  }
-  template<class U,
-           std::enable_if_t<std::is_arithmetic_v<U>, int> = 0>
-  dual& operator/=(const U& v) {
-    val_ /= static_cast<T>(v);
-    if (depend_) for (unsigned i = 0; i < N; ++i) tan_[i] /= static_cast<T>(v);
-    return *this;
-  }
-
-  // -- expression-template assignment / construction --------------------------
-  // Materialises an Expr<D> tree straight into tan_: value first, then one
-  // allocation if not yet bound, then the tangent loop over the constant N.
-  // Definitions live in cppde_dual_expr.hpp, once Expr<D> is complete.
-  template<class D>
-  dual& operator=(const dual_expr::Expr<D>& e);
-
-  template<class D>
-  dual(const dual_expr::Expr<D>& e);
-
-  template<class D>
-  dual& operator+=(const dual_expr::Expr<D>& e);
-  template<class D>
-  dual& operator-=(const dual_expr::Expr<D>& e);
-  template<class D>
-  dual& operator*=(const dual_expr::Expr<D>& e);
-  template<class D>
-  dual& operator/=(const dual_expr::Expr<D>& e);
-};
-
-// =============================================================================
-// Partial specialization: dynamic N (arena-backed storage).
-// =============================================================================
-template<class T>
-class dual<T, 0> {
   T*       tan_;
   unsigned size_;
   T        val_;
 
 public:
   using value_type   = T;
-  static constexpr unsigned static_size = 0;
 
   // -- constructors -----------------------------------------------------------
   dual() : tan_(nullptr), size_(0), val_() {}
@@ -354,7 +99,7 @@ public:
         size_ = o.size_;
         tan_  = detail::arena_alloc_t<T>(size_);
       }
-      assert(size_ == o.size_ && "dual<T,0>: tangent-vector size mismatch");
+      assert(size_ == o.size_ && "dual: tangent-vector size mismatch");
       for (unsigned i = 0; i < size_; ++i) tan_[i] = o.tan_[i];
     } else if (size_ > 0) {
       for (unsigned i = 0; i < size_; ++i) tan_[i] = T();
@@ -395,7 +140,7 @@ public:
       } else {
         // Pre-existing tangent buffer: copy values into it (preserves
         // address stability for callers that hold references).
-        assert(size_ == o.size_ && "dual<T,0>: tangent-vector size mismatch in move-assign");
+        assert(size_ == o.size_ && "dual: tangent-vector size mismatch in move-assign");
         for (unsigned i = 0; i < size_; ++i) tan_[i] = std::move(o.tan_[i]);
       }
     } else if (size_ > 0) {
@@ -436,7 +181,7 @@ public:
 
   unsigned size()   const { return size_; }
   bool     depend() const { return size_ != 0; }
-  // Mirrors dual<T,N>::loop_size() for the dynamic spec: see comment there.
+  // Loop bound inside the arithmetic operators, after set_depend_from*().
   unsigned loop_size() const { return size_; }
 
   // Mutable + const overloads, both returning a reference.
@@ -481,12 +226,13 @@ public:
       size_ = n;
       tan_  = detail::arena_alloc_t<T>(n);
     } else {
-      assert(size_ == n && "dual<T,0>: tangent size mismatch");
+      assert(size_ == n && "dual: tangent size mismatch");
     }
   }
 
-  // As the static-N form, plus: a dual with no width of its own takes the one
-  // the caller declared, if any. Without one it has nothing to bind.
+  // Bind a zeroed tangent buffer now, without claiming a dependence, so a write
+  // inside a callee's own dual_arena::scope reuses it instead of allocating there.
+  // A dual with no width of its own takes the caller's declared one, if any.
   void arm() {
     if (size_ == 0) {
       const unsigned w = dual_arena::default_tangent_width();
@@ -499,8 +245,7 @@ public:
   }
 
   // Non-allocating bind onto an externally owned buffer, typically a row of
-  // tangent_slab. As in the arena-backed case the dual never frees tan_, so the
-  // owner has to keep it alive.
+  // tangent_slab. The dual never frees tan_, so the owner has to keep it alive.
   void rebind_storage(T* p, unsigned n) noexcept {
     tan_  = p;
     size_ = n;
@@ -544,11 +289,10 @@ public:
 // value_of for the first-order dual: peel to the innermost scalar. Nested T
 // recurses through the same overload set.
 // =============================================================================
-template<class T, unsigned N>
-inline auto value_of(const dual<T, N>& d) { return value_of(d.x()); }
+template<class T>
+inline auto value_of(const dual<T>& d) { return value_of(d.x()); }
 
-// dual2nd<T, N>, a refinement of dual<dual<T, N>, N>, lives in
-// cppde_dual2nd.hpp.
+// dual2nd<T>, a refinement of dual<dual<T>>, lives in cppde_dual2nd.hpp.
 
 } // namespace cppde
 

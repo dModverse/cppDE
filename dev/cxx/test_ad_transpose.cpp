@@ -38,7 +38,7 @@ static void close(double a, double b, const std::string& what,
 }
 
 static constexpr unsigned N = 3;      // derivative directions
-using D = dual<double, N>;
+using D = dual<double>;
 
 // A matrix that is not symmetric, is well conditioned, and whose every entry
 // has a different tangent, so a transpose that acts on the wrong index
@@ -50,7 +50,7 @@ static void fill(cppde::dense_matrix<D>& W, int n) {
       const double v = (i == j) ? (4.0 + 0.5 * i) : (0.3 * (i + 1) - 0.2 * j);
       D e(v);
       for (unsigned k = 0; k < N; ++k)
-        e.diff(k) = 0.01 * (i + 1) * (j + 2) * (k + 1);
+        e.diff(k, N) = 0.01 * (i + 1) * (j + 2) * (k + 1);
       W(i, j) = e;
     }
 }
@@ -85,7 +85,7 @@ static void run(int n) {
   std::vector<D> b0(n), b(n), b2(n);
   for (int i = 0; i < n; ++i) {
     D e(1.0 + 0.7 * i);
-    for (unsigned k = 0; k < N; ++k) e.diff(k) = 0.05 * (i + 1) - 0.02 * k;
+    for (unsigned k = 0; k < N; ++k) e.diff(k, N) = 0.05 * (i + 1) - 0.02 * k;
     b0[i] = e;
     b[i] = e;
     b2[i] = e;

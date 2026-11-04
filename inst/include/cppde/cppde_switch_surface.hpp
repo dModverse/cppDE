@@ -57,6 +57,19 @@ V combo_weight(const std::vector<V>& a, std::size_t c, int d = -1) {
   return w;
 }
 
+// The second derivative of the weight of combination c in a_d and a_e, zero for d = e.
+template<class V>
+V combo_weight2(const std::vector<V>& a, std::size_t c, int d, int e) {
+  if (d == e) return V(0.0);
+  V w(1.0);
+  for (std::size_t i = 0; i < a.size(); ++i) {
+    const bool on = (c >> i) & 1u;
+    if (static_cast<int>(i) == d || static_cast<int>(i) == e) w = w * V(on ? 1.0 : -1.0);
+    else w = w * (on ? a[i] : V(1.0) - a[i]);
+  }
+  return w;
+}
+
 // x = A^{-1} b for a small dense A, row-major, by elimination with pivoting on
 // the values `val` reads.
 template<class V, class Val>

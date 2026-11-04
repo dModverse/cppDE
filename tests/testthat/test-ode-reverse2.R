@@ -174,7 +174,7 @@ test_that("every direction runs on the heap and blocks ride one grid", {
   # has to hold is that a Hessian assembled from blocks of directions, each a
   # different runtime width, is the one a single pass gives.
   #
-  # The trap is silent: a heap dual with no width cannot arm, and a tangent read
+  # The trap is silent: a dual with no width cannot arm, and a tangent read
   # off an unarmed one returns the out-of-bounds zero, which leaves the gradient
   # bit-identical and the Hessian wrong. Measure the curvature, not just the
   # cotangent.

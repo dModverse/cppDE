@@ -19,3 +19,12 @@ main p, main li, main dd {
   text-align: justify;
   hyphens: auto;
 }
+
+/* Display math wider than the text column scrolls inside it instead of running over the margin. */
+mjx-container[display="true"] {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}
