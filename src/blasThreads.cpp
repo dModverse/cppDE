@@ -41,11 +41,17 @@ extern "C" SEXP cppde_blas_info(void) {
 }
 
 extern "C" SEXP cppde_ptc(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern "C" int cppde_ptc_v1(void (*)(double*, double*, double*, double*, double*, double*, int*, int*,
+                                     int*, int*, int*),
+                            int, int, int, double*, const double*, int, const int*, const int*, int,
+                            const double*, const double*, const double*, int, int*, char*, int);
+extern "C" SEXP cppde_ptc_entry(void);
 extern "C" SEXP cppde_forcing_values(SEXP, SEXP, SEXP);
 
 static const R_CallMethodDef callMethods[] = {
   {"cppde_blas_info", (DL_FUNC) &cppde_blas_info, 0},
   {"cppde_ptc",       (DL_FUNC) &cppde_ptc,       9},
+  {"cppde_ptc_entry", (DL_FUNC) &cppde_ptc_entry, 0},
   {"cppde_forcing_values", (DL_FUNC) &cppde_forcing_values, 3},
   {NULL, NULL, 0}
 };
@@ -53,5 +59,6 @@ static const R_CallMethodDef callMethods[] = {
 extern "C" void R_init_cppDE(DllInfo* dll) {
   R_registerRoutines(dll, NULL, callMethods, NULL, NULL);
   R_useDynamicSymbols(dll, FALSE);
+  R_RegisterCCallable("cppDE", "cppde_ptc_v1", (DL_FUNC) &cppde_ptc_v1);
   guard_installed = cppde::detail::install_blas_fork_guard();
 }

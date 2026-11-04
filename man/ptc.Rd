@@ -45,13 +45,22 @@ they must start positive.}
 measured against \code{reltol} times its turnover
 \eqn{\sum_k |\partial f_i / \partial x_k|\, |x_k|}{
   sum_k |df_i/dx_k| |x_k|} plus \code{abstol} times its largest Jacobian
-entry. The old names \code{rtol} and \code{atol} are
-deprecated.
+entry. Newton steps from there, while they contract, bring each
+variable to within \code{reltol * (abs(x) + abstol)} of the root.
 \item \code{flowTol} (\code{1}): relative local error of a pseudo-time step.
-\item \code{maxit} (\code{400}): maximum number of iterations.
+\item \code{maxit} (\code{400}): maximum number of iterations of one descent; a continuation
+from an unstable root starts another.
 \item \code{dtInit} (\code{1e-2}): the first pseudo-time step, relative to the fastest
 rate if \code{flow = TRUE}.
 \item \code{zmax} (\code{5}): the largest change of the logarithm of a variable per step.
+\item \code{stability} (\code{TRUE}): with \code{flow = TRUE}, a root must be stable on the
+kernel of \code{C}. From an unstable one the search continues along its
+unstable direction, first to the side the iterates came from.
+\item \code{stabilityTol} (\code{0}): with \code{stability}, a root counts as stable while the
+real part of its leading eigenvalue on the kernel of \code{C} is at most
+\code{stabilityTol}. A small positive value accepts a state that leaves the
+root more slowly than a time scale of interest, such as near a Hopf
+bifurcation.
 }}
 }
 \value{
@@ -62,7 +71,8 @@ A list with the named solution \code{x} (all variables), \code{converged},
 Solves \eqn{f(x, p) = 0} for variables of a \code{\link[=cppFUN]{cppFUN()}} model, one output per
 solved variable, optionally under linear constraints \eqn{C x = total}.
 \code{flow = TRUE} follows the ODE flow to a stable steady state; \code{flow = FALSE}
-returns any regular root.
+returns any regular root. The result depends only on the start, the
+parameters and the controls.
 }
 \examples{
 \donttest{

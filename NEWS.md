@@ -1,3 +1,19 @@
+# cppDE 0.13.5
+
+* `ptc()` ends with Newton steps until every solved variable is within
+  `reltol * (abs(x) + abstol)` of the root, so that a variable many orders below the others is
+  resolved relative to itself and the root within one basin does not depend on the start.
+
+* With `flow = TRUE`, `ptc()` returns a stable steady state: at an unstable root it continues
+  along the unstable direction; `controls = list(stability = FALSE)` accepts any root of the
+  flow. `controls = list(stabilityTol = )` counts a root as stable while the real part of its
+  leading eigenvalue on the kernel of `C` is at most `stabilityTol`, default 0.
+
+* The solver of `ptc()` is available to the compiled code of other packages through
+  `R_GetCCallable("cppDE", "cppde_ptc_v1")`, safe in threads; its signature is in `src/ptc.cpp`.
+
+* `ptc()` takes the tolerances as `reltol` and `abstol` only.
+
 # cppDE 0.13.4
 
 * `solveODE()` with `deriv2 = TRUE` and a `tangent` but no `hessian` takes the

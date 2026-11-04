@@ -4,7 +4,8 @@
 #' Solves \eqn{f(x, p) = 0} for variables of a [cppFUN()] model, one output per
 #' solved variable, optionally under linear constraints \eqn{C x = total}.
 #' `flow = TRUE` follows the ODE flow to a stable steady state; `flow = FALSE`
-#' returns any regular root.
+#' returns any regular root. The result depends only on the start, the
+#' parameters and the controls.
 #'
 #' @param fun A compiled [cppFUN()] object with forward derivatives.
 #' @param x Named numeric, values of all variables of `fun`. The solved
@@ -24,13 +25,22 @@
 #'     measured against `reltol` times its turnover
 #'     \eqn{\sum_k |\partial f_i / \partial x_k|\, |x_k|}{
 #'     sum_k |df_i/dx_k| |x_k|} plus `abstol` times its largest Jacobian
-#'     entry. The old names `rtol` and `atol` are
-#'     deprecated.
+#'     entry. Newton steps from there, while they contract, bring each
+#'     variable to within `reltol * (abs(x) + abstol)` of the root.
 #'   * `flowTol` (`1`): relative local error of a pseudo-time step.
-#'   * `maxit` (`400`): maximum number of iterations.
+#'   * `maxit` (`400`): maximum number of iterations of one descent; a continuation
+#'     from an unstable root starts another.
 #'   * `dtInit` (`1e-2`): the first pseudo-time step, relative to the fastest
 #'     rate if `flow = TRUE`.
 #'   * `zmax` (`5`): the largest change of the logarithm of a variable per step.
+#'   * `stability` (`TRUE`): with `flow = TRUE`, a root must be stable on the
+#'     kernel of `C`. From an unstable one the search continues along its
+#'     unstable direction, first to the side the iterates came from.
+#'   * `stabilityTol` (`0`): with `stability`, a root counts as stable while the
+#'     real part of its leading eigenvalue on the kernel of `C` is at most
+#'     `stabilityTol`. A small positive value accepts a state that leaves the
+#'     root more slowly than a time scale of interest, such as near a Hopf
+#'     bifurcation.
 #' @return A list with the named solution `x` (all variables), `converged`,
 #'   `iterations` and `message`.
 #' @references Kelley CT, Keyes DE (1998). Convergence analysis of
@@ -56,8 +66,9 @@ ptc <- function(fun, x, parms, solve = names(x), rows = solve, C = NULL, total =
     C <- C[, solve, drop = FALSE]
     if (length(total) != nrow(C)) stop("'total' needs one value per row of 'C'")
   }
-  def <- list(reltol = 1e-10, abstol = 1e-14, flowTol = 1, maxit = 400L, dtInit = 1e-2, zmax = 5)
-  controls <- .renamedControls(as.list(controls), c(rtol = "reltol", atol = "abstol"))
+  def <- list(reltol = 1e-10, abstol = 1e-14, flowTol = 1, maxit = 400L, dtInit = 1e-2, zmax = 5,
+              stability = TRUE, stabilityTol = 0)
+  controls <- as.list(controls)
   bad <- setdiff(names(controls), names(def))
   if (length(bad)) stop("unknown controls: ", toString(bad))
   ctrl <- utils::modifyList(def, controls)
@@ -79,20 +90,6 @@ ptc <- function(fun, x, parms, solve = names(x), rows = solve, C = NULL, total =
   list(x = xo, converged = res$converged, iterations = res$iterations, message = res$message)
 }
 
-
-# `controls` with deprecated names replaced by their new ones, `map` giving the
-# new name for each old one. Warns once per call; both names at once is an
-# error.
-.renamedControls <- function(controls, map) {
-  old <- intersect(names(controls), names(map))
-  if (!length(old)) return(controls)
-  clash <- intersect(map[old], names(controls))
-  if (length(clash))
-    stop("give ", toString(sQuote(clash, FALSE)), " only; ",
-         toString(sQuote(old[map[old] %in% clash], FALSE)),
-         " is deprecated", call. = FALSE)
-  warning("deprecated control ", toString(sQuote(old, FALSE)), "; use ",
-          toString(sQuote(map[old], FALSE)), call. = FALSE)
-  names(controls)[match(old, names(controls))] <- map[old]
-  controls
-}
+# The solver behind ptc() as an external pointer to its C entry cppde_ptc_v1, for packages that
+# call it from compiled code; the signature is documented in src/ptc.cpp.
+.ptcEntry <- function() .Call(C_cppde_ptc_entry)

@@ -13,12 +13,16 @@ mods <- list(
               parameters = c("k0", "k1", "K", "d"), modelname = "ptc_bi", compile = FALSE),
   sq = cppFUN(c(x = "x^2 - a"), variables = "x", parameters = "a",
               modelname = "ptc_sq", compile = FALSE),
+  ti = cppFUN(c(F = "kf * (1 - F)", S = "ks * F - kd * S"), variables = c("F", "S"),
+              parameters = c("kf", "ks", "kd"), modelname = "ptc_ti", compile = FALSE),
   sc = cppFUN(c(small = "ks - d * small", big = "kb - d * big", fix = "0"),
               variables = c("small", "big", "fix"), parameters = c("ks", "kb", "d"),
               modelname = "ptc_sc", compile = FALSE),
   rt = cppFUN(c(slow = "ks - kslow * slow", fast = "kf - kfast * fast"),
               variables = c("slow", "fast"), parameters = c("ks", "kslow", "kf", "kfast"),
-              modelname = "ptc_rt", compile = FALSE)
+              modelname = "ptc_rt", compile = FALSE),
+  fo = cppFUN(c(x = "a * (x - 1) - (y - 1)", y = "(x - 1) + a * (y - 1)"), variables = c("x", "y"),
+              parameters = "a", modelname = "ptc_fo", compile = FALSE)
 )
 do.call(compile, c(unname(mods), list(output = "test_ptc", cores = test_cores())))
 
@@ -45,6 +49,40 @@ test_that("ptc follows the flow into the basin it starts in", {
   hi <- uniroot(f, c(1, 3), tol = 1e-14)$root
   expect_equal(ptc(mods$bi, c(X = 0.8 * mi), p)$x[["X"]], lo, tolerance = 1e-8)
   expect_equal(ptc(mods$bi, c(X = 1.2 * mi), p)$x[["X"]], hi, tolerance = 1e-8)
+})
+
+test_that("ptc leaves an unstable root to the side it came from", {
+  p  <- c(k0 = 0.02, k1 = 1, K = 1, d = 0.4)
+  f  <- function(x) p[["k0"]] + p[["k1"]] * x^2 / (p[["K"]]^2 + x^2) - p[["d"]] * x
+  lo <- uniroot(f, c(0.01, 0.1), tol = 1e-14)$root
+  mi <- uniroot(f, c(0.1, 1), tol = 1e-14)$root
+  hi <- uniroot(f, c(1, 3), tol = 1e-14)$root
+  for (s in c(0.99, 0.999)) {
+    r <- ptc(mods$bi, c(X = s * mi), p)
+    expect_true(r$converged)
+    expect_equal(r$x[["X"]], lo, tolerance = 1e-8)
+  }
+  for (s in c(1.001, 1.01, 1.1)) expect_equal(ptc(mods$bi, c(X = s * mi), p)$x[["X"]], hi, tolerance = 1e-8)
+  r <- ptc(mods$bi, c(X = 1.01 * mi), p, controls = list(stability = FALSE))
+  expect_equal(r$x[["X"]], mi, tolerance = 1e-8)
+})
+
+test_that("ptc accepts an unstable root whose growth is below stabilityTol", {
+  p <- c(a = 1e-3)
+  expect_false(ptc(mods$fo, c(x = 1.01, y = 0.99), p)$converged)
+  r <- ptc(mods$fo, c(x = 1.01, y = 0.99), p, controls = list(stabilityTol = 2e-3))
+  expect_true(r$converged)
+  expect_equal(unname(r$x[c("x", "y")]), c(1, 1), tolerance = 1e-8)
+})
+
+test_that("ptc brings a tiny state to its relative tolerance from any start", {
+  # a tiny state meets the residual test long before it is accurate
+  p <- c(kf = 4, ks = 3e-14, kd = 0.03)
+  for (x0 in c(1, 1e-3)) {
+    r <- ptc(mods$ti, x = c(F = x0, S = x0), parms = p)
+    expect_true(r$converged)
+    expect_lt(abs(r$x[["S"]] / 1e-12 - 1), 1e-9)
+  }
 })
 
 test_that("ptc resolves states fifteen orders apart and holds unsolved ones", {
@@ -83,14 +121,10 @@ test_that("ptc reports what it could not do", {
                    controls = list(tol = 1)), "unknown controls: tol")
 })
 
-test_that("ptc takes reltol and abstol, and the old names with one warning", {
+test_that("ptc takes reltol and abstol only", {
   p <- c(k_in = 2, k_out = 0.5)
-  new <- ptc(mods$pd, x = c(A = 1), parms = p,
-             controls = list(reltol = 1e-8, abstol = 1e-12))
-  expect_warning(old <- ptc(mods$pd, x = c(A = 1), parms = p,
-                            controls = list(rtol = 1e-8, atol = 1e-12)),
-                 "deprecated control")
-  expect_identical(old, new)
-  expect_error(ptc(mods$pd, x = c(A = 1), parms = p,
-                   controls = list(rtol = 1e-8, reltol = 1e-8)), "only")
+  r <- ptc(mods$pd, x = c(A = 1), parms = p, controls = list(reltol = 1e-8, abstol = 1e-12))
+  expect_equal(r$x[["A"]], 4, tolerance = 1e-8)
+  expect_error(ptc(mods$pd, x = c(A = 1), parms = p, controls = list(rtol = 1e-8)),
+               "unknown controls: rtol")
 })
