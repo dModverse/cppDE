@@ -1,4 +1,5 @@
 # Generated from src/Makevars.in by ./configure.  @DLLIB@ is -ldl where dlsym()
 # is not in libc, which is glibc before 2.34.
 PKG_CPPFLAGS = -I../inst/include
-PKG_LIBS = @DLLIB@ $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
+PKG_LIBS = @DLLIB@ $(SHLIB_OPENMP_CXXFLAGS) $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)

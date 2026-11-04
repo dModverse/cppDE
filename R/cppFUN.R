@@ -667,6 +667,12 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
                            if (deriv2) "_eval_ad2_batch" else "_eval_ad_batch"))
   if (is.null(sym) || length(sets) < 2L) return(lapply(sets, one))
 
+  # alignment and names in C++, where the sets allow; the R path below otherwise
+  fast <- .Call(C_cppde_eval_prep, st$innames, st$parameters, st$fixed, sets, deriv2, length(st$outnames))
+  if (!is.null(fast))
+    return(.Call(C_cppde_eval_wrap, .callSym(sym, fast$sets, as.integer(cores)), st$outnames, fast$theta,
+                 deriv2))
+
   n_out <- length(st$outnames)
   # The requests of one batch are the same function at different numbers: the
   # `fixed` set and the theta basis are almost always shared. Keep the last
@@ -749,6 +755,44 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
     }
     res
   })
+}
+
+
+#' Evaluate Several Compiled Functions at Once
+#'
+#' @description
+#' Evaluates each argument set with its own [cppFUN()] object, all sets in
+#' one call from R and one parallel region.
+#'
+#' @param funs List of the `evaluateBatch` entries of [cppFUN()] objects
+#'   built with forward derivatives, one per set.
+#' @param sets List of argument sets, as `evaluateBatch` takes them.
+#' @param cores Number of threads over the sets.
+#' @param deriv2 Logical. Second derivatives as well. Default `FALSE`.
+#' @return A list with one element per set, as `evaluateBatch` returns them.
+#' @seealso [cppFUN()]
+#' @export
+#' @example inst/examples/evaluateMany.R
+evaluateMany <- function(funs, sets, cores = 1L, deriv2 = FALSE) {
+  if (length(funs) != length(sets))
+    stop("evaluateMany: one function per set.", call. = FALSE)
+  if (!all(vapply(funs, is.function, TRUE)))
+    stop("evaluateMany: 'funs' must be evaluateBatch entries of cppFUN() objects.", call. = FALSE)
+  one <- function(i) funs[[i]](sets[i], deriv2 = deriv2)[[1L]]
+  if (!length(sets)) return(list())
+  sts <- lapply(funs, function(f) environment(f)$st)
+  syms <- vapply(sts, function(st) paste0(st$modelname, if (deriv2) "_eval_ad2" else "_eval_ad"), "")
+  fast <- .Call(C_cppde_eval_prep, lapply(sts, `[[`, "innames"), lapply(sts, `[[`, "parameters"),
+                lapply(sts, `[[`, "fixed"), sets, deriv2, vapply(sts, function(st) length(st$outnames), 0L))
+  addr <- lapply(syms, .nativeAddress)
+  if (is.null(fast) || any(vapply(addr, is.null, TRUE))) return(lapply(seq_along(sets), one))
+  raw <- .Call(C_cppde_eval_many, addr, fast$sets, deriv2, as.integer(cores))
+  if (is.null(raw)) {
+    addr <- lapply(syms, .nativeAddress, fresh = TRUE)
+    raw <- .Call(C_cppde_eval_many, addr, fast$sets, deriv2, as.integer(cores))
+    if (is.null(raw)) return(lapply(seq_along(sets), one))
+  }
+  .Call(C_cppde_eval_wrap, raw, lapply(sts, `[[`, "outnames"), fast$theta, deriv2)
 }
 
 

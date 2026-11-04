@@ -4,19 +4,19 @@
  Owns one [(K) × n_rows × n_cols] inner_type buffer; provides K
  tangent_slab views (each one [n_rows × n_cols] block) bound via
  prime_external() onto the corresponding contiguous slice. The unified
- buffer enables BLAS-3 across the slot axis: ndfPredict / ndfRestore
- collapse to one dtrmm; complete_step's rank-1 update collapses to one
- dger. Per-slot operations (vec_axpy_with_slab, vec_copy_with_slab, …)
- go through the per-slot slab views.
+ buffer enables block products across the slot axis: ndfPredict / ndfRestore
+ collapse to one triangular product; complete_step's rank-1 update collapses
+ to one call (cppde_small_la.hpp). Per-slot operations (vec_axpy_with_slab,
+ vec_copy_with_slab, …) go through the per-slot slab views.
 
  Storage layout: column-major over (slot j, n_rows*n_cols flat). Slot j
  occupies indices [j * n_rows * n_cols, (j+1) * n_rows * n_cols). Within
  a slot the layout is that of a tangent_slab: row-major over
  (state i, deriv k), so v[i].tan_ -> base_j + i * n_cols + [0, n_cols).
- With BLAS this is column-major from the slot perspective: each slot is
+ This is column-major from the slot perspective: each slot is
  one column of a [(n_rows*n_cols) × K] matrix with leading dimension
- n_rows*n_cols. dtrmm("R", ...) and dger right-multiply onto this
- matrix to apply (q+1) × (q+1) Pascal / outer-product updates on the
+ n_rows*n_cols. The triangular product and the rank-one update right-multiply
+ onto this matrix to apply (q+1) × (q+1) Pascal / outer-product updates on the
  slot axis.
 
  dual2nd has a two-block specialisation. Any other non-slab T (plain double,

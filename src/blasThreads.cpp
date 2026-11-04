@@ -47,12 +47,18 @@ extern "C" int cppde_ptc_v1(void (*)(double*, double*, double*, double*, double*
                             const double*, const double*, const double*, int, int*, char*, int);
 extern "C" SEXP cppde_ptc_entry(void);
 extern "C" SEXP cppde_forcing_values(SEXP, SEXP, SEXP);
+extern "C" SEXP cppde_eval_prep(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
+extern "C" SEXP cppde_eval_wrap(SEXP, SEXP, SEXP, SEXP);
+extern "C" SEXP cppde_eval_many(SEXP, SEXP, SEXP, SEXP);
 
 static const R_CallMethodDef callMethods[] = {
   {"cppde_blas_info", (DL_FUNC) &cppde_blas_info, 0},
   {"cppde_ptc",       (DL_FUNC) &cppde_ptc,       9},
   {"cppde_ptc_entry", (DL_FUNC) &cppde_ptc_entry, 0},
   {"cppde_forcing_values", (DL_FUNC) &cppde_forcing_values, 3},
+  {"cppde_eval_prep",      (DL_FUNC) &cppde_eval_prep,      6},
+  {"cppde_eval_wrap",      (DL_FUNC) &cppde_eval_wrap,      4},
+  {"cppde_eval_many",      (DL_FUNC) &cppde_eval_many,      4},
   {NULL, NULL, 0}
 };
 

@@ -52,7 +52,7 @@ namespace cppde {
 enum class prof_cat : unsigned {
   f_eval = 0,       // RHS function evaluations
   jac_eval,         // Jacobian evaluations (codegen functor call)
-  lu_factor,        // LU factorization (LAPACK dgetrf / KLU factor+refactor)
+  lu_factor,        // LU factorization (dense LU / KLU factor+refactor)
   lu_solve,         // LU solve (forward/back substitution, incl. IFT)
   nordsieck,        // Nordsieck predict/restore/rescale/complete/increase/decrease
   dense_interp,     // Dense output interpolation (calc_state)

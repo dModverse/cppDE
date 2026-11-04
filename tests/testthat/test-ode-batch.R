@@ -354,9 +354,9 @@ test_that("the reported thread count is the one actually used", {
   m <- m_plain
   expect_identical(attr(solveODEBatch(m, conds, times = tt, cores = 1L),
                         "threads"), 1L)
-  # capped by the number of conditions, never above it
+  # capped by the processors, not by the number of conditions
   nt <- attr(solveODEBatch(m, conds, times = tt, cores = 99L), "threads")
-  expect_lte(nt, length(conds))
+  expect_lte(nt, parallel::detectCores())
   skip_if_not(isTRUE(batchAvailable(m)$parallel), "batch falls back to a serial loop")
   expect_identical(attr(solveODEBatch(m, conds, times = tt, cores = 2L), "threads"), 2L)
 })

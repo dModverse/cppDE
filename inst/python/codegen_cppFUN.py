@@ -188,6 +188,20 @@ std::fill(y, y + ny_, %s);
 std::fill(wx, wx + (size_t)(*n_obs_p) * (size_t)(*n_vars_p) * ns_, %s);
 std::fill(wp, wp + (size_t)(*n_params_p) * ns_, %s);""" % (NAN_, NAN_, NAN_),
         )
+        if vjp_fr:
+            _write_guarded(
+                buf,
+                lambda b: _write_vjp_ad_function(b, modelname),
+                """const size_t ny_ = (size_t)(*n_obs_p) * (size_t)(*n_out_p);
+const size_t nx_ = (size_t)(*n_obs_p) * (size_t)(*n_vars_p) * (size_t)std::max(*n_seed_p, 1);
+const size_t np_ = (size_t)(*n_params_p) * (size_t)std::max(*n_seed_p, 1);
+const size_t nd_ = (size_t)std::max(*n_dir_p, 1);
+std::fill(y, y + ny_, %s);
+std::fill(wx, wx + nx_, %s);
+std::fill(wp, wp + np_, %s);
+std::fill(dwx, dwx + nx_ * nd_, %s);
+std::fill(dwp, dwp + np_ * nd_, %s);""" % ((NAN_,) * 5),
+            )
     if emit_ad2:
         _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=True)
         _write_guarded(
@@ -716,6 +730,21 @@ def _write_vjp_function(buf, modelname):
     )
 
 
+def _write_vjp_ad_function(buf, modelname):
+    """Raw entry of forward over reverse for native callers; `vx`, `vp` and `dw` may be null."""
+    buf.write(
+        f"void {modelname}_vjp_ad(double* x, double* p, double* w, double* vx, double* vp,\n"
+        f"                        double* dw, double* y, double* wx, double* wp,\n"
+        f"                        double* dwx, double* dwp, int* n_obs_p, int* n_vars_p,\n"
+        f"                        int* n_params_p, int* n_out_p, int* n_seed_p,\n"
+        f"                        int* n_dir_p) {{\n"
+        f"    {modelname}_vjp_ad_impl(x, p, w, vx, vp, dw, y, wx, wp, dwx, dwp, *n_obs_p,\n"
+        f"                            *n_vars_p, *n_params_p, *n_out_p, *n_seed_p,\n"
+        f"                            *n_dir_p);\n"
+        "}\n\n"
+    )
+
+
 def _write_eval_ad_batch(buf, modelname):
     """Emit the .Call batch entry for the AD evaluator.
 
@@ -758,9 +787,10 @@ def _write_eval_ad_batch(buf, modelname):
     UNPROTECT(4);
   }}
 
-  int nt = (nt_req > 0) ? nt_req : 1;
-  if (nt > K) nt = K;
+  // the requested team even for fewer sets, as batch_threads() of the solves
+  int nt = (nt_req > 0 && K > 1) ? nt_req : 1;
 #ifdef _OPENMP
+  if (nt > omp_get_num_procs()) nt = omp_get_num_procs();
   if (omp_in_parallel()) nt = 1;
 #pragma omp parallel for schedule(dynamic) num_threads(nt) if (nt > 1)
 #endif
@@ -833,9 +863,10 @@ def _write_eval_ad2_batch(buf, modelname):
     UNPROTECT(6);
   }}
 
-  int nt = (nt_req > 0) ? nt_req : 1;
-  if (nt > K) nt = K;
+  // the requested team even for fewer sets, as batch_threads() of the solves
+  int nt = (nt_req > 0 && K > 1) ? nt_req : 1;
 #ifdef _OPENMP
+  if (nt > omp_get_num_procs()) nt = omp_get_num_procs();
   if (omp_in_parallel()) nt = 1;
 #pragma omp parallel for schedule(dynamic) num_threads(nt) if (nt > 1)
 #endif

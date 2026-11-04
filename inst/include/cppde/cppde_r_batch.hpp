@@ -200,8 +200,12 @@ inline int batch_threads(int K, int requested) {
 #ifdef _OPENMP
   if (detail::child_of_fork()) return 1;
   if (omp_in_parallel()) return 1;
+  // The requested team, at most the processors, even for fewer items: libgomp ends the surplus
+  // threads of a smaller team and starts new ones for the next larger, whose per-thread scratch is
+  // then allocated anew.
+  if (K <= 1) return 1;
   int nt = (requested > 0) ? requested : omp_get_max_threads();
-  if (nt > K) nt = K;
+  if (nt > omp_get_num_procs()) nt = omp_get_num_procs();
   return (nt < 1) ? 1 : nt;
 #else
   (void)requested;

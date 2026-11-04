@@ -42,6 +42,20 @@ unique_modelname <- function(modelname) {
 ## pairing is remembered, which nothing but a recompile can invalidate.
 .symDLL <- new.env(parent = emptyenv())
 
+## Addresses of the raw entries evaluateMany() calls from C++. The C++ side refuses one that
+## dyn.unload() has cleared, and the caller resolves it anew.
+.symAddress <- new.env(parent = emptyenv())
+
+.nativeAddress <- function(name, fresh = FALSE) {
+  a <- if (!fresh) get0(name, envir = .symAddress, inherits = FALSE)
+  if (!is.null(a)) return(a)
+  sym <- .nativeSym(name)
+  if (is.null(sym)) return(NULL)
+  a <- tryCatch(getNativeSymbolInfo(name, PACKAGE = sym$dll)$address, error = function(e) NULL)
+  if (!is.null(a)) assign(name, a, envir = .symAddress)
+  a
+}
+
 ## Entry point `name` and the DLL exporting it, or NULL when nothing does.
 .nativeSym <- function(name) {
   dll <- get0(name, envir = .symDLL, inherits = FALSE)
@@ -72,6 +86,7 @@ unique_modelname <- function(modelname) {
 #' @export
 clearNativeSymbols <- function() {
   rm(list = ls(.symDLL, all.names = TRUE), envir = .symDLL)
+  rm(list = ls(.symAddress, all.names = TRUE), envir = .symAddress)
   invisible(NULL)
 }
 

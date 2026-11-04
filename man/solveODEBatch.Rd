@@ -87,8 +87,8 @@ covers the sensitivities as well.}
 
 \item{maxroot}{Maximum number of triggers per root event. Default \code{1}.}
 
-\item{cores}{Number of threads, capped by \code{length(conditions)}. \code{NULL}
-(default) takes the first of \code{getOption("cppDE.cores")},
+\item{cores}{Number of threads, at most the processors; one for a single
+condition. \code{NULL} (default) takes the first of \code{getOption("cppDE.cores")},
 \code{getOption("Ncpus")} and \code{parallel::detectCores(logical = FALSE)} that is
 set. \code{1} forces the serial loop.}
 

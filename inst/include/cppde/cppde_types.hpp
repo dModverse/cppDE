@@ -4,7 +4,7 @@
  dense_matrix<T>   = flat column-major array with (i,j) access
  csc_matrix<T>     = compressed sparse column (Ap, Ai, Ax)
 
- Dense LU uses LAPACK (dgetrf/dgetrs) via R's BLAS/LAPACK.
+ Dense LU loops for small systems (cppde_small_la.hpp), LAPACK above.
  Sparse LU uses KLU from the system SuiteSparse.
 
  Copyright (C) 2026 Simon Beyer

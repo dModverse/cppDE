@@ -254,6 +254,51 @@ test_that("cppFUN evaluates the second-order chain rule", {
   expect_equal(unname(out$hessian[1, , , ]), d2, tolerance = 1e-12)
 })
 
+test_that("evaluateBatch equals the evaluation of each set alone", {
+  f <- fx$vjp_fr
+  th <- c("t1", "t2", "t3")
+  set.seed(1)
+  # inputs in another order and with extra entries, the directions of the parameter seeds permuted
+  one_set <- function(perm, fixed = NULL, extra = FALSE) {
+    vars <- matrix(runif(6), 3, 2, dimnames = list(NULL, c("x2", "x1")))
+    if (extra) vars <- cbind(vars, z = 1)
+    list(vars = vars, params = c(b = 0.7, a = 1.3, q = 2),
+         tangentX = array(rnorm(18), c(3, 2, 3), list(NULL, c("x1", "x2"), th)),
+         tangentP = matrix(rnorm(6), 2, 3, dimnames = list(c("a", "b"), th[perm])),
+         hessianX = array(rnorm(54), c(3, 2, 3, 3), list(NULL, c("x1", "x2"), th, th)),
+         hessianP = array(rnorm(18), c(2, 3, 3), list(c("a", "b"), th[perm], th[perm])),
+         fixed = fixed)
+  }
+  sets <- list(one_set(1:3), one_set(c(2, 3, 1), fixed = "b"), one_set(3:1, extra = TRUE))
+  for (d2 in c(FALSE, TRUE)) {
+    s2 <- if (d2) sets else lapply(sets, function(a) a[setdiff(names(a), c("hessianX", "hessianP"))])
+    # a single set takes the path of evaluate()
+    expect_equal(f$evaluateBatch(s2, cores = 2, deriv2 = d2),
+                 lapply(s2, function(a) f$evaluateBatch(list(a), deriv2 = d2)[[1L]]), tolerance = 1e-14)
+  }
+})
+
+test_that("evaluateMany evaluates each set with its own function", {
+  th <- c("t1", "t2")
+  set.seed(2)
+  s1 <- list(vars = matrix(c(0.3, 0.5, 0.7, 0.2), 2, 2, dimnames = list(NULL, c("x1", "x2"))),
+             params = c(a = 1.1, b = 0.4),
+             tangentX = array(rnorm(8), c(2, 2, 2), list(NULL, c("x1", "x2"), th)),
+             tangentP = matrix(rnorm(4), 2, 2, dimnames = list(c("a", "b"), th)),
+             hessianX = array(rnorm(16), c(2, 2, 2, 2), list(NULL, c("x1", "x2"), th, th)),
+             hessianP = array(rnorm(8), c(2, 2, 2), list(c("a", "b"), th, th)))
+  s2 <- list(vars = NULL, params = c(x = 3, a = 2, b = 1, c = 0.3), fixed = "b",
+             tangentP = matrix(rnorm(8), 4, 2, dimnames = list(c("a", "b", "c", "x"), rev(th))),
+             hessianP = array(rnorm(32), c(4, 2, 2), list(c("a", "b", "c", "x"), rev(th), rev(th))))
+  funs <- list(fx$vjp_fr$evaluateBatch, fx$xs$evaluateBatch, fx$vjp_fr$evaluateBatch)
+  sets <- list(s1, s2, s1)
+  for (d2 in c(FALSE, TRUE)) {
+    ss <- if (d2) sets else lapply(sets, function(a) a[setdiff(names(a), c("hessianX", "hessianP"))])
+    expect_equal(evaluateMany(funs, ss, cores = 2, deriv2 = d2),
+                 lapply(seq_along(ss), function(i) funs[[i]](ss[i], deriv2 = d2)[[1L]]), tolerance = 1e-14)
+  }
+})
+
 # -- forward + deriv2 + identity pass-through (regression) ------------------------
 # An output that is just a bare param or var arms no inner Hessian seed, so the
 # dual2nd writeback has to reach it through the bounds-safe const overload.
@@ -389,6 +434,28 @@ test_that("the dual vjp answers the curvature the forward Hessian holds", {
   }
   expect_equal(r$curvatureX, ref_x, tolerance = 1e-12)
   expect_equal(r$curvatureP, ref_p, tolerance = 1e-12)
+})
+
+test_that("the raw forward-over-reverse entry equals the .Call entry", {
+  f <- fx$vjp_fr
+  set.seed(9)
+  n <- 3L; nd <- 2L; ns <- 2L
+  X <- matrix(rnorm(n * 2), n, 2L, dimnames = list(NULL, c("x1", "x2")))
+  P <- c(a = 0.7, b = -0.4)
+  W <- array(rnorm(n * 2 * ns), c(n, 2L, ns))
+  VX <- array(rnorm(n * 2 * nd), c(n, 2L, nd))
+  VP <- matrix(rnorm(2 * nd), 2L, nd)
+  DW <- array(rnorm(n * 2 * ns * nd), c(n, 2L, ns, nd))
+  r <- f$vjp(X, P, W, tangentX = VX, tangentP = VP, curvature = DW)
+  sym <- getNativeSymbolInfo("cf_vjpfr_vjp_ad")
+  o <- .C(sym, as.double(X), as.double(P), as.double(W), as.double(VX), as.double(VP), as.double(DW),
+          y = double(n * 2), wx = double(n * 2 * ns), wp = double(2 * ns), dwx = double(n * 2 * ns * nd),
+          dwp = double(2 * ns * nd), n, 2L, 2L, 2L, ns, nd)
+  expect_equal(o$y, as.vector(r$y), tolerance = 1e-14)
+  expect_equal(o$wx, as.vector(r$cotangentX), tolerance = 1e-14)
+  expect_equal(o$wp, as.vector(r$cotangentP), tolerance = 1e-14)
+  expect_equal(o$dwx, as.vector(r$curvatureX), tolerance = 1e-14)
+  expect_equal(o$dwp, as.vector(r$curvatureP), tolerance = 1e-14)
 })
 
 test_that("a curvature alone goes through linearly", {

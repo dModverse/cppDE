@@ -1,3 +1,19 @@
+# cppDE 0.13.7
+
+* The dense LU factorisation of the step path, its solves and the products of the corrector and
+  Nordsieck updates run in plain loops for systems up to 64 states, outside the lock under which
+  OpenBLAS hands out its work buffers.
+
+* Batches, `evaluateBatch()` and `evaluateMany()` run on the cores asked for, at most the
+  processors, also with fewer conditions or sets than cores, so that OpenMP keeps the threads
+  of its team from one call to the next; `attr(, "threads")` of a batch reports that count.
+
+* New `evaluateMany()` evaluates argument sets, each with its own `cppFUN()` object, in one
+  parallel region.
+
+* `cppFUN()` with `derivMode = "forward-reverse"` also emits `<model>_vjp_ad`, a plain C entry
+  of forward over reverse that native code can call from its own threads.
+
 # cppDE 0.13.6
 
 * The arena that holds the tangents of temporaries and the scratch buffers of the steppers goes

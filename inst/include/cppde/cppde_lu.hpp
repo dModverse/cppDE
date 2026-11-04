@@ -388,7 +388,7 @@ private:
   // ====================================================================
   //  Dense refactorize from cache: W = inv_gamma_dt * I + (cached -J).
   //  The cached matrix is copied into m_W_temp, then the dense factorise adds
-  //  the diagonal and moves: one copy, one diagonal pass, one dgetrf.
+  //  the diagonal and moves: one copy, one diagonal pass, one factorisation.
   // ====================================================================
 
   void refactorize_W_from_cache_dense(size_t n, value_type inv_gamma_dt)

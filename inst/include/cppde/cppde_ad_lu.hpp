@@ -1,10 +1,11 @@
 /*
- AD-aware dense LU solver for cppDE: LAPACK backend.
+ AD-aware dense LU solver for cppDE.
 
- Uses dgetrf/dgetrs from R's bundled LAPACK for the base case.
+ The base case factorises and solves in the loops of cppde_small_la.hpp up to
+ small_la::max_n unknowns and by LAPACK dgetrf/dgetrs above.
  Nested AD types (dual<dual<T,N>,N>) are handled by recursive IFT peeling.
 
- The derivative layer goes out as one batched dgetrs (nrhs = n_derivs), and
+ The derivative layer goes out as one batched solve (nrhs = n_derivs), and
  the IFT matvec reads each W entry once.
 
  Copyright (C) 2026 Simon Beyer
@@ -22,6 +23,7 @@
 #include <cppde/cppde_types.hpp>
 #include <cppde/cppde_ad_traits.hpp>
 #include <cppde/cppde_dual2nd.hpp>
+#include <cppde/cppde_small_la.hpp>
 
 // LAPACK declarations via R's headers (handles ILP64 automatically)
 #include <R_ext/BLAS.h>
@@ -50,7 +52,7 @@ using cppde::ad_traits::bulk_extract_derivs;
 using cppde::ad_traits::bulk_inject_results;
 
 // ============================================================================
-//  dense_lu_solver<double>: Base case: LAPACK dgetrf + dgetrs
+//  dense_lu_solver<double>: base case, small_la loops or LAPACK dgetrf + dgetrs
 // ============================================================================
 
 template<class T, class Enable = void>
@@ -65,10 +67,7 @@ public:
     const int n = W.rows();
     m_n = n;
     m_lu_data = W.data;
-    m_ipiv.resize(n);
-
-    int info = 0;
-    F77_CALL(dgetrf)(&m_n, &m_n, m_lu_data.data(), &m_n, m_ipiv.data(), &info);
+    factor();
   }
 
   // Factorize by MOVING the data out of the source matrix (zero-copy).
@@ -80,37 +79,19 @@ public:
     const int n = W.rows();
     m_n = n;
     m_lu_data.swap(W.data);   // O(1) pointer swap, no memcpy
-    m_ipiv.resize(n);
-
-    int info = 0;
-    F77_CALL(dgetrf)(&m_n, &m_n, m_lu_data.data(), &m_n, m_ipiv.data(), &info);
+    factor();
   }
 
   // Solve in-place: b ← W⁻¹ b
   void solve(std::vector<Scalar>& b) const
-  {
-    char trans = 'N';
-    int nrhs = 1;
-    int info = 0;
-    F77_CALL(dgetrs)(&trans, &m_n, &nrhs,
-             const_cast<double*>(m_lu_data.data()), &m_n,
-             const_cast<int*>(m_ipiv.data()),
-             b.data(), &m_n, &info
-                       FCONE);
-  }
+  { solve_rhs('N', b.data(), 1); }
 
-  // Batched solve: B ← W⁻¹ B  (B is column-major n × nrhs), one dgetrs call
-  // whose triangular solves run as BLAS-3 dtrsm.
+  // Batched solve: B ← W⁻¹ B  (B is column-major n × nrhs), in the loops of small_la up to
+  // small_la::max_n unknowns and as one dgetrs above.
   void solve_batch(std::vector<Scalar>& B, int nrhs) const
   {
     if (nrhs <= 0) return;
-    char trans = 'N';
-    int info = 0;
-    F77_CALL(dgetrs)(&trans, &m_n, &nrhs,
-             const_cast<double*>(m_lu_data.data()), &m_n,
-             const_cast<int*>(m_ipiv.data()),
-             B.data(), &m_n, &info
-                       FCONE);
+    solve_rhs('N', B.data(), nrhs);
   }
 
   // Solve with separate output
@@ -124,23 +105,35 @@ public:
   // Solve in-place against the transpose: b <- W^-T b. The reverse mode's
   // implicit-function step, where the same factorisation serves both directions.
   void solve_transposed(std::vector<Scalar>& b) const
-  {
-    char trans = 'T';
-    int nrhs = 1;
-    int info = 0;
-    F77_CALL(dgetrs)(&trans, &m_n, &nrhs,
-             const_cast<double*>(m_lu_data.data()), &m_n,
-             const_cast<int*>(m_ipiv.data()),
-             b.data(), &m_n, &info
-                       FCONE);
-  }
+  { solve_rhs('T', b.data(), 1); }
 
   // Scalar-only solve (identity for base case: same as solve)
   void solve_scalar(std::vector<double>& b) const
   { solve(b); }
 
 private:
+  void factor()
+  {
+    m_ipiv.resize(m_n);
+    m_small = m_n <= small_la::max_n;
+    if (m_small) { small_la::getrf(m_n, m_lu_data.data(), m_ipiv.data()); return; }
+    int info = 0;
+    F77_CALL(dgetrf)(&m_n, &m_n, m_lu_data.data(), &m_n, m_ipiv.data(), &info);
+  }
+
+  void solve_rhs(char trans, double* b, int nrhs) const
+  {
+    if (m_small) { small_la::getrs(trans, m_n, nrhs, m_lu_data.data(), m_ipiv.data(), b, m_n); return; }
+    int info = 0;
+    F77_CALL(dgetrs)(&trans, &m_n, &nrhs,
+             const_cast<double*>(m_lu_data.data()), &m_n,
+             const_cast<int*>(m_ipiv.data()),
+             b, &m_n, &info
+                       FCONE);
+  }
+
   mutable int m_n = 0;
+  bool m_small = true;             // factors from small_la, pivots 0-based
   std::vector<double> m_lu_data;   // LU-factorized copy of W
   std::vector<int>    m_ipiv;      // pivot indices
 };
@@ -181,7 +174,7 @@ public:
       // dual2nd: synthesise the value-layer dual<S, N> from the inline
       // gradient (outer.tan_[k].x()).
       for (int k = 0; k < nn; ++k)
-        m_W_val.data[k] = first_order_view(W.data[k]);
+        assign_first_order(m_W_val.data[k], W.data[k]);
     } else {
       for (int k = 0; k < nn; ++k)
         m_W_val.data[k] = const_cast<F&>(W.data[k]).x();
@@ -246,7 +239,7 @@ public:
     m_b_val.resize(n);
     if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
       for (int i = 0; i < n; ++i)
-        m_b_val[i] = first_order_view(b[i]);
+        assign_first_order(m_b_val[i], b[i]);
     } else {
       for (int i = 0; i < n; ++i)
         m_b_val[i] = const_cast<F&>(b[i]).x();
@@ -277,7 +270,7 @@ public:
     }
     if (n_derivs == 0) {
       for (int i = 0; i < n; ++i)
-        b[i].x() = m_b_val[i];
+        cppde::ad_traits::set_value(b[i], m_b_val[i]);
       return;
     }
 
@@ -287,7 +280,8 @@ public:
       auto& bi = const_cast<F&>(b[i]);
       unsigned sz = bi.size();
       for (unsigned j = 0; j < n_derivs; ++j)
-        m_rhs_all[j * n + i] = (j < sz) ? bi.d(j) : Inner(0);
+        if (j < sz) m_rhs_all[j * n + i] = bi.d(j);
+        else m_rhs_all[j * n + i] = 0.0;
     }
 
     // 4. IFT matvec: rhs_all -= dW · b_val
@@ -312,7 +306,7 @@ public:
     m_b_val.resize(n);
     if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
       for (int i = 0; i < n; ++i)
-        m_b_val[i] = first_order_view(b[i]);
+        assign_first_order(m_b_val[i], b[i]);
     } else {
       for (int i = 0; i < n; ++i)
         m_b_val[i] = const_cast<F&>(b[i]).x();
@@ -343,7 +337,7 @@ public:
     }
     if (n_derivs == 0) {
       for (int i = 0; i < n; ++i)
-        b[i].x() = m_b_val[i];
+        cppde::ad_traits::set_value(b[i], m_b_val[i]);
       return;
     }
 
@@ -353,7 +347,8 @@ public:
       auto& bi = const_cast<F&>(b[i]);
       unsigned sz = bi.size();
       for (unsigned j = 0; j < n_derivs; ++j)
-        m_rhs_all[j * n + i] = (j < sz) ? bi.d(j) : Inner(0);
+        if (j < sz) m_rhs_all[j * n + i] = bi.d(j);
+        else m_rhs_all[j * n + i] = 0.0;
     }
 
     // 4. IFT matvec: rhs_all -= dW · b_val
@@ -361,11 +356,11 @@ public:
 
     // 5. One transposed solve per direction.
     {
-      std::vector<Inner> col(static_cast<std::size_t>(n));
+      m_col.resize(static_cast<std::size_t>(n));
       for (unsigned j = 0; j < n_derivs; ++j) {
-        for (int i = 0; i < n; ++i) col[i] = m_rhs_all[j * n + i];
-        m_inner.solve_transposed(col);
-        for (int i = 0; i < n; ++i) m_rhs_all[j * n + i] = col[i];
+        for (int i = 0; i < n; ++i) m_col[i] = m_rhs_all[j * n + i];
+        m_inner.solve_transposed(m_col);
+        for (int i = 0; i < n; ++i) m_rhs_all[j * n + i] = m_col[i];
       }
     }
 
@@ -387,8 +382,7 @@ public:
     if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
       for (int col = 0; col < nrhs; ++col) {
         for (int i = 0; i < n; ++i)
-          m_b_val_batch[col * n + i] =
-            first_order_view(B_flat[col * n + i]);
+          assign_first_order(m_b_val_batch[col * n + i], B_flat[col * n + i]);
       }
     } else {
       for (int col = 0; col < nrhs; ++col) {
@@ -441,7 +435,7 @@ public:
       // No derivatives anywhere: just write back the value layer.
       for (int col = 0; col < nrhs; ++col)
         for (int i = 0; i < n; ++i)
-          B_flat[col * n + i].x() = m_b_val_batch[col * n + i];
+          cppde::ad_traits::set_value(B_flat[col * n + i], m_b_val_batch[col * n + i]);
       return;
     }
 
@@ -456,8 +450,8 @@ public:
         auto& bi = const_cast<F&>(B_flat[col * n + i]);
         unsigned sz = bi.size();
         for (unsigned j = 0; j < n_derivs; ++j)
-          m_rhs_all_batch[col * per_col + j * n + i] =
-            (j < sz) ? bi.d(j) : Inner(0);
+          if (j < sz) m_rhs_all_batch[col * per_col + j * n + i] = bi.d(j);
+          else m_rhs_all_batch[col * per_col + j * n + i] = 0.0;
       }
     }
 
@@ -473,7 +467,7 @@ public:
     for (int col = 0; col < nrhs; ++col) {
       for (int i = 0; i < n; ++i) {
         auto& bi = B_flat[col * n + i];
-        bi.x() = m_b_val_batch[col * n + i];
+        cppde::ad_traits::set_value(bi, m_b_val_batch[col * n + i]);
         if constexpr (StaticN > 0) {
           if (!bi.depend()) bi.diff(0);
         } else {
@@ -495,7 +489,7 @@ public:
 private:
 
     // ================================================================
-    //  IFT matvec: rhs_all -= dW * b_val. For Inner = double this is the dgemv
+    //  IFT matvec: rhs_all -= dW * b_val. For Inner = double this is a matvec
     //  on the block extracted in factorize(); for a nested inner type it is one
     //  element-wise pass over m_W_stored.
     // ================================================================
@@ -510,6 +504,12 @@ private:
       const unsigned nd_W = m_n_derivs_cached;
       if (nd_W == 0) return;
       const int ld = n * static_cast<int>(nd_W);
+      if (n <= small_la::max_n) {
+        for (unsigned k = 0; k < nd_W && k < n_derivs; ++k)
+          small_la::gemv_t_sub(n, n, m_dW_block.data() + (std::size_t)k * n, ld,
+                               m_b_val.data(), m_rhs_all.data() + (std::size_t)k * n);
+        return;
+      }
       double alpha = -1.0, beta = 1.0;
       int inc = 1, nn = n;
       char trans = 'T';
@@ -520,14 +520,12 @@ private:
                  &beta, m_rhs_all.data() + (std::size_t)k * n, &inc  FCONE);
     } else {
       for (int col = 0; col < n; ++col) {
-        const Inner b_col = m_b_val[col];
+        const Inner& b_col = m_b_val[col];
         for (int row = 0; row < n; ++row) {
           auto& w_entry = const_cast<F&>(m_W_stored(col, row));
           unsigned wsz = w_entry.size();
-          for (unsigned j = 0; j < n_derivs; ++j) {
-            Inner dw = (j < wsz) ? w_entry.d(j) : Inner(0);
-            m_rhs_all[j * n + row] -= dw * b_col;
-          }
+          for (unsigned j = 0; j < n_derivs && j < wsz; ++j)
+            m_rhs_all[j * n + row] -= w_entry.d(j) * b_col;
         }
       }
     }
@@ -537,15 +535,19 @@ private:
   {
     if constexpr (!is_ad<Inner>::value) {
     // =============================================================
-    //  BLAS-2 path: m_dW_block is (n * n_derivs_cached) x n, column-major. A
+    //  Matvec path: m_dW_block is (n * n_derivs_cached) x n, column-major. A
     //  right-hand side with more directions than W has dW = 0 for those, so
-    //  dgemv covers the cached range and the rest stays untouched.
+    //  the matvec covers the cached range and the rest stays untouched.
     // =============================================================
 
       unsigned nd_W = m_n_derivs_cached;
       if (nd_W == 0) return;  // W has no derivatives, no IFT correction
 
       int m = n * static_cast<int>(nd_W);
+      if (n <= small_la::max_n) {
+        small_la::gemv_sub(m, n, m_dW_block.data(), m, m_b_val.data(), m_rhs_all.data());
+        return;
+      }
       double alpha = -1.0, beta = 1.0;
       int inc = 1;
       char trans = 'N';
@@ -563,21 +565,19 @@ private:
       // =============================================================
 
       for (int col = 0; col < n; ++col) {
-        const Inner b_col = m_b_val[col];
+        const Inner& b_col = m_b_val[col];
         for (int row = 0; row < n; ++row) {
           auto& w_entry = const_cast<F&>(m_W_stored(row, col));
           unsigned wsz = w_entry.size();
-          for (unsigned j = 0; j < n_derivs; ++j) {
-            Inner dw = (j < wsz) ? w_entry.d(j) : Inner(0);
-            m_rhs_all[j * n + row] -= dw * b_col;
-          }
+          for (unsigned j = 0; j < n_derivs && j < wsz; ++j)
+            m_rhs_all[j * n + row] -= w_entry.d(j) * b_col;
         }
       }
     }
   }
 
     // Batched IFT matvec: rhs_all[col, j, row] -= sum_k dW[row, k, j] *
-    // b_val[col, k]. One dgemm for Inner = double, otherwise an outer loop over
+    // b_val[col, k]. One matrix product for Inner = double, otherwise an outer loop over
     // the batch columns with the single-RHS pass inside.
   void ift_matvec_batch(int n, unsigned n_derivs, int nrhs) const
   {
@@ -596,6 +596,11 @@ private:
       // Pass column stride for C as per_col so dgemm steps over the full
       // n_derivs blocks even though it only writes the first nd_W of them.
       int ldc = static_cast<int>(per_col);
+      if (n <= small_la::max_n) {
+        small_la::gemm_sub(m, nrhs, n, m_dW_block.data(), m, m_b_val_batch.data(), n,
+                           m_rhs_all_batch.data(), ldc);
+        return;
+      }
       F77_CALL(dgemm)(&trans, &trans, &m, &nrhs, &n, &alpha,
                const_cast<double*>(m_dW_block.data()), &m,
                m_b_val_batch.data(), &n,
@@ -608,14 +613,12 @@ private:
         Inner* rhs_col = m_rhs_all_batch.data() + col_b * per_col;
         const Inner* b_val_col = m_b_val_batch.data() + col_b * n;
         for (int col = 0; col < n; ++col) {
-          const Inner b_col = b_val_col[col];
+          const Inner& b_col = b_val_col[col];
           for (int row = 0; row < n; ++row) {
             auto& w_entry = const_cast<F&>(m_W_stored(row, col));
             unsigned wsz = w_entry.size();
-            for (unsigned j = 0; j < n_derivs; ++j) {
-              Inner dw = (j < wsz) ? w_entry.d(j) : Inner(0);
-              rhs_col[j * n + row] -= dw * b_col;
-            }
+            for (unsigned j = 0; j < n_derivs && j < wsz; ++j)
+              rhs_col[j * n + row] -= w_entry.d(j) * b_col;
           }
         }
       }
@@ -636,7 +639,7 @@ private:
   // Persistent solve buffers: avoid per-call heap allocations.
   mutable std::vector<Inner>  m_b_val;          // n scalars: value part (single solve)
   mutable std::vector<Inner>  m_rhs_all;        // n × n_derivs: derivs (single solve)
-  mutable std::vector<F>      m_col_buf;        // n entries, unused
+  mutable std::vector<Inner>  m_col;            // one direction of a transposed solve
   mutable std::vector<Inner>  m_b_val_batch;    // n × nrhs: value part (batched)
   mutable std::vector<Inner>  m_rhs_all_batch;  // n × n_derivs × nrhs (batched)
 };

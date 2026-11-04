@@ -12,8 +12,8 @@
  On the stiff side set_use_ndf_kappa() chooses between the Klopfenstein-Shampine
  NDF (default; Shampine & Reichelt 1997, "The MATLAB ODE Suite", SIAM J. Sci.
  Comput. 18(1), 1-22) and classical BDF (kappa = 0). kappa enters through gamma
- and the error constant, see ndfSet() and ndfSetTq(), and vignette("Methods"),
- appendix "BDF and NDF coefficients".
+ and the error constant, see ndfSet() and ndfSetTq(), and "BDF and NDF
+ coefficients" in https://dmodverse.github.io/cppDE/articles/methods-coefficients.html.
 
  The Newton corrector is ndf_newton_solve() in cppde_newton.hpp; the Adams
  coefficients are defined below. For AD types lu_W::solve() applies the IFT and
@@ -44,6 +44,7 @@
 #include <memory>
 #include <vector>
 
+#include <cppde/cppde_small_la.hpp>
 #include <cppde/cppde_tls.hpp>
 #include <cppde/cppde_odeint_compat.hpp>
 #include <cppde/cppde_lu.hpp>
@@ -1149,7 +1150,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         // dual2nd: vec_axpy_with_slab covers scalar and first-order
         // layers per element, so no separate value-layer loop runs here.
         // The Hessian layer is lifted out of the per-slot calls into one
-        // dger, as the first-order tangent block already is.
+        // rank-one update, as the first-order tangent block already is.
         const bool block_hess =
           m_zn_block.primed() && m_zn_block.hess_slot_stride() > 0
           && m_acor_slab.hess_size() == m_zn_block.hess_slot_stride();
@@ -1163,14 +1164,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         if (block_hess) {
           std::array<double, max_order + 2> ll{};
           for (int j = 0; j < qp1; ++j) ll[j] = static_cast<double>(m_l[j]);
-          int M_ = static_cast<int>(m_zn_block.hess_slot_stride());
-          int N_ = qp1;
-          int inc = 1;
-          double one = 1.0;
-          F77_CALL(dger)(&M_, &N_, &one,
-                         m_acor_slab.hess_data(), &inc,
-                         ll.data(), &inc,
-                         m_zn_block.hess_block_data(), &M_);
+          const int M_ = static_cast<int>(m_zn_block.hess_slot_stride());
+          small_la::ger(M_, qp1, m_acor_slab.hess_data(), ll.data(), m_zn_block.hess_block_data(), M_);
         }
       } else if constexpr (detail::is_dynamic_dual<value_type>::value) {
         using inner_t = typename value_type::value_type;
@@ -1196,8 +1191,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
           }
         }
 
-  // Tangent layer: one dger over the whole block when the slabs are primed and
-  // the inner type is double; a nested dual falls back to per-slot axpy. For a
+  // Tangent layer: one rank-one update over the whole block when the slabs are
+  // primed and the inner type is double; a nested dual falls back to per-slot axpy. For a
   // static-N dual the trailing inactive columns are zero and propagate as such.
         if constexpr (std::is_same_v<inner_t, double>) {
           if (m_zn_block.primed() && m_acor_slab.primed() && m_n_sens > 0
@@ -1205,14 +1200,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
           {
             std::array<double, max_order + 2> ll{};
             for (int j = 0; j < qp1; ++j) ll[j] = static_cast<double>(m_l[j]);
-            int M_ = static_cast<int>(m_zn_block.slot_stride());
-            int N_ = qp1;
-            int inc = 1;
-            double one = 1.0;
-            F77_CALL(dger)(&M_, &N_, &one,
-                           m_acor_slab.tangent_data(), &inc,
-                           ll.data(), &inc,
-                           m_zn_block.tangent_block_data(), &M_);
+            const int M_ = static_cast<int>(m_zn_block.slot_stride());
+            small_la::ger(M_, qp1, m_acor_slab.tangent_data(), ll.data(), m_zn_block.tangent_block_data(), M_);
           }
         } else {
           for (int j = 0; j < qp1; ++j)
@@ -1736,8 +1725,8 @@ private:
   //  ndfPredict is the Nordsieck Pascal shift, Z := Z * P with P the unit-Pascal
   //  lower triangle P[i,j] = C(i,j); ndfRestore is its inverse, with the signs
   //  alternating. With a primed tangent block and a plain inner type the whole
-  //  tangent matrix goes through one dtrmm, while the value layer stays
-  //  per-element because the .x() fields are not contiguous across slots.
+  //  tangent matrix goes through one triangular product, while the value layer
+  //  stays per-element because the .x() fields are not contiguous across slots.
   // ====================================================================
 
 private:
@@ -1790,7 +1779,7 @@ private:
       const double sign = restore ? -1.0 : 1.0;
 
       // The Hessian layer is one contiguous [hess_slot_stride x (q+1)]
-      // block, shifted by a single dtrmm against the Pascal matrix, as
+      // block, shifted by one triangular product with the Pascal matrix, as
       // the first-order tangent block already is.
       const bool block_hess =
         m_zn_block.primed() && m_zn_block.hess_slot_stride() > 0;
@@ -1805,17 +1794,8 @@ private:
       if (block_hess) {
         const auto& P = restore ? pascal_restore_table_()
                                 : pascal_predict_table_();
-        char side = 'R', uplo = 'L', transa = 'N', diag = 'U';
-        int M_ = static_cast<int>(m_zn_block.hess_slot_stride());
-        int N_ = m_q + 1;
-        int lda = LM;
-        int ldb = M_;
-        double one = 1.0;
-        F77_CALL(dtrmm)(&side, &uplo, &transa, &diag,
-                        &M_, &N_, &one,
-                        const_cast<double*>(P.data()), &lda,
-                        m_zn_block.hess_block_data(), &ldb
-                        FCONE FCONE FCONE FCONE);
+        const int M_ = static_cast<int>(m_zn_block.hess_slot_stride());
+        small_la::trmm_right_lower_unit(M_, m_q + 1, P.data(), LM, m_zn_block.hess_block_data(), M_);
       }
     } else if constexpr (detail::is_dynamic_dual<value_type>::value) {
       using inner_t = typename value_type::value_type;
@@ -1840,7 +1820,7 @@ private:
         }
       }
 
-      // Tangent layer: single dtrmm across the (n*slab_cols) × (q+1)
+      // Tangent layer: one triangular product across the (n*slab_cols) × (q+1)
       // block. Static-N: slab cols = N (≥ m_n_sens); dynamic-N: = M.
       // The Pascal P is unit lower-triangular so trailing inactive
       // tangent columns (which are zero by construction) stay zero.
@@ -1848,17 +1828,8 @@ private:
         if (m_zn_block.primed() && m_n_sens > 0) {
           const auto& P = restore ? pascal_restore_table_()
                                   : pascal_predict_table_();
-          char side = 'R', uplo = 'L', transa = 'N', diag = 'U';
-          int M_ = static_cast<int>(m_zn_block.slot_stride());
-          int N_ = m_q + 1;
-          int lda = LM;
-          int ldb = M_;
-          double one = 1.0;
-          F77_CALL(dtrmm)(&side, &uplo, &transa, &diag,
-                          &M_, &N_, &one,
-                          const_cast<double*>(P.data()), &lda,
-                          m_zn_block.tangent_block_data(), &ldb
-                          FCONE FCONE FCONE FCONE);
+          const int M_ = static_cast<int>(m_zn_block.slot_stride());
+          small_la::trmm_right_lower_unit(M_, m_q + 1, P.data(), LM, m_zn_block.tangent_block_data(), M_);
         }
       } else {
         // Nested-dual / non-double inner: per-slot path.
@@ -2164,8 +2135,9 @@ public:
 
   // SoA tangent storage for the heap-dual path, empty stubs otherwise. The
   // Nordsieck history and the dense-output snapshots each live in one contiguous
-  // [K x n_states x n_sens] block, so dtrmm and dger reach all K slots in one
-  // call while the per-slot views keep working. Sized once per solve.
+  // [K x n_states x n_sens] block, so the Pascal product and the rank-one update
+  // reach all K slots in one call while the per-slot views keep working. Sized
+  // once per solve.
   detail::nordsieck_block<value_type, max_order + 2> m_zn_block;
   detail::nordsieck_block<value_type, max_order + 1> m_zn_dense_block;
   detail::tangent_slab<value_type> m_acor_slab, m_y_slab, m_tempv_slab, m_ftemp_slab;

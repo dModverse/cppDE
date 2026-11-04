@@ -768,8 +768,8 @@ solveODE <- function(model, times, parms,
 #'   used as a template, in which case the condition's name (or its index) is
 #'   inserted before the extension. Needs a model built with `stepTrace = TRUE`.
 #'   Default `NULL`.
-#' @param cores Number of threads, capped by `length(conditions)`. `NULL`
-#'   (default) takes the first of `getOption("cppDE.cores")`,
+#' @param cores Number of threads, at most the processors; one for a single
+#'   condition. `NULL` (default) takes the first of `getOption("cppDE.cores")`,
 #'   `getOption("Ncpus")` and `parallel::detectCores(logical = FALSE)` that is
 #'   set. `1` forces the serial loop.
 #' @param onFailure Applied once after all conditions have run. `"stop"`
@@ -907,10 +907,8 @@ solveODEBatch <- function(model, conditions,
            warn = warning(paste0(msg, "\n  Returning partial results."),
                           call. = FALSE, immediate. = TRUE))
   }
-  # The C++ side reports the thread count it used; fall back to the request when
-  # the batch entry is missing.
-  if (is.null(attr(raw, "threads"))) attr(out, "threads") <- as.integer(nt)
-  else attr(out, "threads") <- attr(raw, "threads")
+  # The C++ side reports the thread count it used; the loop without a batch entry runs on one.
+  attr(out, "threads") <- if (is.null(attr(raw, "threads"))) 1L else attr(raw, "threads")
   out
 }
 
@@ -1040,19 +1038,25 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
              "earlier solve", call. = FALSE)
   }
 
+  # names are checked and matched once per run of conditions with identical names (NA matches none)
+  lastNames <- NA; at <- NULL
   for (k in seq_len(K)) {
     if (!is.null(parms)) {
       pk <- parms[[k]]
-      if (is.null(names(pk))) stop("'parms' elements must be named", call. = FALSE)
-      dup <- unique(names(pk)[duplicated(names(pk))])
-      if (length(dup))
-        stop("condition ", k, ": 'parms' names more than once ",
-             paste(dup, collapse = ", "), call. = FALSE)
-      miss <- setdiff(handle$required, names(pk))
-      if (length(miss))
-        stop("condition ", k, ": 'parms' missing ", paste(miss, collapse = ", "),
-             call. = FALSE)
-      v <- as.double(pk[handle$required])
+      nk <- names(pk)
+      if (!identical(nk, lastNames)) {
+        if (is.null(nk)) stop("'parms' elements must be named", call. = FALSE)
+        dup <- unique(nk[duplicated(nk)])
+        if (length(dup))
+          stop("condition ", k, ": 'parms' names more than once ",
+               paste(dup, collapse = ", "), call. = FALSE)
+        at <- match(handle$required, nk)
+        if (anyNA(at))
+          stop("condition ", k, ": 'parms' missing ", paste(handle$required[is.na(at)], collapse = ", "),
+               call. = FALSE)
+        lastNames <- nk
+      }
+      v <- as.double(pk[at])
       if (anyNA(v) || any(!is.finite(v)))
         stop("condition ", k, ": 'parms' must be finite", call. = FALSE)
       preps[[k]]$args$parms <- v
@@ -1107,20 +1111,20 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
   .asDouble(new)
 }
 
-# Thread count for a batch of K conditions. Deliberately not read from
-# OMP_NUM_THREADS: nothing keeps a process-wide variable in step with the
-# BLAS thread count cppDE pins, so it is not a trustworthy source.
+# Thread count for a batch of K conditions: the cores asked for even when K is smaller, so that
+# OpenMP keeps its team (batch_threads() in cppde_r_batch.hpp), one for a single condition. Not read
+# from OMP_NUM_THREADS, which nothing keeps in step with the BLAS thread count cppDE pins.
 .batchCores <- function(cores, K) {
   if (!is.null(cores)) {
     cores <- as.integer(cores)
     if (is.na(cores) || cores < 1L) stop("'cores' must be a positive integer", call. = FALSE)
-    return(min(cores, K))
+    return(if (K > 1L) cores else 1L)
   }
   n <- getOption("cppDE.cores", NULL)
   if (is.null(n)) n <- getOption("Ncpus", NULL)
   if (is.null(n)) n <- parallel::detectCores(logical = FALSE)
   if (!is.numeric(n) || !is.finite(n) || n < 1) n <- 1L
-  min(as.integer(n), K)
+  if (K > 1L) as.integer(n) else 1L
 }
 
 

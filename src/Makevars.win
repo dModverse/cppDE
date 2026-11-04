@@ -1,4 +1,5 @@
 # Windows has no fork(); the guard compiles to nothing and only the vendor probe
 # behind forkGuard() is built. GetProcAddress() needs no extra library.
 PKG_CPPFLAGS = -I../inst/include
-PKG_LIBS = $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)
+PKG_CXXFLAGS = $(SHLIB_OPENMP_CXXFLAGS)
+PKG_LIBS = $(SHLIB_OPENMP_CXXFLAGS) $(LAPACK_LIBS) $(BLAS_LIBS) $(FLIBS)
