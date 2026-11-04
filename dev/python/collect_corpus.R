@@ -15,10 +15,12 @@ logdir <- file.path(root, "dev", "python", "tap_log")
 unlink(logdir, recursive = TRUE)
 dir.create(logdir, recursive = TRUE)
 
-Sys.setenv(CPPDE_PY_DIR = file.path(root, "dev", "python", "tap"),
-           CPPDE_TAP_REAL = system.file("python", package = "cppDE"),
+Sys.setenv(CPPDE_TAP_REAL = system.file("python", package = "cppDE"),
            CPPDE_TAP_LOG = logdir,
            NOT_CRAN = "true")
+## cppDE imports the logging wrappers of dev/python/tap instead of its generators.
+suppressPackageStartupMessages(library(cppDE))
+utils::assignInNamespace(".cppde_py_dir", function() file.path(root, "dev", "python", "tap"), "cppDE")
 
 run_suite <- function(dir, pkg) {
   cat("== tests of", pkg, "\n")

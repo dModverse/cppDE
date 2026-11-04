@@ -313,13 +313,13 @@ def check_model_syntax(corpus):
             for kw in (dict(sparse=False), dict(sparse=True),
                        dict(sparse=False, emit_contractions=True, emit_jvp=True)):
                 for strat in ("entries", "colour"):
-                    os.environ["CPPDE_JAC"] = strat
+                    CO.cppde_model.JACOBIAN_STRATEGY = strat
                     try:
                         r = CO.generate_ode_cpp(rhs, params, num_type=scalar,
                                                 ad_level=lvl, arena=lvl > 0,
                                                 forcings_list=forcings, **kw)
                     finally:
-                        os.environ.pop("CPPDE_JAC", None)
+                        CO.cppde_model.JACOBIAN_STRATEGY = None
                     units.append("namespace u%d { // %s %s %s %s\n%s\n%s\n%s\n%s\n}\n"
                                  % (len(units), label, scalar, sorted(kw), strat,
                                     r["data_code"], r["ode_code"], r["jac_code"],
@@ -366,12 +366,12 @@ def check_cvode_syntax(corpus):
     ]
     for name, rhs, params, forcings, kw in runs:
         for strat in ("entries", "colour"):
-            os.environ["CPPDE_JAC"] = strat
+            CV.cppde_model.JACOBIAN_STRATEGY = strat
             try:
                 r = CV.generate_cvode_cpp(rhs, params, "cv_%s_%s" % (name, strat), d,
                                           forcings_list=forcings, **kw)
             finally:
-                os.environ.pop("CPPDE_JAC", None)
+                CV.cppde_model.JACOBIAN_STRATEGY = None
             args = [cxx, "-std=gnu++17", "-fsyntax-only", "-I", include_dir(),
                     "-I", rinc, "-I", sund, "-I", os.path.join(sund, "suitesparse")]
             args += list(r["compile_defs"]) + [r["srcfile"]]
@@ -1179,8 +1179,16 @@ def check_linear_codegen(corpus):
 # Phase 7: loops over statements of equal structure
 # ---------------------------------------------------------------------------
 
+_VEC_DEFAULT = None
+
+
 def _set_vectorise(value):
-    os.environ["CPPDE_VECTORISE"] = str(value)
+    """Loop threshold of the generator, "" for its default."""
+    global _VEC_DEFAULT
+    import cppde_struct as cs
+    if _VEC_DEFAULT is None:
+        _VEC_DEFAULT = cs.VEC_MIN_INSTANCES
+    cs.VEC_MIN_INSTANCES = _VEC_DEFAULT if value == "" else int(value)
 
 
 def _model_statements(m, emit_jvp=True):

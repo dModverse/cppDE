@@ -1,5 +1,5 @@
-# The coloured Jacobian (CPPDE_JAC = "colour") against the entry-wise one, for
-# both backends, forward sensitivities and the reverse sweep.
+# The coloured Jacobian against the entry-wise one, for both backends, forward
+# sensitivities and the reverse sweep.
 
 skip_on_cran()
 
@@ -9,10 +9,11 @@ eqns_col <- setNames(vapply(seq_len(n_col), function(i) if (i == 1) "-k1*x1 + k2
 pars_col <- c(setNames(c(1, rep(0, n_col - 1)), names(eqns_col)), k1 = 0.7, k2 = 0.3)
 times_col <- seq(0, 10, 1)
 
+# one model built under `strategy`, set on the module object codegen imports by name
 build_col <- function(strategy, backend, name, ...) {
-  old <- Sys.getenv("CPPDE_JAC", NA)
-  on.exit(if (is.na(old)) Sys.unsetenv("CPPDE_JAC") else Sys.setenv(CPPDE_JAC = old))
-  Sys.setenv(CPPDE_JAC = strategy)
+  cm <- reticulate::import_from_path("cppde_model", system.file("python", package = "cppDE"))
+  cm$JACOBIAN_STRATEGY <- strategy
+  on.exit(cm$JACOBIAN_STRATEGY <- NULL)
   backend(eqns_col, modelname = paste0("jac_", name, "_", strategy), compile = FALSE, ...)
 }
 
@@ -23,6 +24,12 @@ mods_col <- list(
 if (isTRUE(cvodeConfig$available))
   mods_col <- c(mods_col, list(cv_c = build_col("colour", cvode, "cv"), cv_e = build_col("entries", cvode, "cv")))
 do.call(compile, c(unname(mods_col), list(output = "test_jacobian_colour", cores = test_cores())))
+
+test_that("the strategy reaches the generator", {
+  src <- function(m) gsub(as.character(m)[1], "", readLines(attr(m, "srcfile")))
+  expect_false(identical(src(mods_col$cpp_c), src(mods_col$cpp_e)))
+  expect_false(identical(src(mods_col$rev_c), src(mods_col$rev_e)))
+})
 
 test_that("coloured and entry-wise Jacobians give the same forward sensitivities", {
   a <- solveODE(mods_col$cpp_c, times_col, pars_col, abstol = 1e-10, reltol = 1e-10)

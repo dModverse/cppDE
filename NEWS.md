@@ -1,3 +1,8 @@
+# cppDE 0.13.8
+
+* The code generators read no environment variables; `CPPDE_PY_DIR`, `CPPDE_JAC`, `CPPDE_LINEAR`
+  and `CPPDE_VECTORISE` are removed.
+
 # cppDE 0.13.7
 
 * The dense LU factorisation of the step path, its solves and the products of the corrector and

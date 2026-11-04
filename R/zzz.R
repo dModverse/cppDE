@@ -105,12 +105,7 @@ cvodeConfig <- new.env(parent = emptyenv())
 #' @noRd
 .cppde_py_cache <- new.env(parent = emptyenv())
 
-# Directory of the Python generators; CPPDE_PY_DIR overrides the installed one.
-.cppde_py_dir <- function() {
-  d <- Sys.getenv("CPPDE_PY_DIR")
-  if (nzchar(d)) normalizePath(d, "/", mustWork = TRUE)
-  else system.file("python", package = "cppDE")
-}
+.cppde_py_dir <- function() system.file("python", package = "cppDE")
 
 #' @keywords internal
 #' @importFrom reticulate import_from_path

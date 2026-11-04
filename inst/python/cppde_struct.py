@@ -9,7 +9,6 @@ Loops: statements of equal structure become loops over index tables
 """
 
 import math
-import os
 from fractions import Fraction
 
 import cppde_emit as em
@@ -26,13 +25,9 @@ _POOL_MIN = 256
 
 
 def linear_min_terms(value=None):
-    """Row threshold: `value`, else CPPDE_LINEAR, else LIN_MIN_TERMS; 0 disables."""
+    """Row threshold: `value`, else LIN_MIN_TERMS; 0 disables."""
     if value is None:
-        env = os.environ.get("CPPDE_LINEAR", "").strip()
-        try:
-            value = int(env) if env else LIN_MIN_TERMS
-        except ValueError:
-            value = LIN_MIN_TERMS
+        value = LIN_MIN_TERMS
     return max(0, int(value))
 
 
@@ -205,14 +200,9 @@ _MULTI = ("m",)
 
 
 def vector_min_instances(value=None):
-    """Loop threshold: `value`, else CPPDE_VECTORISE, else VEC_MIN_INSTANCES;
-    0 disables."""
+    """Loop threshold: `value`, else VEC_MIN_INSTANCES; 0 disables."""
     if value is None:
-        env = os.environ.get("CPPDE_VECTORISE", "").strip()
-        try:
-            value = int(env) if env else VEC_MIN_INSTANCES
-        except ValueError:
-            value = VEC_MIN_INSTANCES
+        value = VEC_MIN_INSTANCES
     return max(0, int(value))
 
 

@@ -2,9 +2,9 @@
 ##
 ##   Rscript dev/python/smoke.R <phase> [workers]
 ##
-## The generators are read from inst/python (CPPDE_PY_DIR); cppDE's R code and
-## headers come from the installed package. A `[legacy]` twin reads the frozen
-## generators of dev/python/legacy (e55c599) instead.
+## The generators are read from inst/python (use_generators()); cppDE's R code
+## and headers come from the installed package. A `[legacy]` twin reads the
+## frozen generators of dev/python/legacy (e55c599) instead.
 
 args <- commandArgs(trailingOnly = TRUE)
 phase <- if (length(args)) args[1] else "2"
@@ -17,8 +17,21 @@ root <- normalizePath(local({
 }), "/")
 ## SMOKE_LEGACY=1 runs every case on the frozen generators; SMOKE_ONLY selects
 ## cases by regular expression; SMOKE_PROGRESS names a progress file.
-Sys.setenv(CPPDE_PY_DIR = file.path(root, "inst", "python"))
+gen_dir <- file.path(root, "inst", "python")
 legacy_dir <- file.path(root, "dev", "python", "legacy")
+
+## cppDE imports its generators from `dir` for the rest of this R process.
+use_generators <- function(dir)
+  utils::assignInNamespace(".cppde_py_dir", function() dir, "cppDE")
+
+## Runs `code` on the current generators, imported from gen_dir before codegen
+## imports them, so that codegen finds them patched; a legacy case keeps its
+## frozen generators unpatched.
+patch_gen <- function(code) {
+  if (isTRUE(get0(".legacy", envir = globalenv()))) return(invisible())
+  reticulate::py_run_string(paste(sprintf("import sys; sys.path.insert(0, '%s')", gen_dir),
+                                  code, sep = "\n"))
+}
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
 
@@ -119,11 +132,10 @@ rev2_vs_fwd2 <- function(M, method, outdir, tag, sparse = NULL) {
 }
 
 
-## Jacobian strategy of the generator for the rest of this worker.
+## Jacobian strategy of the generator for the rest of this case ("" = its own).
 set_jac <- function(strategy) {
-  if (nzchar(Sys.getenv("CPPDE_PY_DIR")))
-    reticulate::py_run_string(sprintf(
-      "import os; os.environ['CPPDE_JAC'] = '%s'", strategy))
+  if (nzchar(strategy))
+    patch_gen(sprintf("import cppde_model\ncppde_model.JACOBIAN_STRATEGY = '%s'", strategy))
 }
 
 ## Central differences of the trajectory (and of the tangent) in each parameter.
@@ -274,11 +286,9 @@ S5s <- llg_dipole(6)
 S5s$fixed <- names(S5s$rhs)
 S5s$times <- seq(0, 1, length.out = 5)
 
-## Row threshold of the linear map for the rest of this worker ("" = default).
+## Row threshold of the linear map for the rest of this case ("" = default).
 set_lin <- function(value) {
-  if (nzchar(Sys.getenv("CPPDE_PY_DIR")))
-    reticulate::py_run_string(sprintf(
-      "import os; os.environ['CPPDE_LINEAR'] = '%s'", value))
+  if (nzchar(value)) patch_gen(sprintf("import cppde_struct\ncppde_struct.LIN_MIN_TERMS = %s", value))
 }
 
 ## S6: Brusselator on an nx x ny grid (dev/python/harness.py); the initial
@@ -305,11 +315,9 @@ brusselator2d <- function(nx, ny) {
        pars = c(init[names(rhs)], Du = 0.002 * nx * nx, Dv = 0.001 * nx * nx, a = 1, b = 3),
        fixed = names(rhs), no_fd = character(0))
 }
-## Loop threshold of the generator for the rest of this worker ("" = default).
+## Loop threshold of the generator for the rest of this case ("" = default).
 set_vec <- function(value) {
-  if (nzchar(Sys.getenv("CPPDE_PY_DIR")))
-    reticulate::py_run_string(sprintf(
-      "import os; os.environ['CPPDE_VECTORISE'] = '%s'", value))
+  if (nzchar(value)) patch_gen(sprintf("import cppde_struct\ncppde_struct.VEC_MIN_INSTANCES = %s", value))
 }
 
 ## CVODE against the native backend on the requested times: trajectory and
@@ -545,16 +553,15 @@ on.exit(parallel::stopCluster(cl), add = TRUE)
 parallel::clusterExport(cl, setdiff(ls(), c("cl", "cases")))
 t0 <- proc.time()[["elapsed"]]
 res <- parallel::clusterApplyLB(cl, names(cases), function(nm, cases) {
-  Sys.setenv(CPPDE_PY_DIR = if (cases[[nm]]$legacy) legacy_dir
-                            else file.path(root, "inst", "python"))
   suppressPackageStartupMessages(library(cppDE))
+  assign(".legacy", cases[[nm]]$legacy, envir = globalenv())
+  use_generators(if (cases[[nm]]$legacy) legacy_dir else gen_dir)
   ## One worker runs many cases: every case imports its own generators.
   cache <- cppDE:::.cppde_py_cache
   rm(list = ls(cache), envir = cache)
   if (reticulate::py_available())
     reticulate::py_run_string(paste(
-      "import os, sys",
-      "for _v in ('CPPDE_JAC', 'CPPDE_LINEAR', 'CPPDE_VECTORISE'): os.environ.pop(_v, None)",
+      "import sys",
       "for _m in [m for m in sys.modules if m.startswith(('codegen_', 'cppde_', 'cppsympy', 'derivSymb'))]:",
       "    del sys.modules[_m]", sep = "\n"))
   d <- file.path(outdir, gsub("[^A-Za-z0-9]", "_", nm))
