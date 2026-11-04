@@ -121,7 +121,8 @@ method's own maximum. An error on \code{"rb4"} and \code{"tsit5"}.}
 
 \item{stald}{Logical, default \code{FALSE}. Stability limit detection for method
 \code{"bdf"}: the order drops when the step size leaves the stability region
-of the current order. See \code{vignette("Methods")}.}
+of the current order. See
+\href{https://dmodverse.github.io/cppDE/articles/methods-stepping.html#adaptive-step-size-control}{Stepping and error control}.}
 }
 \value{
 An object of class \code{"cppDEbatch"} for \code{\link[=solveBatch]{solveBatch()}}.

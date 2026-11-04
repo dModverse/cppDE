@@ -11,8 +11,8 @@
  *
  * A, B and c are read off the stepper by running its own routines on a unit
  * slot. The model supplies `jac_t_vec` (J' lambda) and `dfdp_t_vec_axpy`
- * ((df/dp)' lambda, scaled and added). See vignette("Methods"), section
- * "The step map and its adjoint".
+ * ((df/dp)' lambda, scaled and added). See "The step map and its adjoint" in
+ * https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
  *
  * Copyright (C) 2026 Simon Beyer
  */
@@ -266,8 +266,9 @@ multistep_operators<Stepper> build_multistep_operators(
 
 // ---------------------------------------------------------------------------
 //  The adjoint of one step: w_pred = B' w_out, mu = (I - gamma J)^-T w_y for
-//  the corrector, w_in = A' w_pred. See vignette("Methods"), "The step map and
-//  its adjoint". `solver`'s transposed apply includes the gamma scale.
+//  the corrector, w_in = A' w_pred. `solver`'s transposed apply includes the
+//  gamma scale. See "The step map and its adjoint" in
+//  https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
 // ---------------------------------------------------------------------------
 /// What the step above hands down, passed back through the tail onto the
 /// predicted history and onto acor. Separate from the step adjoint itself
@@ -658,7 +659,8 @@ private:
 // ---------------------------------------------------------------------------
 //  The adjoint of one explicit Runge-Kutta step, stages recomputed by one
 //  forward run: m_i = h b_i w + h sum_{j>i} a_ji u_j with u_j = J(X_j)' m_j,
-//  w_x = w + sum_i u_i. See vignette("Methods"), "The step map and its adjoint".
+//  w_x = w + sum_i u_i. See "The step map and its adjoint" in
+//  https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
 // ---------------------------------------------------------------------------
 template<class T = double>
 struct onestep_workspace {
@@ -742,7 +744,8 @@ void apply_onestep_adjoint(Stepper& st, System& sys,
 // ---------------------------------------------------------------------------
 //  The adjoint of one Rosenbrock step. dg = W^-1 (dr + (dJ) g), so besides the
 //  transposed solves against the step's own W it needs lambda contracted with
-//  d(J g). See vignette("Methods"), section "The step map and its adjoint".
+//  d(J g). See "The step map and its adjoint" in
+//  https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
 // ---------------------------------------------------------------------------
 template<class T = double>
 struct rosenbrock_workspace {

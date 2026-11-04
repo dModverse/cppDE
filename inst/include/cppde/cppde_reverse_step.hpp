@@ -8,7 +8,8 @@
 
  The controller is not differentiated: the size is read off the checkpoint and
  the grid is a constant (Bock's internal numerical differentiation, see
- vignette("Methods"), "Internal numerical differentiation").
+ "Internal numerical differentiation" in
+ https://dmodverse.github.io/cppDE/articles/methods-reverse.html).
 
  Acceptance, order, iteration and rebuild counts are piecewise constant and stay
  control decisions; what is smooth within one control path is differentiated.

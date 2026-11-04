@@ -1,0 +1,202 @@
+---
+title: "Method coefficients"
+bibliography: refs.bib
+csl: ieee.csl
+link-citations: true
+---
+
+## BDF and NDF coefficients {#bdf-coeffs}
+
+*Source.* Shampine and Reichelt [@MATLABODESuite, Table 1]; implemented in
+`cppde_multistepper.hpp`.
+
+The NDF of order $q$ adds to the BDF$q$ corrector a term proportional
+to the Nordsieck predictor error,
+$$
+  \sum_{m=1}^{q} \frac{1}{m}\, \nabla^{m} x_n
+  \;-\; h_n\, f(x_n, t_n)
+  \;-\; \kappa_q\, \gamma_q\, \bigl(x_n - x_n^{\mathrm{pred}}\bigr)
+  \;=\; 0,
+  \qquad
+  \gamma_q \;=\; \sum_{m=1}^{q} \tfrac{1}{m}.
+$$
+Setting $\kappa_q = 0$ recovers BDF$q$. The table below
+lists the $\kappa_q$ of cppDE with the step-size gain over BDF$q$ and
+the stability angle. The argument `useNDF` (default
+`TRUE`) selects NDF or BDF at compile time.
+
+| $q$ | $\kappa_q$ | step-size gain over BDF$q$ | stability angle |
+|:--|--:|:--|:--|
+| 1 | -0.1850 | $+26\,\%$ | A-stable |
+| 2 | -0.1111 | $+26\,\%$ | A-stable |
+| 3 | -0.0823 | $+26\,\%$ | $80^\circ$ |
+| 4 | -0.0415 | $+12\,\%$ | $66^\circ$ |
+| 5 | 0.0000 | $0\,\%$ | $51^\circ$ ($=$ BDF5) |
+
+Table: NDF correction coefficients $\kappa_q$ adopted by cppDE, the empirical step-size gain over classical BDF$q$ at matched local error, and the resulting stability angle.
+
+NDF5 is BDF5 ($\kappa_5 = 0$), because the BDF5 stability angle of
+$51^\circ$ leaves no room for further reduction.
+
+## Adams-Moulton coefficients {#adams-coeffs}
+
+*Source.* Hindmarsh et al. [@hindmarsh2005sundials], the
+$\ell$-vector formulation of CVODE; implemented in
+`cppde_multistepper.hpp` by `adams_set_coefficients()`.
+
+The Adams-Moulton coefficients depend on the step-size history, so no
+static table holds them: they are recomputed every step from the
+Nordsieck array. With $\xi_j = (t_n - t_{n-j})/h_n$, the recurrence
+$$
+  \ell_0(q) \;=\; 1,
+  \qquad
+  \ell_j(q) \;=\; \ell_{j-1}(q) \;+\; \xi_j^{-1},
+  \qquad j = 1, \dots, q,
+$$
+followed by a polynomial expansion, yields the corrector weights
+$\beta_0, \dots, \beta_q$ of the current step. For
+$h_n = h_{n-1} = \cdots$ they reduce to the fixed-step values of
+Hairer, Nørsett and Wanner [@hairer2008solving, Table III.1.1].
+
+The maximum order is $q_{\max} = 12$, the CVODE default; the order
+controller selects $q \in \{1, \dots, 12\}$ at run time.
+
+## Rosenbrock4 coefficients {#ros-coeffs}
+
+*Source.* Hairer and Wanner [@hairer2010solving, §IV.7], the default
+coefficients of the `rosenbrock4` stepper of
+Boost.Numeric.Odeint except the sign of $d_4$, which is that of
+`rodas.f`; implemented in
+`default_rosenbrock_coefficients` in
+`cppde_rosenbrock4.hpp`.
+
+With iteration matrix $W = (\gamma h_n)^{-1} I - J(x_n, t_n)$, a
+Rosenbrock method of $s$ stages with diagonal coefficient $\gamma$ has
+the stage equations
+$$
+\begin{aligned}
+W\, k_i
+  &\;=\; f\!\left(x_n + \sum_{j<i} \alpha_{ij}\, k_j,\;
+                 t_n + c_i\, h_n \right)
+        \;+\; \frac{1}{h_n} \sum_{j<i} \gamma_{ij}\, k_j
+        \;+\; h_n\, d_i\, \frac{\partial f}{\partial t}, \\
+x_{n+1}      &\;=\; x_n + \sum_{i=1}^{s} m_i\, k_i,
+   \qquad
+\hat x_{n+1} \;=\; x_n + \sum_{i=1}^{s} \hat m_i\, k_i.
+\end{aligned}
+$$
+cppDE uses $s = 6$ and $\gamma = 1/4$. The tables are indexed as in
+the source code and follow in this order: $\gamma$, the time partials
+and the node positions, the stage couplings $\alpha_{ij}$ and
+$\gamma_{ij}$, the sixth-row weights and the dense-output
+coefficients.
+
+|  |  |  |  |  |  |
+|:--|--:|--:|--:|--:|--:|
+| $\gamma$ | 0.25 | $d_1$ | 0.25 | $c_2$ | 0.386 |
+| $d_2$ | $-0.1043$ | $d_3$ | 0.1035 | $c_3$ | 0.21 |
+| $d_4$ | $-0.0362$ |  |  | $c_4$ | 0.63 |
+
+Table: Rosenbrock4 diagonal coefficient $\gamma$, time-partial coefficients $d_i$, and stage node positions $c_i$.
+
+|  | $j=1$ | $j=2$ | $j=3$ | $j=4$ |
+|:--|--:|--:|--:|--:|
+| $\alpha_{2,j}$ | 1.5440000000 |  |  |  |
+| $\alpha_{3,j}$ | 0.9466785281 | 0.2557011699 |  |  |
+| $\alpha_{4,j}$ | 3.3148251871 | 2.8961240160 | 0.9986419140 |  |
+| $\alpha_{5,j}$ | 1.2212245092 | 6.0191344813 | 12.5370833293 | -0.6878860361 |
+
+Table: Rosenbrock4 stage-coupling coefficients $\alpha_{ij}$. Row index $i$ is the stage being formed; column index $j$ ranges over earlier stages.
+
+|  | $j=1$ | $j=2$ | $j=3$ | $j=4$ |
+|:--|--:|--:|--:|--:|
+| $\gamma_{2,j}$ | -5.6688000000 |  |  |  |
+| $\gamma_{3,j}$ | -2.4300933568 | -0.2063599157 |  |  |
+| $\gamma_{4,j}$ | -0.1073529058 | -9.5945622510 | -20.4702861481 |  |
+| $\gamma_{5,j}$ | 7.4964433140 | -10.2468043146 | -33.9999035282 | 11.7089089321 |
+
+Table: Rosenbrock4 stage-coupling coefficients $\gamma_{ij}$, appearing in the $(1/h_n)\sum_{j<i}\gamma_{ij}\,k_j$ term of the stage equation. Row and column conventions match the table of $\alpha_{ij}$.
+
+The sixth stage, at the embedded order-$3$ solution $X_6$, is the error
+estimate $e_{n+1}$, and the step solution adds it to $X_6$:
+$$
+  X_6 \;=\; x_n + \sum_{i=1}^{5} \alpha_{6,i}\, k_i,
+  \qquad
+  W\, e_{n+1} \;=\; f(X_6,\, t_n + h_n) + \frac{1}{h_n}\sum_{i=1}^{5} \gamma_{6,i}\, k_i,
+  \qquad
+  x_{n+1} \;=\; X_6 + e_{n+1},
+$$
+with the sixth-row coefficients of the table below.
+
+|  | $i=1$ | $i=2$ | $i=3$ | $i=4$ | $i=5$ |
+|:--|--:|--:|--:|--:|--:|
+| $\alpha_{6,i}$ | 1.2212245092 | 6.0191344813 | 12.5370833293 | -0.6878860361 | 1.0 |
+| $\gamma_{6,i}$ | 8.0832467959 | -7.9811329881 | -31.5215943287 | 16.3193054312 | -6.0588182388 |
+
+Table: Rosenbrock4 sixth-row coefficients. The $\alpha_{6,i}$ values combine the stage values into the embedded solution $X_6$; the $\gamma_{6,i}$ values enter the sixth stage, the error estimate $e_{n+1}$.
+
+The order-$3$ interpolant on $[t_n, t_{n+1}]$ combines the five stage
+values and the step solution through the coefficient sets
+$d_i^{(2)}$ and $d_i^{(3)}$ of the table below.
+
+|  | $i=1$ | $i=2$ | $i=3$ | $i=4$ | $i=5$ |
+|:--|--:|--:|--:|--:|--:|
+| $d_i^{(2)}$ | 10.1262350834 | -7.4879958776 | -34.8009186156 | -7.9927717076 | 1.0251377233 |
+| $d_i^{(3)}$ | -0.6762803393 | 6.0877146517 | 16.4308432089 | 24.7672251142 | -6.5943891257 |
+
+Table: Rosenbrock4 dense-output coefficients $d_i^{(2)}$ and $d_i^{(3)}$. Together with the stage values they form the order-$3$ interpolant on $[t_n, t_{n+1}]$ used to serve user output points falling between accepted steps.
+
+## Tsitouras 5(4) coefficients {#tsit5-coeffs}
+
+*Source.* Tsitouras [@TSITOURAS2011770, Table 1 and eqs. (7), (8)];
+implemented in `cppde_tsit5.hpp`.
+
+The Tsitouras 5(4) pair (tables below) has $s = 7$
+stages and satisfies the first column simplifying assumption
+$\sum_i b_i a_{ij} = b_j(1 - c_j)$ for every $j$, but not the row
+condition $\sum_j a_{ij} c_j = c_i^2/2$. The seventh stage is the FSAL
+stage: the row $a_{7,j}$ of the $A$ matrix coincides with $b_j$ for
+$j = 1, \dots, 6$.
+
+| $i$ | $c_i$ | $a_{i1}$ | $a_{i2}$ | $a_{i3}$ |
+|:--|--:|--:|--:|--:|
+| 1 | 0 |  |  |  |
+| 2 | 0.161 | 0.161 |  |  |
+| 3 | 0.327 | -0.0084806555 | 0.3354806555 |  |
+| 4 | 0.9 | 2.8971530571 | -6.3594484900 | 4.3622954329 |
+| 5 | 0.9800255409 | 5.3258648284 | -11.7488835641 | 7.4955393429 |
+| 6 | 1.0 | 5.8614554429 | -12.9209693178 | 8.1593678986 |
+| 7 | 1.0 | 0.0964607668 | 0.01 | 0.4798896504 |
+
+Table: Tsitouras 5(4) nodes $c_i$ and coefficients $a_{i1}$ to $a_{i3}$.
+
+| $i$ | $a_{i4}$ | $a_{i5}$ | $a_{i6}$ |
+|:--|--:|--:|--:|
+| 5 | -0.0924950664 |  |  |
+| 6 | -0.0715849733 | -0.0282690504 |  |
+| 7 | 1.3790085741 | -3.2900695154 | 2.3247105241 |
+
+Table: Tsitouras 5(4) coefficients $a_{i4}$ to $a_{i6}$, nonzero from row $5$ on. Row $7$ of both tables equals the order-$5$ weights $b_j$ (FSAL).
+
+The seventh stage $k_7 = f(x_{n+1},\, t_n + h_n)$ is reused as $k_1$
+of step $n+1$. Since $b_7 = 0$ and $\hat b_7 \neq 0$, it enters the
+embedded order-$4$ estimate but not the order-$5$ solution. The step
+controller uses the local-error estimate
+$$
+  e_n \;=\; h_n \sum_{i=1}^{7} (\hat b_i - b_i)\, k_i.
+$$
+The weights and their differences are
+
+| $i$ | $b_i$ | $\hat b_i$ | $\hat b_i - b_i$ |
+|:--|--:|--:|--:|
+| 1 | 0.0964607668 | 0.0946807557 | -0.0017800111 |
+| 2 | 0.01 | 0.0091835655 | -0.0008164345 |
+| 3 | 0.4798896504 | 0.4877705284 | 0.0078808780 |
+| 4 | 1.3790085741 | 1.2342975669 | -0.1447110072 |
+| 5 | -3.2900695154 | -2.7077123499 | 0.5823571655 |
+| 6 | 2.3247105241 | 1.8666284182 | -0.4580821059 |
+| 7 | 0 | 0.0151515152 | 0.0151515152 |
+
+Table: Tsitouras 5(4) weights of order $5$ ($b_i$) and $4$ ($\hat b_i$). The differences are stored in `cppde_tsit5.hpp` as `e1`, ..., `e7` and sum to zero.
+
+## References

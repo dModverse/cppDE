@@ -189,7 +189,8 @@ inline double cvhub_max_ratio(
 //
 //  A rough scale from ||y0||/||f0||, a curvature from the caller's second
 //  derivative, the HNW h1 formula, then an Euler-change cap above and the
-//  rounding of the time variable below. See vignette("Methods"), "The first step".
+//  rounding of the time variable below. See "The first step" in
+//  https://dmodverse.github.io/cppDE/articles/methods-stepping.html.
 // =========================================================================================
 
 constexpr double HLB_FACTOR = 100.0;
@@ -336,8 +337,10 @@ inline fd_ydd<System> make_fd_ydd(System sys) { return fd_ydd<System>(sys); }
 //
 //  Used by the multistep methods so that the first step cppDE takes is the one
 //  CVODES would take on the same problem. The refinement and its two bounds are
-//  in vignette("Methods"), "The first step". The WRMS norm sweeps AD components
-//  unless sens_err_con is off, which makes the first step value-only too.
+//  in "The first step" of
+//  https://dmodverse.github.io/cppDE/articles/methods-stepping.html. The WRMS
+//  norm sweeps AD components unless sens_err_con is off, which makes the first
+//  step value-only too.
 // =========================================================================================
 
 template<class Value, class System>

@@ -3,7 +3,8 @@
 
  The reset is sandwiched between a forward and a backward Heun shift, so that
  the parameter dependence of the firing time reaches the sensitivities. See
- vignette("Methods"), section "Sensitivity transport across a discontinuity".
+ "Sensitivity transport across a discontinuity" in
+ https://dmodverse.github.io/cppDE/articles/methods-events.html.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -30,7 +31,8 @@ namespace detail {
 // dt* comes from the implicit function theorem as a dual quotient, the state
 // is transported across the surface on Heun shifts so that the second-order
 // components survive, and events triggered together share one roundtrip.
-// See vignette("Methods"), section "Root-triggered events".
+// See "Root-triggered events" in
+// https://dmodverse.github.io/cppDE/articles/methods-events.html.
 // ============================================================================
 
 /// The coefficient of the second-order IFT correction, dt* -> dt* + c2 dt*^2,

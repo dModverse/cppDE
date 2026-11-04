@@ -62,6 +62,6 @@ if (codegenAvailable()) {
 }
 }
 \seealso{
-\code{\link[=solveODE]{solveODE()}}; \code{vignette("Methods", package = "cppDE")}, "Checking
-the sweep".
+\code{\link[=solveODE]{solveODE()}}; \href{https://dmodverse.github.io/cppDE/articles/methods-reverse.html#refine}{Checking the sweep}
+in the methods of the cppDE site.
 }

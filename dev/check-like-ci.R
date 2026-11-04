@@ -3,9 +3,6 @@
 # Local R CMD check mimicking the GitHub Actions check-r-package step
 # (build_args + --as-cran). Aborts on warnings, not just on errors.
 
-# Needs vignettes/Methods.pdf (else run dev/render-methods.R first). Without
-# ghostscript, --compact-vignettes=gs+qpdf skips compaction instead of failing.
-
 # On Windows without pandoc on PATH: try the usual RStudio bundle locations.
 if (!nzchar(Sys.which("pandoc")) && !nzchar(Sys.getenv("RSTUDIO_PANDOC"))) {
   rstudio_pandoc_candidates <- c(
@@ -30,5 +27,5 @@ if (!nzchar(Sys.getenv("TESTTHAT_CPUS"))) {
 devtools::check(
   error_on   = "warning",
   args       = c("--no-manual", "--as-cran"),
-  build_args = c("--no-manual", "--compact-vignettes=gs+qpdf")
+  build_args = "--no-manual"
 )

@@ -14,5 +14,8 @@
 ^benchmarks$
 ^cran-comments\.md$
 ^src/Makevars$
-^examples$
 \.ruff_cache$
+^_pkgdown\.yml$
+^docs$
+^pkgdown$
+^vignettes/articles$

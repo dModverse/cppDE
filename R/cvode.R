@@ -6,7 +6,7 @@
 #' sensitivity solver (`deriv = TRUE`) or by its adjoint
 #' (`derivMode = "reverse"`). The compiled model exposes the same R interface
 #' as a model from [cppODE()]; the differences between the two backends are
-#' described in `vignette("Methods", package = "cppDE")`.
+#' described in [cvode() and its adjoint](https://dmodverse.github.io/cppDE/articles/methods-cvode.html).
 #'
 #' Available methods are `"bdf"` (default) and `"adams"`. Forward
 #' sensitivities are of first order only; `deriv2` is not supported. Events,
@@ -48,7 +48,7 @@
 #' \emph{ACM Transactions on Mathematical Software} \strong{31}(3), 363-396.
 #'
 #' @seealso [expressions], [cppODE()], [solveODE()], [cppFUN()];
-#'   `vignette("Methods", package = "cppDE")`.
+#'   [cvode() and its adjoint](https://dmodverse.github.io/cppDE/articles/methods-cvode.html).
 #' @example inst/examples/cvode.R
 #' @export
 cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = NULL,

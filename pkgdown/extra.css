@@ -1,0 +1,21 @@
+/* The page grows with the window: from 1400 px on, the container takes 92 % of it, at most 2000 px. */
+@media (min-width: 1400px) {
+  .container, .container-xxl {
+    max-width: min(92vw, 2000px);
+  }
+}
+
+/* The text column fills the container next to the sidebar. */
+@media (min-width: 768px) {
+  .row > main {
+    max-width: none;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+
+/* Prose in justified text, hyphenated at the line ends. */
+main p, main li, main dd {
+  text-align: justify;
+  hyphens: auto;
+}

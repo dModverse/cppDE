@@ -72,7 +72,7 @@ jobs:
       - uses: r-lib/actions/check-r-package@v2
         with:
           upload-snapshots: true
-          build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
+          build_args: '"--no-manual"'
 
   # R on FlexiBLAS, with SymPy/SUNDIALS/KLU packaged: the only job that runs the
   # test suite, i.e. the generate -> compile -> dyn.load path.
@@ -104,7 +104,7 @@ jobs:
 
       - name: Install R dependencies
         run: |
-          Rscript -e 'install.packages(c("reticulate", "rcmdcheck", "testthat", "spelling", "R.rsp", "knitr", "rmarkdown"), repos = "https://cloud.r-project.org", Ncpus = 4L)'
+          Rscript -e 'install.packages(c("reticulate", "rcmdcheck", "testthat", "spelling"), repos = "https://cloud.r-project.org", Ncpus = 4L)'
 
       - name: Session info
         run: |
@@ -112,7 +112,7 @@ jobs:
 
       - name: Check
         run: |
-          Rscript -e 'rcmdcheck::rcmdcheck(args = c("--no-manual", "--as-cran"), build_args = c("--no-manual", "--compact-vignettes=gs+qpdf"), error_on = "warning", check_dir = "check")'
+          Rscript -e 'rcmdcheck::rcmdcheck(args = c("--no-manual", "--as-cran"), build_args = "--no-manual", error_on = "warning", check_dir = "check")'
 
       - name: Upload check results
         if: failure()

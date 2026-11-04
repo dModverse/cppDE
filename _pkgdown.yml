@@ -1,0 +1,107 @@
+url: https://dmodverse.github.io/cppDE/
+
+template:
+  bootstrap: 5
+  math-rendering: mathjax
+
+navbar:
+  structure:
+    left: [intro, reference, methods, articles, news]
+    right: [search, dmod2, github]
+  components:
+    methods:
+      text: Methods
+      menu:
+      - text: Entry points and code generation
+        href: articles/methods-codegen.html
+      - text: Stepping and error control
+        href: articles/methods-stepping.html
+      - text: Forward sensitivities
+        href: articles/methods-forward.html
+      - text: Events, switches and saltation
+        href: articles/methods-events.html
+      - text: "Reverse mode: the discrete adjoint"
+        href: articles/methods-reverse.html
+      - text: "Second derivatives: forward over reverse"
+        href: articles/methods-forward-reverse.html
+      - text: Batches of conditions
+        href: articles/methods-batches.html
+      - text: cvode() and its adjoint
+        href: articles/methods-cvode.html
+      - text: cppFUN() and its derivative directions
+        href: articles/methods-cppfun.html
+      - text: Method coefficients
+        href: articles/methods-coefficients.html
+    dmod2:
+      text: dMod2
+      href: https://dmodverse.github.io/dMod2/
+      aria-label: dMod2, the modelling framework built on cppDE
+    github:
+      icon: fa-github
+      href: https://github.com/dModverse/cppDE
+      aria-label: GitHub
+
+articles:
+- title: Methods
+  desc: >
+    What the generated code computes: integrators, step-size control,
+    forward and reverse sensitivities, events, batches, the CVODES backend
+    and the derivatives of algebraic functions.
+  contents:
+  - '`articles/methods-codegen`'
+  - '`articles/methods-stepping`'
+  - '`articles/methods-forward`'
+  - '`articles/methods-events`'
+  - '`articles/methods-reverse`'
+  - '`articles/methods-forward-reverse`'
+  - '`articles/methods-batches`'
+  - '`articles/methods-cvode`'
+  - '`articles/methods-cppfun`'
+  - '`articles/methods-coefficients`'
+
+- title: Examples
+  navbar: Examples
+  desc: Worked examples beyond Getting started.
+  contents:
+  - '`articles/saltation`'
+  - '`articles/fitCoPt`'
+
+- title: Benchmarks
+  navbar: ~
+  desc: The two integrators compared on 43 problems, from the saved results of one run.
+  contents:
+  - '`articles/benchmarks`'
+
+reference:
+- title: ODE models
+  desc: Generate, compile and solve ODE models with their sensitivities.
+  contents:
+  - cppODE
+  - cvode
+  - solveODE
+  - adjointControl
+  - diagnostics
+  - forcingValues
+  - expressions
+
+- title: Batches of conditions
+  desc: Many conditions of one model in one call, in parallel.
+  contents:
+  - solveODEBatch
+  - prepareBatch
+  - solveBatch
+  - batchAvailable
+  - forkGuard
+
+- title: Algebraic functions and steady states
+  contents:
+  - cppFUN
+  - evaluateMany
+  - ptc
+
+- title: Compilation and libraries
+  contents:
+  - compile
+  - codegenAvailable
+  - clearNativeSymbols
+  - installLibs

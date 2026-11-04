@@ -31,7 +31,7 @@ Description: Generates, compiles and runs 'C++' code for models given as
     in parallel are supported.
 Language: en-GB
 License: MIT + file LICENSE
-URL: https://github.com/dModverse/cppDE
+URL: https://dmodverse.github.io/cppDE/, https://github.com/dModverse/cppDE
 BugReports: https://github.com/dModverse/cppDE/issues
 SystemRequirements: C++17; Python (>= 3.9) with SymPy. Two further
     features are gated on external libraries that ./configure detects at
@@ -55,12 +55,10 @@ Suggests:
     testthat,
     knitr,
     rmarkdown,
-    R.rsp,
     ggplot2,
     tidyr,
     dplyr,
     scales
-VignetteBuilder: R.rsp
 Config/roxygen2/version: 8.1.1
 Config/testthat/edition: 3
 Config/testthat/parallel: true

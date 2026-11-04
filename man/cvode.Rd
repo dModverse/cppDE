@@ -87,7 +87,7 @@ for use with \code{\link[=solveODE]{solveODE()}}. Sensitivities are computed by 
 sensitivity solver (\code{deriv = TRUE}) or by its adjoint
 (\code{derivMode = "reverse"}). The compiled model exposes the same R interface
 as a model from \code{\link[=cppODE]{cppODE()}}; the differences between the two backends are
-described in \code{vignette("Methods", package = "cppDE")}.
+described in \href{https://dmodverse.github.io/cppDE/articles/methods-cvode.html}{cvode() and its adjoint}.
 }
 \details{
 Available methods are \code{"bdf"} (default) and \code{"adams"}. Forward
@@ -130,5 +130,5 @@ Nonlinear and Differential/Algebraic Equation Solvers.
 }
 \seealso{
 \link{expressions}, \code{\link[=cppODE]{cppODE()}}, \code{\link[=solveODE]{solveODE()}}, \code{\link[=cppFUN]{cppFUN()}};
-\code{vignette("Methods", package = "cppDE")}.
+\href{https://dmodverse.github.io/cppDE/articles/methods-cvode.html}{cvode() and its adjoint}.
 }

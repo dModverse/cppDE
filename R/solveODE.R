@@ -667,7 +667,8 @@
 #'   method's own maximum. An error on `"rb4"` and `"tsit5"`.
 #' @param stald Logical, default `FALSE`. Stability limit detection for method
 #'   `"bdf"`: the order drops when the step size leaves the stability region
-#'   of the current order. See `vignette("Methods")`.
+#'   of the current order. See
+#'   [Stepping and error control](https://dmodverse.github.io/cppDE/articles/methods-stepping.html#adaptive-step-size-control).
 #'
 #' @return A named list:
 #' - `time`: the output times, length `n_t`.

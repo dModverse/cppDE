@@ -1,0 +1,184 @@
+---
+title: "Forward sensitivities"
+bibliography: refs.bib
+csl: ieee.csl
+link-citations: true
+---
+
+## Dual-number arithmetic
+
+Parameter sensitivities of the trajectory are computed by forward-mode
+automatic differentiation [@griewank2008evaluating], not by finite
+differences. Every floating-point scalar is augmented by a
+component holding its directional derivative. Arithmetic and
+elementary functions are overloaded for the augmented type, so the C++
+source that evaluates $f$ is compiled unchanged for the primal and the
+sensitivity computation.
+
+The augmented type is the *dual number*
+$$
+  \tilde x = x + x'\,\varepsilon,
+  \qquad \varepsilon^2 = 0,\quad \varepsilon \ne 0,
+$$
+with primal value $x \in \mathbb{R}$ and directional derivative
+$x' \in \mathbb{R}$. Read as a first-order Taylor expansion in
+$\varepsilon$, it obeys, for $\tilde x = x + x'\varepsilon$ and
+$\tilde y = y + y'\varepsilon$,
+$$
+  \tilde x + \tilde y = (x+y) + (x'+y')\varepsilon,
+  \qquad
+  \tilde x \cdot \tilde y = xy + (xy' + x'y)\varepsilon,
+$$
+and for any smooth scalar function $g$,
+$$
+  g(\tilde x) = g(x) + g'(x)\,x'\,\varepsilon.
+$$
+Compositions propagate the derivative of the composed function, so the
+source that evaluates $f$ over $\mathbb{R}$ returns $f$ and its
+directional derivative when called with dual inputs.
+
+## Tangent storage
+
+A dual stores its value inline and $m$ tangent slots behind a pointer;
+$m$ is $\mathrm{ncol}$ of the tangent, set at run time rather than at
+compile time. Tangents of temporaries come from a thread-local bump
+arena. A generated model body binds its outputs first and then opens an
+arena scope, so that everything else it allocates there is released in
+one operation when it returns, while the outputs stay with the caller.
+State vectors the stepper keeps across steps point into one contiguous
+$n_x \times m$ block per vector, the tangent slab, sized once per
+solve, and the linear solves of the step write into buffers they keep.
+The memory of a solve is thus that of one step, whatever the number of
+steps. The outermost scope of a solve returns its arena to a pool, from
+which the next solve on any thread takes it, with at most 1 GB of its
+storage kept.
+
+A second-order dual nests a dual in a dual. The outer tangents hold the
+gradient in their values and the rows of the Hessian in their tangents,
+of which only the lower triangle is propagated. The value layer holds
+the scalar; its tangents would repeat the gradient, and a copy never
+binds them, so that an output bound before a scope keeps its storage
+after it.
+
+A tangent wider than one call should handle is split into blocks of
+directions; since the step sequence of a tangent-blind solve does not
+depend on $m$, the blocks share one grid and the assembled Hessian
+equals that of a single pass exactly.
+
+A dual whose width was never set has no slots and reads as a zero
+tangent. Buffers zeroed before use, such as the cotangents of a
+backward sweep, therefore get their width declared first; otherwise
+their derivatives would be structurally zero.
+
+## Sensitivity equations via dual evaluation
+
+For a right-hand side depending on parameters
+$p \in \mathbb{R}^{n_p}$,
+$$
+  \dot x = f(x, p, t), \qquad x(t_0) = x_0(p),
+$$
+the *sensitivity matrix* is
+$$
+  S_p = \frac{\partial x}{\partial p} \in \mathbb{R}^{n_x \times n_p},
+  \qquad
+  (S_p)_{ij} = \frac{\partial x_i}{\partial p_j}.
+$$
+Seeding each state component with its row of $S_p$ gives the dual
+state
+$$
+  \tilde x_i = x_i + (S_p)_{ij}\,\varepsilon_j,
+$$
+with dual unit $\varepsilon_j$ for direction $p_j$ and summation over
+repeated indices. The $\varepsilon_j$-coefficient of the $i$-th output
+of $f$ evaluated over the dual algebra is
+$$
+  \bigl[f(\tilde x, p, t)\bigr]_{i,\,\varepsilon_j}
+  = \frac{\partial f_i}{\partial x_k}\,(S_p)_{kj}
+    + \frac{\partial f_i}{\partial p_j}.
+$$
+The primal part recovers $\dot x_i = f_i(x,p,t)$; differentiating it
+with respect to $p_j$ identifies the $\varepsilon_j$-coefficient with
+$\dot{(S_p)}_{ij}$, which gives
+[]{#eq-sensitivity-p}
+$$
+  \dot S_p
+    = \frac{\partial f}{\partial x}\,S_p
+      + \frac{\partial f}{\partial p},
+  \qquad
+  S_p(t_0) = \frac{\partial x_0}{\partial p}. \tag{12}
+$$
+One dual evaluation of $f$ thus yields the right-hand side of
+[(12)](#eq-sensitivity-p) for all columns of $S_p$, at a cost
+proportional to $n_p$ and without forming $\partial f/\partial x$.
+
+## Seeding: from $S_p$ to $S_\theta$
+
+Inference parameters are often a vector $\theta \in \mathbb{R}^M$
+linked to the dynamic parameters $p_{\mathrm{dyn}}$ and the initial
+condition $x_0 = p_{\mathrm{init}}(\theta)$ by a reparametrisation
+$p = \Phi(\theta)$. The quantity of interest is then
+$$
+  S_\theta = \frac{\partial x}{\partial \theta}
+           \in \mathbb{R}^{n_x \times M},
+$$
+and the chain rule $S_\theta = S_p\,\partial p / \partial\theta$ turns
+[(12)](#eq-sensitivity-p) into
+[]{#eq-sensitivity-theta}
+$$
+  \dot S_\theta
+    = \frac{\partial f}{\partial x}\,S_\theta
+      + \frac{\partial f}{\partial p_{\mathrm{dyn}}}
+        \,\frac{\partial p_{\mathrm{dyn}}}{\partial \theta},
+  \qquad
+  S_\theta(t_0) = \frac{\partial p_{\mathrm{init}}}{\partial \theta}. \tag{13}
+$$
+The matrix $\partial p / \partial\theta$, the *tangent* of the
+inputs, is passed as the `tangent` argument of
+`solveODE()` and is fixed during integration. The choice
+$\partial p/\partial\theta = I_{n_p}$ gives $S_\theta = S_p$; each of
+the $M$ directions of $\theta$-space costs one additional state vector.
+
+## Error norm with sensitivities
+
+With forward sensitivities the integrator integrates
+$S_\theta \in \mathbb{R}^{n_x \times M}$ beside the state, and every
+step produces $1+M$ error vectors of length $n_x$: $e_n^{(x)}$ for the
+state and $e_S^{(k)}$ for each column $\partial x/\partial \theta_k$.
+As in CVODES, they are combined by the maximum of the per-vector WRMS
+norms, not by a flat WRMS over all $n_x(1+M)$ components.
+
+The state norm $\| e_n^{(x)} \|_{\mathrm{WRMS}}$ is [(10)](methods-stepping.html#eq-wrms).
+The column norm is its analogue with $S_\theta$ in place of $x$ in
+error vector and weight,
+[]{#eq-wrms-col}
+$$
+  \| e_S^{(k)} \|_{\mathrm{WRMS}} =
+  \sqrt{\frac{1}{n_x} \sum_{i=1}^{n_x} \left(
+    \frac{(e_S)_{ik}}{w^{(k)}_{i}}
+  \right)^{\!2}},
+  \qquad
+  w^{(k)}_{i} = \mathtt{abstol} + \mathtt{reltol}\,|(S_\theta)_{ik}^{\mathrm{ref}}|, \tag{14}
+$$
+where $(S_\theta)_{ik}^{\mathrm{ref}}$ is taken like
+$x^{\mathrm{ref}}_n$: the accepted value for multistep methods, the
+maximum over both step ends for single-step methods. The step-size
+controller uses the largest of these norms,
+[]{#eq-wrms-sens}
+$$
+  \| e_n \|_{\mathrm{WRMS}} = \max\left\{
+    \| e_n^{(x)} \|_{\mathrm{WRMS}},\;
+    \max_{1 \le k \le M} \| e_S^{(k)} \|_{\mathrm{WRMS}}
+  \right\}. \tag{15}
+$$
+A flat WRMS divides by $n_x(1+M)$, so small errors in some columns can
+mask a large error in another; the maximum holds each direction to the
+requested tolerance separately.
+
+The BDF/NDF corrector uses the same maximum, so an unconverged
+sensitivity direction forces further iterations or a smaller step even
+when the state has converged. With
+`solveODE(..., sensErrCon = FALSE)`, error test, order
+selection, corrector test and initial-step estimate use the state
+components only, and the step sequence is that of a value run.
+
+## References

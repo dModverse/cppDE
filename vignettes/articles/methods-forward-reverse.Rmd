@@ -1,0 +1,119 @@
+---
+title: "Second derivatives: forward over reverse"
+bibliography: refs.bib
+csl: ieee.csl
+link-citations: true
+---
+
+For a fixed cotangent, [(22)](methods-reverse.html#eq-adjoint-contraction) defines the
+gradient map
+[]{#eq-gradient-map}
+$$
+  \bar\theta : \mathbb{R}^{M} \to \mathbb{R}^{M},
+  \qquad \theta \mapsto \nabla_\theta L(\theta), \tag{46}
+$$
+whose Jacobian is the Hessian $\nabla^2_\theta L$. The sweep that
+evaluates [(46)](#eq-gradient-map) is generic in the scalar type, so
+instantiating it on $\mathtt{dual}\langle\mathtt{double}, N\rangle$
+instead of `double` differentiates the sweep itself. Seeded with
+a tangent $V \in \mathbb{R}^{M \times N}$ it returns
+$(\nabla_\theta L,\; \nabla^2_\theta L\,V)$, both exact rather than
+difference quotients [@pearlmutter1994fast]; for $V = I_M$ the second
+member is the Hessian. For an ODE this is the second-order adjoint
+[@wang1992second; @ozyurt2005cheap]. It is selected by
+`derivMode = "forward-reverse"` and reported as
+`curvature`, of shape $[n_x + n_p, N, n_{\text{seed}}]$, beside
+the `cotangent` and `tangent` of the same run.
+
+The tangents satisfy the second-order adjoint system. For a direction
+$v = (v_0, v_p)$ in $\theta$, let $\sigma$ be the directional
+sensitivity and $\mu$ the tangent of $\lambda$ along $v$. Then $\sigma$
+solves [(12)](methods-forward.html#eq-sensitivity-p) contracted with $v$,
+[]{#eq-soa-tangent}
+$$
+  \dot\sigma = \frac{\partial f}{\partial x}\,\sigma
+             + \frac{\partial f}{\partial p}\,v_p,
+  \qquad \sigma(t_0) = v_0, \tag{47}
+$$
+and differentiating [(23)](methods-reverse.html#eq-adjoint-ode) along $v$ gives $\mu$
+backwards from $\mu(T^+) = 0$,
+[]{#eq-soa-adjoint}
+$$
+  \dot\mu_i = -\sum_k \frac{\partial f_k}{\partial x_i}\,\mu_k
+            - \sum_k \lambda_k \left(
+                \sum_j \frac{\partial^2 f_k}{\partial x_i\, \partial x_j}\,\sigma_j
+              + \sum_m \frac{\partial^2 f_k}{\partial x_i\, \partial p_m}\,v_m
+              \right), \tag{48}
+$$
+with jumps $\mu(t_o^-) = \mu(t_o^+) + \dot w_o$, where $\dot w_o$ is
+the derivative of the cotangent row $w_o$ along $v$. It is zero for a
+cotangent independent of $\theta$; a cotangent formed from the
+solution, such as a weighted residual, supplies it through the
+`curvature` argument, an array
+$[n_{\mathrm{out}}, n_x, n_{\mathrm{seed}}, N]$. Without it the
+gradient is unchanged and the Hessian misses the dependence of the
+cotangent on $\theta$. Differentiating [(26)](methods-reverse.html#eq-adjoint-quadrature)
+along $v$ gives the two halves of $\nabla^2_\theta L\,v$: the state
+half $\mu(t_0)$ and the parameter half
+[]{#eq-soa-quadrature}
+$$
+  \int_{t_0}^{T}\left(
+      \sum_k \frac{\partial f_k}{\partial p_m}\,\mu_k
+    + \sum_k \lambda_k \left(
+        \sum_j \frac{\partial^2 f_k}{\partial p_m\, \partial x_j}\,\sigma_j
+      + \sum_l \frac{\partial^2 f_k}{\partial p_m\, \partial p_l}\,v_l
+      \right)\right)\mathrm{d}t . \tag{49}
+$$
+cppDE does not integrate [(47)](#eq-soa-tangent) to
+[(49)](#eq-soa-quadrature) but obtains their discrete counterpart from
+the dual instantiation: the tangent propagated alongside $\lambda$ is
+$\mu$ on the grid the forward run chose, and the tangent of the
+parameter accumulator is [(49)](#eq-soa-quadrature). The second
+derivatives of $f$ in [(48)](#eq-soa-adjoint) and
+[(49)](#eq-soa-quadrature) come from instantiating the first-order
+contractions $J^{\mathsf T}\lambda$ and
+$(\partial f/\partial p)^{\mathsf T}\lambda$ over duals, so forward
+over reverse needs no generated expression beyond those of the
+first-order sweep. For a Rosenbrock method these already include the
+contractions of $J v$, which are second derivatives of $f$.
+
+The sweep reads tangents from its checkpoints, so the forward pass is a
+sensitivity run in the same $N$ directions, and a checkpoint holds the
+history of the step with its tangents, $(q+1)\,n_x (N+1)$ numbers. The
+memory of the sweep is linear in the number of steps, as for the first
+order, but with that factor. The error test and first step of the
+forward pass read the values only, so the grid does not depend on the
+directions. The cost, one
+sensitivity integration and one sweep, both of width $N$, is linear in
+$N$. Forward over forward, selected by
+`derivMode = "forward-forward"` or `deriv2 = TRUE`,
+propagates the full second-order sensitivity tensor through the
+integration at a cost quadratic in $M$. A difference quotient of the
+gradient would cost $N$ further gradient evaluations and lose half of
+the available digits.
+
+Forward over forward returns a different object:
+`hessian`, the second derivatives of every state with respect to
+every pair of parameters, from which the Hessian of any functional can
+be contracted afterwards. Forward over reverse returns the Hessian of
+one functional. For a likelihood the mixed route is cheaper by a factor
+of $M$; where the states themselves are of interest, `hessian` is
+the only route.
+
+The second order needs two further facilities. The iteration matrix
+has tangents, so the transposed solve applies the implicit function
+theorem with the matrix transposed alongside;
+`cppde_ad_lu.hpp` and `cppde_sparse_ad_lu.hpp`
+provide this in the dense and the sparse case. And a generated model
+body opens an arena scope of its own, which would release a tangent
+allocated there for one of the caller's numbers, so the sweep binds the
+tangent storage of every buffer before passing it to the model, as the
+stepper does for its own buffers through the tangent slab.
+
+The two second-order routes agree to $10^{-6}$ on `bdf`,
+`rb4` and `tsit5`, and all four methods return the same
+Hessian in reverse to $10^{-5}$. The second comparison is the stronger:
+the four methods adapt grids of their own, so agreement means that
+each sweep differentiated the discretisation its own method applied.
+
+## References

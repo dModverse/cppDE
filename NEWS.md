@@ -1,3 +1,11 @@
+# cppDE (development version)
+
+* cppDE has a site, <https://dmodverse.github.io/cppDE/>: the reference, Getting started, the
+  methods in ten articles, two worked examples and the benchmarks against SUNDIALS CVODES. The
+  methods articles replace the PDF vignette `Methods`, and `R.rsp` is not suggested. The demos
+  are articles of the site: `basics` is Getting started, `saltation` and `fitCoPt` are the
+  worked examples; `demo()` lists none.
+
 # cppDE 0.13.8
 
 * The code generators read no environment variables; `CPPDE_PY_DIR`, `CPPDE_JAC`, `CPPDE_LINEAR`

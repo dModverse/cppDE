@@ -4,8 +4,10 @@
 #' compiles it via `R CMD SHLIB`, and returns a handle for use with
 #' [solveODE()]. The four available methods (`"bdf"`, `"adams"`,
 #' `"rb4"`, `"tsit5"`) and their selection criteria, the dual-number
-#' sensitivity framework, and the event handling are described in
-#' `vignette("Methods", package = "cppDE")`.
+#' sensitivity framework, and the event handling are described in the
+#' articles [Stepping and error control](https://dmodverse.github.io/cppDE/articles/methods-stepping.html),
+#' [Forward sensitivities](https://dmodverse.github.io/cppDE/articles/methods-forward.html) and
+#' [Events, switches and saltation](https://dmodverse.github.io/cppDE/articles/methods-events.html).
 #'
 #' Events are specified as a `data.frame` with columns `var` (affected
 #' variable), `value` (expression to apply), `method` (`"replace"`,
@@ -104,7 +106,7 @@
 #' @seealso [expressions] for the syntax of equations; [solveODE()] for
 #'   integration; [cvode()] for the
 #'   SUNDIALS-backed alternative; [cppFUN()] for algebraic functions;
-#'   `vignette("Methods", package = "cppDE")` for behaviour.
+#'   the [methods](https://dmodverse.github.io/cppDE/articles/methods-codegen.html) for behaviour.
 #' @export
 cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = NULL,
                    compile = TRUE, modelname = NULL, outdir = tempdir(),

@@ -109,7 +109,8 @@ integration; the principal use cases are observation maps for
 likelihood-based inference and reparametrisations for \code{\link[=solveODE]{solveODE()}}.
 \code{derivMode} selects which derivative products are built. Every returned
 function runs compiled code: an object built with \code{compile = FALSE} is
-evaluable only after \code{\link[=compile]{compile()}}. See \code{vignette("Methods", package = "cppDE")}
+evaluable only after \code{\link[=compile]{compile()}}. See
+\href{https://dmodverse.github.io/cppDE/articles/methods-cppfun.html}{cppFUN() and its derivative directions}
 for the computational paths and the pass-through of unmodelled inputs.
 }
 \details{
@@ -165,5 +166,5 @@ if (codegenAvailable()) {
 \seealso{
 \link{expressions} for the syntax of equations; \code{\link[=compile]{compile()}} for
 compilation; \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} for ODE integration; \code{\link[=ptc]{ptc()}} for
-steady states; \code{vignette("Methods", package = "cppDE")}.
+steady states; \href{https://dmodverse.github.io/cppDE/articles/methods-cppfun.html}{cppFUN() and its derivative directions}.
 }

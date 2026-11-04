@@ -110,8 +110,10 @@ Generates C++ source code for an ODE system \eqn{\dot{x} = f(x, p)},
 compiles it via \verb{R CMD SHLIB}, and returns a handle for use with
 \code{\link[=solveODE]{solveODE()}}. The four available methods (\code{"bdf"}, \code{"adams"},
 \code{"rb4"}, \code{"tsit5"}) and their selection criteria, the dual-number
-sensitivity framework, and the event handling are described in
-\code{vignette("Methods", package = "cppDE")}.
+sensitivity framework, and the event handling are described in the
+articles \href{https://dmodverse.github.io/cppDE/articles/methods-stepping.html}{Stepping and error control},
+\href{https://dmodverse.github.io/cppDE/articles/methods-forward.html}{Forward sensitivities} and
+\href{https://dmodverse.github.io/cppDE/articles/methods-events.html}{Events, switches and saltation}.
 }
 \details{
 Events are specified as a \code{data.frame} with columns \code{var} (affected
@@ -211,5 +213,5 @@ if (codegenAvailable()) {
 \link{expressions} for the syntax of equations; \code{\link[=solveODE]{solveODE()}} for
 integration; \code{\link[=cvode]{cvode()}} for the
 SUNDIALS-backed alternative; \code{\link[=cppFUN]{cppFUN()}} for algebraic functions;
-\code{vignette("Methods", package = "cppDE")} for behaviour.
+the \href{https://dmodverse.github.io/cppDE/articles/methods-codegen.html}{methods} for behaviour.
 }

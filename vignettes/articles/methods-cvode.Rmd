@@ -1,0 +1,152 @@
+---
+title: "cvode() and its adjoint"
+bibliography: refs.bib
+csl: ieee.csl
+link-citations: true
+---
+
+`cvode()` compiles a model against SUNDIALS CVODE/CVODES
+($\ge 6.0$), installed on the build host, and exposes it through the
+`solveODE()` interface of `cppODE()`.
+
+## What is shared
+
+The code generator, the `events`, `forcings`,
+`rootfunc` and `fixed` arguments, the returned object and
+the column order of `parms` and `tangent` are those of
+`cppODE()`. The Jacobian $J = \partial f / \partial x$ is formed
+on the [expression graph](methods-codegen.html#codegen) and emitted as for
+`cppODE()`, linear tables and loops included. Both backends
+select the sparse KLU solver for $n_x \ge 8$ states and a structural
+density of $J$ of at most $0.4$, provided SuiteSparse was found at
+install time, and dense LAPACK otherwise; `sparse = TRUE`
+requires KLU. Forcing functions are PCHIP interpolants, events reset
+the state discontinuously, and root events fire when a user-supplied
+scalar function crosses zero. The chain rule
+$S_\theta = S_p\,\partial p / \partial \theta$ of
+[(13)](methods-forward.html#eq-sensitivity-theta) is that of `cppODE()`, with the
+same `tangent` shapes (state-only, full, partial) and row-name
+conventions.
+
+## What differs
+
+**Sensitivity right-hand side.** CVODES integrates the
+forward-sensitivity equation
+[]{#eq-cvodes-sens}
+$$
+  \dot S_k = J(x, p)\, S_k + \frac{\partial f}{\partial p_k},
+  \qquad k = 1, \dots, n_p, \tag{50}
+$$
+directly. Its generated right-hand side is one Jacobian-vector product
+of $f$ in the direction $(S_k, \partial p/\partial\theta_k)$, evaluated
+in `double` without forming $J$. The in-tree backend obtains the
+same equation, [(12)](methods-forward.html#eq-sensitivity-p), by evaluating $f$ on
+dual-typed state. The generated product avoids the arena allocation of
+each dual evaluation but runs once per direction; the dual evaluation
+covers all directions in one pass.
+
+**Methods.** CVODE provides only the multistep families, selected
+by `method = "bdf"` or `"adams"`; `rb4` and
+`tsit5` are unavailable. The [stability properties](methods-stepping.html#stiffness-and-the-choice-of-method) apply unchanged.
+
+**Second-order sensitivities.** CVODES provides only first-order
+forward sensitivities, and `cvode()` does not accept
+`deriv2 = TRUE`.
+
+**Events.** Events use the Heun transport of `cppODE()`
+with the first-order corrections [(17)](methods-events.html#eq-fixed-heun) and
+[(19)](methods-events.html#eq-dt-star-first). The transport runs in the generated glue,
+outside CVODES, which re-initialises its sensitivities from the
+transported state.
+
+## Adjoint sensitivity analysis {#asa}
+
+`cvode(..., derivMode = "reverse")` compiles the CVODES adjoint
+sensitivity analysis (ASA) in place of forward sensitivities and
+returns the `$cotangent` of a native reverse solve: the
+contraction [(22)](methods-reverse.html#eq-adjoint-contraction), states first and
+parameters second. The rest of the call, batch entry point included, is
+unchanged.
+
+**Backward problem.** Where `cppODE()` transposes the
+forward steps, CVODES integrates [(23)](methods-reverse.html#eq-adjoint-ode) as an ODE of
+its own [@cao2003adjoint]. The generated glue emits both right-hand
+sides as vector-Jacobian products of $f$ (see [code generation](methods-codegen.html#codegen)),
+the contractions of the native reverse mode, without forming $J$:
+[]{#eq-asa-system}
+$$
+  \dot\lambda = -\left(\frac{\partial f}{\partial x}\right)^{\!\mathsf T}\!\lambda,
+  \qquad
+  \dot q = -\left(\frac{\partial f}{\partial p}\right)^{\!\mathsf T}\!\lambda, \tag{51}
+$$
+the second being the quadrature [(26)](methods-reverse.html#eq-adjoint-quadrature) with
+$q(T) = 0$. CVODES integrates it alongside the backward state and, by
+default, leaves it out of the error test: with gradient entries of very
+different scale the test would stall the backward step against
+`reltol` alone. `adjointControl(gradtol = g)` puts it in,
+with absolute tolerance $g$, so the backward step size then holds the
+gradient's own error. The [checked sweep](methods-reverse.html#refine) of the native reverse mode
+applies the same test to the discrete steps. Both equations run from $T$ down to
+$t_0$; the minus signs cancel against the reversed limits, so
+$\lambda(t_0)$ is the state part of the gradient and $q(t_0)$ the
+parameter part. The backward problem is a BDF solve with the linear
+solver of the forward problem, KLU for a sparse model, and the analytic
+Jacobian $-J^{\mathsf T}$, formed from $J$ in the forward pattern, at the
+caller's tolerances and step budget.
+
+**Checkpoints.** The backward right-hand side needs $x(t)$, which
+the forward pass does not keep. CVODES stores a checkpoint every
+`asaCheckpoints` accepted steps, $200$ by default, and recovers
+the states between two checkpoints by re-integrating forward from the
+earlier one and interpolating; the argument trades memory against
+re-integration. This is the main difference between the two
+discretisations: the adjoint sees interpolated states, not the ones
+the forward run stepped through, so the gradient is the derivative of
+no discretisation actually performed. It approximates the exact
+gradient to $O(\mathrm{tol})$ and differs by the same order from the
+derivative of the reported value.
+
+**Jumps at observations.** $\lambda$ starts from the cotangent
+row of the last observation, and the sweep stops at each earlier
+observation time to add its row, the jump condition of
+[(23)](methods-reverse.html#eq-adjoint-ode). A jump is a new initial condition, so the
+backward problem is re-initialised where a row is nonzero, and only
+there: re-initialising at every output time would reduce the method to
+first order at times the objective does not observe.
+
+**Several cotangents.** The columns of a cotangent share the
+checkpoints, but each needs its own backward integration, where the
+native mode sweeps its stored checkpoints once per column.
+`keepStore`, `store` and the rest of
+`adjointControl()` have no counterpart: CVODES holds its own
+checkpoints and runs its own backward controller, and the continuous
+adjoint has no discrete steps whose errors could be estimated, weighted
+or reported.
+
+**Events.** CVODES cannot be re-initialised in the middle of a
+forward run it records for the adjoint, so a model with events is
+integrated in stretches between the jumps, each on its own CVODES memory
+with its own checkpoints, root functions and linear solver. A jump
+starts the next stretch from the state after it. The backward sweep runs
+the stretches last to first, each as its own backward problem started
+from the adjoint the later stretch handed back, and between two stretches
+applies the transpose of the jump: for $x^+ = R(x^-, p, t_e)$,
+$\lambda^- = (\partial_x R)^{\mathsf T}\lambda^+$ and the gradient gains
+$(\partial_p R)^{\mathsf T}\lambda^+$, together with the terms of an event
+time that moves with $p$ or, for a root $g(x, p, t) = 0$, with the state,
+$s = -(\nabla_x g\,\delta x + \partial_p g\,\delta p)/\dot g$, as in
+[the adjoint of an event](methods-reverse.html#event-adjoint) of the native reverse mode. Root finding is switched off on a
+stretch before the sweep: CVODES recomputes the forward solution between
+checkpoints step by step, and a root reported again there would label
+the stored data with the root's time. A model without events keeps the
+single stretch.
+
+**Restrictions.** The same model cannot also provide forward
+sensitivities, and there is no second-order mode. A Hessian, or a
+gradient consistent with the value it accompanies, therefore requires
+the native backend.
+
+As an independent implementation of the same mathematics, ASA checks
+the in-tree adjoint: the two agree to $10^{-6}$ on the test models.
+
+## References

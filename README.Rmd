@@ -35,6 +35,14 @@ equations in R. Derivatives with respect to the parameters are propagated
 forward on dual numbers or backward by a discrete adjoint, to first and second
 order.
 
+The [site](https://dmodverse.github.io/cppDE/) has the reference,
+[Getting started](https://dmodverse.github.io/cppDE/articles/cppDE.html), the
+[methods](https://dmodverse.github.io/cppDE/articles/methods-codegen.html)
+behind the generated code and the
+[benchmarks](https://dmodverse.github.io/cppDE/articles/benchmarks.html)
+against SUNDIALS CVODES. [dMod2](https://dmodverse.github.io/dMod2/) builds
+its modelling framework on cppDE.
+
 ## Features
 
 - **Solvers**: variable-order BDF/NDF and Adams multistep in Nordsieck form,
@@ -132,20 +140,20 @@ out$tangent[11, , ]      # [state, parameter] at t = 10
 `derivMode = "reverse"` builds the same model for gradients by the adjoint,
 `cvode()` for SUNDIALS CVODES; `?expressions` lists what an equation can contain.
 
-## Demos
+## Documentation
 
-- [Basics](examples/basics.md): sensitivities of first and second order,
-  reverse-mode gradients, events, switches and sliding, forcings, steady
-  states, `cvode()` and `cppFUN()` on small models.
-- [Saltation](examples/saltation.md): sensitivities across events, switches
-  and sliding, forward and reverse, against symbolic solutions to second order.
-- [Fitting measured magnetisation dynamics](examples/fitCoPt.md): a
-  Landau-Lifshitz-Gilbert model fitted to pump-probe measurements by
-  Gauss-Newton on forward sensitivities, with a moving-average noise model and
-  a multistart.
+The site, <https://dmodverse.github.io/cppDE/>, has the reference and these articles:
 
-`demo("saltation", package = "cppDE")` runs one, `demo(package = "cppDE")`
-lists them.
+- [Getting started](https://dmodverse.github.io/cppDE/articles/cppDE.html): sensitivities of
+  first and second order, reverse-mode gradients, events, switches and sliding, forcings,
+  steady states, `cvode()` and `cppFUN()` on small models.
+- [Sensitivities across events, checked symbolically](https://dmodverse.github.io/cppDE/articles/saltation.html):
+  forward and reverse sensitivities across events, switches and sliding against symbolic
+  solutions to second order.
+- [Fitting magnetisation dynamics](https://dmodverse.github.io/cppDE/articles/fitCoPt.html): a
+  Landau-Lifshitz-Gilbert model fitted to pump-probe measurements by Gauss-Newton on forward
+  sensitivities, with a moving-average noise model, a multistart and profile likelihoods.
+- The methods in ten articles, and the benchmarks against SUNDIALS CVODES.
 
 ## License
 
@@ -169,7 +177,7 @@ third-party projects and remain subject to their upstream licenses:
   **Boost Software License 1.0**.
 
 Full upstream copyright notices and license texts are reproduced in
-[`inst/COPYRIGHTS`](inst/COPYRIGHTS). Both upstream licenses are permissive and
+[`inst/COPYRIGHTS`](https://github.com/dModverse/cppDE/blob/master/inst/COPYRIGHTS). Both upstream licenses are permissive and
 compatible with MIT; using or redistributing cppDE requires preserving the
 notices in `inst/COPYRIGHTS` and the relevant header attribution blocks.
 

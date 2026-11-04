@@ -1,0 +1,391 @@
+---
+title: "Events, switches and saltation"
+bibliography: refs.bib
+csl: ieee.csl
+link-citations: true
+---
+
+Two kinds of events interrupt smooth integration. A
+*time-triggered event* fires at a time $t_e(\theta)$ given as a
+closed-form expression, which may depend on $\theta$. A
+*root-triggered event* fires when an event function $g_e(x, t)$
+crosses zero along the trajectory, at the time $t^{*}(\theta)$ defined
+implicitly by $g_e(x(t^{*}), t^{*}) = 0$. Either kind applies a
+discontinuous reset
+$$
+  x^{+} = R(x^{-}, t),
+$$
+such as dosing a species, clipping to non-negative values, or
+switching between dynamical regimes.
+
+## Restart cost
+
+Single-step methods (Rosenbrock4, Tsit5) resume after the reset with a
+full-order step. Multistep methods (BDF/NDF, Adams) restart at order
+$1$ and rebuild the Nordsieck array over several steps, which dominates
+the cost on problems with frequent events. For every method the step
+size is re-estimated from the post-event state by the port of the CVODES
+routine `cvHin` ([the first step](methods-stepping.html#the-first-step)),
+bounded by the remaining interval; for a single-step method this is the
+whole restart.
+
+## Sensitivity transport across a discontinuity
+
+The reset $R$ acts on the trajectory $x(t, \theta)$ at the firing time
+$t^{*}(\theta)$. The linearised update
+$S_\theta^{+} = (\partial R/\partial x)\,S_\theta^{-}$ misses the
+$\theta$-dependence of the firing time: a perturbation $\delta t^{*}$
+adds short integrations of $\dot x = f$ on either side of the event,
+with different right-hand sides before and after the reset. With
+$f^{-}$ the right-hand side at $x^{-}$ and $f^{+}$ that at
+$R(x^{-}, t^{*})$, the sensitivity at the first grid time after the
+event receives two contributions beyond the linearised reset:
+
+1. *Pre-event drift.* $x^{-}$ flows along $\dot x = f^{-}$ from
+   the grid time $t_*^{(0)} := \mathrm{scalar}(t^{*})$ to the perturbed
+   firing time $t^{*}$, over $\delta t^{*} = t^{*} - t_*^{(0)}$, whose
+   scalar part vanishes but whose $\theta$-derivatives do not.
+2. *Post-event drift.* The reset state $R(x^{-}, t^{*})$ flows
+   along $\dot x = f^{+}$ from $t^{*}$ back to the grid time, over
+   $-\delta t^{*}$.
+
+Both contribute terms of order
+$f^{\pm}\,(\partial t^{*}/\partial \theta)$; to first order they give
+the [saltation matrix](#saltation).
+
+cppDE replaces the bare reset by forward drift, reset and backward
+drift, evaluated in dual arithmetic. Each drift is one step of Heun's
+method, the explicit trapezoidal rule. Since $\delta t^{*}$ has scalar
+part zero, the value of $x$ at the grid time is unchanged and only the
+$\theta$-derivatives of the displacement enter the state. The reset
+between the drifts is evaluated in the same arithmetic, so its first
+and second derivatives enter as well. Without sensitivities, $R$ is
+applied as a plain map.
+
+The two kinds of event differ in how $\delta t$ is obtained: from the
+expression $t_e(\theta)$, or by the implicit function theorem applied
+to $g_e = 0$.
+
+## Time-triggered events
+
+For a firing time given as an expression $t_e(\theta)$, the
+$\theta$-derivatives follow from the chain rule. The integrator runs
+to the scalar grid time $t_e^{(0)} := \mathrm{scalar}(t_e)$ and treats
+the displacement
+[]{#eq-fixed-dt}
+$$
+  \delta t = t_e - t_e^{(0)},
+  \qquad \mathrm{scalar}(\delta t) = 0, \tag{16}
+$$
+as a dual number of value zero with first-order tangents
+$\partial t_e/\partial \theta_a$ and second-order tangents
+$\partial^2 t_e/\partial \theta_a \partial \theta_b$. The state at
+$t_e^{(0)}$ is $x^{-}$; its first-order tangents are the pre-event
+sensitivities $S_\theta$. The transport, a Heun step forward to $t_e$,
+the reset, and a Heun step back to $t_e^{(0)}$ with the post-event
+right-hand side, reads
+[]{#eq-fixed-heun}
+$$
+\begin{aligned}
+  &\text{forward:}\quad
+    f_1 = f(x^{-}, t_e^{(0)}), \quad
+    x_E = x^{-} + f_1\,\delta t, \quad
+    f_2 = f(x_E, t_e), \\
+  &\hphantom{\text{forward:}\quad}
+    x^{*} = x^{-} + \tfrac{1}{2}(f_1 + f_2)\,\delta t, \\
+  &\text{reset:}\quad
+    x^{*}_{+} = R(x^{*}, t_e), \\
+  &\text{backward:}\quad
+    \tilde f_1 = f(x^{*}_{+}, t_e), \quad
+    x_B = x^{*}_{+} - \tilde f_1\,\delta t, \quad
+    \tilde f_2 = f(x_B, t_e^{(0)}), \\
+  &\hphantom{\text{backward:}\quad}
+    x^{+} = x^{*}_{+} - \tfrac{1}{2}(\tilde f_1 + \tilde f_2)\,\delta t.
+\end{aligned} \tag{17}
+$$
+An Euler step would suffice at first order: since
+$\mathrm{scalar}(\delta t) = 0$, the powers $\delta t^{k}$, $k \ge 2$,
+have no first-order dual content, so every $O(\delta t^{2})$ term drops
+out of $\partial x^{+}/\partial \theta$. At second order the curvature
+term
+$$
+  \tfrac{1}{2}\bigl(J\,f + \partial f/\partial t\bigr)\,\delta t^{2},
+  \qquad J = \partial f/\partial x,
+$$
+keeps a second-order dual component, because $(\delta t)^{2}$, though
+zero in value and first derivatives, has the mixed derivative
+$$
+  \frac{\partial^{2}(\delta t)^{2}}{\partial \theta_a\,\partial \theta_b}
+    = 2\, \frac{\partial t_e}{\partial \theta_a}\,
+          \frac{\partial t_e}{\partial \theta_b}.
+$$
+Heun's second evaluation, at the shifted state and the shifted time
+$t_e$, supplies this term and leaves a truncation error of
+$O(\delta t^{3})$. Evaluating $f_2$ and $\tilde f_2$ at $t_e^{(0)}$
+instead would drop the $\tfrac{1}{2}(\partial f/\partial t)\,\delta t^{2}$
+part for a right-hand side that depends explicitly on time.
+
+## Root-triggered events
+
+A root event fires at the time $t^{*}(\theta)$ defined implicitly by
+[]{#eq-root-condition}
+$$
+  G(t^{*}(\theta), \theta) :=
+    g_e\bigl(x(t^{*}(\theta), \theta), t^{*}(\theta)\bigr) = 0. \tag{18}
+$$
+It is handled in three steps: localisation of $t^{*}$ on the scalar
+trajectory, reconstruction of the dual residual $\delta t^{*}$ by the
+implicit function theorem, and the Heun transport
+[(17)](#eq-fixed-heun).
+
+### Localisation
+
+The integrator evaluates $g_e$ at the end of every accepted step and at
+every requested output time. A crossing on $[t_n, t_{n+1}]$ is accepted
+when the two readings differ in sign, or when
+$g_e(x_{n+1}, t_{n+1})$ is exactly zero, as for a root on a sampled
+time. A zero at the lower end was reported with that sample and is not
+a new crossing; this also keeps an event from firing again on the
+surface it was just applied on, where $g_e$ is zero up to round-off.
+
+The crossing is refined on the dense output of the accepted step,
+without further right-hand-side evaluations, by false position with the
+interpolation factor clamped to $[0.1, 0.9]$. The clamp bounds the
+stagnation of the classical rule and keeps its speed on a nearly linear
+$g_e$. The iteration stops when the bracket is narrower than the root
+tolerance, after at most fifty iterations, or when an iterate gives
+$g_e = 0$ exactly. It returns as $t_*^{(0)} := \mathrm{scalar}(t^{*})$
+the end of the final bracket that still has the pre-crossing sign
+of $g_e$. Localisation yields no $\theta$-dependence of $t^{*}$, so the
+dual residual $\delta t^{*} = t^{*} - t_*^{(0)}$ is reconstructed from
+[(18)](#eq-root-condition).
+
+### Dual residual of the event time
+
+If $G$ is smooth at the crossing and $\partial G/\partial t \neq 0$
+there, the implicit function theorem applied to
+[(18)](#eq-root-condition) gives
+[]{#eq-dt-star-first}
+$$
+  \frac{\partial t^{*}}{\partial \theta}
+    = -\frac{G_\theta}{G_t}
+    = -\frac{\nabla_x g_e \cdot S_\theta}
+            {\nabla_x g_e \cdot f + \partial g_e/\partial t}\bigg|_{*}, \tag{19}
+$$
+whose denominator is the total time derivative
+$\dot g_e = \nabla_x g_e \cdot f + \partial g_e/\partial t$ along the
+trajectory at the crossing. The condition $\dot g_e \neq 0$ means a
+transversal crossing of the event surface; at a grazing crossing the
+firing time is not differentiable in $\theta$, and the fallback under
+simultaneous events applies. In dual arithmetic
+[(19)](#eq-dt-star-first) is the quotient
+[]{#eq-dt-star-quotient}
+$$
+  \delta t^{*} = -\frac{g_e(x^{-}, t_*^{(0)})}
+                       {\dot g_e(x^{-}, t_*^{(0)})}, \tag{20}
+$$
+with $g_e$ and $\dot g_e$ evaluated on the dual state $x^{-}$ at the
+scalar grid time. The generated partials $\nabla_x g_e$ and
+$\partial g_e/\partial t$ are needed only for $\dot g_e$; the dual
+arithmetic forms $\nabla_x g_e \cdot S_\theta$ in the numerator. The
+scalar value of the numerator, of the order of the root tolerance, is
+set to zero before the division, so $\delta t^{*}$ is zero in value and
+has only derivatives.
+
+The first-order part of [(20)](#eq-dt-star-quotient) equals
+[(19)](#eq-dt-star-first). At second order the quotient lacks the
+$G_{tt}$ contribution, because $g_e$ is evaluated at the scalar time
+$t_*^{(0)}$, not at the dual time $t^{*}$. Expanding
+[(18)](#eq-root-condition) to second order in $\theta$ with
+$\delta t^{*} = \delta t^{*}_{(1)} + \delta t^{*}_{(2)} + \cdots$ and
+$G(t_*^{(0)}, \theta^{(0)}) = 0$ gives
+$$
+  0 = G_t\,\delta t^{*}_{(2)}
+      + \tfrac{1}{2} G_{tt}\,(\delta t^{*}_{(1)})^{2}
+      + G_{t\theta}\,\delta t^{*}_{(1)}\,\delta\theta
+      + \tfrac{1}{2} G_{\theta\theta}\,\delta\theta^{2},
+$$
+of which the quotient supplies the $G_{t\theta}$ and
+$G_{\theta\theta}$ terms. The corrected update is
+[]{#eq-dt-star-second}
+$$
+  \delta t^{*} \leftarrow \delta t^{*}
+    - \tfrac{1}{2}\,\frac{G_{tt}}{G_t}\,(\delta t^{*})^{2}, \tag{21}
+$$
+where
+$$
+  G_{tt} = \frac{\mathrm{d}^{2}}{\mathrm{d} t^{2}}
+            g_e\bigl(x(t), t\bigr)\bigg|_{*}
+$$
+is the second total time derivative of $g_e$ along the trajectory,
+taken from generated code or, where that is not available, from a
+forward finite difference of $\dot g_e$. The correction
+[(21)](#eq-dt-star-second) changes only the second-order components of
+$\delta t^{*}$.
+
+The Heun transport [(17)](#eq-fixed-heun) then moves $x^{-}$ across
+the event to the grid time $t_*^{(0)}$, with $\delta t^{*}$ in place of
+$\delta t$ and $t_*^{(0)} + \delta t^{*}$ in place of $t_e$.
+
+### Simultaneous events
+
+Several root conditions can cross zero within one accepted step. Each
+crossing is localised separately, and those that share $t_*^{(0)}$
+within the localisation tolerance form a cluster. For a cluster, one
+forward Heun shift reaches the common event surface, every triggered
+reset is applied there (the reset maps are assumed to commute), and
+one backward shift returns to the grid time: four right-hand-side
+evaluations regardless of the number of events. The dual residual
+$\delta t^{*}$ is computed once, from the first event in the cluster
+with non-zero $\dot g_e$, and shared by the others, which sit at the
+same grid time with the same parameter dependence through $x^{-}$.
+
+If every event in the cluster has $\dot g_e = 0$ at the surface, the
+denominator of [(19)](#eq-dt-star-first) vanishes and the implicit
+function theorem gives no $\partial t^{*}/\partial \theta$. cppDE
+detects this case by the size of $|\dot g_e|$ and applies the reset as
+a plain map without transport, which is exact in the limit where both
+contributions $f^{\pm}\,(\partial t^{*}/\partial \theta)$ vanish.
+
+### Conditions switched by a reset
+
+A root condition that a reset makes true escapes the sign-change
+search, since a jump is not a crossing of the continuous solution.
+Every condition is therefore evaluated on both sides of a jump. A
+condition whose sign changes across the jump fires there, one per
+sweep so that a reset can switch on the next condition; one that
+already held before the jump does not fire again.
+
+The switched resets are applied at the jump, between the forward and
+the backward shift of the event that caused it, not after the
+transport has returned to the grid time. One Heun transport then
+applies the composition of both resets, and its first- and
+second-order sensitivities equal those of the same reset written as a
+time-triggered event at that time.
+
+Terminal conditions are excluded: they stop the integration instead of
+resetting the state.
+
+## Switches on states and time
+
+A comparison in the right-hand side whose sides differ by an amount
+$g(x, t)$ that reads a state or the time, and $\mathrm{Heaviside}(g)$ or
+$\mathrm{sign}(g)$, switch $f$ on the set where $g$ changes sign. Read
+as written, such a condition makes $f$ discontinuous in $x$: a step
+across the switch fails the error test until it is short enough, and
+the sensitivities miss the dependence of the switching time on
+$\theta$ altogether.
+
+The code generator therefore keeps each such condition as a *mode*
+$m \in \{0, 1\}$, equal to $1$ where $g > 0$ (or $g \ge 0$ for a
+non-strict comparison); $a < b$ becomes the mode of $g = b - a$. The
+right-hand side, its Jacobian and every derivative code read the mode
+in place of the comparison, so between two switches $f(x, t; m)$ is as
+smooth as its branches. $\mathrm{Heaviside}(g)$ and $\mathrm{sign}(g)$
+take two modes, on $g$ and on $-g$, so that they keep their value at
+$g = 0$. Equality and inequality are evaluated as written, since they
+switch on a set of measure zero.
+
+A switch is then a root event with $g$ as its condition and no reset.
+The step that crosses $g = 0$ integrates the branch it started on, which
+is smooth there, and the crossing is localised on the dense output of
+that step as in the root-event case, to a few doubles in $t$ rather than
+to the root tolerance, since the switching time enters the state through
+the jump of $f$. The mode is set on the event surface, between the
+forward and the backward Heun shift, so the transport
+[(17)](#eq-fixed-heun) reads $f^{-} = f(\,\cdot\,; m^{-})$ on the near side
+and $f^{+} = f(\,\cdot\,; m^{+})$ on the far side, and the reset is the
+identity. To first order this is the [saltation matrix](#saltation) with $\partial R/\partial x = I$,
+$$
+  S_\theta^{+} = S_\theta^{-} + (f^{-} - f^{+})\,
+    \frac{\partial t^{*}}{\partial \theta},
+  \qquad
+  \frac{\partial t^{*}}{\partial \theta}
+    = -\frac{\nabla_x g \cdot S_\theta^{-} + \partial g/\partial \theta}
+            {\nabla_x g \cdot f^{-} + \partial g/\partial t},
+$$
+and the second-order components follow from the same dual arithmetic,
+with the $G_{tt}$ correction [(21)](#eq-dt-star-second) taken along
+$f^{-}$. Where $f$ is continuous across the switch, a kink, the
+first-order jump vanishes and the transport still supplies the
+second-order term, which comes from the jump of $\partial f/\partial x$
+over the shifts.
+
+The modes are read off the state at the start of the solve and after
+every reset, since a jump can move the state across a switch; a switch
+crossed by its root takes the side its root crossed to. A switch adds
+no output row and is not limited by `maxroot`. A root that is
+zero at the start of a step sits on its surface and shows no sign
+change when the state leaves it to the side its mode does not describe;
+such a departure is taken as a crossing once $|g|$ exceeds its residual
+and rounding there.
+
+### Sliding along a switching surface {#sliding}
+
+On its surface a switch takes the side both branches move to, read off
+the sign of the rate $r' = \partial g/\partial t + \nabla_x g \cdot f$
+under each mode. Where both branches move onto the surface,
+$r'_{\mathrm{on}} < 0 < r'_{\mathrm{off}}$, the solution slides along it
+[@filippov1988differential] on the mix
+$$
+  f = a\, f_{\mathrm{on}} + (1 - a)\, f_{\mathrm{off}},
+  \qquad
+  a = \frac{r'_{\mathrm{off}}}{r'_{\mathrm{off}} - r'_{\mathrm{on}}},
+$$
+whose rate $r'$ is zero, so that $g$ stays at zero. A slide ends where
+$a$ reaches $0$ or $1$, a root of its own, and the solution leaves to
+that side; $f$ is continuous there. Switches that slide at once take
+the mix $\sum_c w_c(a)\, f_c$ over the combinations $c$ of their modes,
+$w_c$ the product of $a_k$ or $1 - a_k$ over the sliding switches $k$,
+with the weights $a$ chosen so that the rate of every sliding switch is
+zero; a set of slides without such a mix stops the solve with an error,
+as does a switch that leaves its surface twice in a row without being
+taken for a slide. The weights are formed in the model's scalar type,
+so the dual sensitivities hold their dependence on $x$ and $\theta$.
+
+### Switches in the reverse mode and in `cvode()`
+
+The reverse mode keeps the modes each step ran under with its
+checkpoint, sets them before the step's adjoint, and transposes the
+switch's sandwich as that of a root event
+([the adjoint of an event](methods-reverse.html#event-adjoint)), with
+$f^{-}$ and its derivatives read in the old mode and $f^{+}$ in the new
+one. Where switches slide, the weights depend on the state through the
+rates $R_k(a) = \sum_c w_c(a)\, r'_{k,c}$ held at zero,
+$\nabla a = -R_a^{-1} R_x$, and the pullback of $\lambda$ is
+$$
+  J^{\mathsf T}\lambda = \sum_c w_c\, J_c^{\mathsf T}\lambda
+    - \sum_k u_k \sum_c w_c\, \nabla r'_{k,c},
+  \qquad
+  u = R_a^{-\mathsf T} q, \quad q_j = \frac{\partial f}{\partial a_j}\cdot\lambda,
+$$
+with $\nabla r'_{k,c}$ the generated gradient of the rate of switch $k$
+with the slides held at combination $c$, and the same in the
+parameters. `cvode()` hands $g$ to CVODES' root finding, sets the mode
+at the root it returns, adds
+$(f^{-} - f^{+})\,\partial t^{*}/\partial \theta$ to the sensitivities
+before `CVodeSensReInit()`, and under adjoint sensitivity
+analysis starts a new stretch there, whose backward problem reads the
+modes the stretch ran under. It slides along a surface by the same rule,
+with two further roots per switch for the ends of a slide.
+
+## Connection to the saltation matrix {#saltation}
+
+The classical *saltation matrix* adds to the reset Jacobian
+$\partial R/\partial x$ a term for the $\theta$-dependence of the
+firing time:
+$$
+  S_\theta^{+} = \frac{\partial R}{\partial x}\,S_\theta^{-}
+    + \left( \frac{\partial R}{\partial t}
+             + \frac{\partial R}{\partial x}\,f^{-} - f^{+} \right)
+       \frac{\partial t^{*}}{\partial \theta}.
+$$
+The first-order part of the Heun transport equals this expression,
+with $\partial t^{*}/\partial \theta = \partial t_e/\partial \theta$
+for time-triggered events and $\partial t^{*}/\partial \theta$ from
+[(19)](#eq-dt-star-first) for root events. The transport also yields
+the second-order sensitivities, which the saltation matrix does not.
+It is implemented in `cppde_saltation.hpp`, the event loop in
+`cppde_event_engine.hpp`.
+
+## References

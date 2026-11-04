@@ -11,8 +11,9 @@
  holds them; one before the first step reaches the initial state directly.
 
  The step grid is not differentiated: a step reads the state from the one
- before it, and its size is a constant read off its checkpoint. See
- vignette("Methods"), "Internal numerical differentiation".
+ before it, and its size is a constant read off its checkpoint. See "Internal
+ numerical differentiation" in
+ https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
 
  Copyright (C) 2026 Simon Beyer
  */

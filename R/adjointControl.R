@@ -27,8 +27,8 @@
 #' the substeps each step was swept in, and `failures`, the steps over all seed
 #' columns that failed the test at the largest substep count.
 #'
-#' @seealso [solveODE()]; `vignette("Methods", package = "cppDE")`, "Checking
-#'   the sweep".
+#' @seealso [solveODE()]; [Checking the sweep](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#refine)
+#'   in the methods of the cppDE site.
 #' @example inst/examples/adjointControl.R
 #' @export
 adjointControl <- function(refine = FALSE, gradtol = NULL, trace = FALSE) {

@@ -1,0 +1,396 @@
+---
+title: "Stepping and error control"
+bibliography: refs.bib
+csl: ieee.csl
+link-citations: true
+---
+
+## Initial-value problem
+
+`cppODE()` solves
+[]{#eq-ivp}
+$$
+  \dot{x}  = f\bigl(x,\, p_{\mathrm{dyn}},\, t\bigr),
+  \qquad x(t_0) = p_{\mathrm{init}}, \tag{2}
+$$
+with state $x \in \mathbb{R}^{n_x}$ and parameters
+$p = (p_{\mathrm{init}}, p_{\mathrm{dyn}})$, the initial conditions and
+the dynamic parameters. The right-hand side $f$
+may depend explicitly on time (non-autonomous systems), as the
+forcing functions that inject time-dependent inputs require.
+$J = \partial f / \partial x$ denotes the state Jacobian throughout.
+The coefficients of the four methods are listed in
+[Method coefficients](methods-coefficients.html).
+
+## Stiffness and the choice of method
+
+Stability is analysed on the linear test equation
+$\dot y = \lambda y$, $\lambda \in \mathbb{C}^-$. A one-step method
+multiplies $y$ by an amplification factor $R(z)$ per step,
+$z = h \lambda$. The method is *A-stable* if $|R(z)| \le 1$ on
+the entire left half-plane, so that the numerical solution decays
+whenever the exact one does, for any step size;
+*A($\alpha$)-stable* if the bound holds on the wedge
+$\{ z \in \mathbb{C} : |\arg(-z)| \le \alpha \}$ for some
+$\alpha < 90^{\circ}$; and *L-stable* if it is A-stable and
+$R(z) \to 0$ as $\operatorname{Re}(z) \to -\infty$, which damps very
+stiff transients within one step.
+
+Problem [(2)](#eq-ivp) is *stiff* on $[t_0, t_{\mathrm{end}}]$
+when an explicit method must take steps much smaller than local
+accuracy demands, to keep $h \lambda_k$ inside its stability domain,
+with $\{\lambda_k\}$ the eigenvalues of $J$ along the trajectory.
+Stiffness thus depends on the spectrum of $J$, the integration horizon
+and the tolerance. Chemical-kinetics networks with rate constants
+spanning several orders of magnitude are stiff, as are many
+discretised parabolic PDEs.
+
+BDF/NDF and Rosenbrock4 have stability domains containing the left
+half-plane or a wide wedge of it and suit stiff problems; Adams-Moulton
+and Tsit5 do not, at any tolerance. The cost of a wrong choice is
+asymmetric: an explicit method on a stiff problem fails or is forced
+to uneconomic step sizes, an implicit method on a non-stiff problem
+has a constant overhead per step. BDF/NDF is therefore the default
+when the spectrum of $J$ is unknown; for a large model with a sparse
+Jacobian it runs on the sparse linear solver (`sparse = TRUE`).
+
+## Multistep methods
+
+A linear multistep method determines $x_n$ from a linear combination
+of the most recent $k+1$ states and right-hand-side values,
+$\{x_{n-j}, f_{n-j}\}_{j=0}^{k}$. Reusing past steps, it reaches high
+accuracy with few right-hand-side evaluations per step.
+
+cppDE implements the BDF and Adams families in the Nordsieck
+representation of SUNDIALS [@hindmarsh2005sundials]. Instead of the
+past $k+1$ states it stores the *scaled derivative array*
+$$
+  z_n =\left(x_n,\, h_n \dot{x}_n,\, \dfrac{h_n^2}{2!} \ddot{x}_n,
+                  \,\dots,\,
+                  \dfrac{h_n^{k}}{k!} x_n^{(k)} \right).
+$$
+A change of step size or order is then a linear transformation of
+$z_n$, not a refit through past data.
+
+### Backward Differentiation Formula (`bdf`)
+
+The BDF of order $q$ defines $x_n$ implicitly by
+[]{#eq-bdf}
+$$
+  \sum_{j=0}^{q} \alpha_j\, x_{n-j} \;=\; h_n\, f(x_n, t_n), \tag{3}
+$$
+which is exact whenever $x(t)$ is a polynomial of degree at most $q$
+on the past $q+1$ nodes. It is A-stable for $q \le 2$ and
+A($\alpha$)-stable for $q \in \{3,4,5\}$, with $\alpha$ falling
+monotonically from $86^\circ$ at $q=3$ to $51^\circ$ at $q=5$.
+
+The corrector [(3)](#eq-bdf) is solved by Newton iteration,
+[]{#eq-newton}
+$$
+  W \Delta x^{(\nu)} = - \tilde r \left(x_n^{(\nu)}\right),
+  \qquad
+  x_n^{(\nu+1)} = x_n^{(\nu)} + \Delta x^{(\nu)}, \tag{4}
+$$
+with leading coefficient $\beta_0 = 1/\alpha_0$ and iteration matrix
+[]{#eq-bdf-W}
+$$
+  W = \frac{1}{h_n\, \beta_0}I - J\bigl(x_n^{(\nu)}, t_n\bigr), \tag{5}
+$$
+in the SUNDIALS form [@hindmarsh2005sundials], which differs from the
+textbook $I - h_n \beta_0\, J$ by the scalar factor $h_n \beta_0$.
+Factorising $W$ dominates the cost of a step; the factorisation is
+reused across steps.
+
+cppDE defaults to the Numerical Differentiation Formula (NDF) variant
+of Shampine and Reichelt [@MATLABODESuite], which adds to the BDF corrector a term proportional
+to the Nordsieck predictor error,
+[]{#eq-ndf}
+$$
+\sum_{m=1}^{q} \dfrac{1}{m}\, \nabla^{m} x_n - h_n f(x_n, t_n) - \kappa_q\, \gamma_q\, \left(x_n - x_n^{\mathrm{pred}}\right) = 0, \qquad \gamma_q  = \sum_{m=1}^{q} \dfrac{1}{m}, \tag{6}
+$$
+with $\nabla$ the backward-difference operator. The term scales
+$1/\beta_0$ in [(5)](#eq-bdf-W) by $(1 - \kappa_q)$ and multiplies the
+leading truncation-error coefficient $1/(q+1)$ by
+$1 + \kappa_q (q+1) \gamma_q$. With $\kappa_q < 0$ the truncation error
+at fixed step size decreases, permitting a larger step at equal
+accuracy. The values of $\kappa_q$ ([BDF and NDF coefficients](methods-coefficients.html#bdf-coeffs))
+give the step-size gains over classical BDF reported by
+Shampine and Reichelt [@MATLABODESuite], $26\,\%$ for $q \le 3$ and $12\,\%$ for $q = 4$, at a
+small loss of stability angle. `useNDF = FALSE` recovers
+classical BDF ($\kappa_q \equiv 0$).
+
+The corrector takes at most three iterations, each with one
+right-hand-side evaluation and one linear solve. It has converged when
+the damped correction norm $\delta\,\min(1, \rho)/\tau_q \le 1$, with
+$\delta$ the WRMS norm of the latest correction, $\rho$ the estimated
+contraction rate and $\tau_q$ an order-dependent constant. As in
+CVODE, $W$ is refactorised when $\gamma = h_n\beta_0$ has moved by more
+than $30\,\%$ since the last factorisation, after $20$ steps, or after
+a failed corrector or error test; $J$ is re-evaluated at a refactorisation
+once it is $51$ steps old, and after a failed corrector. Without a new Jacobian, a sparse $W$
+changes only on its diagonal.
+
+### Adams-Moulton (`adams`)
+
+The Adams-Moulton family integrates the interpolant of $f$ through
+the $q+1$ samples $\{(t_{n-j}, f_{n-j})\}_{j=0}^{q}$ over $[t_{n-1}, t_n]$,
+[]{#eq-adams}
+$$
+  x_n \;=\; x_{n-1} \;+\; h_n \sum_{j=0}^{q} \beta_j\,
+            f(x_{n-j}, t_{n-j}), \tag{7}
+$$
+implicit in $x_n$ through the $j=0$ term. cppDE solves it by the Newton
+iteration of the BDF corrector, on $W = \tfrac{1}{\gamma} I - J$ with
+$\gamma = h/\ell_1$ from the Adams coefficients, as CVODES does with a
+linear solver attached: the same setup triggers, Jacobian reuse and
+convergence test, the same controller. Only the coefficients and the
+maximum order $q_{\max} = 12$ differ.
+
+Its stability domain on the negative real axis shrinks rapidly with
+order; for $q \ge 3$ it contains no wedge of $\mathbb{C}^-$, so the
+method suits non-stiff problems with smooth solutions and a long
+horizon. The Newton corrector keeps a mildly stiff component from
+stalling the iteration, but the step size stays bounded by the
+stability domain.
+
+## Single-step methods
+
+Single-step methods keep no information beyond the current state and
+reach order $p > 1$ through internal stages. They therefore restart
+after an event at full order, whereas the multistep methods rebuild
+the Nordsieck history from order $1$.
+
+### Rosenbrock (`rb4`)
+
+A Rosenbrock method of $s$ stages with diagonal coefficient $\gamma$
+linearises the implicit Runge-Kutta condition about $(x_n, t_n)$; its
+stages $k_i$ solve
+[]{#eq-rosenbrock-stage}
+$$
+  W k_i = f\left(x_n + \sum_{j<i} \alpha_{ij}\, k_j,\,
+                 t_n + c_i\, h_n \right) + \dfrac{1}{h_n} \sum_{j<i} \gamma_{ij}\, k_j + h_n\, d_i\, \dfrac{\partial f}{\partial t}(x_n, t_n), \tag{8}
+$$
+with iteration matrix
+[]{#eq-rosenbrock-W}
+$$
+  W = \frac{1}{\gamma\, h_n}I - J(x_n, t_n). \tag{9}
+$$
+The coefficients are
+
+| symbol | meaning |
+|:--|:------------------------|
+| $\alpha_{ij}$ | weights with which stage $i$ combines all earlier stages $k_j$, $j<i$ |
+| $c_i$         | time abscissa of stage $i$ inside the step |
+| $\gamma_{ij}$ | weights with which the linear-solve correction at stage $i$ uses earlier stages |
+| $\gamma$      | common diagonal coefficient appearing in the iteration matrix $W$ |
+| $d_i$         | weights that pick up the explicit time dependence of $f$ via $\partial f/\partial t$ |
+| $m_i$         | weights combining the stages into the advanced solution $x_{n+1}$ |
+| $\hat{m}_i$   | weights combining the stages into the embedded order-3 estimator used for step control |
+
+Table: Rosenbrock method coefficients.
+
+The advanced solution and embedded error estimate are
+$$
+  x_{n+1} = x_n + \sum_{i=1}^{s} m_i\, k_i,
+  \qquad
+  \hat{x}_{n+1} \;=\; x_n + \sum_{i=1}^{s} \hat{m}_i\, k_i.
+$$
+Each stage [(8)](#eq-rosenbrock-stage) is one linear solve, without
+Newton iteration. Per accepted step cppDE evaluates $J$ and factorises
+$W$ once, evaluates the right-hand side five times and back-substitutes
+six times.
+
+cppDE uses the order-$4$ coefficients of Hairer and Wanner
+[@hairer2010solving, §IV.7] (see [Rosenbrock4 coefficients](methods-coefficients.html#ros-coeffs)), the same set as the
+`rosenbrock4` stepper of Boost.Numeric.Odeint: an L-stable pair
+with an embedded order-$3$ estimator. Rosenbrock methods are competitive with BDF on
+stiff problems whose Jacobian is cheap relative to the right-hand
+side. With its full-order restart, Rosenbrock4 is the stiff method of
+choice for systems with frequent state discontinuities at moderate
+state dimension.
+
+### Tsitouras (`tsit5`)
+
+Tsit5 is the explicit Runge-Kutta pair of order $5(4)$ of Tsitouras
+[@TSITOURAS2011770], derived under the first column simplifying assumption alone,
+$$
+  \sum_{i=1}^{s} b_i\, a_{ij} \;=\; b_j\,(1 - c_j),
+  \qquad j = 1, \dots, s,
+$$
+without the row simplifying assumption
+$\sum_{j} a_{ij}\, c_j = c_i^2/2$, $i \ge 3$, on which the
+Dormand-Prince pair rests. Tsitouras uses the freed parameters for a
+smaller leading-error norm; the [coefficients](methods-coefficients.html#tsit5-coeffs) satisfy the column condition to rounding and
+violate the row condition. The pair has $s = 7$ stages with the
+First-Same-As-Last (FSAL) property,
+$$
+  k_7 \;=\; f(x_{n+1},\, t_n + h_n)
+       \;=\; k_1 \text{ at step } n+1,
+$$
+so an accepted step costs six right-hand-side evaluations, not seven.
+The symbols of the tableau are
+
+| symbol | meaning |
+|:--|:------------------------|
+| $a_{ij}$    | weights with which stage $i$ combines earlier stages (strictly lower triangular) |
+| $c_i$       | time abscissa of stage $i$ inside the step, with $c_i = \sum_{j<i} a_{ij}$ |
+| $b_i$       | weights combining the stages into the advanced order-5 solution; $b_7 = 0$ |
+| $\hat{b}_i$ | weights combining the stages into the embedded order-4 estimator; $\hat{b}_7 \ne 0$ |
+| $k_i$       | right-hand side at stage $i$: $k_i = f\!\left(x_n + h_n\sum_{j<i}a_{ij}k_j,\; t_n + c_i h_n\right)$ |
+
+Table: Symbols of the Tsit5 tableau.
+
+The advanced solution and embedded error estimate are
+$$
+  x_{n+1} = x_n + h_n \sum_{i=1}^{7} b_i\, k_i,
+  \qquad
+  \hat{x}_{n+1} = x_n + h_n \sum_{i=1}^{7} \hat{b}_i\, k_i,
+$$
+and the local error estimate for step-size control is
+$$
+  e_{n+1} = h_n \sum_{i=1}^{7} (\hat{b}_i - b_i)\, k_i.
+$$
+Tsit5 needs neither Jacobian nor linear solve and, of the four
+methods, advances furthest per right-hand-side evaluation. It suits
+non-stiff problems with an expensive right-hand side.
+
+## Adaptive step-size control
+
+The error estimate $e_n$ of each method is reduced to a scalar by the
+weighted root-mean-square norm
+[]{#eq-wrms}
+$$
+  \| e_n \|_{\mathrm{WRMS}} =
+  \sqrt{\frac{1}{n_x} \sum_{j=1}^{n_x} \left(
+    \frac{e_{n,j}}{w_{n,j}}
+  \right)^{\!2}},
+  \qquad
+  w_{n,j} = \mathtt{abstol} + \mathtt{reltol}\,|x^{\mathrm{ref}}_{n,j}|, \tag{10}
+$$
+whose weights put components of different magnitude and unit on a
+common scale. The reference state $x^{\mathrm{ref}}_n$ is the accepted
+solution $|x_n|$ at the start of the step in BDF/NDF and Adams, as in
+CVODE, so the weights are fixed for the whole step, and the
+component-wise maximum $\max(|x_n|, |x_{n+1}|)$ in the single-step
+methods. A step is accepted when $\| e_n \|_{\mathrm{WRMS}} \le 1$.
+
+The single-step methods choose the next step size with the
+proportional-integral (PI) controller of Hairer and Wanner [@hairer2010solving]. With
+$\varepsilon_n = \| e_n \|_{\mathrm{WRMS}}$ and $p$ the order of the
+embedded estimate, $p = 3$ for Rosenbrock4 and $p = 4$ for Tsit5, an
+accepted step sets
+$$
+  h_{n+1} = h_n\, \min\Bigl\{\rho_{\max},\; \max\Bigl(\rho_{\min},\;
+        S\, \varepsilon_n^{-(\alpha+\beta)}\,
+        \varepsilon_{n-1}^{\,\beta}\Bigr)\Bigr\},
+  \qquad
+  \alpha = \frac{0.7}{p+1}, \quad \beta = \frac{0.4}{p+1},
+$$
+with $S = 0.9$, $\rho_{\min} = 0.2$, $\rho_{\max} = 5$, and
+$\varepsilon_{n-1}$ the norm of the previous accepted step, floored at
+$0.01$. On the first step and on the first accepted step after a
+rejection the integral factor $S\,\varepsilon_n^{-1/(p+1)}$ replaces the
+PI factor, capped at $1$ after a rejection. A rejected step is retried
+with the factor $S\,\varepsilon_n^{-1/(p+1)}$ clamped to
+$[\rho_{\min}, 0.9]$.
+
+The multistep methods choose step size and order as CVODE does. With
+$d_{q'}$ the WRMS norm of the error estimate at order $q'$, the
+candidate ratios are
+$$
+  \eta_{q'} = \frac{1}{\bigl(B_{q'}\, d_{q'}\bigr)^{1/(q'+1)} + 10^{-6}},
+  \qquad q' \in \{q-1,\, q,\, q+1\},
+$$
+with $B_{q-1} = B_q = 6$ and $B_{q+1} = 10$. The neighbouring orders
+are compared $q+1$ steps after a change to order $q$ and every second
+step while the order is unchanged; the largest ratio fixes the next
+order. A ratio below $1.5$ leaves $h$ unchanged, and the ratio is
+capped at $10^4$ on the first step and at $10$ afterwards.
+
+The order never exceeds $q_{\max}$, $5$ for BDF/NDF and $12$ for Adams,
+or a smaller `maxOrder` given to a solve. The error test alone
+cannot see that a step size has reached the edge of the stability domain
+of order $q$, which for $q \ge 3$ excludes a wedge around the imaginary
+axis: it answers with rejections and a shrinking $h$ where a lower order
+would be stable. `stald = TRUE` adds CVODE's stability limit
+detection to the BDF family [@hindmarsh2005sundials]. From order $3$ on,
+each step records the squared norms of the scaled derivatives of degree
+$q-1$ and $q$, from the Nordsieck columns, and of degree $q+1$, from the
+corrector's correction. Once $q+5$ steps have been taken at order $q$,
+the last five records give the magnitude $r$ of the dominant root of the
+step-to-step error propagation, and $r > 0.98$ lowers the order by one at
+the step size $\eta_{q-1} h$. It overrides the order selection unless
+that already lowers the order. Detection is off by default, as in
+CVODE: it lowers the step count on weakly damped stiff oscillations, and
+elsewhere it costs the estimate on every step. On a `cvode()`
+model, `maxOrder` and `stald` set CVODE's own
+`CVodeSetMaxOrd` and `CVodeSetStabLimDet`.
+
+### The first step
+
+The single-step methods estimate the first step size from the initial
+state as in Hairer, Nørsett and Wanner [@hairer2008solving, Algorithm II.4.4]: a rough
+$h_0 = 0.01\,\|x_0\| / \|f_0\|$ fixes a scale, a second derivative
+$\ddot x$ along the trajectory fixes the curvature, and
+[]{#eq-hnw-h1}
+$$
+  h_1 = \left(
+    \frac{0.01}{\max\bigl(\|f_0\|, \|\ddot x\|\bigr)}
+  \right)^{\!1/2} \tag{11}
+$$
+turns the two into a step. The exponent is that of a first-order
+method for both: $\|\ddot x\|$ stands in for the derivative of order
+$p+1$, which it is only at $p = 1$, and a method of higher order raises
+its step within a few steps. `rb4` obtains
+$\ddot x = \partial f/\partial t + J f$ from the generated Jacobian,
+`tsit5` from a finite difference of $f$. The norms are weighted
+maximum norms with weights $\mathtt{abstol} + \mathtt{reltol}\,|x_0|$;
+with `sensErrCon = TRUE` they include the sensitivity components.
+The step is $\min(100\,h_0,\, h_1,\, h_{\mathrm{ub}})$: the upper bound
+$h_{\mathrm{ub}}$, at most a tenth of the interval, keeps a single Euler
+step from changing any component by more than a fraction of its own
+scale, and a lower bound keeps $t_0 + h$ distinct from $t_0$ in double
+precision.
+
+The multistep methods use a port of the CVODES routine
+`cvHin`, which starts from $\sqrt{h_{\mathrm{lb}} h_{\mathrm{ub}}}$,
+with $h_{\mathrm{lb}}$ above the rounding of the time variable, and
+refines it by a finite-difference curvature until two successive estimates agree
+within a factor of two, so the first step equals the one CVODES takes
+on the same problem. After every event each method estimates its step
+again with this port, from the post-event state.
+
+## Dense output
+
+Requested output times in general do not coincide with the adaptive step grid.
+Each accepted step therefore provides a local interpolant that yields
+$x(t)$ anywhere inside the step by polynomial arithmetic alone,
+without right-hand-side evaluations. With
+$s = (t - t_n)/h_n \in [0, 1]$ the three families use:
+
+- Tsit5: the cubic Hermite interpolant through $x_n$, $x_{n+1}$ and the
+  FSAL derivatives $k_1$, $k_7$,
+  $$
+  x(t) = (1+2s)(1-s)^2\, x_n + s^2(3-2s)\, x_{n+1}
+       + s(1-s)^2\, h_n k_1 + s^2(s-1)\, h_n k_7 .
+  $$
+- Rosenbrock4: the stage-based cubic of Hairer and Wanner [@hairer2010solving],
+  $$
+  x(t) = (1-s)\, x_n + s\bigl(x_{n+1} + (1-s)(u_3 + s\, u_4)\bigr),
+  \qquad
+  u_3 = \sum_{i=1}^{5} d_i^{(2)} k_i, \quad
+  u_4 = \sum_{i=1}^{5} d_i^{(3)} k_i,
+  $$
+  with the [dense-output coefficients](methods-coefficients.html#ros-coeffs).
+- BDF/NDF and Adams: the Nordsieck polynomial of degree $q$ held after
+  the step,
+  $$
+  x(t) = \sum_{j=0}^{q} z_{n+1,j}\,
+  \Bigl(\frac{t - t_{n+1}}{h_n}\Bigr)^{j}.
+  $$
+
+Both single-step interpolants are of order $3$, below the order of the
+step itself ($5$ for Tsit5, $4$ for Rosenbrock4); the multistep
+interpolant has the order $q$ of the step.
+
+## References

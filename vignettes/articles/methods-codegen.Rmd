@@ -1,0 +1,176 @@
+---
+title: "Entry points and code generation"
+bibliography: refs.bib
+csl: ieee.csl
+link-citations: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+```
+
+## Entry points
+
+cppDE generates and compiles C++ code per model: for ODE models through
+`cppODE()` and `cvode()`, for algebraic models through `cppFUN()`.
+
+|                | `cppODE()`                       | `cvode()`                              | `cppFUN()`                       |
+|:---------------|:---------------------------------|:---------------------------------------|:---------------------------------|
+| problem        | ODE                              | ODE                                    | algebraic $y = g(x, p)$          |
+| `method`       | `bdf`, `adams`, `rb4`, `tsit5`   | `bdf`, `adams`                         | none                             |
+| first order    | forward, reverse                 | forward, reverse                       | forward, reverse                 |
+| second order   | forward-forward, forward-reverse | none                                   | forward-forward, forward-reverse |
+| derivatives    | dual numbers, adjoint            | forward sensitivity equations, adjoint | dual numbers                     |
+| libraries      | LAPACK, KLU optional             | SUNDIALS $\ge 6.0$, KLU optional       | none                             |
+
+Table: The three entry points. All share the [code generator](#codegen);
+the two integrators share `solveODE()`.
+
+`cppODE()` and `cvode()` share their R interface: both
+take named character vectors of right-hand sides with optional events,
+forcings and parameter vectors and return a model handle for
+`solveODE()`. They differ only in the numerical core.
+`cppODE()` emits self-contained C++ that includes the headers
+under `inst/include/cppde/`. `cvode()` emits glue code
+that links the system-installed SUNDIALS CVODE/CVODES library and
+inherits its numerical behaviour.
+
+The in-tree integrator `cppODE()` is described in six articles:
+[stepping and error control](methods-stepping.html) with its four
+time-stepping methods, [forward sensitivities](methods-forward.html) by
+forward-mode automatic differentiation,
+[events, switches and saltation](methods-events.html), the
+[reverse-mode discrete adjoint](methods-reverse.html), whose cost does not
+depend on the number of parameters,
+[second derivatives forward over reverse](methods-forward-reverse.html),
+and [batches of conditions](methods-batches.html).
+[cvode() and its adjoint](methods-cvode.html) covers `cvode()` and its
+adjoint sensitivity analysis, and
+[cppFUN() and its derivative directions](methods-cppfun.html) covers
+`cppFUN()`, used for observation maps and reparametrisations
+$p = \Phi(\theta)$. The coefficients of the four methods are listed in
+[Method coefficients](methods-coefficients.html).
+[Benchmarks](benchmarks.html) compares the two integrators on $43$
+problems, and the reverse and second-order modes with their forward
+counterparts.
+
+## Code generation {#codegen}
+
+Every entry point turns the user's expressions into straight-line C++
+templated over the scalar type, so one source serves the value,
+dual-number and nested-dual instantiations. The further derivatives the
+integrators need are formed at code-generation time by automatic
+differentiation [@griewank2008evaluating] on an expression graph: the
+Jacobian, the contractions of the discrete adjoint, and the time
+derivatives of the right-hand side and of the event roots.
+
+**Expression graph.** Each expression is read by Python's own
+parser and lowered into a directed acyclic graph with states, parameters,
+forcings, time and constants as leaves and sums, products, powers and
+function calls as inner nodes. Nodes are hash-consed
+[@ershov1958programming; @filliatre2006hashconsing]: a node is
+identified by its operation, operands and constant attributes and is
+created at most once, so a repeated subexpression is a single node
+without a separate elimination pass. Sums and products are kept flat
+with numeric coefficients and exponents, and numeric constants are
+normalised so that equal values map to equal nodes. Syntax the parser
+does not read goes through SymPy into the same graph; SymPy also
+supplies the derivative of a function the graph has no rule for.
+
+```{r expression-graph, fig.width = 4.6, fig.height = 3.6, fig.align = "center", out.width = "60%", fig.cap = "Expression graph of $f_A = f_B = -k_1 A B + k_2 C$ and $f_C = k_1 A B - k_2 C$; edge labels are coefficients."}
+# leaves at the bottom, operations as circles, roots at the top
+pos <- list(k1 = c(0, 0), A = c(1, 0), B = c(2, 0), C = c(3, 0), k2 = c(4, 0),
+            u = c(1, 1.3), v = c(3.5, 1.3), s = c(1.5, 2.6), r = c(3, 2.6),
+            fs = c(1.5, 3.6), fr = c(3, 3.6))
+radius <- c(k1 = 0.2, A = 0.2, B = 0.2, C = 0.2, k2 = 0.2, u = 0.27, v = 0.27,
+            s = 0.27, r = 0.27, fs = 0.25, fr = 0.25)
+edge <- function(from, to, label = NULL, side = 2) {
+  p <- pos[[from]]; q <- pos[[to]]
+  d <- (q - p) / sqrt(sum((q - p)^2))
+  a <- p + radius[[from]] * d; b <- q - radius[[to]] * d
+  arrows(a[1], a[2], b[1], b[2], length = 0.08, angle = 20)
+  if (!is.null(label)) {
+    m <- (a + b) / 2
+    text(m[1], m[2], label, pos = side, cex = 0.8, offset = 0.3)
+  }
+}
+op <- par(mar = c(0, 0, 0, 0))
+plot.new()
+plot.window(xlim = c(-0.4, 4.4), ylim = c(-0.3, 3.9), asp = 1)
+for (n in c("u", "v", "s", "r"))
+  symbols(pos[[n]][1], pos[[n]][2], circles = radius[[n]], inches = FALSE, add = TRUE)
+text(pos$u[1], pos$u[2], "\u00d7"); text(pos$v[1], pos$v[2], "\u00d7")
+text(pos$s[1], pos$s[2], "+"); text(pos$r[1], pos$r[2], "+")
+text(pos$k1[1], pos$k1[2], quote(k[1])); text(pos$k2[1], pos$k2[2], quote(k[2]))
+for (n in c("A", "B", "C")) text(pos[[n]][1], pos[[n]][2], bquote(italic(.(n))))
+text(pos$fs[1], pos$fs[2], quote(list(f[A], f[B])))
+text(pos$fr[1], pos$fr[2], quote(f[C]))
+for (n in c("k1", "A", "B")) edge(n, "u")
+for (n in c("C", "k2")) edge(n, "v")
+edge("u", "s", "-1", side = 2); edge("v", "s")
+edge("u", "r"); edge("v", "r", "-1", side = 4)
+edge("s", "fs"); edge("r", "fr")
+par(op)
+```
+
+**Example.** In the expression graph above each product is
+one node, and so are the equal right-hand sides $f_A$ and $f_B$. Nodes
+used more than once become temporaries:
+
+```cpp
+const double _t0 = params[4]*x[2];       // k2*C
+const double _t1 = params[3]*x[0]*x[1];  // k1*A*B
+const double _t2 = _t0 - _t1;
+dxdt[0] = _t2;
+dxdt[1] = _t2;
+dxdt[2] = -_t0 + _t1;
+```
+
+**Derivatives.** A forward sweep over the graph forms a
+Jacobian-vector product, a reverse sweep a vector-Jacobian product,
+each in time linear in the size of the graph [@griewank2008evaluating].
+Both add nodes to the same graph, so derivative and value share their
+common parts. The reverse contractions $J^{\mathsf T}\lambda$ and
+$(\partial f/\partial p)^{\mathsf T}\lambda$ are vector-Jacobian
+products; the derivatives the Rosenbrock stages and the event
+localisation require are Jacobian-vector products along $\dot x = f$.
+
+The Jacobian $J = \partial f/\partial x$ is assembled by entries or by
+colouring. By entries, each state-dependent node holds the
+sparse gradient of its value with respect to the states, and the
+gradients of the graph roots are the nonzero entries of $J$. The cost
+of this accumulation,
+$W_{\mathrm{ent}} = \sum_{v} |\mathrm{supp}\,\nabla v|$ summed over
+the $E_s$ state-dependent nodes $v$ of $f$, grows with the density of
+$J$. Entries are used while
+$W_{\mathrm{ent}} \le \max(4E_s, 50\,000)$. Beyond that, a greedy
+distance-2 colouring of the column intersection graph groups
+structurally orthogonal columns
+[@curtis1974estimation; @coleman1983estimation; @gebremedhin2005color].
+If it needs at most $n_x/4$ colours, one Jacobian-vector product per
+colour, seeded with ones on the columns of that colour, recovers those
+columns; otherwise entries are kept.
+
+**Linear tables.** A sum of at least twelve terms
+$c_j\,x_j\,\varphi$ with numeric $c_j$ and a common state-free factor
+$\varphi$ becomes a row of a constant matrix $C$, so that
+$f(x) = \phi(x, Cx)$. The generated code evaluates $z = Cx$ once per
+call from a sparse or dense table, and assembles the Jacobian as
+[]{#eq-linmap-jacobian}
+$$
+  J = \frac{\partial \phi}{\partial x} + \frac{\partial \phi}{\partial z}\,C, \tag{1}
+$$
+while the reverse contractions apply $C^{\mathsf T}$. A dense coupling,
+such as a dipolar interaction among all states, thus costs a table
+rather than a sum of expressions per entry.
+
+**Loops.** Statements whose graphs agree up to state indices and
+constants, such as those a method-of-lines discretisation repeats for
+every grid point, form a class. A class of at least sixteen instances
+is emitted as one loop over index and constant tables, and a sum of
+many terms of one structure as an inner loop. Differentiation stays
+per instance, so the work of the generator grows with the number of
+instances, while the size of the emitted code for a regular model does
+not.
+
+## References
