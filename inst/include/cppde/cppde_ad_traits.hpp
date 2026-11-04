@@ -123,16 +123,44 @@ inline unsigned tangent_count(const cppde::dual<S, 0>& v) { return v.size(); }
 template<class T>
 inline void arm_width(T&, unsigned) {}
 
+template<class T> struct is_heap_dual : std::false_type {};
+template<class S> struct is_heap_dual<cppde::dual<S, 0>> : std::true_type {};
+
+// A second-order dual also binds the rows of its second derivatives, as wide as
+// the first.
 template<class S>
 inline void arm_width(cppde::dual<S, 0>& v, unsigned w) {
-  if (v.size() != 0 || w == 0) return;
-  v.set_depend_size(w);
-  for (unsigned i = 0; i < w; ++i) v[i] = S();
+  if (w == 0) return;
+  if (v.size() == 0) {
+    v.set_depend_size(w);
+    for (unsigned i = 0; i < w; ++i) v[i] = S();
+  }
+  if constexpr (is_heap_dual<S>::value)
+    for (unsigned i = 0; i < v.size(); ++i) arm_width(v[i], w);
 }
 
 template<class S, unsigned N>
 inline void arm_width(cppde::dual<S, N>& v, unsigned) {
   if (!v.depend()) v.arm();
+}
+
+// dual2nd derives from the nested dual, so the templates for that base lose to
+// the generic ones by their conversion; these take it exactly and bind both
+// layers zeroed, so that an entry the body does not write reads as zero.
+template<class S, unsigned N>
+inline unsigned tangent_count(const cppde::dual2nd<S, N>& v) { return v.width(); }
+
+template<class S, unsigned N>
+inline void arm_width(cppde::dual2nd<S, N>& v, unsigned w) {
+  auto& b = static_cast<typename cppde::dual2nd<S, N>::base&>(v);
+  if constexpr (N == 0) {
+    arm_width(b, w);
+  } else {
+    (void)w;
+    if (!b.depend()) b.arm();
+    for (unsigned i = 0; i < N; ++i)
+      if (!b[i].depend()) b[i].arm();
+  }
 }
 
 template<class T>
@@ -305,7 +333,8 @@ inline void bulk_extract_derivs(
     auto& vi = const_cast<AD&>(v[i]);
     unsigned sz = vi.size();
     for (unsigned j = 0; j < n_derivs; ++j) {
-      out[j * n + i] = (j < sz) ? vi.d(j) : Inner(0);
+      if (j < sz) out[j * n + i] = vi.d(j);
+      else out[j * n + i] = Inner(0.0);
     }
   }
 }
@@ -320,6 +349,13 @@ template<class T, unsigned N>
 struct ad_static_size<cppde::dual2nd<T, N>> : std::integral_constant<unsigned, N> {};
 } // namespace detail
 
+// The value layer of b from v; for a dual2nd through set_value_layer, which
+// binds no tangents there.
+template<class AD, class V>
+inline void set_value(AD& b, const V& v) { b.x() = v; }
+template<class S, unsigned N, class V>
+inline void set_value(cppde::dual2nd<S, N>& b, const V& v) { b.set_value_layer(v); }
+
 template<class AD,
          std::enable_if_t<is_ad<AD>::value, int> = 0>
 inline void bulk_inject_results(
@@ -330,7 +366,7 @@ inline void bulk_inject_results(
 {
   constexpr unsigned StaticN = detail::ad_static_size<AD>::value;
   for (int i = 0; i < n; ++i) {
-    b[i].x() = b_val[i];
+    set_value(b[i], b_val[i]);
     if (n_derivs > 0) {
       // Activate dependence (sets internal flag / allocates tangent vec).
       // Static N: diff(0) seeds m_diff[0] = 1; every slot is overwritten below.

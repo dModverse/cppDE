@@ -79,8 +79,27 @@ public:
   // does not import the implicit default ctor in all compiler versions.
   dual2nd() : base() {}
 
-  // Implicit copy / move are generated and copy/move the base subobject.
-  // No new data members, so default copy/move are correct.
+    // Copies and moves never bind the tangents of the value layer, which repeat
+    // the gradient of the outer layer: an entry bound before an arena scope and
+    // assigned inside it stays valid after the scope.
+  dual2nd(const dual2nd& o) : base() { copy_from(o); }
+  dual2nd(dual2nd&& o) noexcept : base(std::move(static_cast<base&>(o))) {}
+  dual2nd& operator=(const dual2nd& o) {
+    if (this != &o) copy_from(o);
+    return *this;
+  }
+  dual2nd& operator=(dual2nd&& o) noexcept {
+    if (this != &o) move_from(o);
+    return *this;
+  }
+
+    // The scalar of v into the value layer, and its tangents where that layer
+    // is bound; binds nothing.
+  void set_value_layer(const inner_dual_t& v) {
+    inner_dual_t& own = base::x();
+    if (own.depend()) own = v;
+    else own.x() = v.x();
+  }
 
     // ---------------------------------------------------------------------------
     // Triangular accessors. The gradient lives in outer.tan_[i].x(), which is
@@ -182,6 +201,62 @@ public:
   inline dual2nd& operator*=(const dual2nd_expr::Expr2nd<D>& e);
   template<class D>
   inline dual2nd& operator/=(const dual2nd_expr::Expr2nd<D>& e);
+
+    // The same with a dual2nd operand, with the Hessian cross terms the inherited
+    // nested-dual operators omit. Templates, so that an operand that only
+    // converts to dual2nd keeps the inherited overload.
+  template<class U, std::enable_if_t<std::is_same_v<U, dual2nd>, int> = 0>
+  inline dual2nd& operator+=(const U& o);
+  template<class U, std::enable_if_t<std::is_same_v<U, dual2nd>, int> = 0>
+  inline dual2nd& operator-=(const U& o);
+  template<class U, std::enable_if_t<std::is_same_v<U, dual2nd>, int> = 0>
+  inline dual2nd& operator*=(const U& o);
+  template<class U, std::enable_if_t<std::is_same_v<U, dual2nd>, int> = 0>
+  inline dual2nd& operator/=(const U& o);
+
+private:
+    // The base copy with the value layer through set_value_layer; a static
+    // width keeps the base copy.
+  void copy_from(const dual2nd& o) {
+    if constexpr (N > 0) {
+      base::operator=(static_cast<const base&>(o));
+    } else {
+      set_value_layer(static_cast<const base&>(o).x());
+      base& b = *this;
+      const base& ob = o;
+      const unsigned m = ob.size();
+      if (m == 0) {
+        for (unsigned i = 0; i < b.size(); ++i) b[i] = inner_dual_t();
+        return;
+      }
+      if (b.size() == 0) b.set_depend_size(m);
+      assert(b.size() == m && "dual2nd: tangent-vector size mismatch");
+      for (unsigned i = 0; i < m; ++i) b[i] = ob[i];
+    }
+  }
+
+    // As copy_from, but an unbound outer layer takes the buffer of o and a
+    // bound one takes its rows.
+  void move_from(dual2nd& o) noexcept {
+    if constexpr (N > 0) {
+      base::operator=(std::move(static_cast<base&>(o)));
+    } else {
+      set_value_layer(static_cast<const base&>(o).x());
+      base& b = *this;
+      base& ob = o;
+      const unsigned m = ob.size();
+      if (m == 0) {
+        for (unsigned i = 0; i < b.size(); ++i) b[i] = inner_dual_t();
+        return;
+      }
+      if (b.size() > 0) {
+        for (unsigned i = 0; i < m; ++i) b[i] = std::move(ob[i]);
+        return;
+      }
+      b.rebind_storage(&ob[0], m);
+      ob.rebind_storage(nullptr, 0);
+    }
+  }
 };
 
 // ----------------------------------------------------------------------------
@@ -206,6 +281,18 @@ inline cppde::dual<S, N> first_order_view(const cppde::dual2nd<S, N>& v) {
     }
   }
   return r;
+}
+
+// first_order_view(v) written into the tangent storage dst already has, so that
+// a buffer filled on every solve allocates on its first fill only.
+template<class S, unsigned N>
+inline void assign_first_order(cppde::dual<S, N>& dst, const cppde::dual2nd<S, N>& v) {
+  unsigned m = N;
+  if constexpr (N == 0) m = v.size();
+  if (!v.depend() || m == 0) { dst = v.scalar(); return; }
+  dst.set_depend_size(m);
+  dst.x() = v.scalar();
+  for (unsigned k = 0; k < m; ++k) dst[k] = v.d1_at(k);
 }
 
 // value_of on a dual2nd: the innermost scalar, matching the first-order

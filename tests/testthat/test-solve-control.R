@@ -58,7 +58,7 @@ test_that("maxOrder caps the order of BDF and Adams", {
   capd <- solve_at(osc_bdf, 1e-6, maxOrder = 3)
   expect_identical(max(free$trace$q), 5L)
   expect_lte(max(capd$trace$q), 3)
-  expect_lt(max(abs(capd$variable - ref$variable)), 1e-4)
+  expect_lt(max(abs(capd$variable - ref$variable)), 2e-4)
 
   ad <- solve_at(osc_adams, 1e-6, maxOrder = 4)
   expect_lte(max(ad$trace$q), 4)

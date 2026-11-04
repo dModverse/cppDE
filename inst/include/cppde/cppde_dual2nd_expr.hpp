@@ -967,6 +967,31 @@ dual2nd<T, N>::operator/=(const dual2nd_expr::Expr2nd<D>& e) {
   return *this;
 }
 
+template<class T, unsigned N>
+template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T, N>>, int>>
+CPPDE_ET2_INLINE dual2nd<T, N>& dual2nd<T, N>::operator+=(const U& o) {
+  *this = *this + o;
+  return *this;
+}
+template<class T, unsigned N>
+template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T, N>>, int>>
+CPPDE_ET2_INLINE dual2nd<T, N>& dual2nd<T, N>::operator-=(const U& o) {
+  *this = *this - o;
+  return *this;
+}
+template<class T, unsigned N>
+template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T, N>>, int>>
+CPPDE_ET2_INLINE dual2nd<T, N>& dual2nd<T, N>::operator*=(const U& o) {
+  *this = *this * o;
+  return *this;
+}
+template<class T, unsigned N>
+template<class U, std::enable_if_t<std::is_same_v<U, dual2nd<T, N>>, int>>
+CPPDE_ET2_INLINE dual2nd<T, N>& dual2nd<T, N>::operator/=(const U& o) {
+  *this = *this / o;
+  return *this;
+}
+
 } // namespace cppde
 
 #endif // CPPDE_DUAL2ND_EXPR_HPP

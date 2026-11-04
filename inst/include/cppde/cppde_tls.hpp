@@ -1,10 +1,7 @@
 /*
- Thread-local scratch storage.
-
- A thread_local with a non-trivial destructor registers __cxa_thread_atexit,
- which makes glibc refuse to unmap the shared object, dyn.unload() becomes a
- no-op and every model rebuild leaks its .so.  A thread_local pointer registers
- nothing; the buffer behind it is leaked on purpose (one per thread per slot).
+ Thread-local scratch storage, kept in the dual arena of the thread: a solve's
+ outermost arena scope frees it, and no thread_local with a destructor pins the
+ shared object against dyn.unload().
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -14,16 +11,16 @@
 
 #include <vector>
 
+#include "cppde_dual_arena.hpp"
+
 namespace cppde {
 namespace detail {
 
 // Per-thread scratch. Slot must be distinct per call site; callers assign()
-// or resize() before use.
+// or resize() before use, inside a dual_arena::scope.
 template <int Slot>
 inline std::vector<double>& tls_scratch_f64() {
-  thread_local std::vector<double>* p = nullptr;
-  if (p == nullptr) p = new std::vector<double>();  // leaked, see above
-  return *p;
+  return dual_arena::arena().template scratch<Slot>();
 }
 
 }  // namespace detail

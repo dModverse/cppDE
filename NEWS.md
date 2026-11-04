@@ -1,3 +1,20 @@
+# cppDE 0.13.6
+
+* The arena that holds the tangents of temporaries and the scratch buffers of the steppers goes
+  back to a pool when the outermost scope of a solve closes, with at most 1 GB of its storage,
+  and the next solve on any thread takes it from there. The memory of a process stays bounded
+  when OpenMP ends and starts threads.
+
+* Solves with second-order sensitivities release the temporaries of every step, so that their
+  memory does not grow with the steps. An allocation that fails in the arena is an R error.
+
+* The first step of a forward solve is estimated from the tangents the right-hand side returns;
+  the step grid of forward solves with sensitivities changes within the tolerance.
+
+* `cppde::dual2nd` has compound assignments with a `dual2nd` operand that keep the Hessian. Its
+  copies, its moves and the results of its LU solves write the value layer only where it is
+  bound.
+
 # cppDE 0.13.5
 
 * `ptc()` ends with Newton steps until every solved variable is within

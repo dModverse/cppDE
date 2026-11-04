@@ -27,6 +27,8 @@
 #include <utility>
 #include <vector>
 
+#include <cppde/cppde_ad_traits.hpp>
+#include <cppde/cppde_dual_arena.hpp>
 #include <cppde/cppde_events.hpp>
 #include <cppde/cppde_saltation.hpp>
 #include <cppde/cppde_switch_modes.hpp>
@@ -55,7 +57,10 @@ struct sliding_core {
   bool wrote_full = false;
   bool inexact = false;
 
+  // f is cleared before it is filled: fm and f_tmp outlive the arena scopes of the mixes, and an
+  // assignment would write into tangents a closed scope released.
   void eval(const State& x, State& f, const Time& t) {
+    f.clear();
     f.assign(x.size(), V(0.0));
     for (auto& v : f) ad_traits::arm_tangents(v);
     rhs(x, f, t);
@@ -174,6 +179,7 @@ struct sliding_core {
         m = keep;
         no_mix();
       }
+      f_tmp.clear();
       f_tmp.assign(x.size(), V(0.0));
       mix(a, f_tmp);
     }
@@ -181,14 +187,20 @@ struct sliding_core {
     return root_rate(roots[root_of[k]], x, t, f_tmp, terms);
   }
 
-  // The weight of slide k at (x, t); k slides.
+  // The weight of slide k at (x, t); k slides. The result is bound before the
+  // arena scope the Newton iteration of the weights allocates in.
   V weight(int k, const State& x, const Time& t) {
     const std::vector<int> S = sliding_switches();
+    V out(0.0);
+    unsigned w = 0;
+    for (const V& v : x) w = std::max(w, ad_traits::tangent_count(v));
+    ad_traits::arm_width(out, w);
+    dual_arena::scope scope;
     std::vector<V> a;
     if (!solve(S, x, t, a)) no_mix();
     for (std::size_t i = 0; i < S.size(); ++i)
-      if (S[i] == k) return a[i];
-    return V(0.0);
+      if (S[i] == k) out = a[i];
+    return out;
   }
 };
 
@@ -210,6 +222,9 @@ struct sliding_system {
         c->rhs(x, dxdt, t);
         return;
       }
+      // the temporaries of the mix go with the scope, dxdt is bound before it
+      ad_traits::arm_outputs(dxdt, dxdt, x, x);
+      dual_arena::scope scope;
       c->slide(S, x, dxdt, t);
     }
   };
@@ -229,11 +244,15 @@ struct sliding_system {
         jac(x, J, t, dfdt);
         return;
       }
-      std::vector<V> a;
-      if (!c->solve(S, x, t, a)) core_type::no_mix();
-      const std::size_t M = c->fm.size(), n = x.size(), ns = S.size();
+      const std::size_t n = x.size(), ns = S.size();
       signed char* md = switch_mode_sink().m;
       if constexpr (std::is_same_v<Matrix, dense_matrix<V>>) {
+        // J and dfdt are bound before the scope the weights and differences allocate in
+        ad_traits::arm_outputs(J.data, dfdt, x, x);
+        dual_arena::scope scope;
+        std::vector<V> a;
+        if (!c->solve(S, x, t, a)) core_type::no_mix();
+        const std::size_t M = c->fm.size();
         // df/da_k from the combinations at x, before the differences overwrite them.
         std::vector<State> dfda(ns, State(n));
         for (std::size_t k = 0; k < ns; ++k)
@@ -286,10 +305,15 @@ struct sliding_system {
         c->wrote_full = true;
       } else {
         std::size_t best = 0;
-        double wbest = -1.0;
-        for (std::size_t cc = 0; cc < M; ++cc) {
-          const double w = scalar_value(combo_weight(a, cc));
-          if (w > wbest) { wbest = w; best = cc; }
+        {
+          dual_arena::scope scope;
+          std::vector<V> a;
+          if (!c->solve(S, x, t, a)) core_type::no_mix();
+          double wbest = -1.0;
+          for (std::size_t cc = 0; cc < c->fm.size(); ++cc) {
+            const double w = scalar_value(combo_weight(a, cc));
+            if (w > wbest) { wbest = w; best = cc; }
+          }
         }
         for (std::size_t q = 0; q < ns; ++q) md[S[q]] = ((best >> q) & 1u) ? 1 : 0;
         jac(x, J, t, dfdt);
@@ -313,6 +337,7 @@ struct sliding_system {
 
   // Signs of r' of switch k with its mode off and on, the other slides mixed.
   void rate_signs(int k, const State& x, const Time& t, int& off, int& on) const {
+    dual_arena::scope scope;
     double terms = 0.0;
     off = rate_sign(scalar_value(first.c->rate(k, false, x, t, terms)), terms);
     on = rate_sign(scalar_value(first.c->rate(k, true, x, t, terms)), terms);
@@ -321,8 +346,9 @@ struct sliding_system {
   // Whether the slides as they stand have a mix at (x, t), weights in [0, 1].
   bool mixable(const State& x, const Time& t) const {
     const std::vector<int> S = sliding_switches();
-    std::vector<V> a;
     if (S.empty()) return true;
+    dual_arena::scope scope;
+    std::vector<V> a;
     if (!first.c->solve(S, x, t, a)) return false;
     for (const V& v : a) {
       const double w = scalar_value(v);

@@ -229,7 +229,7 @@ public:
       }
       if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
         for (int k = 0; k < nnz; ++k)
-          m_W_val.Ax[k] = first_order_view(W.Ax[k]);
+          assign_first_order(m_W_val.Ax[k], W.Ax[k]);
       } else {
         for (int k = 0; k < nnz; ++k)
           m_W_val.Ax[k] = const_cast<F&>(W.Ax[k]).x();
@@ -247,7 +247,7 @@ public:
     adopt_structure(W);
     if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
       for (int k = 0; k < nnz; ++k)
-        m_W_val.Ax[k] = first_order_view(W.Ax[k]);
+        assign_first_order(m_W_val.Ax[k], W.Ax[k]);
     } else {
       for (int k = 0; k < nnz; ++k)
         m_W_val.Ax[k] = const_cast<F&>(W.Ax[k]).x();
@@ -263,7 +263,7 @@ public:
     m_b_val.resize(n);
     if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
       for (int i = 0; i < n; ++i)
-        m_b_val[i] = first_order_view(b[i]);
+        assign_first_order(m_b_val[i], b[i]);
     } else {
       for (int i = 0; i < n; ++i)
         m_b_val[i] = const_cast<F&>(b[i]).x();
@@ -292,7 +292,7 @@ public:
 
     if (n_derivs == 0) {
       for (int i = 0; i < n; ++i)
-        b[i].x() = m_b_val[i];
+        cppde::ad_traits::set_value(b[i], m_b_val[i]);
       return;
     }
 
@@ -302,7 +302,8 @@ public:
       auto& bi = const_cast<F&>(b[i]);
       unsigned sz = bi.size();
       for (unsigned j = 0; j < n_derivs; ++j)
-        m_rhs_all[j * n + i] = (j < sz) ? bi.d(j) : Inner(0);
+        if (j < sz) m_rhs_all[j * n + i] = bi.d(j);
+        else m_rhs_all[j * n + i] = 0.0;
     }
 
     // 4. IFT sparse matvec: rhs_all -= dW · b_val
@@ -325,7 +326,7 @@ public:
     m_b_val.resize(n);
     if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
       for (int i = 0; i < n; ++i)
-        m_b_val[i] = first_order_view(b[i]);
+        assign_first_order(m_b_val[i], b[i]);
     } else {
       for (int i = 0; i < n; ++i)
         m_b_val[i] = const_cast<F&>(b[i]).x();
@@ -354,7 +355,7 @@ public:
 
     if (n_derivs == 0) {
       for (int i = 0; i < n; ++i)
-        b[i].x() = m_b_val[i];
+        cppde::ad_traits::set_value(b[i], m_b_val[i]);
       return;
     }
 
@@ -364,7 +365,8 @@ public:
       auto& bi = const_cast<F&>(b[i]);
       unsigned sz = bi.size();
       for (unsigned j = 0; j < n_derivs; ++j)
-        m_rhs_all[j * n + i] = (j < sz) ? bi.d(j) : Inner(0);
+        if (j < sz) m_rhs_all[j * n + i] = bi.d(j);
+        else m_rhs_all[j * n + i] = 0.0;
     }
 
     // 4. IFT sparse matvec: rhs_all -= dW · b_val
@@ -372,11 +374,11 @@ public:
 
     // 5. One transposed solve per direction.
     {
-      std::vector<Inner> col(static_cast<std::size_t>(n));
+      m_col.resize(static_cast<std::size_t>(n));
       for (unsigned j = 0; j < n_derivs; ++j) {
-        for (int i = 0; i < n; ++i) col[i] = m_rhs_all[j * n + i];
-        m_inner.solve_transposed(col);
-        for (int i = 0; i < n; ++i) m_rhs_all[j * n + i] = col[i];
+        for (int i = 0; i < n; ++i) m_col[i] = m_rhs_all[j * n + i];
+        m_inner.solve_transposed(m_col);
+        for (int i = 0; i < n; ++i) m_rhs_all[j * n + i] = m_col[i];
       }
     }
 
@@ -398,8 +400,7 @@ public:
     if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
       for (int col = 0; col < nrhs; ++col)
         for (int i = 0; i < n; ++i)
-          m_b_val_batch[col * n + i] =
-            first_order_view(B_flat[col * n + i]);
+          assign_first_order(m_b_val_batch[col * n + i], B_flat[col * n + i]);
     } else {
       for (int col = 0; col < nrhs; ++col)
         for (int i = 0; i < n; ++i)
@@ -447,7 +448,7 @@ public:
     if (n_derivs == 0) {
       for (int col = 0; col < nrhs; ++col)
         for (int i = 0; i < n; ++i)
-          B_flat[col * n + i].x() = m_b_val_batch[col * n + i];
+          cppde::ad_traits::set_value(B_flat[col * n + i], m_b_val_batch[col * n + i]);
       return;
     }
 
@@ -459,8 +460,8 @@ public:
         auto& bi = const_cast<F&>(B_flat[col * n + i]);
         unsigned sz = bi.size();
         for (unsigned j = 0; j < n_derivs; ++j)
-          m_rhs_all_batch[col * per_col + j * n + i] =
-            (j < sz) ? bi.d(j) : Inner(0);
+          if (j < sz) m_rhs_all_batch[col * per_col + j * n + i] = bi.d(j);
+          else m_rhs_all_batch[col * per_col + j * n + i] = 0.0;
       }
     }
 
@@ -476,7 +477,7 @@ public:
     for (int col = 0; col < nrhs; ++col) {
       for (int i = 0; i < n; ++i) {
         auto& bi = B_flat[col * n + i];
-        bi.x() = m_b_val_batch[col * n + i];
+        cppde::ad_traits::set_value(bi, m_b_val_batch[col * n + i]);
         if constexpr (StaticN > 0) {
           if (!bi.depend()) bi.diff(0);
         } else {
@@ -537,15 +538,13 @@ private:
         Inner* rhs_col = m_rhs_all_batch.data() + col_b * per_col;
         const Inner* b_val_col = m_b_val_batch.data() + col_b * n;
         for (int col = 0; col < n; ++col) {
-          const Inner b_col = b_val_col[col];
+          const Inner& b_col = b_val_col[col];
           for (int p = m_W_stored.Ap[col]; p < m_W_stored.Ap[col + 1]; ++p) {
             int row = m_W_stored.Ai[p];
             auto& w_entry = const_cast<F&>(m_W_stored.Ax[p]);
             unsigned wsz = w_entry.size();
-            for (unsigned j = 0; j < n_derivs; ++j) {
-              Inner dw = (j < wsz) ? w_entry.d(j) : Inner(0);
-              rhs_col[j * n + row] -= dw * b_col;
-            }
+            for (unsigned j = 0; j < n_derivs && j < wsz; ++j)
+              rhs_col[j * n + row] -= w_entry.d(j) * b_col;
           }
         }
       }
@@ -575,13 +574,11 @@ private:
       for (int col = 0; col < n; ++col) {
         for (int p = m_W_stored.Ap[col]; p < m_W_stored.Ap[col + 1]; ++p) {
           const int row = m_W_stored.Ai[p];
-          const Inner b_row = m_b_val[row];
+          const Inner& b_row = m_b_val[row];
           auto& w_entry = const_cast<F&>(m_W_stored.Ax[p]);
           unsigned wsz = w_entry.size();
-          for (unsigned j = 0; j < n_derivs; ++j) {
-            Inner dw = (j < wsz) ? w_entry.d(j) : Inner(0);
-            m_rhs_all[j * n + col] -= dw * b_row;
-          }
+          for (unsigned j = 0; j < n_derivs && j < wsz; ++j)
+            m_rhs_all[j * n + col] -= w_entry.d(j) * b_row;
         }
       }
     }
@@ -623,15 +620,13 @@ private:
       // =============================================================
 
       for (int col = 0; col < n; ++col) {
-        const Inner b_col = m_b_val[col];
+        const Inner& b_col = m_b_val[col];
         for (int p = m_W_stored.Ap[col]; p < m_W_stored.Ap[col + 1]; ++p) {
           int row = m_W_stored.Ai[p];
           auto& w_entry = const_cast<F&>(m_W_stored.Ax[p]);
           unsigned wsz = w_entry.size();
-          for (unsigned j = 0; j < n_derivs; ++j) {
-            Inner dw = (j < wsz) ? w_entry.d(j) : Inner(0);
-            m_rhs_all[j * n + row] -= dw * b_col;
-          }
+          for (unsigned j = 0; j < n_derivs && j < wsz; ++j)
+            m_rhs_all[j * n + row] -= w_entry.d(j) * b_col;
         }
       }
     }
@@ -654,7 +649,7 @@ private:
   // Persistent solve buffers.
   mutable std::vector<Inner> m_b_val;          // n scalars: value part (single)
   mutable std::vector<Inner> m_rhs_all;        // n × n_derivs (single)
-  mutable std::vector<F>     m_col_buf;        // unused
+  mutable std::vector<Inner> m_col;            // one direction of a transposed solve
   mutable std::vector<Inner> m_b_val_batch;    // n × nrhs: value part (batched)
   mutable std::vector<Inner> m_rhs_all_batch;  // n × n_derivs × nrhs (batched)
 };

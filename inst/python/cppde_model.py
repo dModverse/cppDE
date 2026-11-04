@@ -5,11 +5,12 @@ params[n_states + k] parameter k. With a constant linear map (see
 cppde_struct), row r of C x is `_lin[r]` and of C v is `_linv[r]`.
 """
 
-import os
-
 import cppde_emit as em
 import cppde_graph as cg
 import cppde_struct as cs
+
+# The Jacobian strategy, 'entries' or 'colour'; None chooses by the work of each.
+JACOBIAN_STRATEGY = None
 
 
 def _bit_list(b):
@@ -353,10 +354,9 @@ class OdeModel:
         return self.cached("colouring", colour)
 
     def jacobian_strategy(self):
-        """'entries' or 'colour'; CPPDE_JAC forces one."""
-        forced = os.environ.get("CPPDE_JAC", "").strip().lower()
-        if forced in ("entries", "colour", "color"):
-            return "entries" if forced == "entries" else "colour"
+        """'entries' or 'colour': JACOBIAN_STRATEGY, else by the work of each."""
+        if JACOBIAN_STRATEGY is not None:
+            return JACOBIAN_STRATEGY
         w, es = self.entry_work()
         if w <= max(4 * es, 50000):
             return "entries"
@@ -888,6 +888,14 @@ class Scalar:
             return ["    cppde::dual_arena::scope _rhs_arena_scope;"]
         return []
 
+    def output_scope(self, out):
+        """Lines that bind `out` as wide as x and the parameters, then open an arena scope: the
+        temporaries of the body go with the scope, the outputs live in the caller's."""
+        if not (self.arena and self.level >= 1):
+            return []
+        return ["    cppde::ad_traits::arm_outputs(%s, %s, x, params);" % (out, out),
+                "    cppde::dual_arena::scope _rhs_arena_scope;"]
+
 
 def cpp_statements(model, stores, scalar, prefix="_t", indent="    "):
     stmts, names = em.schedule(model.g, stores, prefix=prefix)
@@ -972,7 +980,7 @@ def cpp_ode_system(model, scalar):
               "                  std::vector<%s>& dxdt," % T,
               "                  const %s& t) {" % T,
               "    (void)x; (void)t;"]
-    lines += scalar.arena_scope()
+    lines += scalar.output_scope("dxdt")
     lines += cpp_statements_raw(model, ode_statements(model, T), scalar)
     lines += ["  }", "};"]
     return lines
@@ -991,7 +999,7 @@ def cpp_jacobian(model, scalar, sparse, strategy):
               "                  const %s& t," % T,
               "                  std::vector<%s>& dfdt) {" % T,
               "    (void)x; (void)t;"]
-    scoped = scalar.arena and scalar.level == 1
+    scoped = scalar.arena and scalar.level >= 1
     lines += cpp_statements_raw(
         model, jacobian_statements(model, sparse, strategy, T, scoped=scoped), scalar)
     lines += ["  }", "};"]

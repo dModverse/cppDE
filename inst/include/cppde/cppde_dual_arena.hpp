@@ -3,7 +3,11 @@
 
  Design:
  - One thread-local arena per thread, growing slabs (initial 64 KiB, doubling).
- - LIFO scope-based reset via cppde::dual_arena::scope (RAII).
+ - LIFO scope-based reset via cppde::dual_arena::scope (RAII). The outermost
+   scope of an arena that held nothing before it returns the arena to a pool
+   that any thread takes it from next, so a thread that ends leaves nothing
+   behind. An arena goes back with at most retain_bytes of slabs and of each
+   scratch buffer.
  - Bump-pointer alloc<T>(n): O(1) per allocation, no per-temporary heap call.
  - For trivially-destructible T (double, float, int, …) the alloc is a pure
    bump; no ctor/dtor bookkeeping. For non-trivially-destructible T (e.g.
@@ -23,10 +27,12 @@
 #ifndef CPPDE_DUAL_ARENA_HPP
 #define CPPDE_DUAL_ARENA_HPP
 
+#include <array>
 #include <cstddef>
 #include <limits>
 #include <cstdint>
 #include <cstdlib>
+#include <mutex>
 #include <new>
 #include <type_traits>
 #include <vector>
@@ -36,6 +42,7 @@ namespace cppde {
 class dual_arena {
 public:
   static constexpr std::size_t initial_slab_bytes = 64u * 1024u;
+  static constexpr std::size_t retain_bytes = 1024u * 1024u * 1024u;
 
   struct slab {
     char*       data = nullptr;
@@ -44,7 +51,9 @@ public:
     slab() = default;
     explicit slab(std::size_t bytes)
       : data(static_cast<char*>(std::malloc(bytes))), cap(bytes), top(0)
-    {}
+    {
+      if (data == nullptr) throw std::bad_alloc();
+    }
     slab(const slab&) = delete;
     slab& operator=(const slab&) = delete;
     slab(slab&& o) noexcept : data(o.data), cap(o.cap), top(o.top) { o.data=nullptr; o.cap=0; o.top=0; }
@@ -61,6 +70,14 @@ public:
   std::vector<slab>       slabs_;
   std::size_t             active_ = 0;          // index of current slab
   std::vector<dtor_entry> dtors_;
+  std::size_t             depth_ = 0;           // open scopes
+#ifdef CPPDE_DEBUG_ARENA
+  // Debug aid: one malloc per allocation, freed by the scope that made it, so
+  // that valgrind sees a tangent used after its scope or past its end.
+  std::vector<void*>      blocks_;
+#endif
+  // per-call-site scratch of cppde_tls.hpp, freed with the arena
+  std::array<std::vector<double>, 4> scratch_;
 
   dual_arena() {
     slabs_.emplace_back(initial_slab_bytes);
@@ -108,12 +125,17 @@ public:
     std::size_t saved_active_;
     std::size_t saved_top_;
     std::size_t saved_dtors_;
+    bool        release_;   // the outermost scope of an arena that held nothing before it
+#ifdef CPPDE_DEBUG_ARENA
+    std::size_t saved_blocks_ = a_.blocks_.size();
+#endif
   public:
-    scope() noexcept
+    scope()
       : a_(arena()),
         saved_active_(a_.active_),
         saved_top_(a_.slabs_[a_.active_].top),
-        saved_dtors_(a_.dtors_.size())
+        saved_dtors_(a_.dtors_.size()),
+        release_(a_.depth_++ == 0 && a_.clean())
     {}
     scope(const scope&)            = delete;
     scope& operator=(const scope&) = delete;
@@ -131,6 +153,20 @@ public:
       }
       a_.active_ = saved_active_;
       a_.slabs_[saved_active_].top = saved_top_;
+#ifdef CPPDE_DEBUG_ARENA
+      while (a_.blocks_.size() > saved_blocks_) {
+        std::free(a_.blocks_.back());
+        a_.blocks_.pop_back();
+      }
+#endif
+      --a_.depth_;
+      if (release_) {
+        a_.trim();
+        pool_t& q = pool();
+        std::lock_guard<std::mutex> lock(q.m);
+        q.free.push_back(&a_);
+        tls() = nullptr;
+      }
     }
   };
 
@@ -155,15 +191,73 @@ public:
   };
 
   // Pointer, not `thread_local dual_arena`: a non-trivial TLS destructor
-  // pins this .so against dyn.unload(). See cppde_tls.hpp. Leaked on purpose.
-  static dual_arena& arena() noexcept {
-    thread_local dual_arena* tls = nullptr;
-    if (tls == nullptr) tls = new dual_arena();
-    return *tls;
+  // pins this .so against dyn.unload(). The outermost scope returns it to the
+  // pool.
+  static dual_arena*& tls() noexcept {
+    thread_local dual_arena* p = nullptr;
+    return p;
+  }
+  // A failed allocation throws std::bad_alloc, which the solve entries turn into an R error.
+  static dual_arena& arena() {
+    dual_arena*& p = tls();
+    if (p != nullptr) return *p;
+    pool_t& q = pool();
+    std::lock_guard<std::mutex> lock(q.m);
+    if (q.free.empty()) {
+      // room for every arena made, so that returning one to the pool never allocates
+      q.free.reserve(++q.made);
+      p = new dual_arena();
+    } else {
+      p = q.free.back();
+      q.free.pop_back();
+    }
+    return *p;
+  }
+
+  // The arenas no thread holds; at most as many as threads ran solves at once.
+  struct pool_t {
+    std::mutex m;
+    std::vector<dual_arena*> free;
+    std::size_t made = 0;
+    ~pool_t() { for (dual_arena* a : free) delete a; }
+  };
+  static pool_t& pool() noexcept {
+    static pool_t q;
+    return q;
+  }
+
+  // Nothing allocated: the state the outermost scope of a solve leaves behind.
+  bool clean() const noexcept {
+#ifdef CPPDE_DEBUG_ARENA
+    if (!blocks_.empty()) return false;
+#endif
+    return active_ == 0 && slabs_[0].top == 0 && dtors_.empty();
+  }
+
+  // Keeps the leading slabs up to retain_bytes, the first always, and frees the
+  // other slabs and every scratch buffer above retain_bytes. Only on a clean
+  // arena, where no slab is in use.
+  void trim() noexcept {
+    std::size_t kept = slabs_[0].cap, k = 1;
+    while (k < slabs_.size() && kept + slabs_[k].cap <= retain_bytes) kept += slabs_[k++].cap;
+    if (k < slabs_.size()) slabs_.erase(slabs_.begin() + static_cast<std::ptrdiff_t>(k), slabs_.end());
+    for (std::vector<double>& v : scratch_)
+      if (v.capacity() * sizeof(double) > retain_bytes) std::vector<double>().swap(v);
+  }
+
+  template <int Slot>
+  std::vector<double>& scratch() noexcept {
+    static_assert(Slot >= 0 && Slot < 4, "four scratch slots");
+    return scratch_[Slot];
   }
 
 private:
   void* bump(std::size_t align, std::size_t bytes) {
+#ifdef CPPDE_DEBUG_ARENA
+    (void)align;
+    blocks_.push_back(std::malloc(bytes > 0 ? bytes : 1));
+    return blocks_.back();
+#endif
     slab* s = &slabs_[active_];
     std::size_t aligned = (s->top + (align - 1)) & ~(align - 1);
     if (aligned + bytes > s->cap) {
