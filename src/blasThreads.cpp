@@ -50,6 +50,7 @@ extern "C" SEXP cppde_forcing_values(SEXP, SEXP, SEXP);
 extern "C" SEXP cppde_eval_prep(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern "C" SEXP cppde_eval_wrap(SEXP, SEXP, SEXP, SEXP);
 extern "C" SEXP cppde_eval_many(SEXP, SEXP, SEXP, SEXP);
+extern "C" SEXP cppde_release_store(SEXP);
 
 static const R_CallMethodDef callMethods[] = {
   {"cppde_blas_info", (DL_FUNC) &cppde_blas_info, 0},
@@ -59,6 +60,7 @@ static const R_CallMethodDef callMethods[] = {
   {"cppde_eval_prep",      (DL_FUNC) &cppde_eval_prep,      6},
   {"cppde_eval_wrap",      (DL_FUNC) &cppde_eval_wrap,      4},
   {"cppde_eval_many",      (DL_FUNC) &cppde_eval_many,      4},
+  {"cppde_release_store",  (DL_FUNC) &cppde_release_store,  1},
   {NULL, NULL, 0}
 };
 

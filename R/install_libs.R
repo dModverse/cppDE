@@ -102,7 +102,6 @@
 #'   `FALSE`.
 #' @param ask If `TRUE` (the default in an interactive session), ask for
 #'   confirmation before downloading and writing to `dir`.
-#' @param ... For `install_libs()`, the arguments of `installLibs()`.
 #'
 #' @return The install prefix, invisibly.
 #'
@@ -214,12 +213,3 @@ installLibs <- function(which = c("sundials", "suitesparse"),
   invisible(prefix)
 }
 
-
-#' @rdname installLibs
-#' @description `install_libs()` is the deprecated former name of
-#'   `installLibs()`.
-#' @export
-install_libs <- function(...) {
-  warning("'install_libs()' is deprecated; use 'installLibs()'", call. = FALSE)
-  installLibs(...)
-}

@@ -66,11 +66,6 @@ test_that("installLibs() points Windows to Rtools", {
   expect_error(installLibs(ask = FALSE), "pacman")
 })
 
-test_that("install_libs() is a deprecated alias of installLibs()", {
-  expect_warning(expect_error(install_libs(which = "none"), "should be one of"),
-                 "deprecated")
-})
-
 # -- adjointControl() -----------------------------------------------------------
 
 test_that("adjointControl() returns its three settings and checks each", {

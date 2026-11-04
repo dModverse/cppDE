@@ -30,7 +30,7 @@ for (k in c("available", "cflags", "libs", "klu_available", "klu_cflags",
   kv(k, format(cppDE:::cvodeConfig[[k]]))
 
 ## The prefix cppDE was *installed against*, which is not necessarily
-## the one install_libs() last built: the paths are frozen into
+## the one installLibs() last built: the paths are frozen into
 ## cvodeConfig.dcf at install time.
 hr("SUNDIALS actually linked")
 prefix <- sub(".*-I *([^ ]*)/include.*", "\\1", cppDE:::cvodeConfig$cflags)

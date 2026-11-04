@@ -114,10 +114,12 @@ Only on a \code{\link[=cppODE]{cppODE()}} model compiled with \code{derivMode = 
 backward sweep alone. A store from a different point is an error. A store
 may be reused any number of times. Default \code{NULL}.}
 
-\item{sensErrCon}{Logical. Include the sensitivities in the error test.
-Default \code{TRUE}; \code{FALSE} is cheaper and less accurate. Needs a model with
-sensitivities, has no effect under \code{derivMode = "reverse"}, and a
-\code{\link[=cvode]{cvode()}} model takes \code{TRUE} only.}
+\item{sensErrCon}{Logical. Include the sensitivities, under
+\code{derivMode = "forward-reverse"} the tangents, in the error test and the
+first step. Default \code{TRUE}; \code{FALSE} is cheaper and less accurate, and
+under \code{"forward-reverse"} gives a step grid that does not depend on the
+directions of the tangent. Needs a model with sensitivities, has no effect
+under \code{derivMode = "reverse"}, and a \code{\link[=cvode]{cvode()}} model takes \code{TRUE} only.}
 
 \item{adjoint}{Optional \code{\link[=adjointControl]{adjointControl()}} object for a model compiled with
 \code{derivMode = "reverse"}. Default \code{NULL}, the same as \code{adjointControl()}.}

@@ -236,6 +236,17 @@ test_that("a reverse solve can hand its checkpoints to the next one", {
   expect_identical(again$cotangent, plain$cotangent)
 })
 
+test_that("a released store frees its checkpoints, and a solve given it integrates again", {
+  mr <- models$rev$bdf
+  one <- do.call(solveODE, c(list(mr, times, pars, keepStore = TRUE), tol))
+  W <- seed_for(one)
+  plain <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
+  expect_identical(releaseStore(list(one$store, NULL)), 1L)
+  expect_identical(releaseStore(one$store), 0L)
+  after <- do.call(solveODE, c(list(mr, times, pars, cotangent = W, store = one$store), tol))
+  expect_identical(after$cotangent, plain$cotangent)
+})
+
 test_that("a store from another point is refused, not quietly used", {
   # This is the whole safety of the scheme. A store holds the run it was made
   # from; handed back at a different theta it would give a gradient at one point

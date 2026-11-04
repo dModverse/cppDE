@@ -656,10 +656,12 @@
 #'   `times` and `parms`. The solve then integrates nothing and runs the
 #'   backward sweep alone. A store from a different point is an error. A store
 #'   may be reused any number of times. Default `NULL`.
-#' @param sensErrCon Logical. Include the sensitivities in the error test.
-#'   Default `TRUE`; `FALSE` is cheaper and less accurate. Needs a model with
-#'   sensitivities, has no effect under `derivMode = "reverse"`, and a
-#'   [cvode()] model takes `TRUE` only.
+#' @param sensErrCon Logical. Include the sensitivities, under
+#'   `derivMode = "forward-reverse"` the tangents, in the error test and the
+#'   first step. Default `TRUE`; `FALSE` is cheaper and less accurate, and
+#'   under `"forward-reverse"` gives a step grid that does not depend on the
+#'   directions of the tangent. Needs a model with sensitivities, has no effect
+#'   under `derivMode = "reverse"`, and a [cvode()] model takes `TRUE` only.
 #' @param adjoint Optional [adjointControl()] object for a model compiled with
 #'   `derivMode = "reverse"`. Default `NULL`, the same as `adjointControl()`.
 #' @param maxOrder Optional upper bound on the order of a multistep method,
@@ -1222,4 +1224,26 @@ diagnostics.default <- function(result) {
   cat("---------------------------------------------------------------------\n")
 
   invisible(diag)
+}
+
+
+#' Release the Checkpoints of a Reverse Solve
+#'
+#' @description
+#' Frees the checkpoints a solve kept with `keepStore = TRUE` at once.
+#' Otherwise they are freed at the next garbage collection, which does not
+#' count their memory. A solve given a released store integrates again.
+#'
+#' @param store The `$store` of a solve, or a list of them; `NULL` entries are
+#'   skipped.
+#' @return Invisibly, the number of stores freed.
+#' @seealso [solveODE()]
+#' @example inst/examples/releaseStore.R
+#' @export
+releaseStore <- function(store) {
+  if (!is.list(store)) store <- list(store)
+  freed <- 0L
+  for (s in store)
+    if (inherits(s, "externalptr")) freed <- freed + .Call(C_cppde_release_store, s)
+  invisible(freed)
 }

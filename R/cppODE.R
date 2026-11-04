@@ -904,10 +904,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     }
   } else NULL
 
-  # Whether step-size control reads the tangents: the caller's choice. Under
-  # forward-reverse the grid must not depend on the directions it follows, so
-  # neither the first-step estimate nor the error test reads them.
-  sens_err_con_arg <- if (second_reverse) "false" else "args.sens_err_con"
+  # Whether step-size control reads the tangents: sensErrCon of the solve, under
+  # every derivMode.
+  sens_err_con_arg <- "args.sens_err_con"
 
   if (is_multistep(method)) {
     # ---- Multistep stepper (bdf / adams) ----
@@ -1563,11 +1562,13 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "}",
     "",
     "// Built here rather than in cppde_r_batch.hpp: the store's type comes from",
-    "// the model's stepper, so only this translation unit can free it.",
+    "// the model's stepper, so only this translation unit can free it. The finalizer",
+    "// also sits in the protected slot, where releaseStore() calls it before the GC.",
     "static SEXP rev_state_wrap(void* q) {",
-    "  SEXP p = PROTECT(R_MakeExternalPtr(q, Rf_install(\"cppde_rev_state\"), R_NilValue));",
+    "  SEXP fn = PROTECT(R_MakeExternalPtrFn((DL_FUNC) rev_state_finalizer, R_NilValue, R_NilValue));",
+    "  SEXP p = PROTECT(R_MakeExternalPtr(q, Rf_install(\"cppde_rev_state\"), fn));",
     "  R_RegisterCFinalizerEx(p, rev_state_finalizer, TRUE);",
-    "  UNPROTECT(1);",
+    "  UNPROTECT(2);",
     "  return p;",
     "}",
     "",

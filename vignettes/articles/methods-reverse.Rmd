@@ -216,7 +216,8 @@ them through `store`, performs no integration and proceeds
 directly to the sweep. A store created at a different parameter value
 is rejected. The call that creates a store may omit the cotangent and
 then performs a value-only run. A store holds its checkpoints until the
-garbage collector frees it.
+garbage collector frees it or `releaseStore()` frees them at once; a
+solve given a released store integrates again.
 
 A gradient needs two solves at the same parameter value, one for the
 values from which the cotangent is formed and one for the sweep; the

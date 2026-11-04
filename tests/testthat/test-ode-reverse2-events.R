@@ -161,7 +161,7 @@ test_that("an event's root, time and value may be any expression", {
 test_that("a clock-reading jump height rides on roottol", {
   # It reads t* itself, where a height blind to the clock only reads the state
   # there, so the localisation error reaches it undamped. Not a missing term:
-  # the gap falls with roottol and floors at reltol.
+  # with sensErrCon = FALSE the gap falls with roottol and floors at reltol.
   p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, d_amt = 0.4)
   mf <- pr_rtol$ff
   mr <- pr_rtol$fr$bdf
@@ -171,7 +171,7 @@ test_that("a clock-reading jump height rides on roottol", {
     ff <- do.call(solveODE, c(list(mf, times, p), tl))
     W  <- seed_for(nrow(ff$variable))
     W[vapply(ff$time, function(x) min(abs(x - times)) > 1e-9, TRUE), , ] <- 0
-    fr <- do.call(solveODE, c(list(mr, times, p, cotangent = W), tl))
+    fr <- do.call(solveODE, c(list(mr, times, p, cotangent = W, sensErrCon = FALSE), tl))
     max(abs(unname(fr$curvature[, , 1]) - hess_forward(ff, W)))
   }, numeric(1))
 

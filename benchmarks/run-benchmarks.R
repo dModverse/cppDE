@@ -293,7 +293,7 @@ cvode_ok <- isTRUE(cppDE:::cvodeConfig$available)
 if (!cvode_ok)
   stop("The CVODE backend is unavailable, so there is nothing to compare against.\n",
        "  Install SUNDIALS and re-install cppDE, or run:\n",
-       "      cppDE::install_libs(\"sundials\")")
+       "      cppDE::installLibs(\"sundials\")")
 
 cat(sprintf("cppDE benchmark suite\n  results  : %s\n  build    : %s\n", outdir, builddir))
 cat(sprintf("  R %s | cppDE %s | KLU %s\n",

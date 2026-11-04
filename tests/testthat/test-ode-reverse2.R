@@ -1,11 +1,11 @@
 # Forward over reverse: the grid it differentiates. The features it runs on are
 # in test-ode-reverse2-events.R.
 #
-# The grid claims are exact and not tolerance tests. A forward-reverse solve
-# takes its step sequence from value arithmetic alone, so its grid does not
-# depend on how many tangents it follows or what they contain. That is what
-# makes a Hessian assembled from blocks of directions one matrix rather than
-# several.
+# The grid claims are exact and not tolerance tests. With sensErrCon = FALSE a
+# forward-reverse solve takes its step sequence from value arithmetic alone, so
+# its grid does not depend on how many tangents it follows or what they contain.
+# That makes a Hessian assembled from blocks of directions one matrix rather
+# than several.
 
 skip_on_cran()
 
@@ -14,6 +14,8 @@ eqns <- c(A = "-k1 * A + k2 * B",
 pars  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1)
 times <- seq(0, 5, length.out = 21)
 tol   <- list(abstol = 1e-10, reltol = 1e-10)
+# the tangents stay out of the error test
+grid  <- c(tol, sensErrCon = FALSE)
 n_phi <- length(pars)
 
 seed_for <- function(n_t, n_x = 2L, n_seed = 1L, seed = 1L) {
@@ -51,11 +53,11 @@ test_that("a forward-reverse solve lands on the reverse run's grid at any width"
   mr <- m_r$bdf
   m  <- m_fr$bdf
   W  <- seed_for(length(times))
-  rr <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
+  rr <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), grid))
 
   for (B in c(1L, 3L, 5L)) {
     fr <- do.call(solveODE,
-                  c(list(m, times, pars, tangent = block_dirs(B), cotangent = W), tol))
+                  c(list(m, times, pars, tangent = block_dirs(B), cotangent = W), grid))
     # The grid is the exact claim. The numbers on it are not bit-identical:
     # a corrector sums in a different order over the AD type than over double.
     expect_identical(fr$time, rr$time, info = paste("B =", B))
@@ -76,7 +78,7 @@ test_that("the grid does not depend on what the tangents contain", {
   ref <- NULL
   for (nm in names(dirs)) {
     fr <- do.call(solveODE,
-                  c(list(m, times, pars, tangent = dirs[[nm]], cotangent = W), tol))
+                  c(list(m, times, pars, tangent = dirs[[nm]], cotangent = W), grid))
     if (is.null(ref)) ref <- fr
     expect_identical(fr$time, ref$time, info = nm)
     expect_identical(unname(fr$variable), unname(ref$variable), info = nm)
@@ -90,10 +92,10 @@ test_that("every method takes the reverse run's grid backwards", {
   W <- seed_for(length(times))
   for (meth in c("bdf", "adams", "rb4", "tsit5")) {
     mr <- m_r[[meth]]
-    rr <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
+    rr <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), grid))
     m  <- m_fr[[meth]]
     fr <- do.call(solveODE,
-                  c(list(m, times, pars, tangent = block_dirs(5L), cotangent = W), tol))
+                  c(list(m, times, pars, tangent = block_dirs(5L), cotangent = W), grid))
     expect_identical(fr$time, rr$time, info = meth)
     expect_lt(abs(fr$diagnostics$accepted - rr$diagnostics$accepted) /
                 rr$diagnostics$accepted, 0.15, label = meth)
@@ -110,13 +112,13 @@ test_that("blocks ride one grid on every method", {
   W <- seed_for(length(times))
   for (meth in c("bdf", "adams", "rb4", "tsit5")) {
     m <- m_fr[[meth]]
-    one <- do.call(solveODE, c(list(m, times, pars, cotangent = W), tol))
+    one <- do.call(solveODE, c(list(m, times, pars, cotangent = W), grid))
     H <- matrix(0, n_phi, n_phi)
     for (start in c(1L, 3L, 5L)) {
       idx <- seq(start, min(start + 1L, n_phi))
       S <- matrix(0, n_phi, length(idx))
       for (j in seq_along(idx)) S[idx[j], j] <- 1
-      blk <- do.call(solveODE, c(list(m, times, pars, tangent = S, cotangent = W), tol))
+      blk <- do.call(solveODE, c(list(m, times, pars, tangent = S, cotangent = W), grid))
       # One grid is the exact claim; the block width changes the order the same
       # arithmetic runs in, so the numbers agree to rounding.
       expect_identical(blk$time, one$time, info = meth)
@@ -132,7 +134,7 @@ test_that("a Hessian assembled from blocks is the one a single pass gives", {
   m  <- m_fr$bdf
   W  <- seed_for(length(times))
   one <- do.call(solveODE,
-                 c(list(m, times, pars, tangent = block_dirs(5L), cotangent = W), tol))
+                 c(list(m, times, pars, tangent = block_dirs(5L), cotangent = W), grid))
 
   # Three blocks of two, the last one short, tiled into the full matrix.
   H <- matrix(NA_real_, n_phi, n_phi)
@@ -141,7 +143,7 @@ test_that("a Hessian assembled from blocks is the one a single pass gives", {
     S <- matrix(0, n_phi, 2L)
     for (j in seq_along(idx)) S[idx[j], j] <- 1
     blk <- do.call(solveODE,
-                   c(list(m, times, pars, tangent = S, cotangent = W), tol))
+                   c(list(m, times, pars, tangent = S, cotangent = W), grid))
     expect_identical(blk$time, one$time, info = as.character(start))
     expect_equal(unname(blk$cotangent), unname(one$cotangent),
                  tolerance = 1e-12, info = as.character(start))
@@ -178,20 +180,31 @@ test_that("every direction runs on the heap and blocks ride one grid", {
   # cotangent.
   mh <- m_fr$bdf
   W  <- seed_for(length(times))
-  one <- do.call(solveODE, c(list(mh, times, pars, cotangent = W), tol))
+  one <- do.call(solveODE, c(list(mh, times, pars, cotangent = W), grid))
 
   H <- matrix(0, n_phi, n_phi)
   for (start in c(1L, 3L, 5L)) {
     idx <- seq(start, min(start + 1L, n_phi))
     S <- matrix(0, n_phi, length(idx))
     for (j in seq_along(idx)) S[idx[j], j] <- 1
-    blk <- do.call(solveODE, c(list(mh, times, pars, tangent = S, cotangent = W), tol))
+    blk <- do.call(solveODE, c(list(mh, times, pars, tangent = S, cotangent = W), grid))
     expect_identical(blk$time, one$time, info = as.character(start))
     expect_equal(unname(blk$cotangent), unname(one$cotangent),
                  tolerance = 1e-12, info = as.character(start))
     H[, idx] <- blk$curvature[, seq_along(idx), 1L]
   }
   expect_equal(H, unname(one$curvature[, , 1L]), tolerance = 1e-12)
+})
+
+test_that("with sensErrCon the tangents of a forward-reverse solve enter the error test", {
+  mr <- m_fr$bdf
+  ff <- do.call(solveODE, c(list(m_ff, times, pars), list(abstol = 1e-12, reltol = 1e-12)))
+  W <- seed_for(nrow(ff$variable))
+  on <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
+  off <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), grid))
+  expect_gt(on$diagnostics$accepted, off$diagnostics$accepted)
+  ref <- hess_forward(ff, W)
+  expect_lt(max(abs(unname(on$curvature[, , 1]) - ref)), max(abs(unname(off$curvature[, , 1]) - ref)))
 })
 
 test_that("a cotangent that moves with theta has its own curvature", {

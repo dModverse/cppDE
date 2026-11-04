@@ -449,7 +449,7 @@ automatically.
 ## Requirements
 
 * cppDE installed with the **CVODE backend enabled**, the run aborts
-  early with instructions otherwise. `cppDE::install_libs("sundials")`
+  early with instructions otherwise. `cppDE::installLibs("sundials")`
   builds SUNDIALS into a per-user cache without root.
 * R packages `ggplot2`, `scales`, `xml2`, `yaml`.
 * `git`, for `fetch-models.R`.

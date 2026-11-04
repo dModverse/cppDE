@@ -368,7 +368,7 @@ preflight <- function(hosts) {
          "\n  module system or ~/.profile sets up must be reachable from ~/.bashrc;",
          "\n  --libs puts a library path in front. Every task attaches dMod2, the",
          "\n  benchmark compiles C++ at run time and needs cppDE's CVODE backend",
-         "\n  (cppDE::install_libs(\"sundials\")).",
+         "\n  (cppDE::installLibs(\"sundials\")).",
          "\n  A failing or crashing solve with everything else green usually",
          "\n  means another SUNDIALS on the loader's search path is displacing",
          "\n  the one cppDE was installed against; run",

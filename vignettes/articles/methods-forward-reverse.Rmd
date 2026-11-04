@@ -82,8 +82,9 @@ sensitivity run in the same $N$ directions, and a checkpoint holds the
 history of the step with its tangents, $(q+1)\,n_x (N+1)$ numbers. The
 memory of the sweep is linear in the number of steps, as for the first
 order, but with that factor. The error test and first step of the
-forward pass read the values only, so the grid does not depend on the
-directions. The cost, one
+forward pass include the tangents as in a forward solve, by `sensErrCon`
+(default `TRUE`); with `sensErrCon = FALSE` they read the values only,
+and the grid does not depend on the directions. The cost, one
 sensitivity integration and one sweep, both of width $N$, is linear in
 $N$. Forward over forward, selected by
 `derivMode = "forward-forward"` or `deriv2 = TRUE`,

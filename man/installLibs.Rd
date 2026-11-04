@@ -2,7 +2,6 @@
 % Please edit documentation in R/install_libs.R
 \name{installLibs}
 \alias{installLibs}
-\alias{install_libs}
 \title{Build the Optional Solver Libraries from Source}
 \usage{
 installLibs(
@@ -13,8 +12,6 @@ installLibs(
   quiet = FALSE,
   ask = interactive()
 )
-
-install_libs(...)
 }
 \arguments{
 \item{which}{Which libraries to build. Default \code{"sundials"}, which
@@ -33,8 +30,6 @@ defaults are a pair verified to build together.}
 
 \item{ask}{If \code{TRUE} (the default in an interactive session), ask for
 confirmation before downloading and writing to \code{dir}.}
-
-\item{...}{For \code{install_libs()}, the arguments of \code{installLibs()}.}
 }
 \value{
 The install prefix, invisibly.
@@ -46,9 +41,6 @@ Downloads pinned upstream releases of
 them into a per-user cache directory. This is the alternative to
 installing them as system packages, for machines without administrator
 rights or with versions too old to be useful.
-
-\code{install_libs()} is the deprecated former name of
-\code{installLibs()}.
 }
 \details{
 The two libraries serve different features and can be installed
