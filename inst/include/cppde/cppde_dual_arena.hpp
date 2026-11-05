@@ -42,7 +42,7 @@ namespace cppde {
 class dual_arena {
 public:
   static constexpr std::size_t initial_slab_bytes = 64u * 1024u;
-  static constexpr std::size_t retain_bytes = 1024u * 1024u * 1024u;
+  static constexpr std::size_t retain_bytes = 128u * 1024u * 1024u;
 
   struct slab {
     char*       data = nullptr;

@@ -462,6 +462,89 @@ public:
     seed_initial_state(store, next_obs, seeds, n, m_wx);
   }
 
+  /// Every seed column at once, step by step from the last: each step's
+  /// operators and factorisation are built once and serve all columns, which
+  /// keep their own carry, handover, observations and cotangents. `seeds[c]` is
+  /// column c, [n_obs x n_states] row-major; afterwards wx0(c) and wp(c) hold
+  /// its cotangents. Not with trace_lambda, which takes sweep() per column.
+  template<class Store, class AdjTerms, class Solver, class Jumps = no_jumps>
+  void sweep_many(const Store& store, std::size_t n_phi, const std::vector<const scalar_type*>& seeds,
+                  const AdjTerms& adj, Solver& solver, const Jumps& jumps = Jumps())
+  {
+    using T = scalar_type;
+    const std::size_t n = store.n_states();
+    const std::size_t n_steps = store.n_steps();
+    const std::size_t S = seeds.size();
+    m_cols.resize(S);
+    for (column& c : m_cols) {
+      zero_armed(c.wp, n_phi);
+      c.wx.assign(n, T(0.0));
+      c.w_carry.clear();
+      c.handover = jump_handover<T>();
+      c.next_obs = store.n_obs();
+    }
+    if (n_steps == 0) {
+      for (std::size_t s = 0; s < S; ++s)
+        sweep_without_steps(store, n, seeds[s], adj, jumps, m_cols[s].wx, m_cols[s].wp, m_jws);
+      return;
+    }
+    std::vector<T> w_in, w_after, w_before, jtv;
+    zero_armed(jtv, n);
+    for (std::size_t k = n_steps; k-- > 0;) {
+      const auto& cp = store.step(k);
+      store.use_step_modes(k);
+      // the observations inside the step are the same for every column
+      bool observed = false;
+      for (std::size_t s = 0; s < S; ++s)
+        observed = step_seeds(store, k, seeds[s], n, m_cols[s].next_obs, m_cols[s].handover, m_cols[s].obs) || observed;
+      ms_step_prepare(cp, observed, solver);
+      for (std::size_t s = 0; s < S; ++s) {
+        column& c = m_cols[s];
+        w_in.clear();
+        ms_step_column(cp, c.obs.data(), c.obs.size(), c.w_carry, n, n_phi, adj, solver, w_in,
+                       c.wp.data(), nullptr);
+        c.w_carry.swap(w_in);
+      }
+      if constexpr (Jumps::active) {
+        const std::size_t ei = store.event_before(k);
+        if (ei >= store.n_events()) continue;
+        const auto& e = store.event(ei);
+        for (std::size_t s = 0; s < S; ++s) {
+          column& c = m_cols[s];
+          w_after.assign(n, T(0.0));
+          m_ws.x.assign(e.x_after.begin(), e.x_after.end());
+          collapse_restart(c.w_carry, n, m_ws.x, e.t,
+                           e.restart ? e.dt_restart
+                                     : static_cast<double>(cp.carry.h),
+                           adj, w_after.data(), c.wp.data(), m_ws.mu, jtv);
+          event_adjoint(store, ei, seeds[s], n, adj, jumps, w_after, w_before,
+                        c.wp.data(), m_jws);
+          c.w_carry.clear();
+          c.handover.take(e, w_before, c.wx);
+        }
+      }
+    }
+    // The trajectory start, which is the same restart with no jump under it.
+    const auto& cp0 = store.step(0);
+    store.use_step_modes(0);
+    for (std::size_t s = 0; s < S; ++s) {
+      column& c = m_cols[s];
+      if (!c.w_carry.empty()) {
+        w_after.assign(n, T(0.0));
+        m_ws.x.assign(cp0.start_state(), cp0.start_state() + n);
+        collapse_restart(c.w_carry, n, m_ws.x, cp0.t,
+                         static_cast<double>(cp0.carry.h), adj, w_after.data(),
+                         c.wp.data(), m_ws.mu, jtv);
+        for (std::size_t i = 0; i < n; ++i) c.wx[i] += w_after[i];
+      }
+      seed_initial_state(store, c.next_obs, seeds[s], n, c.wx);
+    }
+  }
+
+  /// The cotangents of column s after sweep_many().
+  const std::vector<scalar_type>& wx0(std::size_t s) const { return m_cols[s].wx; }
+  const std::vector<scalar_type>& wp(std::size_t s) const { return m_cols[s].wp; }
+
   /// The sweep that takes the flow between the forward run's grid points
   /// instead of the multistep scheme: each step's interval from the state the
   /// step started at, swept by `flow`. Only the state's cotangent passes from
@@ -537,10 +620,18 @@ private:
                        const AdjTerms& adj, Solver& solver, std::vector<T_>& w_in,
                        T_* wp, T_* eta)
   {
-    using T = T_;
+    ms_step_prepare(cp, observed || nob > 0, solver);
+    ms_step_column(cp, ob, nob, w_carry, n, n_phi, adj, solver, w_in, wp, eta);
+  }
+
+  /// What a step's adjoint shares between seed columns: its operators, and the
+  /// Jacobian and factorisation of its corrector.
+  template<class CP, class Solver>
+  void ms_step_prepare(const CP& cp, bool observed, Solver& solver)
+  {
     multistep_operators<Stepper>& ops = m_ops;
     // An observed step needs its own interpolant, not one kept from another.
-    if (observed || nob > 0) m_probe.valid = false;
+    if (observed) m_probe.valid = false;
     const double tail_key =
         cp.q_next + 1e3 * cp.eta + 1e6 * static_cast<double>(cp.ops.size());
     // Timed on the rebuild alone, so the call count is the miss count.
@@ -551,7 +642,19 @@ private:
                       [&](typename multistep_probe<Stepper>::probe_stepper& pr)
                         { cp.apply_tail(pr, m_null); }, ops);
     }
+    solver.prepare(cp.y, cp.t + ops.h, 1.0 / ops.gamma, ops.gamma);
+  }
 
+  /// The step adjoint of one seed column on the operators and factorisation
+  /// ms_step_prepare() built for the step.
+  template<class CP, class AdjTerms, class Solver>
+  void ms_step_column(const CP& cp, const obs_ref<T_>* ob, std::size_t nob,
+                      std::vector<T_>& w_carry, std::size_t n, std::size_t n_phi,
+                      const AdjTerms& adj, Solver& solver, std::vector<T_>& w_in,
+                      T_* wp, T_* eta)
+  {
+    using T = T_;
+    multistep_operators<Stepper>& ops = m_ops;
     const std::size_t nz_in = static_cast<std::size_t>(ops.q_in + 1) * n;
     const std::size_t nz_out = static_cast<std::size_t>(ops.q_out + 1) * n;
     m_ws.w_pred.assign(nz_in, T(0.0));
@@ -583,7 +686,6 @@ private:
     }
 
     const double t_new = cp.t + ops.h;
-    solver.prepare(cp.y, t_new, 1.0 / ops.gamma, ops.gamma);
 
     w_in.assign(nz_in, T(0.0));
     if (eta) m_wout.assign(n, T(0.0));
@@ -643,6 +745,14 @@ private:
   std::vector<int> m_ref_m;
   bool m_trace = false;
   std::vector<scalar_type> m_wx, m_whist, m_wp, m_lam, m_eta, m_wout;
+  // per seed column of sweep_many()
+  struct column {
+    std::vector<scalar_type> wx, wp, w_carry;
+    jump_handover<scalar_type> handover;
+    std::size_t next_obs = 0;
+    std::vector<obs_ref<scalar_type>> obs;
+  };
+  std::vector<column> m_cols;
 };
 
 // ---------------------------------------------------------------------------

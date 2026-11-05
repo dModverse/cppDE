@@ -95,7 +95,7 @@ struct onestep_checkpoint {
 
   template<class Value>
   void capture(const stepper_type& /*st*/, const std::vector<Value>& x_in,
-               double t_in, double dt_in)
+               double t_in, double dt_in, int /*slots*/ = -1)
   {
     x.resize(x_in.size());
     for (std::size_t i = 0; i < x_in.size(); ++i)
@@ -165,16 +165,19 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern>, T> {
 
   std::size_t n() const { return n_states; }
 
-  // Nordsieck slot 0, which is the state the step starts from.
+  // Nordsieck slot 0, which is the state the step starts from; empty where the
+  // store kept no history for this step.
   const T* start_state() const { return zn.data(); }
 
+  // `slots` of the history kept, all of them where negative.
   void capture(const stepper_type& st, const std::vector<Value>& x_in,
-               double t_in, double dt_in)
+               double t_in, double dt_in, int slots = -1)
   {
     st.save_carry(carry);
     n_states = x_in.size();
-    zn.assign(static_cast<std::size_t>(carry.q + 1) * n_states, T());
-    for (int j = 0; j <= carry.q; ++j) {
+    const int keep = slots < 0 ? carry.q + 1 : std::min(slots, carry.q + 1);
+    zn.assign(static_cast<std::size_t>(keep) * n_states, T());
+    for (int j = 0; j < keep; ++j) {
       const auto& slot = st.zn(j);
       for (std::size_t i = 0; i < n_states; ++i)
         zn[static_cast<std::size_t>(j) * n_states + i] =

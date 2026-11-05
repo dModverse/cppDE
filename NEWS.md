@@ -1,3 +1,14 @@
+# cppDE 0.13.11
+
+* The backward sweep of a second-order reverse solve with a multistep method sweeps all its
+  cotangent columns at once, step by step: the Jacobian and factorisation of a step serve every
+  column.
+* A reverse solve that integrates for its own sweep keeps of the multistep history only what the
+  sweep reads: the start state, of every step where `refine` takes the flow between the steps, and
+  every slot under `adjoint_grid`. A store kept for a later solve keeps the whole history.
+* An arena of dual numbers goes back to the pool with at most 128 MB of its storage, so that a solve
+  with many tangents leaves its memory to the system.
+
 # cppDE 0.13.10
 
 * Every derivative the solvers use is exact; no difference quotient is left:

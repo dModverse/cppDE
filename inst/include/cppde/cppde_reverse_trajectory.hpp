@@ -83,10 +83,23 @@ struct event_record {
 //  state, before any step ran.
 // ============================================================================
 
+// How much of a multistep history a checkpoint keeps: every slot, which the
+// traces of adjoint_grid read; slot 0, the start state, which the flow of refine
+// reads; or slot 0 of the first step alone, which is all the other sweeps read.
+// A one-step checkpoint keeps its state whatever this says.
+enum class history_slots { all, start, first };
+
 template<class Stepper, class T = double>
 class trajectory_store {
 public:
   using checkpoint_type = step_checkpoint<Stepper, T>;
+
+  void keep_history(history_slots h) { m_history = h; }
+  // The history slots the checkpoint of the next step keeps, all where negative.
+  int next_slots() const {
+    if (m_history == history_slots::all) return -1;
+    return (m_history == history_slots::start || m_steps.empty()) ? 1 : 0;
+  }
 
   struct observation {
     double      t;
@@ -111,8 +124,9 @@ public:
                double t, double dt)
   {
     auto _tp = m_prof.timer(cppde::prof_cat::rev_checkpoint);
+    const int slots = next_slots();
     m_steps.emplace_back();
-    m_steps.back().capture(st, x, t, dt);
+    m_steps.back().capture(st, x, t, dt, slots);
   }
 
   // The modes of the state switches the step just accepted ran under. Nothing
@@ -205,6 +219,7 @@ private:
   std::size_t                  m_n          = 0;   // from observe(t, n)
   std::vector<signed char>     m_modes;           // per step, see note_modes()
   std::size_t                  m_n_modes    = 0;
+  history_slots                m_history    = history_slots::all;
   cppde::profiler              m_prof;
 };
 
@@ -321,7 +336,7 @@ private:
   void snapshot(double t, double h) {
     if constexpr (snapshot_family) {
       auto& st = m_st.controlled_stepper().stepper();
-      m_pending.capture(st, st.zn(0), t, h);
+      m_pending.capture(st, st.zn(0), t, h, m_store.next_slots());
     } else {
       (void)t; (void)h;
     }
