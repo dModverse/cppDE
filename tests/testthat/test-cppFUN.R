@@ -88,7 +88,7 @@ test_that("cppFUN returns correct output", {
   expect_equal(unname(res[1, "y2"]), 2.5, tolerance = 1e-10)
 })
 
-test_that("attach.input passes an unmodelled parameter through as an output", {
+test_that("attach.input passes an unmodeled parameter through as an output", {
   f <- fx$basic
   y <- f$func(a = 2, b = 0.5, x = 1, k = 3, attach.input = TRUE)
   expect_equal(colnames(y), c("y1", "y2", "k"))
@@ -97,6 +97,14 @@ test_that("attach.input passes an unmodelled parameter through as an output", {
   expect_equal(dimnames(J)[[2]], c("y1", "y2", "k"))
   expect_equal(unname(J[1, "k", ]), as.numeric(dimnames(J)[[3]] == "k"))
   expect_equal(unname(J[1, "y1", "a"]), exp(-0.5), tolerance = 1e-12)
+})
+
+test_that("attach.input passes an input with one value per row through as a column", {
+  f <- fx$tokens
+  y <- f$func(int = c(1, 4), std = 1, ini = 0, default = 0, time = c(5, 6), attach.input = TRUE)
+  expect_equal(colnames(y), c("o1", "o2", "time"))
+  expect_equal(unname(y[, "time"]), c(5, 6))
+  expect_equal(unname(y[, "o2"]), c(2, 3))
 })
 
 test_that("an object that was not compiled says so", {
@@ -116,7 +124,7 @@ test_that("an object that was not compiled says so", {
 
 test_that("parameters named like the generated arrays do not collide", {
   # The emitted code indexes p[] and x_obs[]. A parameter of that name is
-  # substituted for its own slot, in whatever order the parameters are listed.
+  # substituted for the slot of that parameter, in whatever order the parameters are listed.
   pars <- c(p = 2, x = 3, y = 5, k = 7, x_obs = 11, y_local = 13)
 
   for (i in seq_along(collide_orders)) {
@@ -134,7 +142,7 @@ test_that("parameters named like the generated arrays do not collide", {
 
 test_that("symbols named after C++ tokens do not reach the generated source", {
   # The printer writes std::pow and spells a reserved word default_. A symbol
-  # of either name is substituted for its slot, so neither reaches the source.
+  # of either name is substituted for the slot of that symbol, so neither reaches the source.
   f <- fx$tokens
   res <- f$func(int = 4, std = 2, ini = 0.5, default = 3)
   jac <- f$jac(int = 4, std = 2, ini = 0.5, default = 3)[1, , ]
@@ -278,7 +286,7 @@ test_that("evaluateBatch equals the evaluation of each set alone", {
   }
 })
 
-test_that("evaluateMany evaluates each set with its own function", {
+test_that("evaluateMany evaluates each set with the function given for it", {
   th <- c("t1", "t2")
   set.seed(2)
   s1 <- list(vars = matrix(c(0.3, 0.5, 0.7, 0.2), 2, 2, dimnames = list(NULL, c("x1", "x2"))),
@@ -371,7 +379,7 @@ test_that("derivMode builds exactly the directions it names", {
                       modelname = "dm_bad2"),
                "no reverse counterpart")
 
-  # Each direction is its own build product, and naming one omits the other.
+  # Each direction is a separate build product, and naming one omits the other.
   expect_null(fx$vjp_fwd$vjp)
   expect_false(is.null(fx$vjp_fwd$jac))
   expect_null(fx$vjp_rev$jac)
@@ -398,7 +406,7 @@ test_that("the dual vjp keeps the first order it already answered", {
   r1 <- f$vjp(X, P, W)
   r2 <- f$vjp(X, P, W, tangentX = array(rnorm(24), c(4L, 2L, 3L)),
               tangentP = matrix(rnorm(6), 2L, 3L))
-  # The dual instantiation sums the same expressions in its own order, so the
+  # The dual instantiation sums the same expressions in a different order, so the
   # first order comes back to rounding rather than to the last bit.
   expect_equal(r2$cotangentX, r1$cotangentX, tolerance = 1e-12)
   expect_equal(r2$cotangentP, r1$cotangentP, tolerance = 1e-12)

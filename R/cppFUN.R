@@ -77,7 +77,7 @@
 #'   * `"forward"`: forward-mode AD on `cppde::dual`, delivering `jac`,
 #'     `hess`, `evaluate` and `evaluateBatch`.
 #'   * `"reverse"`: the vector-Jacobian product `vjp`.
-#'   * `"forward-reverse"`: `vjp` and its derivative along a tangent.
+#'   * `"forward-reverse"`: `vjp` and the derivative of `vjp` along a tangent.
 #'
 #'   A mode not named is not generated and costs no compile time.
 #'
@@ -281,7 +281,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   list(M = M, p = p, n_obs = n_obs, extra_vars = extra_vars, extra_params = extra_params)
 }
 
-# --- Attach helpers (pass-through of unmodelled inputs) ---
+# --- Attach helpers (pass-through of unmodeled inputs) ---
 
 # `a` with `b` appended along the second dimension; the other dimensions are a's.
 .bindOutputs <- function(a, b) {
@@ -295,8 +295,8 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
   do.call(`[<-`, c(list(r), at(k + seq_len(dim(b)[2])), list(value = b)))
 }
 
-# The unmodelled inputs appended as outputs: a variable as itself with derivative
-# 0, a parameter as a constant column that is also a direction of its own, with
+# The unmodeled inputs appended as outputs: a variable as itself with derivative
+# 0, a parameter as a constant column that is also a separate direction, with
 # derivative 1 in itself.
 .attachExtras <- function(res, n_obs, ev, ep, type) {
   if (is.null(ev) && is.null(ep)) return(res)
@@ -398,7 +398,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
 # Identity seeds for raw J/H: tangentX = I on vars, tangentP = I on params,
 # over the combined basis c(st$innames, st$parameters). A `fixed` parameter
-# seeds zero but keeps its column.
+# seeds zero but keeps a column.
 .identitySeedsRaw <- function(st, n_obs, fixed_rt) {
   n_vars <- length(st$innames); n_params <- length(st$parameters)
   theta_full <- c(st$innames, st$parameters)
@@ -416,7 +416,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 
 .fun_impl <- function(st, vars, params = numeric(0), attach.input = FALSE, fixed = NULL) {
   chk <- .checkInputs(st, vars, params, attach.input); M <- chk$M; p <- chk$p; n_obs <- chk$n_obs
-  # The _c entry takes its arguments by reference; the .C() entry, used when
+  # The _c entry takes the arguments by reference; the .C() entry, used when
   # no _c symbol exists, copies every argument in and every result out.
   symc <- .nativeSym(paste0(st$modelname, "_eval_c"))
   sym <- if (is.null(symc)) .nativeSym(paste0(st$modelname, "_eval")) else NULL
@@ -762,7 +762,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 #' Evaluate Several Compiled Functions at Once
 #'
 #' @description
-#' Evaluates each argument set with its own [cppFUN()] object, all sets in
+#' Evaluates argument sets, one per [cppFUN()] object, all sets in
 #' one call from R and one parallel region.
 #'
 #' @param funs List of the `evaluateBatch` entries of [cppFUN()] objects
@@ -846,7 +846,7 @@ evaluateMany <- function(funs, sets, cores = 1L, deriv2 = FALSE) {
 
 # The arguments of a convenient call: the variables into the observation matrix,
 # the parameters into the vector, and with attach.input every other input to
-# the one its length fits.
+# the slot of matching length.
 .splitArgs <- function(st, args, attach.input) {
   M <- if (length(st$innames)) do.call(cbind, args[st$innames])
   p <- if (length(st$parameters)) do.call(c, args[st$parameters]) else numeric(0)
@@ -855,8 +855,8 @@ evaluateMany <- function(funs, sets, cores = 1L, deriv2 = FALSE) {
   for (nm in setdiff(names(args), c(st$innames, st$parameters))) {
     v <- args[[nm]]
     if (length(v) == n_obs) {
-      M <- if (is.null(M)) matrix(v, ncol = 1, dimnames = list(NULL, nm))
-           else cbind(M, setNames(data.frame(v), nm))
+      col <- matrix(v, ncol = 1, dimnames = list(NULL, nm))
+      M <- if (is.null(M)) col else cbind(M, col)
     } else if (length(v) == 1) {
       p <- c(p, setNames(v, nm))
     } else {

@@ -33,7 +33,7 @@ eqs_sparse <- setNames(c("-r * S1", paste0("r * S", seq_len(n_sparse - 1L), " - 
 eqs_sparse[n_sparse] <- paste0("r * S", n_sparse - 1L)
 
 # Every native model the file needs, compiled into one shared object. The
-# step-trace model keeps its own build: -DCPPDE_STEP_TRACE would reach every model.
+# step-trace model keeps a separate build: -DCPPDE_STEP_TRACE would reach every model.
 m_sens  <- cppODE(decay, modelname = "batch_sens", deriv = TRUE, compile = FALSE)
 m_plain <- cppODE(decay, modelname = "batch_nosens", deriv = FALSE, compile = FALSE)
 m_d2    <- cppODE(decay, modelname = "batch_d2", deriv = TRUE, deriv2 = TRUE,
@@ -183,6 +183,12 @@ test_that("solveBatch re-solves with new parameters", {
   # the handle is not consumed: solving again with the originals still works
   expect_identical(solveBatch(h, cores = 1L)[[1]]$variable,
                    solveODEBatch(m, conds, times = tt, cores = 1L)[[1]]$variable)
+
+  # a NULL element of parms keeps the prepared parameters of that condition
+  mixed <- c(list(NULL), np[-1])
+  c1 <- solveBatch(h, parms = mixed, cores = 2L)
+  expect_identical(c1[[1]]$variable, solveODEBatch(m, conds[1], times = tt, cores = 1L)[[1]]$variable)
+  expect_identical(c1[[2]]$variable, b[[2]]$variable)
 })
 
 
@@ -297,7 +303,7 @@ test_that("one failing condition is reported and does not take the others down",
 
 test_that("a time event takes the preallocated path when it is on the grid", {
   # A time event on a requested output time leaves n_out alone, so the batch can
-  # size its results up front. Off the grid the extra row makes that prediction
+  # size the results up front. Off the grid the extra row makes that prediction
   # wrong and the sink declines; both paths have to match the serial solve.
   m <- m_evt
   off <- seq(0, 50, length.out = 60)          # 25 is not a grid point
@@ -364,7 +370,7 @@ test_that("the reported thread count is the one actually used", {
 
 test_that("both backends put an event time into the output", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
-  # An event fires whether or not its time was requested, and that time becomes
+  # An event fires whether or not the event time was requested, and that time becomes
   # an output row holding the post-event state. Both backends have to agree on
   # the grid, or the same model returns different rows per `backend`.
   mn <- m_evt
@@ -413,7 +419,7 @@ test_that("the CVODE batch preallocates when the grid is fixed", {
 })
 
 
-test_that("a root event puts its before/after pair into the output", {
+test_that("a root event puts a before/after pair into the output", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
   # The crossing is not a requested time, so both the state just before the
   # event and the state just after it become rows. Both backends have to do it.

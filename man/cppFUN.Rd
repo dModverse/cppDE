@@ -61,7 +61,7 @@ Default \code{FALSE}; compile several objects together with \code{\link[=compile
 \item \code{"forward"}: forward-mode AD on \code{cppde::dual}, delivering \code{jac},
 \code{hess}, \code{evaluate} and \code{evaluateBatch}.
 \item \code{"reverse"}: the vector-Jacobian product \code{vjp}.
-\item \code{"forward-reverse"}: \code{vjp} and its derivative along a tangent.
+\item \code{"forward-reverse"}: \code{vjp} and the derivative of \code{vjp} along a tangent.
 }
 
 A mode not named is not generated and costs no compile time.}

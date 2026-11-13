@@ -31,7 +31,13 @@ solve_at <- function(model, tol, ...)
 
 # -- The argument list ---------------------------------------------------------
 
-test_that("the solve entry reads its argument list by name and checks it", {
+test_that("the flags of one model do not reach the others of a joint shared object", {
+  expect_false(is.null(solve_at(osc_bdf, 1e-6)$trace))
+  expect_null(solve_at(osc_rb4, 1e-6)$trace)
+})
+
+
+test_that("the solve entry reads the argument list by name and checks it", {
   args <- cppDE:::.solveArgs(osc_bdf, times, pars)$args
   sym  <- cppDE:::.nativeSym("solve_oc_bdf")
   call <- function(a) cppDE:::.callSym(sym, a)
@@ -86,7 +92,7 @@ test_that("values, sensitivities and the reverse gradient hold under stald", {
   expect_lt(max(abs(drop(rev_on$cotangent) - ref_grad)), 5e-3)
 })
 
-test_that("a batch condition takes its own maxOrder and stald", {
+test_that("a batch condition takes a separate maxOrder and stald", {
   conds <- list(plain = list(), stald = list(stald = TRUE), capped = list(maxOrder = 2))
   b <- solveODEBatch(osc_bdf, conds, times = times, parms = pars,
                      abstol = 1e-4, reltol = 1e-4, cores = 1)

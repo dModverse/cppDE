@@ -1054,7 +1054,7 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
   # names are checked and matched once per run of conditions with identical names (NA matches none)
   lastNames <- NA; at <- NULL
   for (k in seq_len(K)) {
-    if (!is.null(parms)) {
+    if (!is.null(parms) && !is.null(parms[[k]])) {
       pk <- parms[[k]]
       nk <- names(pk)
       if (!identical(nk, lastNames)) {

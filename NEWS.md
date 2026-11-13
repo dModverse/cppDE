@@ -1,3 +1,12 @@
+# cppDE 0.13.13
+
+* `compile()` applies the `compileArgs` of a model to the source of that model only, also when
+  `output` links several models into one library; the step trace of one model, or the KLU settings
+  of a sparse one, no longer reach the others.
+* `solveBatch()` keeps the prepared parameters of a condition whose element of `parms` is `NULL`.
+* `cppFUN()` functions with `attach.input = TRUE` append an extra input with one value per row as
+  a column.
+
 # cppDE 0.13.12
 
 * The reverse mode of `bdf` and `adams` transposes the corrector iterations the forward run took,

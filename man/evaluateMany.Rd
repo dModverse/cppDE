@@ -20,7 +20,7 @@ built with forward derivatives, one per set.}
 A list with one element per set, as \code{evaluateBatch} returns them.
 }
 \description{
-Evaluates each argument set with its own \code{\link[=cppFUN]{cppFUN()}} object, all sets in
+Evaluates argument sets, one per \code{\link[=cppFUN]{cppFUN()}} object, all sets in
 one call from R and one parallel region.
 }
 \examples{
