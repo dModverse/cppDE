@@ -1,0 +1,164 @@
+---
+title: "Grid and refinement of the sweep"
+bibliography: refs.bib
+csl: ieee.csl
+link-citations: true
+---
+
+The reverse mode of `cppODE()` differentiates on the value-run grid; where that grid does not
+resolve the linearized flow, `refine` holds the sweep to the tolerances. Symbols follow the
+[notation table](methods-overview.html#notation). Used from R through
+[`adjointControl()`](../reference/adjointControl.html) (`refine`, `gradtol`, `trace`) as `adjoint`
+of [`solveODE()`](../reference/solveODE.html), and `sensErrCon`.
+
+## Internal numerical differentiation {#ind}
+
+In Bock's internal numerical differentiation [@bock1981numerical; @albersmeyer2010adjoint] the
+nominal run adapts freely and the selected step sizes are constants of the differentiated scheme.
+For the result $y_h(\theta)$ on the grid selected at $\theta$,
+[]{#eq-grid-effect}
+$$
+  \frac{\mathrm{d} y_{h}}{\mathrm{d}\theta}
+    = \frac{\partial y_{h}}{\partial \theta}
+    + \sum_{k} \frac{\partial y_{h}}{\partial h_{k}}\,
+      \frac{\mathrm{d} h_{k}}{\mathrm{d}\theta} , \tag{1}
+$$
+it computes the first term. The grid effect, the sum, is $O(\mathrm{tol})$ and left out;
+differentiating the control law to obtain it makes the discrete adjoint inconsistent with the
+adjoint ODE [@eberhard1999automatic; @alexe2009discrete]. Step sizes are smooth in $\theta$ within an
+acceptance region and jump where an accepted step turns rejected and the later grid shifts. Automatic differentiation of the control law
+misses these jumps, which dominate the grid effect, and returns the derivative of neither the exact
+solution nor the reported value.
+
+## Grids of the forward and reverse modes {#grids}
+
+Each mode returns the state it integrated and the derivative of the scheme that produced it.
+
+- Forward, default `sensErrCon = TRUE`: the error norm is the maximum over the sensitivity columns,
+  [Forward (4)](methods-forward.html#eq-wrms-sens), since their errors accumulate (as
+  `CVodeSetSensErrCon`). The grid is finer and the values differ from a value run by
+  $O(\mathrm{tol})$.
+- Reverse: the value pass takes the value-run grid, as the forward run of the CVODES adjoint does,
+  so the gradient is the derivative of the trajectory a value run returns.
+
+## Unresolved linearized flow {#state-error}
+
+The step-map derivative is accurate where the step resolves the flow on the tangent modes; the
+state error measures only the state modes, weighted by the state magnitude. On a trajectory
+at rest (an undriven state at zero, a steady state) the corrector is exact, the error estimate is
+zero, the step grows by the maximum controller factor, and the adjoint is the exact derivative of a
+scheme far from the flow. For $\dot x = -k x$, $\dot y = k x - y$
+from $x = y = 0$ with outputs at $0, 1, \ldots, 50$, the `bdf` value pass takes three steps and
+the derivative of $\sum_o y(t_o)$ in $y(0)$ is $4.84$; the flow, returned by `refine`, gives
+$1.58$. Internal numerical differentiation fails the same way for $\dot x = p x$ from $x = 0$
+[@albersmeyer2010adjoint, Sec. 6.7.5], as does forward automatic differentiation through an
+adaptive solver whose controller norm omits the derivative parts [@sapienza2024differentiable].
+
+Related cases, resolved by [refining the sweep](#refine), not by the value pass:
+
+- a state small against $\mathtt{abstol}/\mathtt{reltol}$, a weaker effect of the same kind;
+- a parameter the state does not see: in $\dot x = -k x + \sin(100 t)\, u$ at $u = 0$ the state
+  is smooth while $\partial x/\partial u$ follows the fast forcing;
+- a parameter entering only through an event value, which acts on the flow from that event on.
+
+## Refining the sweep {#refine}
+
+`adjointControl(refine = TRUE)` holds each step of the sweep to the tolerances, on the stored
+trajectory, with the local error test of the CVODES backward problem [@serban2005cvodes], so a
+tolerance means the same for both. Step $n$ passes $\lambda(t_n)$ down and adds
+$\Delta\bar\theta_n$ to the running gradient $\bar\theta(t_n)$, the sum from the end of the run
+down to $t_n$. With $\delta$ the error estimate of the step adjoint, the step passes when
+[]{#eq-refine-test}
+$$
+  \begin{gathered}
+  \max\Bigl(\bigl\|\delta\lambda(t_n)\bigr\|_{\mathrm{rms},\,w_\lambda},\;
+             \bigl\|\delta\Delta\bar\theta_n\bigr\|_{\mathrm{rms},\,w_\theta}\Bigr) \le 1,
+  \\
+  w_{\lambda,i} = \mathtt{reltol}\,|\lambda_i(t_n)| + \mathtt{abstol},
+  \qquad
+  w_{\theta,i} = \mathtt{reltol}\,|\bar\theta_i(t_n)| + \mathtt{gradtol},
+  \end{gathered} \tag{2}
+$$
+in the norm of [Stepping (8)](methods-stepping.html#eq-wrms). The gradient term enters only with
+`gradtol`, an absolute tolerance, as CVODES holds the quadrature (`CVodeSetQuadErrConB`). The test is local: step errors add up over the sweep.
+
+**One-step methods.** An `rb4` step returns $X_6 + e$, the embedded solution plus the error term
+of the sixth solve. One more backward pass over the same stages and factorization, seeded on $e$
+alone, estimates the error of the embedded adjoint. A step meeting [(2)](#eq-refine-test) with it
+is kept; otherwise it is redone from the start state in $m = 2, 4, \ldots, 1024$ substeps, forward
+and back with the observations in each, comparing successive refinements. The difference $d_m$ is divided by Richardson's
+factor $\min\bigl(2^q - 1,\; \max(1,\, d_{m/2}/d_m - 1)\bigr)$ only as far as two successive
+differences show the order $q$, the first halving at face value. `tsit5`, without embedded
+adjoint, starts with the halving. `adjointControl(trace = TRUE)` reports the $m$ of every step in
+`$adjoint$substeps`.
+
+**Multistep methods.** The Nordsieck array couples a `bdf` or `adams` step to the history at order one,
+so substeps would change what every later step reads. The refined sweep instead integrates the flow adjoint over each grid interval
+from the stored start state, passing only the state cotangent across grid points. Like the continuous
+adjoint of CVODES [@serban2005cvodes], the result, the flow derivative along the computed trajectory, is $O(\mathrm{tol})$ from the
+scheme derivative.
+
+The flow over an interval of length $H$ is extrapolated linearly implicit Euler, the scheme of
+SEULEX [@hairer2010solving, §IV.9]. Chain $j$ takes $n_j = j$ steps of $h_j = H/n_j$,
+[]{#eq-lie-chain}
+$$
+  \bigl(h_j^{-1} I - J_0\bigr)\, D_k = f(x_k, t_k), \qquad x_{k+1} = x_k + D_k, \tag{3}
+$$
+with $J_0$ the Jacobian at the interval start. As a W-method, consistent for any matrix in place
+of the Jacobian, a chain has an error expansion in powers of $h_j$, and the Aitken-Neville tableau
+$T_{j,k} = T_{j,k-1} + (T_{j,k-1} - T_{j-1,k-1}) / (n_j/n_{j-k} - 1)$
+raises the order by one per column. Chain $j$ costs one factorization of $h_j^{-1} I - J_0$ (a
+diagonal change of one Jacobian), $n_j$ right-hand sides and $n_j$ solves.
+
+$T_{j,j}$ is a fixed linear combination of the chain end states, so the tableau is built on the
+chain adjoints (start-state cotangent and interval gradient share), each swept back on the
+factorization of that chain. A step of [(3)](#eq-lie-chain) passes
+$\mu_k = (h_j^{-1} I - J_0)^{-\mathsf T} \lambda_{k+1}$ to $x_k$ through $J(x_k)^{\mathsf T} \mu_k$,
+to $\theta$ through $(\partial f/\partial\theta)(x_k)^{\mathsf T} \mu_k$, and through $J_0$ to the
+start of the interval: $\sum_k \mu_k^{\mathsf T} (\partial J_0)\, D_k$ is one bilinear form over the
+Jacobian pattern, $B_{rc} = \sum_k \mu_{k,r} D_{k,c}$, pulled back by the generated code in one
+evaluation. $e_j = T_{j,j} - T_{j,j-1}$ estimates the error of $T_{j,j-1}$; the returned $T_{j,j}$ has the error estimate
+$e_j \min(1, e_j/e_{j-1})$, the rate of the last two differences applied one column on, as CVODES
+estimates the error of the solution it returns. The first column passing
+[(2)](#eq-refine-test) is taken. An interval failing at the eighth column is halved, and an
+observation inside an interval cuts it; the new piece starts from the state reached forward under
+the state error test.
+
+**Limits.** A one-step step takes at most 1024 substeps, fewer where from $m = 32$ on a halving no
+longer shrinks the difference; a multistep interval is halved at most ten times. An error source
+the refinement does not reduce, such as a forcing far faster than the steps, leaves the estimate
+below the error.
+
+## Value correction of the refined sweep {#value-correction}
+
+The refined sweep replaces each step or interval by the map whose adjoint passed the test,
+linearized at the stored states. With the
+observation seeds $w_o$ it differentiates $J = \sum_o w_o^{\mathsf T} x(t_o)$, whose first-order
+change equals that of a nonlinear $L$ with $w_o = \partial L/\partial x(t_o)$. A refined solve
+returns this change per seed column as `$correction`,
+[]{#eq-value-correction}
+$$
+  C = \sum_n \Bigl[\lambda_{n+1}^{\mathsf T}\bigl(\tilde\Phi_n(x^h_n) - x^h_{n+1}\bigr)
+      + \sum_{t_o \in (t_n, t_{n+1}]} w_o^{\mathsf T}\bigl(\tilde x(t_o) - y_o\bigr)\Bigr], \tag{4}
+$$
+with $x^h_n$ the stored states, $\tilde\Phi_n$ the accepted map of step $n$, $\lambda_{n+1}$ the
+cotangent from the step above, $y_o$ the value returned at $t_o$, and $\tilde x(t_o)$ the accepted
+map there: the dense output of the substep containing $t_o$, or for a multistep interval the state
+at the cut at $t_o$. A halved interval adds the cotangent-weighted defect of the left half against
+the midpoint the right half was linearized at. Value plus $C$ equals the functional of the
+differentiated trajectory up to terms quadratic in the defects.
+
+At an event the cotangent at the step end is zero; the jump passes the cotangent down as an
+observation at the stored pre-jump state, so [(4)](#eq-value-correction) includes the defect of the
+state entering the jump. Post-jump rows and the initial state have no defect. For a linear model the accepted maps are linear and the sums telescope: value plus $C$
+equals $x_0^{\mathsf T}\bar x_0$ to rounding, for every method, with or without halving; the tests
+use this identity.
+
+An unrefined step, such as an `rb4` step whose embedded adjoint passes, adds no defect. The
+corrected value is the value of the function whose gradient is returned, not necessarily closer to
+the exact objective:
+with every step substepped it moves a coarse value toward the converged one, and with substepped
+maps less accurate than the value pass (tight tolerances, smooth problems) it can move away by
+$O(\mathrm{tol})$.
+
+## References

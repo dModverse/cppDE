@@ -1,0 +1,164 @@
+---
+title: "8. SUNDIALS backend"
+bibliography: refs.bib
+csl: ieee.csl
+link-citations: true
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE, fig.width = 8,
+                      fig.height = 3.6, out.width = "100%", dpi = 96, fig.retina = 2)
+do.call(knitr::read_chunk, list("helpers.R"))
+```
+
+```{r longFormat, include = FALSE}
+```
+
+```{r style, include = FALSE}
+```
+
+[`cvode()`](../reference/cvode.html) offers SUNDIALS CVODES [@hindmarsh2005sundials; @serban2005cvodes],
+the long-established implementation of BDF and Adams methods with forward and adjoint sensitivities,
+next to the integrators of `cppODE()`. It generates the model from the same equations and links it
+against CVODES; the result is solved by `solveODE()`, `solveODEBatch()` and `prepareBatch()` as a
+model from `cppODE()`. Forward sensitivities come from the CVODES sensitivity solver, reverse mode
+from the CVODES adjoint, a continuous adjoint.
+
+```{r library}
+library(cppDE)
+library(ggplot2)
+```
+
+## Availability of SUNDIALS
+
+`codegenAvailable("cvode")` reports whether the SUNDIALS libraries were found when cppDE was
+installed.
+
+```{r available}
+codegenAvailable("cvode")
+```
+
+Without SUNDIALS ($\ge 6.0$) from the system, [`installLibs()`](../reference/installLibs.html)
+downloads and builds SUNDIALS and SuiteSparse into a per-user cache;
+`installLibs("suitesparse")` builds only KLU, the sparse linear solver of `sparse = TRUE` in
+`cppODE()` and `cvode()`. cppDE records the library paths at install time, so it is installed again
+afterwards ([Installation](installation.html)).
+
+```{r installLibs, eval = FALSE}
+installLibs("sundials")                       # SUNDIALS and SuiteSparse
+devtools::install_github("dModverse/cppDE")   # links the new libraries
+```
+
+## Model definition
+
+The arguments `events`, `rootfunc`, `fixed`, `forcings`, `sparse`, `includeTimeZero`, `stepTrace`,
+`compile`, `modelname`, `outdir` and `verbose` are those of `cppODE()`. `method` is `"bdf"`
+(default) or `"adams"`. Sensitivities are off by default: `deriv = TRUE` selects first-order
+forward sensitivities, `derivMode = "reverse"` the CVODES adjoint with a checkpoint every
+`asaCheckpoints` steps. There are no second-order sensitivities.
+
+The native models for comparison:
+
+```{r native}
+eqns   <- c(A = "-k1*A", B = "k1*A - k2*B")
+parms  <- c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)
+times  <- seq(0, 10, by = 0.1)
+events <- data.frame(var = "A", time = "t_e", value = "dose", method = "add")
+
+chain  <- cppODE(eqns, modelname = "g8_chain", compile = FALSE)
+dosed  <- cppODE(eqns, events = events, modelname = "g8_dosed", compile = FALSE)
+chainR <- cppODE(eqns, derivMode = "reverse", modelname = "g8_chainR", compile = FALSE)
+compile(chain, dosed, chainR, output = "guide8", cores = 2)
+```
+
+The same models on CVODES, compiled into a shared object of their own:
+
+```{r cvode, eval = codegenAvailable("cvode")}
+plainC <- cvode(eqns, modelname = "g8_plainC", compile = FALSE)
+chainC <- cvode(eqns, deriv = TRUE, modelname = "g8_chainC", compile = FALSE)
+dosedC <- cvode(eqns, events = events, deriv = TRUE, modelname = "g8_dosedC", compile = FALSE)
+adjC   <- cvode(eqns, derivMode = "reverse", asaCheckpoints = 100, modelname = "g8_adjC",
+                compile = FALSE)
+compile(plainC, chainC, dosedC, adjC, output = "guide8cvode", cores = 2)
+attr(chainC, "backend")
+```
+
+## Comparison with `cppODE()`
+
+| | `cppODE()` | `cvode()` |
+|:--|:--|:--|
+| `method` | `"bdf"`, `"adams"`, `"rb4"`, `"tsit5"` | `"bdf"`, `"adams"` |
+| sensitivities | on by default; first and second order | `deriv = TRUE`; first order |
+| reverse mode | discrete adjoint of the computed steps | continuous adjoint (CVODES) |
+| reverse options | `keepStore`, `store`, `adjointControl()` | `asaCheckpoints`, `adjointControl(gradtol = )` |
+| `sensErrCon` | `TRUE` or `FALSE` | `TRUE` |
+| libraries | LAPACK; KLU optional | SUNDIALS; KLU optional |
+
+Table: The two backends; details in [cvode() and the CVODES adjoint](methods-cvode.html#comparison).
+
+At tight tolerances the two backends agree in states and sensitivities to the tolerance, with
+different step sequences.
+
+```{r compare, eval = codegenAvailable("cvode")}
+solveODE(plainC, times, parms)$variable[101, ]
+
+outC <- solveODE(chainC, times, parms, abstol = 1e-10, reltol = 1e-10)
+outN <- solveODE(chain, times, parms, abstol = 1e-10, reltol = 1e-10)
+c(states = max(abs(outC$variable - outN$variable)),
+  sensitivities = max(abs(outC$tangent - outN$tangent)))
+sapply(list(cvode = outC, cppODE = outN),
+       function(o) unlist(o$diagnostics[c("accepted", "rejected", "fevals", "jevals")]))
+```
+
+## Events
+
+Events, switches and forcings behave as in `cppODE()`; the sensitivities jump with the states,
+also in the dose and in the event time.
+
+```{r events, eval = codegenAvailable("cvode")}
+pe   <- c(parms, t_e = 2, dose = 1)
+outE <- solveODE(dosedC, times, pe, abstol = 1e-10, reltol = 1e-10)
+rbind(cvode  = outE$tangent[101, "B", ],
+      cppODE = solveODE(dosed, times, pe, abstol = 1e-10, reltol = 1e-10)$tangent[101, "B", ])
+```
+
+```{r events-plot, eval = codegenAvailable("cvode"), fig.height = 4.2}
+ggplot(longFormat(outE, "A"), aes(time, value)) +
+  geom_line() +
+  facet_wrap(~panel, scales = "free_y", ncol = 4) +
+  scale_x_continuous(n.breaks = 3)
+```
+
+## Adjoint sensitivities
+
+`derivMode = "reverse"` integrates the adjoint equations backward, one backward solve per cotangent
+column, and interpolates the forward state between checkpoints. The result is the derivative of the
+exact solution up to the tolerance; the reverse mode of `cppODE()` is the exact derivative of the
+computed solution ([continuous and discrete adjoint](methods-cvode.html#asa)).
+`adjointControl(gradtol = )` sets the tolerance of the quadrature of the gradient.
+
+```{r adjoint, eval = codegenAvailable("cvode")}
+w <- matrix(0, length(times), 2, dimnames = list(NULL, c("A", "B")))
+w[101, "B"] <- 1
+
+cbind(cvode   = solveODE(adjC, times, parms, cotangent = w, abstol = 1e-10, reltol = 1e-10,
+                         adjoint = adjointControl(gradtol = 1e-10))$cotangent[, 1],
+      cppODE  = solveODE(chainR, times, parms, cotangent = w, abstol = 1e-10,
+                         reltol = 1e-10)$cotangent[, 1],
+      forward = outN$tangent[101, "B", ])
+```
+
+## Batches of conditions
+
+A `cvode()` model has the batch entry of [6. Batches of conditions](guide-batches.html).
+
+```{r batch, eval = codegenAvailable("cvode")}
+conditions <- list(low  = list(parms = c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)),
+                   high = list(parms = c(A = 2, B = 0, k1 = 0.5, k2 = 0.2)))
+batch <- solveODEBatch(chainC, conditions, times = times, cores = 2)
+sapply(batch, function(r) r$tangent[101, "B", ])
+```
+
+[← 7. Algebraic functions](guide-functions.html) | [Installation →](installation.html)
+
+## References

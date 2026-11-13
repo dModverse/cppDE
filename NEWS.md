@@ -63,11 +63,11 @@
 
 * `install_libs()` is removed; the function is `installLibs()`.
 
-* cppDE has a site, <https://dmodverse.github.io/cppDE/>: the reference, Getting started, the
-  methods in ten articles, two worked examples and the benchmarks against SUNDIALS CVODES. The
-  methods articles replace the PDF vignette `Methods`, and `R.rsp` is not suggested. The demos
-  are articles of the site: `basics` is Getting started, `saltation` and `fitCoPt` are the
-  worked examples; `demo()` lists none.
+* cppDE has a site, <https://dmodverse.github.io/cppDE/>: the reference, Get started, a Guide
+  in eight chapters, the methods in ten articles, two worked examples and the benchmarks against
+  SUNDIALS CVODES. The methods articles replace the PDF vignette `Methods`, and `R.rsp` is not
+  suggested. The demos are articles of the site: `basics` is Get started, `saltation` and
+  `fitCoPt` are the worked examples; `demo()` lists none.
 
 # cppDE 0.13.8
 

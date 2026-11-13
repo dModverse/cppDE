@@ -72,7 +72,7 @@ BENCH_SEM$slots <- 0L
 
 ## The semaphore lives under TMPDIR because that is host-local, which is the
 ## scope wanted: two jobs on one machine share the count, jobs on different
-## machines must not. A shared /home would serialise the whole pool.
+## machines must not. A shared /home would serialize the whole pool.
 compile_sem_init <- function(slots, id = "cppde-bench-compile") {
   slots <- suppressWarnings(as.integer(slots))
   if (is.na(slots) || slots < 1L) {
@@ -134,7 +134,7 @@ compile_sem_reap <- function(slot, stale = 3600) {
   invisible(NULL)
 }
 
-## Caps one compiler process. R CMD SHLIB takes its compiler from Makeconf with
+## Caps one compiler process. R CMD SHLIB takes the compiler from Makeconf with
 ## R_MAKEVARS_USER on top, so pointing CXX* at a wrapper that calls `ulimit -v`
 ## bounds every build the run starts, with no privilege and no change to cppDE.
 
@@ -322,7 +322,7 @@ align_rows <- function(res, times) {
                  else NULL)
 }
 
-## Each state is normalised by its own trajectory magnitude, so a
+## Each state is normalized by the magnitude of the state trajectory, so a
 ## species living at 1e-9 counts as much as one at 1e5, without that,
 ## the error of a stiff biological model is decided by one large state.
 traj_error <- function(x, ref) {
@@ -337,7 +337,7 @@ traj_error <- function(x, ref) {
   max(err[is.finite(err)])
 }
 
-## Same normalisation, applied over the [time, state, parameter] cube.
+## Same normalization, applied over the [time, state, parameter] cube.
 sens_error <- function(s, ref) {
   if (is.null(s) || is.null(ref)) return(NA_real_)
   if (!identical(dim(s), dim(ref))) return(NA_real_)
@@ -349,7 +349,7 @@ sens_error <- function(s, ref) {
 }
 
 
-## A gradient or Hessian against its reference, relative to the largest entry.
+## A gradient or Hessian against the reference, relative to the largest entry.
 grad_error <- function(g, ref) {
   if (is.null(g) || is.null(ref) || !identical(dim(as.matrix(g)), dim(as.matrix(ref))))
     return(NA_real_)
@@ -548,7 +548,7 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
                  pinned = pin_label(cfg$sparse), mode = mode, deriv = derivMode)
     for (ti in seq_len(nrow(tolerances))) {
       rtol <- tolerances$rtol[ti]
-      ## A problem may pin its absolute tolerance; the relative one
+      ## A problem may pin the absolute tolerance; the relative one
       ## is still swept, which is how the IVP test set treats E5.
       atol <- prob$atol %||% tolerances$atol[ti]
       run <- function() do.call(solveODE, c(
@@ -668,7 +668,7 @@ run_problem <- function(prob, cache, tolerances, modes = c("nosens", "sens1"),
 
 ## Parallelism is applied per problem: one worker runs every solver, mode and
 ## tolerance of that problem in sequence, so both solvers of a matched cell run
-## in the same worker under the same neighbourhood.
+## in the same worker under the same neighborhood.
 
 ## Wall-clock under load is inflated by shared L3, memory bandwidth and turbo
 ## clocking, but largely uniformly, so a ratio survives it and an absolute
@@ -707,7 +707,7 @@ run_all_problems <- function(problems, builddir, tolerances, modes, configs,
     on.exit(release_cache(cache), add = TRUE)
     out <- list()
     for (case in problems[[i]]) {
-      ## The cap bounds forward AD; a reverse case keeps all its parameters.
+      ## The cap bounds forward AD; a reverse case keeps all parameters.
       if (length(case$sens) > max_sens && length(case$sens) < reverse_from) {
         case$sens  <- case$sens[seq_len(max_sens)]
         case$fixed <- setdiff(names(case$parms), case$sens)

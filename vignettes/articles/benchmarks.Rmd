@@ -7,17 +7,18 @@ link-citations: true
 
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE,
-                      fig.width = 7.5, fig.height = 3.6, out.width = "100%")
+                      fig.width = 8, fig.height = 3.6, dpi = 96,
+                      out.width = "100%")
 library(ggplot2)
+do.call(knitr::read_chunk, list("helpers.R"))
 
-BLUE <- "#2a78d6"; ORANGE <- "#eb6834"
+BLUE <- "#0072B2"; ORANGE <- "#E69F00"
 
 gm <- function(x) exp(mean(log(x[is.finite(x) & x > 0])))
 
 theme_bench <- function()
-  theme_bw(base_size = 11) +
-  theme(panel.grid.minor = element_blank(),
-        legend.position = "inside",
+  theme_get() +
+  theme(legend.position = "inside",
         legend.position.inside = c(0.015, 0.985),
         legend.justification = c(0, 1),
         legend.background = element_blank(),
@@ -50,42 +51,35 @@ plain <- auto[auto$mode == "nosens", c("problem", "backend", "rtol", "time_ms")]
 names(plain)[4] <- "t_plain"
 ```
 
-Both backends take the right-hand side, Jacobian, events and
-linear-solver choice from the same expression graph and run at the same
-tolerances, so a head-to-head measurement compares the numerical cores.
-The figures and tables below are drawn from the saved results of one run,
-`vignettes/articles/bench/` in the repository; nothing is measured when
-the site is built. The suite itself is in
-[`benchmarks/`](https://github.com/dModverse/cppDE/tree/master/benchmarks),
-whose README describes its options, the problem tiers and how to run it
-on a cluster.
+The integrators of `cppODE()` and `cvode()` (SUNDIALS CVODES) on $43$
+problems. Both take right-hand side, Jacobian, events and linear solver
+from one expression graph; only the numerical cores differ. Results come from one saved run in
+`vignettes/articles/bench/`; the suite is in
+[`benchmarks/`](https://github.com/dModverse/cppDE/tree/master/benchmarks).
 
-## Setup
+## Benchmark setup
 
-The suite comprises $43$ problems (table below): $33$ published
-systems-biology models of the PEtab benchmark collection
-[@hass2019benchmark; @schmiester2021petab] and $10$ classical test
-problems, with $n_x = 2$ to $504$ states. First-order sensitivities run
-forward for up to $M = 32$ parameters and in reverse on the two models
-with $M \ge 120$, Lang and Chen. Both backends use BDF/NDF with the
-automatically selected linear solver at
-$(\mathrm{rtol}, \mathrm{atol}) \in \{(10^{-4}, 10^{-6}),
-(10^{-7}, 10^{-9}), (10^{-10}, 10^{-12})\}$, and a cell reports the
-median of five batches of at least $0.25$ s. The suite ran on AMD EPYC
-7513 nodes with twelve workers each; both backends of a cell ran in the
-same worker. Ratios are geometric means over the three tolerances.
+- **Problems:** $33$ models of the PEtab benchmark collection
+  [@hass2019benchmark; @schmiester2021petab] and $10$ classical test
+  problems, $n_x = 2$ to $504$.
+- **Derivatives:** forward sensitivities in up to $M = 32$ parameters,
+  reverse on Lang and Chen ($M \ge 120$); `cppODE()` by forward automatic
+  differentiation, `cvode()` by the CVODES sensitivity equations.
+- **Solver:** BDF/NDF, automatic linear solver, at
+  $(\mathrm{rtol}, \mathrm{atol}) \in \{(10^{-4}, 10^{-6}),
+  (10^{-7}, 10^{-9}), (10^{-10}, 10^{-12})\}$; shared output grid and
+  initial values; no R calls during the solve.
+- **Timing:** median of five batches of at least $0.25$ s, both backends
+  of a cell in one worker, AMD EPYC 7513 nodes with twelve workers;
+  ratios are geometric means over the tolerances.
+- **PEtab import:** from SBML; a switch in time inside the simulated
+  window becomes a time-triggered event with an undifferentiated
+  switching time. Differentiated are the estimated parameters entering
+  the ODE, initial values only if estimated. Trajectories start from the
+  SBML initial values, without pre-equilibration.
 
-Both backends also share the output grid and the initial values, and
-neither calls back into R during the solve. Sensitivities come from
-forward automatic differentiation in `cppODE()` and from the CVODES
-forward sensitivity equations in `cvode()`. The PEtab models are read from their SBML. A switch in time
-inside the simulated window becomes a time-triggered event, and a
-parameter that sets a switching time is left out of the sensitivities.
-The differentiated parameters are those PEtab estimates that enter the
-ODE, at most $32$ for the forward runs; the initial values are fixed
-unless the model estimates them. Pre-equilibration conditions are not
-applied: every trajectory starts from the initial values of the SBML
-model, for both backends.
+```{r style, include = FALSE}
+```
 
 ```{r problems}
 pr <- unique(auto[auto$backend == "cppde" & auto$mode == "sens1",
@@ -105,9 +99,9 @@ knitr::kable(wide, row.names = FALSE, align = rep(c("l", "r", "r"), 3),
                              "FitzHugh-Nagumo systems on $N$ grid points."))
 ```
 
-## Head to head
+## Comparison with CVODES
 
-```{r speedup, fig.cap = "Head-to-head ratio of the two backends, one marker per problem and mode; above the line `cppODE()` is faster. The plain solve is placed at the $M$ of its sensitivity counterpart."}
+```{r speedup, fig.cap = "Head-to-head ratio of the two backends, one marker per problem and mode; above the line `cppODE()` is faster. The plain solve is placed at the $M$ of the matching sensitivity run."}
 LABELS <- c(nosens = "without sensitivities", sens1 = "with sensitivities")
 hh  <- auto[auto$mode %in% c("nosens", "sens1") & auto$deriv %in% c("none", "forward"), ]
 key <- c("problem", "mode", "rtol", "nstates")
@@ -125,14 +119,14 @@ pp$M <- unname(Mof[pp$problem])
 pp   <- pp[is.finite(pp$M) & pp$M > 0, ]
 pp$mode <- factor(pp$mode, levels = names(LABELS))
 
-ggplot(pp, aes(M, ratio, colour = mode, shape = mode)) +
-  geom_hline(yintercept = 1, linewidth = 0.35, colour = "grey30") +
-  geom_point(size = 2, stroke = 0.8, alpha = 0.9) +
+ggplot(pp, aes(M, ratio, color = mode, shape = mode)) +
+  geom_hline(yintercept = 1, linewidth = 0.35, color = "gray30") +
+  geom_point(alpha = 0.9) +
   do.call(scale_x_continuous, log2_axis(c(1, 2, 4, 8, 16, 32),
                                         expand = expansion(mult = 0.04))) +
   do.call(scale_y_continuous, log2_axis(c(0.71, 1, 1.41, 2, 2.83), "×",
                                         expand = expansion(mult = 0.05))) +
-  scale_colour_manual(values = c(nosens = BLUE, sens1 = ORANGE), labels = LABELS,
+  scale_color_manual(values = c(nosens = BLUE, sens1 = ORANGE), labels = LABELS,
                       name = NULL) +
   scale_shape_manual(values = c(nosens = 1, sens1 = 2), labels = LABELS, name = NULL) +
   labs(x = expression("differentiated parameters" ~ italic(M)),
@@ -140,26 +134,21 @@ ggplot(pp, aes(M, ratio, colour = mode, shape = mode)) +
   theme_bench()
 ```
 
-**Plain solves.** `cppODE()` is faster on $41$ of $43$
-problems, by a geometric mean of $1.15$, with about as many steps as
-CVODE (ratios of accepted steps and right-hand-side evaluations $1.02$
-and $1.06$). The margin is a cost per step: the model functions are
-inlined into the stepper, whereas CVODE calls them through function
-pointers and dispatches every vector operation through the
-`N_Vector` table.
+- **Plain solves:** `cppODE()` is faster on $41$ of $43$ problems, by a
+  geometric mean of $1.15$ (step ratio $1.02$, right-hand-side
+  evaluations $1.06$). The model functions are inlined into the stepper;
+  CVODE calls them through function pointers and dispatches vector
+  operations through the `N_Vector` table.
+- **Forward sensitivities:** `cppODE()` is faster on $34$ of $41$
+  problems, by $1.29$: $1.01$ for $M \le 3$, $1.22$ for $4 \le M \le 12$,
+  $1.52$ for $13 \le M \le 32$. CVODES evaluates one Jacobian-vector
+  product per parameter, `cppODE()` one dual evaluation of $f$ with all
+  $M$ tangents (about one eleventh of the right-hand-side evaluations).
+  The dual cost per state component does not depend on $M$; six of the
+  seven slower problems have $M \le 6$, the slowest is Salazar-Cavazos
+  ($n_x = 75$, $M = 6$, $0.67$).
 
-**Forward sensitivities.** `cppODE()` is faster on $34$ of
-$41$ problems, by $1.29$, and the ratio grows with $M$: $1.01$ for
-$M \le 3$, $1.22$ for $4 \le M \le 12$ and $1.52$ for
-$13 \le M \le 32$. CVODES evaluates one Jacobian-vector product per
-parameter; the in-tree backend evaluates $f$ once on a dual state that
-holds all $M$ tangents and needs about one eleventh of the
-right-hand-side evaluations. The dual evaluation has a cost per state
-component independent of $M$, so problems with few parameters fall
-below parity: six of the seven slower ones have $M \le 6$, the lowest
-being Salazar-Cavazos ($n_x = 75$, $M = 6$) at $0.67$.
-
-## Gradients
+## Gradient cost
 
 ```{r gradient, fig.cap = "Cost of one gradient by forward sensitivities in units of the plain solve of the same problem and backend, with least-squares lines."}
 g <- merge(auto[auto$mode == "sens1" & auto$deriv == "forward",
@@ -176,14 +165,14 @@ fit_line <- do.call(rbind, lapply(names(GLAB), function(b) {
   data.frame(backend = b, M = M, cost = predict(f, data.frame(nsens = M)))
 }))
 
-ggplot(g, aes(nsens, cost, colour = backend)) +
+ggplot(g, aes(nsens, cost, color = backend)) +
   geom_line(data = fit_line, aes(M, cost), linewidth = 0.5, show.legend = FALSE) +
-  geom_point(aes(shape = backend), size = 2, stroke = 0.8, alpha = 0.9) +
+  geom_point(aes(shape = backend), alpha = 0.9) +
   do.call(scale_x_continuous, log2_axis(c(1, 2, 4, 8, 16, 32),
                                         expand = expansion(mult = 0.04))) +
   do.call(scale_y_continuous, log2_axis(c(1, 2, 4, 8, 16, 32), "×",
                                         expand = expansion(mult = 0.05))) +
-  scale_colour_manual(values = c(cppde = BLUE, cvode = ORANGE), labels = GLAB,
+  scale_color_manual(values = c(cppde = BLUE, cvode = ORANGE), labels = GLAB,
                       name = NULL) +
   scale_shape_manual(values = c(cppde = 1, cvode = 2), labels = GLAB, name = NULL) +
   labs(x = expression("differentiated parameters" ~ italic(M)),
@@ -191,16 +180,14 @@ ggplot(g, aes(nsens, cost, colour = backend)) +
   theme_bench()
 ```
 
-Measured in plain solves, the cost of one gradient by forward
-sensitivities is linear in $M$: $1.8 + 0.60\,M$ for `cppODE()` and
-$1.2 + 0.84\,M$ for CVODES, about $92$ and $129$ at $M = 152$. The
-[discrete adjoint](methods-reverse.html) costs $6.3$ plain solves on
-Chen and $3.6$ on Lang, independent of $M$. The
-[CVODES adjoint](methods-cvode.html#asa), measured on Lang, costs $27$
-plain CVODE solves and takes $8.8$ to $13.7$ times as long as the
-discrete adjoint.
+In units of a plain solve, a forward-sensitivity gradient costs
+$1.8 + 0.60\,M$ with `cppODE()` and $1.2 + 0.84\,M$ with CVODES ($92$ and
+$129$ at $M = 152$). The [discrete adjoint](methods-reverse.html) costs
+$6.3$ on Chen and $3.6$ on Lang, independent of $M$; the
+[CVODES adjoint](methods-cvode.html#asa) costs $27$ on Lang, $8.8$ to
+$13.7$ times the discrete adjoint time.
 
-```{r adjoint, fig.height = 2.8, fig.cap = "Time of one gradient by the CVODES adjoint over the time by the discrete adjoint, per model and tolerance; right of the line the discrete adjoint is faster."}
+```{r adjoint, fig.height = 3, fig.cap = "Time of one gradient by the CVODES adjoint over the time by the discrete adjoint, per model and tolerance; right of the line the discrete adjoint is faster."}
 a  <- read.csv("bench/adjoint.csv", stringsAsFactors = FALSE)
 a  <- a[a$ok, ]
 aw <- merge(a[a$backend == "cppde", c("problem", "rtol", "nsens", "nstates", "time_ms")],
@@ -218,12 +205,12 @@ aw$rtol  <- factor(format(aw$rtol, scientific = TRUE),
                                    scientific = TRUE))
 RCOL <- setNames(c("#9ec5f3", "#2a78d6", "#0d3b73"), levels(aw$rtol))
 
-ggplot(aw, aes(ratio, label, colour = rtol, shape = rtol)) +
-  geom_vline(xintercept = 1, linewidth = 0.35, colour = "grey30") +
-  geom_point(size = 2.2, stroke = 0.9) +
+ggplot(aw, aes(ratio, label, color = rtol, shape = rtol)) +
+  geom_vline(xintercept = 1, linewidth = 0.35, color = "gray30") +
+  geom_point() +
   do.call(scale_x_continuous, log2_axis(c(0.5, 1, 2, 4, 8, 16, 32), "×",
                                         expand = expansion(mult = 0.05))) +
-  scale_colour_manual(values = RCOL, name = "rtol") +
+  scale_color_manual(values = RCOL, name = "rtol") +
   scale_shape_manual(values = c(1, 2, 0), name = "rtol") +
   labs(x = expression(italic(t)["CVODES adjoint"] / italic(t)["discrete adjoint"]),
        y = NULL) +
@@ -231,18 +218,15 @@ ggplot(aw, aes(ratio, label, colour = rtol, shape = rtol)) +
   theme(legend.position = "right", legend.position.inside = NULL)
 ```
 
-A separate run on the six models with $M \ge 40$, one core per model,
-compares the two adjoints on the four of them with a CVODES result. The
-CVODES adjoint takes $8.7$ to $18.8$ times as long on Lang,
-Lucarelli and Raimúndez, and $1.0$ to $1.5$
-times on Zheng ($n_x = 15$), where a solve takes about a
-millisecond. The discrete adjoint runs backward over the steps of the
-forward solve, whereas CVODES chooses its own backward steps and
-recomputes the forward state between checkpoints. At
-$\mathrm{rtol} = 10^{-10}$ both gradients deviate from the reference by
-$10^{-10}$ to $5 \cdot 10^{-7}$.
+On the six models with $M \ge 40$ (one core each), CVODES succeeds on
+four, with adjoint time ratios $8.7$ to $18.8$ on Lang, Lucarelli and
+Raimúndez and $1.0$ to $1.5$ on Zheng ($n_x = 15$,
+about a millisecond per solve). The discrete adjoint reuses the forward
+steps; CVODES chooses new backward steps and recomputes the forward state
+between checkpoints. At $\mathrm{rtol} = 10^{-10}$ both
+gradients deviate from the reference by $10^{-10}$ to $5 \cdot 10^{-7}$.
 
-## Second order
+## Second-order derivatives
 
 ```{r hessian, fig.cap = "Cost of one Hessian of the summed outputs in units of the plain solve. The lines are power laws fitted in log-log over $M > 1$."}
 h <- merge(ok[ok$mode == "sens2", c("problem", "rtol", "deriv", "nsens", "time_ms")],
@@ -266,14 +250,14 @@ pl_line$deriv <- factor(pl_line$deriv, levels = names(HLAB))
 slopes <- tapply(pl_line$slope, pl_line$deriv, `[`, 1)
 HLAB2 <- setNames(sprintf("%s, slope %.1f", HLAB, slopes[names(HLAB)]), names(HLAB))
 
-ggplot(h, aes(nsens, cost, colour = deriv)) +
+ggplot(h, aes(nsens, cost, color = deriv)) +
   geom_line(data = pl_line, aes(M, cost), linewidth = 0.5, show.legend = FALSE) +
-  geom_point(aes(shape = deriv), size = 2, stroke = 0.8, alpha = 0.9) +
+  geom_point(aes(shape = deriv), alpha = 0.9) +
   do.call(scale_x_continuous, log2_axis(c(1, 2, 4, 8, 16, 32),
                                         expand = expansion(mult = 0.04))) +
   do.call(scale_y_continuous, log2_axis(c(2, 4, 8, 16, 32, 64, 128, 256), "×",
                                         expand = expansion(mult = 0.05))) +
-  scale_colour_manual(values = c(`forward-forward` = BLUE, `forward-reverse` = ORANGE),
+  scale_color_manual(values = c(`forward-forward` = BLUE, `forward-reverse` = ORANGE),
                       labels = HLAB2, name = NULL) +
   scale_shape_manual(values = c(`forward-forward` = 1, `forward-reverse` = 2),
                      labels = HLAB2, name = NULL) +
@@ -282,19 +266,17 @@ ggplot(h, aes(nsens, cost, colour = deriv)) +
   theme_bench()
 ```
 
-The Hessian of the summed outputs is measured for `cppODE()` alone, on
-models with at most $30$ states:
-[forward over reverse](methods-forward-reverse.html) with up to $32$
+Hessian of the summed outputs, `cppODE()` only, $n_x \le 30$:
+[forward over reverse](methods-forward-reverse.html) up to $32$
 directions, forward over forward up to $10$ states and $10$ directions.
-Fitted in log-log, the cost grows with exponent $1.9$ forward over
-forward and $0.6$ forward over reverse. The two break even at $M = 3$;
-forward over reverse is $3.0$ times faster at $M = 6$ and $9$ to $14$
-times at $M = 9$ and $10$. At $\mathrm{rtol} = 10^{-10}$ the Hessians
-deviate from the forward-over-forward Hessian at the reference tolerance
-by a median of $8.1 \cdot 10^{-10}$ (forward over forward) and
-$1.8 \cdot 10^{-8}$ (forward over reverse).
+Cost exponents are $1.9$ (forward over forward) and $0.6$ (forward over
+reverse); forward over reverse breaks even at $M = 3$ and
+is $3.0$ times faster at $M = 6$, $9$ to $14$ at $M = 9, 10$. At $\mathrm{rtol} = 10^{-10}$ the
+median deviation from the forward-over-forward reference Hessian is
+$8.1 \cdot 10^{-10}$ (forward over forward) and $1.8 \cdot 10^{-8}$
+(forward over reverse).
 
-## Linear solver
+## Sparse linear solver
 
 ```{r sparse, fig.width = 5, fig.height = 3.4, out.width = "65%", fig.cap = "Gain of the sparse over the dense linear solver, one marker per model and backend."}
 sw <- ok[ok$pinned != "auto" & ok$mode %in% c("nosens", "sens1") &
@@ -306,14 +288,14 @@ sg$gain <- sg$time_ms.d / sg$time_ms.s
 sg <- aggregate(gain ~ problem + backend + nstates, data = sg, FUN = gm)
 SLAB <- c(cppde = "cppODE()", cvode = "cvode()")
 
-ggplot(sg, aes(nstates, gain, colour = backend, shape = backend)) +
-  geom_hline(yintercept = 1, linewidth = 0.35, colour = "grey30") +
-  geom_point(size = 2, stroke = 0.8, alpha = 0.9) +
+ggplot(sg, aes(nstates, gain, color = backend, shape = backend)) +
+  geom_hline(yintercept = 1, linewidth = 0.35, color = "gray30") +
+  geom_point(alpha = 0.9) +
   do.call(scale_x_continuous, log2_axis(c(8, 16, 32, 64, 128, 256, 512),
                                         expand = expansion(mult = 0.05))) +
   do.call(scale_y_continuous, log2_axis(c(1, 1.41, 2, 2.83, 4), "×",
                                         expand = expansion(mult = 0.05))) +
-  scale_colour_manual(values = c(cppde = BLUE, cvode = ORANGE), labels = SLAB,
+  scale_color_manual(values = c(cppde = BLUE, cvode = ORANGE), labels = SLAB,
                       name = NULL) +
   scale_shape_manual(values = c(cppde = 1, cvode = 2), labels = SLAB, name = NULL) +
   labs(x = expression("states" ~ italic(n)[x]),
@@ -321,62 +303,58 @@ ggplot(sg, aes(nstates, gain, colour = backend, shape = backend)) +
   theme_bench()
 ```
 
-Seventeen models were solved again with the linear solver pinned to
-dense and to sparse. The sparse gain is the same for both backends and
-grows from $1.09$ at $n_x = 8$ to $3.3$ at $n_x = 504$; the automatic
-selection chose the sparse path in every case.
+On seventeen models with the linear solver pinned, sparse gains $1.09$
+at $n_x = 8$ to $3.3$ at $n_x = 504$ for both backends; the automatic
+selection chose sparse in every case.
 
-## Accuracy
+## Accuracy against a reference
 
-Against a reference at $\mathrm{atol} = 10^{-14}$,
-$\mathrm{rtol} = 10^{-12}$ the error of `cppODE()` is a median
-$0.99$ times that of CVODE without sensitivities (central $90\,\%$ of
-the problems between $0.51$ and $1.51$) and $1.09$ with sensitivities
-(between $0.66$ and $2.37$). The reference is itself a CVODE solution,
-which favours CVODE. The error of a solve is the largest deviation of a
-state from the reference, divided by the largest value that state takes
-along the reference trajectory.
+Error: largest deviation of a state from a CVODE reference
+($\mathrm{atol} = 10^{-14}$, $\mathrm{rtol} = 10^{-12}$) over the largest
+reference value of the state. The median error ratio `cppODE()`/CVODE is $0.99$ without sensitivities (central $90\,\%$:
+$0.51$ to $1.51$) and $1.09$ with ($0.66$ to $2.37$). The CVODE reference
+favors CVODE.
 
-```{r work-precision, fig.width = 9, fig.height = 12, fig.cap = "Work-precision of the plain solves, one panel per problem: scaled error against time per solve at the three tolerances; down and to the left is better."}
+::: {.wide}
+```{r work-precision, fig.width = 12, fig.height = 16, fig.cap = "Work-precision of the plain solves, one panel per problem: scaled error against time per solve at the three tolerances; down and to the left is better."}
 wp <- auto[auto$mode == "nosens" & is.finite(auto$err) & auto$err > 0,
            c("problem", "nstates", "backend", "rtol", "time_ms", "err")]
 lev <-unique(wp[order(wp$nstates, tolower(wp$problem)), "problem"])
 wp$panel <- factor(label(wp$problem), levels = label(lev))
 wp <- wp[order(wp$problem, wp$backend, wp$rtol), ]
 
-ggplot(wp, aes(time_ms, err, colour = backend, shape = backend)) +
+ggplot(wp, aes(time_ms, err, color = backend, shape = backend)) +
   geom_path(linewidth = 0.4) +
-  geom_point(size = 1.4, stroke = 0.6) +
+  geom_point() +
   scale_x_log10(guide = guide_axis(check.overlap = TRUE)) +
   scale_y_log10(labels = scales::label_log()) +
-  scale_colour_manual(values = c(cppde = BLUE, cvode = ORANGE), labels = SLAB,
+  scale_color_manual(values = c(cppde = BLUE, cvode = ORANGE), labels = SLAB,
                       name = NULL) +
   scale_shape_manual(values = c(cppde = 1, cvode = 2), labels = SLAB, name = NULL) +
   facet_wrap(~panel, scales = "free", ncol = 6, labeller = label_wrap_gen(18)) +
   labs(x = "time per solve [ms]", y = "scaled error") +
-  theme_bw(base_size = 8) +
-  theme(panel.grid.minor = element_blank(), legend.position = "top",
-        strip.background = element_blank())
+  theme(legend.position = "top")
 ```
+:::
 
-## Failures
+## Failed runs
 
-Six of the $1083$ cells failed, all at $\mathrm{rtol} = 10^{-10}$: the
-forward sensitivities of `cppODE()` on Oliveira with each linear solver
-and on Weber, and forward over forward on the same two models.
+Six of $1083$ cells failed, all at $\mathrm{rtol} = 10^{-10}$: forward
+sensitivities and forward over forward of `cppODE()` on Oliveira (each
+linear solver) and on Weber.
 
 ## Running the suite
 
-The suite needs the PEtab collection, fetched once, and runs in three
-tiers of increasing coverage; a full run of all modes takes hours and is
-meant for an idle machine or a cluster:
+The suite fetches the PEtab collection once and runs in three tiers of
+increasing coverage; a full run takes hours:
 
 ```sh
 Rscript benchmarks/fetch-models.R
 Rscript benchmarks/run-benchmarks.R --tier full --modes nosens,sens1,sens2
 ```
 
-Each run writes `results.csv`, a README with the configuration and the
-tables, and its figures to `benchmarks/results/<timestamp>/`.
+A run writes `results.csv`, a README with configuration and tables, and
+the figures to `benchmarks/results/<timestamp>/`; options and cluster
+runs are in the README of `benchmarks/`.
 
 ## References

@@ -1,0 +1,83 @@
+---
+title: "Overview and notation"
+---
+
+## Entry points
+
+| entry point | problem | numerical core | article |
+|:------------|:--------|:---------------|:--------|
+| `cppODE()`  | ODE $\dot x = f(x, p, t)$ | in-tree integrator, `inst/include/cppde/` | [Stepping](methods-stepping.html) to [Second derivatives](methods-forward-reverse.html) |
+| `cvode()`   | ODE $\dot x = f(x, p, t)$ | SUNDIALS CVODE/CVODES | [cvode() and the CVODES adjoint](methods-cvode.html) |
+| `cppFUN()`  | algebraic $y = g(x, p)$ | none | [Derivative directions of cppFUN()](methods-cppfun.html) |
+| `ptc()`     | steady state $f(x, p) = 0$, $C x = b$ | pseudo-transient continuation on a `cppFUN()` object | [Steady states by pseudo-transient continuation](methods-ptc.html) |
+
+Table: Entry points. The first three share the
+[code generator](methods-codegen.html).
+
+`cppODE()` and `cvode()` take the same model arguments (`rhs`, `events`,
+`rootfunc`, `fixed`, `forcings`) and return the same object for
+`solveODE()` ([comparison](methods-cvode.html#comparison)). `cppFUN()`
+derivatives are `"forward"` (second order with `deriv2 = TRUE`),
+`"reverse"` or `"forward-reverse"`.
+
+## Order of the articles
+
+1. [Code generation](methods-codegen.html): expression graph and emitted
+   C++ of all entry points.
+2. [Stepping and error control](methods-stepping.html): the four methods of
+   `cppODE()`, error control, dense output.
+3. [Forward sensitivities](methods-forward.html): dual numbers.
+4. [Events, switches and saltation](methods-events.html): sensitivities
+   across resets, root events and switches.
+5. [Reverse mode: the discrete adjoint](methods-reverse.html): gradients at
+   a cost independent of the parameter count.
+6. [Events in reverse mode](methods-reverse-events.html): adjoint of a
+   jump, to second order.
+7. [Grid and refinement of the sweep](methods-reverse-checks.html): the
+   adjoint grid and `refine`.
+8. [Second derivatives: forward over reverse](methods-forward-reverse.html):
+   Hessian-vector products.
+9. [cvode() and the CVODES adjoint](methods-cvode.html): the SUNDIALS
+   backend.
+10. [Derivative directions of cppFUN()](methods-cppfun.html): observation
+    maps and reparametrizations.
+11. [Steady states by pseudo-transient continuation](methods-ptc.html):
+    `ptc()` under conservation laws, stability test.
+12. [Method coefficients](methods-coefficients.html): appendix.
+
+Batches of conditions: [Batches of conditions](guide-batches.html).
+[Benchmarks](benchmarks.html) compares the integrators and the derivative
+modes.
+
+## Notation {#notation}
+
+| symbol | meaning |
+|:-------|:--------|
+| $t$, $t_0$, $T$ | time, initial time, last output time |
+| $x \in \mathbb{R}^{n_x}$ | state; $x_0 = x(t_0)$ |
+| $p \in \mathbb{R}^{n_p}$ | parameters of the right-hand side |
+| $f(x, p, t)$ | right-hand side, $\dot x = f$ |
+| $J = \partial f/\partial x$ | state Jacobian |
+| $\theta \in \mathbb{R}^{M}$ | parameters of the derivatives, with $x_0(\theta)$, $p(\theta)$; $\theta = (x_0, p)$, $M = n_x + n_p$ under the identity tangent |
+| $\partial(x_0, p)/\partial\theta$ | tangent of the inputs, argument `tangent` of `solveODE()` |
+| $S = \partial x/\partial\theta \in \mathbb{R}^{n_x \times M}$ | sensitivity matrix |
+| $t_o$, $o = 1, \dots, n_{\mathrm{obs}}$ | output times, rows of the returned trajectory |
+| $w \in \mathbb{R}^{n_{\mathrm{obs}} \times n_x}$ | cotangent of the outputs, row $w_o$ at $t_o$ |
+| $\lambda \in \mathbb{R}^{n_x}$ | adjoint state |
+| $\bar\theta$, $\bar x_0$, $\bar p$ | cotangent of the inputs, the gradient of $\sum_o w_o^{\mathsf T} x(t_o)$ |
+| $t_n$, $x_n$ | step points and computed states |
+| $h_n = t_{n+1} - t_n$ | step size |
+| $q$, $q_{\max}$ | order, maximum order |
+| $e_{n+1}$ | local error estimate of the step from $t_n$ |
+| $\lVert\cdot\rVert_{\mathrm{WRMS}}$ | weighted root-mean-square norm, [Stepping (8)](methods-stepping.html#eq-wrms) |
+| $W$ | iteration matrix of an implicit step, a shift of $-J$ |
+| $g_e(x, t, \theta)$ | root function of an event or switch |
+| $t_e(\theta)$ | firing time of a time-triggered event, an expression |
+| $t^{*}$, $t_*^{(0)}$ | firing time; the value of $t^{*}$ without derivatives, the grid time |
+| $\delta t^{*} = t^{*} - t_*^{(0)}$ | firing-time residual: zero in value, holds the derivatives of $t^{*}$ |
+| $\dot g_e = \partial g_e/\partial t + \nabla_x g_e \cdot f$ | rate of the root function along the trajectory |
+| $R(x, t)$ | reset map of an event |
+| $x^{-}$, $x^{+}$; $f^{-}$, $f^{+}$ | state and right-hand side before and after an event |
+
+Table: Symbols shared by the methods articles; others are defined where
+they first appear.

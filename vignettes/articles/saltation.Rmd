@@ -4,33 +4,38 @@ title: "Sensitivities across events, checked symbolically"
 
 ```{r setup, include = FALSE}
 knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE, fig.width = 8,
-                      fig.height = 3.6, out.width = "100%")
+                      fig.height = 3.6, dpi = 96, out.width = "100%")
+do.call(knitr::read_chunk, list("helpers.R"))
 # the comparisons `keep` of a section, read from saltation/<label>.rds where that exists, else
-# computed by the code of the chunk `label` and saved there
+# computed by the code of the chunk `label` and saved there with that code and the cppDE version;
+# a saved result from other code or another version is used with a warning
 section <- function(label, keep) {
-  file <- file.path("saltation", paste0(label, ".rds"))
+  file  <- file.path("saltation", paste0(label, ".rds"))
+  code  <- knitr::knit_code$get(label)
+  stamp <- list(code = as.character(code), cppDE = as.character(packageVersion("cppDE")))
   if (!file.exists(file)) {
-    eval(parse(text = knitr::knit_code$get(label)), knitr::knit_global())
+    eval(parse(text = code), knitr::knit_global())
     dir.create("saltation", showWarnings = FALSE)
-    saveRDS(mget(keep, knitr::knit_global()), file)
+    saveRDS(list(stamp = stamp, value = mget(keep, knitr::knit_global())), file)
   }
-  list2env(readRDS(file), knitr::knit_global())
+  saved <- readRDS(file)
+  if (!identical(saved$stamp, stamp))
+    warning(file, " was computed from other code or another cppDE version; ",
+            "delete it to compute it again", call. = FALSE)
+  invisible(list2env(saved$value, knitr::knit_global()))
 }
 ```
 
-This article checks the sensitivities of cppDE across events, switches and sliding against
-symbolic solutions. Every model is solved by `cppODE()` with first- and second-order
-sensitivities, forward and forward over reverse, and by SymPy through `dsolve()` per smooth
-segment, glued at the event times and differentiated twice. Where an event time depends on the
-parameters, the sensitivities after it hold a saltation term
-([Events, switches and saltation](methods-events.html)); a wrong or missing one shows as an
-offset from the symbolic curve.
+First- and second-order sensitivities of `cppODE()` across events, switches and sliding,
+forward and forward over reverse, against symbolic solutions from SymPy. A
+parameter-dependent event time adds a saltation term
+([Events, switches and saltation](methods-events.html)); an error in it shows as an offset
+from the symbolic curve. Figures: solid line symbolic, forward result on top, circles forward
+over reverse at each seeded output time. Printed lines give the largest difference per
+derivative order. Results are read from `saltation/*.rds`, computed if absent.
 
-In every figure the symbolic solution is the solid line, the forward sensitivities from
-`solveODE()` are drawn on top of it, and the circles are forward over reverse, one per seeded
-output time. The printed lines give the largest difference to the symbolic solution per
-derivative order. The comparisons are computed once and read from `saltation/*.rds`; without
-these files the article computes them.
+```{r style, include = FALSE}
+```
 
 ```{r}
 library(cppDE)
@@ -40,8 +45,8 @@ sp <- reticulate::import("sympy")
 
 ## Symbolic solutions
 
-The symbolic solution of a model is built in SymPy: one `dsolve()` per smooth segment, pinned
-to the state at its start and glued to the next at the firing time.
+One `dsolve()` per smooth segment, pinned to the state at the segment start and glued to the
+next segment at the firing time.
 
 ```{r}
 sym  <- function(name, ...) sp$Symbol(name, real = TRUE, ...)
@@ -72,7 +77,7 @@ composed <- function(branches, fires) {
 }
 
 # A parameter point: the symbols, their values, and the grid to compare on.
-# The names are the ones solveODE() labels its sensitivity slices with, where
+# The names are the ones solveODE() labels the sensitivity slices with, where
 # a state name stands for that state's initial value.
 point <- function(syms, pars, times)
   list(syms = syms, names = names(pars), values = as.list(unname(pars)),
@@ -81,10 +86,10 @@ point <- function(syms, pars, times)
 toNumeric <- function(expr)
   suppressWarnings(as.numeric(reticulate::py_str(sp$N(expr))))
 
-# Every parameter replaced by its value, time left free.
+# Every parameter replaced by the value at the point, time left free.
 atPoint <- function(expr, at) expr$subs(reticulate::py_dict(at$syms, at$values))
 
-# SymPy's lambdify reads its caller's frame for a docstring and a call from R
+# SymPy's lambdify reads the frame of the caller for a docstring and a call from R
 # has none, so it goes through a Python function. Compiling once per expression
 # turns one round trip per time point into one per panel.
 sympyGrid <- reticulate::py_run_string(
@@ -116,11 +121,10 @@ crossing <- function(conditions, at, after = 0) {
 }
 ```
 
-## Comparison and figures
+## Comparison functions
 
-`comparison()` puts the derivatives of the symbolic solution next to those of the forward
-solve, `reverseSeries()` adds forward over reverse, `report()` prints the largest differences
-per order and `comparisonPlot()` draws them.
+`comparison()` pairs symbolic and forward derivatives, `reverseSeries()` adds forward over
+reverse, `report()` prints the largest differences per order, `comparisonPlot()` draws them.
 
 ```{r}
 # Panel labels use the partial derivative sign, U+2202.
@@ -131,11 +135,11 @@ lab2 <- function(var, a, b) {
 }
 
 # The last row at a requested time holds the post-event state, whether
-# or not a localised root inserted rows of its own.
+# or not a localized root inserted extra rows.
 rowsAt <- function(res, times)
   vapply(times, function(s) max(which(abs(res$time - s) < 1e-9)), 1L)
 
-# One panel per quantity: the state, its gradient, and each distinct
+# One panel per quantity: the state, the gradient, and each distinct
 # second derivative, symbolic against what solveODE() returned.
 comparison <- function(expr, at, res, var) {
   i  <- rowsAt(res, at$times)
@@ -179,7 +183,7 @@ report <- function(df, title) {
 
 # Forward over reverse at every `every`-th output time: a cotangent seeded on
 # one row and state makes the gradient that state's row of the tangent and the
-# curvature its Hessian. Only requested times are seeded, since a row a root
+# curvature the Hessian of that state. Only requested times are seeded, since a row a root
 # inserts moves with the parameters.
 reverseSeries <- function(expr, at, res, model, pars, var, states,
                           opts = list(), every = 50L) {
@@ -219,32 +223,33 @@ comparisonPlot <- function(df, orders, title, rev = NULL) {
   p <- ggplot(df[df$order %in% orders, ], aes(x = time)) +
     # A quantity that vanishes identically leaves the solver a cancellation
     # residue of a few ulp, and a free y scale would blow that up into a
-    # picture of its own round-off. No panel is drawn tighter than this.
+    # picture of the round-off. No panel is drawn tighter than this.
     expand_limits(y = c(-1e-10, 1e-10)) +
-    geom_line(aes(y = symbolic, colour = "symbolic", linetype = "symbolic"),
+    geom_line(aes(y = symbolic, color = "symbolic", linetype = "symbolic"),
               linewidth = 1) +
-    geom_line(aes(y = numeric, colour = "forward", linetype = "forward"),
+    geom_line(aes(y = numeric, color = "forward", linetype = "forward"),
               linewidth = 1)
   if (!is.null(rev)) {
     rev$quantity <- factor(rev$quantity, levels = levels(df$quantity))
     p <- p + geom_point(data = rev[rev$order %in% orders, ],
-                        aes(y = reverse, colour = "reverse"),
-                        shape = 21, size = 1.6, stroke = 0.7, fill = NA)
+                        aes(y = reverse, color = "reverse"),
+                        shape = 21, fill = NA)
   }
-  p + facet_wrap(~quantity, scales = "free_y") +
-    scale_colour_manual(values = c(symbolic = "#2166ac", forward = "#d6604d",
-                                   reverse = "#1a9850")) +
-    scale_linetype_manual(values = c(symbolic = "solid", forward = "dotdash")) +
-    labs(title = title, x = "time", y = NULL, colour = NULL, linetype = NULL) +
-    theme_bw(base_size = 9) +
+  p + facet_wrap(~quantity, scales = "free_y", ncol = 5) +
+    scale_x_continuous(n.breaks = 3) +
+    scale_color_manual(values = c(symbolic = "#000000", forward = "#E69F00", reverse = "#0072B2"),
+                       breaks = c("symbolic", "forward", "reverse")) +
+    scale_linetype_manual(values = c(symbolic = "solid", forward = "dotdash"), guide = "none") +
+    guides(color = guide_legend(override.aes = list(linetype = c("solid", "dotdash", "blank"),
+                                                    shape = c(NA, NA, 21)))) +
+    labs(title = title, x = "time", y = NULL, color = NULL) +
     theme(legend.position = "top")
 }
 ```
 
 ## Root event on a coupled pair
 
-The firing time depends on three parameters, so every sensitivity after the event holds a
-saltation term; the crossing lands on a requested output time.
+The firing time depends on three parameters, and the crossing lands on an output time.
 
 ```{r pair, eval = FALSE}
 events_pair <- data.frame(var = "C", time = NA, value = "d", method = "add",
@@ -283,24 +288,25 @@ rev_pair <- reverseSeries(C_of_t, point_pair, res_pair, model_pair_r, pars_pair,
 
 ```
 
-```{r, include = FALSE}
+```{r, echo = FALSE}
 section("pair", c("cmp_pair", "rev_pair"))
 ```
 
-```{r}
+::: {.wide}
+```{r, fig.width = 12, fig.height = 6}
 report(cmp_pair, "root event on a coupled pair")
-plot_pair_1 <- comparisonPlot(cmp_pair, 0:1, "C and its gradient across a root event",
+plot_pair_1 <- comparisonPlot(cmp_pair, 0:1, "C and gradient across a root event",
                               rev_pair)
 plot_pair_1
 plot_pair_2 <- comparisonPlot(cmp_pair, 2L, "Second derivatives of C across a root event",
                               rev_pair)
 plot_pair_2
 ```
+:::
 
 ## Time-triggered event
 
-The event time is an expression of the parameters, so $\partial t^*/\partial\theta$ comes from
-that expression, not from a root condition.
+$\partial t^*/\partial\theta$ comes from the event-time expression, not from a root.
 
 ```{r dose, eval = FALSE}
 events_dose <- data.frame(var = "x", time = "te", value = "v", method = "add",
@@ -330,23 +336,25 @@ rev_dose <- reverseSeries(x_dose, point_dose, res_dose, model_dose_r, pars_dose,
 
 ```
 
-```{r, include = FALSE}
+```{r, echo = FALSE}
 section("dose", c("cmp_dose", "rev_dose"))
 ```
 
-```{r}
+::: {.wide}
+```{r, fig.width = 12, fig.height = 6}
 report(cmp_dose, "time-triggered event")
-plot_dose_1 <- comparisonPlot(cmp_dose, 0:1, "x and its gradient across a timed dose",
+plot_dose_1 <- comparisonPlot(cmp_dose, 0:1, "x and gradient across a timed dose",
                               rev_dose)
 plot_dose_1
 plot_dose_2 <- comparisonPlot(cmp_dose, 2L, "Second derivatives of x across a timed dose",
                               rev_dose)
 plot_dose_2
 ```
+:::
 
-## A root event that fires three times
+## Repeated root event
 
-Each firing time depends on the one before, so the three saltation terms compose.
+Three firings, each depending on the one before; the saltation terms compose.
 
 ```{r pulse, eval = FALSE}
 events_pulse <- data.frame(var = "x", time = NA, value = "v", method = "add",
@@ -384,24 +392,25 @@ rev_pulse <- reverseSeries(x_pulse, point_pulse, res_pulse, model_pulse_r,
 
 ```
 
-```{r, include = FALSE}
+```{r, echo = FALSE}
 section("pulse", c("cmp_pulse", "rev_pulse"))
 ```
 
-```{r}
+::: {.wide}
+```{r, fig.width = 12, fig.height = 6}
 report(cmp_pulse, "a root event that fires three times")
-plot_pulse_1 <- comparisonPlot(cmp_pulse, 0:1, "x and its gradient over three firings",
+plot_pulse_1 <- comparisonPlot(cmp_pulse, 0:1, "x and gradient over three firings",
                                rev_pulse)
 plot_pulse_1
 plot_pulse_2 <- comparisonPlot(cmp_pulse, 2L, "Second derivatives of x over three firings",
                                rev_pulse)
 plot_pulse_2
 ```
+:::
 
-## Explicit time dependence in the right-hand side
+## Time-dependent right-hand side
 
-The right-hand side reads the time, so the second-order transport needs the time argument of
-the Heun shifts, not only the shifted state.
+The second-order transport needs the time argument of the Heun shifts, not only the state.
 
 ```{r drift, eval = FALSE}
 events_drift <- data.frame(var = "x", time = NA, value = "v", method = "add",
@@ -432,26 +441,27 @@ rev_drift <- reverseSeries(x_drift, point_drift, res_drift, model_drift_r,
 
 ```
 
-```{r, include = FALSE}
+```{r, echo = FALSE}
 section("drift", c("cmp_drift", "rev_drift"))
 ```
 
-```{r}
+::: {.wide}
+```{r, fig.width = 12, fig.height = 6}
 report(cmp_drift, "explicit time dependence in the right-hand side")
-plot_drift_1 <- comparisonPlot(cmp_drift, 0:1, "x and its gradient, time-dependent decay",
+plot_drift_1 <- comparisonPlot(cmp_drift, 0:1, "x and gradient, time-dependent decay",
                                rev_drift)
 plot_drift_1
 plot_drift_2 <- comparisonPlot(cmp_drift, 2L, "Second derivatives of x, time-dependent decay",
                                rev_drift)
 plot_drift_2
 ```
+:::
 
-## Oscillator between two elastic walls
+## Oscillator between elastic walls
 
-Each wall is a root event that reverses the velocity, and the two fire alternately. The
-position is continuous at a bounce, so all that an event does to the sensitivities is
-saltation. The root of the wall just left is exactly zero when the solver restarts and does
-not count as the next crossing.
+Two root events reverse the velocity and fire alternately. The position is continuous, so
+the events act on the sensitivities through saltation only. The root of the wall just left,
+zero at the restart, is not counted as a crossing.
 
 ```{r wall, eval = FALSE}
 events_wall <- data.frame(var = c("v", "v"), time = c(NA, NA),
@@ -523,31 +533,33 @@ rev_wall_v <- reverseSeries(v_wall, point_wall, res_wall, model_wall_r,
 
 ```
 
-```{r, include = FALSE}
+```{r, echo = FALSE}
 section("wall", c("cmp_wall_v", "cmp_wall_x", "rev_wall_v", "rev_wall_x"))
 ```
 
-```{r}
+::: {.wide}
+```{r, fig.width = 12, fig.height = 6}
 report(cmp_wall_x, "oscillator between elastic walls, position")
 report(cmp_wall_v, "oscillator between elastic walls, velocity")
-plot_wall_1 <- comparisonPlot(cmp_wall_x, 0:1, "Position and its gradient over 8 bounces",
+plot_wall_1 <- comparisonPlot(cmp_wall_x, 0:1, "Position and gradient over 8 bounces",
                               rev_wall_x)
 plot_wall_1
 plot_wall_2 <- comparisonPlot(cmp_wall_x, 2L, "Second derivatives of the position",
                               rev_wall_x)
 plot_wall_2
-plot_wall_3 <- comparisonPlot(cmp_wall_v, 0:1, "Velocity and its gradient over 8 bounces",
+plot_wall_3 <- comparisonPlot(cmp_wall_v, 0:1, "Velocity and gradient over 8 bounces",
                               rev_wall_v)
 plot_wall_3
 plot_wall_4 <- comparisonPlot(cmp_wall_v, 2L, "Second derivatives of the velocity",
                               rev_wall_v)
 plot_wall_4
 ```
+:::
 
-## A jump whose time and height are expressions
+## Event time and height as expressions
 
-No term of the transport vanishes here: the firing time is a nonlinear function of a
-parameter, and the height reads the clock and the state it lands on.
+The firing time is nonlinear in a parameter and the height depends on time and state, so no
+term of the transport vanishes.
 
 ```{r expr, eval = FALSE}
 events_expr <- data.frame(var = "x", time = "0.5*te + 0.4*te*te",
@@ -579,26 +591,27 @@ rev_expr <- reverseSeries(x_expr, point_expr, res_expr, model_expr_r, pars_expr,
 
 ```
 
-```{r, include = FALSE}
+```{r, echo = FALSE}
 section("expr", c("cmp_expr", "rev_expr"))
 ```
 
-```{r}
+::: {.wide}
+```{r, fig.width = 12, fig.height = 6}
 report(cmp_expr, "a jump whose time and height are expressions")
-plot_expr_1 <- comparisonPlot(cmp_expr, 0:1, "x and its gradient, expression-valued jump",
+plot_expr_1 <- comparisonPlot(cmp_expr, 0:1, "x and gradient, expression-valued jump",
                               rev_expr)
 plot_expr_1
 plot_expr_2 <- comparisonPlot(cmp_expr, 2L, "Second derivatives, expression-valued jump",
                               rev_expr)
 plot_expr_2
 ```
+:::
 
-## A root nonlinear in the state and explicit in time
+## Nonlinear time-dependent root
 
 The derivative of the firing time in the state holds
-$\nabla \dot g = \nabla g_t + (\nabla^2 g)\, f + J^\mathsf{T} \nabla g$. A root linear in the
-state and independent of the time has the first two terms at zero; this one has neither. It
-is quadratic in $t$, so the crossing has a closed form.
+$\nabla \dot g = \nabla g_t + (\nabla^2 g)\, f + J^\mathsf{T} \nabla g$, here with no zero term.
+The root is quadratic in $t$, so the crossing has a closed form.
 
 ```{r quad, eval = FALSE}
 events_quad <- data.frame(var = "x", time = NA, value = "v * time",
@@ -630,26 +643,26 @@ rev_quad <- reverseSeries(x_quad, point_quad, res_quad, model_quad_r, pars_quad,
 
 ```
 
-```{r, include = FALSE}
+```{r, echo = FALSE}
 section("quad", c("cmp_quad", "rev_quad"))
 ```
 
-```{r}
+::: {.wide}
+```{r, fig.width = 12, fig.height = 6}
 report(cmp_quad, "a root nonlinear in the state and explicit in time")
-plot_quad_1 <- comparisonPlot(cmp_quad, 0:1, "x and its gradient, nonlinear root",
+plot_quad_1 <- comparisonPlot(cmp_quad, 0:1, "x and gradient, nonlinear root",
                               rev_quad)
 plot_quad_1
 plot_quad_2 <- comparisonPlot(cmp_quad, 2L, "Second derivatives, nonlinear root",
                               rev_quad)
 plot_quad_2
 ```
+:::
 
-## A switch on a state that the solution crosses
+## Crossing a state switch
 
-Above $x_c$ the state decays, below it an inflow $p < k x_c$ is added, so the solution crosses
-$x = x_c$ once. The state is continuous there and its right-hand side jumps by $p$; the
-sensitivities take the jump through the saltation of the switch, whose time moves with $x_0$,
-$k$ and $x_c$.
+Below $x_c$ an inflow $p < k x_c$ is added, so the solution crosses $x = x_c$ once. The
+right-hand side jumps by $p$; the switching time depends on $x_0$, $k$ and $x_c$.
 
 ```{r cross, eval = FALSE}
 model_cross   <- cppODE(c(x = "-k*x + p*(x < xc)"), deriv2 = TRUE,
@@ -678,26 +691,27 @@ rev_cross <- reverseSeries(x_cross, point_cross, res_cross, model_cross_r,
 
 ```
 
-```{r, include = FALSE}
+```{r, echo = FALSE}
 section("cross", c("cmp_cross", "rev_cross"))
 ```
 
-```{r}
+::: {.wide}
+```{r, fig.width = 12, fig.height = 6}
 report(cmp_cross, "a switch on a state, crossed")
-plot_cross_1 <- comparisonPlot(cmp_cross, 0:1, "x and its gradient across a switch",
+plot_cross_1 <- comparisonPlot(cmp_cross, 0:1, "x and gradient across a switch",
                                rev_cross)
 plot_cross_1
 plot_cross_2 <- comparisonPlot(cmp_cross, 2L, "Second derivatives of x across a switch",
                                rev_cross)
 plot_cross_2
 ```
+:::
 
 ## Sliding along a switching surface
 
-The same switch with an inflow $p\, e^{-rt}$ that fades. While it exceeds $k x_c$, both
-branches push the solution onto $x = x_c$, and it slides along the surface until the inflow
-falls to $k x_c$. During the slide the sensitivities are those of $x_c$ alone; after the exit
-they start from there with the dependence of the exit time on $p$, $r$, $k$ and $x_c$.
+The inflow is $p\, e^{-rt}$. While it exceeds $k x_c$ the solution slides on $x = x_c$, with the
+sensitivities of $x_c$ alone; after the exit they include the dependence of the exit time on
+$p$, $r$, $k$ and $x_c$.
 
 ```{r slide, eval = FALSE}
 model_slide   <- cppODE(c(x = "-k*x + p*exp(-r*time)*(x < xc)"), deriv2 = TRUE,
@@ -730,16 +744,18 @@ rev_slide <- reverseSeries(x_slide, point_slide, res_slide, model_slide_r,
 
 ```
 
-```{r, include = FALSE}
+```{r, echo = FALSE}
 section("slide", c("cmp_slide", "rev_slide"))
 ```
 
-```{r}
+::: {.wide}
+```{r, fig.width = 12, fig.height = 6}
 report(cmp_slide, "sliding along a switching surface")
-plot_slide_1 <- comparisonPlot(cmp_slide, 0:1, "x and its gradient, entering and leaving a slide",
+plot_slide_1 <- comparisonPlot(cmp_slide, 0:1, "x and gradient, entering and leaving a slide",
                                rev_slide)
 plot_slide_1
 plot_slide_2 <- comparisonPlot(cmp_slide, 2L, "Second derivatives of x over a slide",
                                rev_slide)
 plot_slide_2
 ```
+:::

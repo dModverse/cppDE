@@ -1,0 +1,191 @@
+---
+title: "1. Model definition and solution"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE, fig.width = 8,
+                      fig.height = 3.6, out.width = "100%", dpi = 96, fig.retina = 2)
+do.call(knitr::read_chunk, list("helpers.R"))
+```
+
+```{r longFormat, include = FALSE}
+```
+
+```{r style, include = FALSE}
+```
+
+The chapter builds the decay chain $A \to B \to \emptyset$ of [Get started](cppDE.html) with
+several integrators, compiles the variants together and reads the result of `solveODE()`.
+
+```{r library}
+library(cppDE)
+library(ggplot2)
+```
+
+## Model definition
+
+[`cppODE()`](../reference/cppODE.html) takes the right-hand sides as a named character vector,
+the names being the states. Every other symbol is a parameter. `modelname` names the source file
+and the exported C symbols, `outdir` the directory of the source (default `tempdir()`). With
+`compile = FALSE` the source is written and nothing is compiled.
+
+```{r define}
+eqns  <- c(A = "-k1*A", B = "k1*A - k2*B")
+parms <- c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)
+times <- seq(0, 10, by = 0.1)
+
+chain <- cppODE(eqns, modelname = "g1_chain", outdir = tempdir(), compile = FALSE)
+attr(chain, "variables")
+attr(chain, "parameters")
+basename(attr(chain, "srcfile"))
+```
+
+`method` selects the integrator, `stepTrace = TRUE` records every step attempt (see
+[Diagnostics](#diagnostics)).
+
+```{r define-methods}
+adams <- cppODE(eqns, method = "adams", modelname = "g1_adams", compile = FALSE)
+rb4   <- cppODE(eqns, method = "rb4",   modelname = "g1_rb4",   compile = FALSE)
+tsit5 <- cppODE(eqns, method = "tsit5", modelname = "g1_tsit5", compile = FALSE)
+traced <- cppODE(eqns, deriv = FALSE, stepTrace = TRUE, modelname = "g1_traced",
+                 compile = FALSE)
+```
+
+Further arguments of `cppODE()`: `events`, `forcings` and `rootfunc` ([chapter 2](guide-events.html),
+[chapter 5](guide-steady-states.html)); `deriv`, `deriv2` and `fixed` ([chapter 3](guide-sensitivities.html));
+`derivMode` ([chapter 4](guide-reverse.html)); `profile = TRUE` compiles timers that print a
+summary per category to the standard error stream after each solve; `verbose = TRUE` reports the
+steps of code generation.
+
+## Expression language
+
+Right-hand sides, event values, roots and the equations of `cppFUN()` share one
+[expression language](../reference/expressions.html): R syntax with `+`, `-`, `*`, `/`, `^`,
+the common elementary functions, comparisons and logical operators that give 1 or 0, and the
+switches `piecewise()`, `ifelse()`, `Heaviside()` and `sign()`. `time` is the independent variable
+and `pi` the number.
+
+## Joint compilation
+
+[`compile()`](../reference/compile.html) builds the generated sources. With `output` they link into
+one shared object in the directory of the first source; `cores` runs the compiler jobs in parallel,
+`args` appends compiler or linker flags, `verbose = TRUE` shows the commands.
+
+```{r compile}
+compile(chain, adams, rb4, tsit5, traced, output = "guide1", cores = 2)
+```
+
+The flags of a model, such as the step trace, apply to the source of that model only.
+
+The environment variables `CPPDE_EXTRA_CXXFLAGS` and `CPPDE_EXTRA_LIBS` add flags to every
+compilation of the session. A model recompiled into a shared object of another name needs
+[`clearNativeSymbols()`](../reference/clearNativeSymbols.html); `compile()` calls it itself.
+
+## Solution and output
+
+[`solveODE()`](../reference/solveODE.html) takes the model, the output times and a named vector of
+initial values and parameters.
+
+```{r solve}
+out <- solveODE(chain, times, parms)
+str(out[c("time", "variable", "tangent")])
+out$variable[101, ]
+```
+
+| element | content |
+|:--|:--|
+| `time` | output times, `n_t` |
+| `variable` | states, `[n_t, n_x]` |
+| `tangent` | first-order sensitivities, `[n_t, n_x, n_s]` ([chapter 3](guide-sensitivities.html)) |
+| `hessian` | second-order sensitivities, `[n_t, n_x, n_s, n_s]` ([chapter 3](guide-sensitivities.html)) |
+| `cotangent`, `curvature`, `correction`, `store`, `adjoint` | reverse mode ([chapter 4](guide-reverse.html)) |
+| `diagnostics` | solver statistics |
+| `trace` | step trace, with `stepTrace = TRUE` |
+
+The initial values hold at time 0. With `includeTimeZero = TRUE` (default of `cppODE()`) the
+time 0 is added to the output grid, so a grid that starts later still starts from them.
+
+```{r time-zero}
+solveODE(chain, c(5, 10), parms)$time
+```
+
+## Tolerances and step control
+
+`abstol` and `reltol` (default `1e-6`) bound the local error of every step. `hini` sets the first
+step (default `0`, estimated), `maxsteps` the total number of steps, `maxattempts` the number of
+attempts without progress. `onFailure` decides what an unsuccessful solve returns: `"stop"`
+(default) is an error, `"warn"` and `"silent"` return the rows up to the time reached.
+
+```{r failure}
+part <- solveODE(chain, times, parms, maxsteps = 20, onFailure = "warn")
+part$diagnostics[c("return_code", "t_reached")]
+```
+
+## Diagnostics {#diagnostics}
+
+[`diagnostics()`](../reference/diagnostics.html) prints the statistics of a solve; the list itself
+is `$diagnostics`.
+
+```{r diagnostics}
+diagnostics(out)
+```
+
+A model compiled with `stepTrace = TRUE` returns one row per step attempt as `$trace`, with step
+size `h`, order `q` and error test value `dsm`; `traceFile` writes the same to a CSV file.
+
+```{r trace, fig.height = 3}
+tr <- solveODE(traced, times, parms)$trace
+head(tr[, c("t", "h", "q", "dsm", "mode")], 4)
+
+ggplot(tr, aes(t, h, color = factor(q))) +
+  geom_point(size = 1) +
+  scale_y_log10() +
+  labs(x = "time", y = "step size", color = "order")
+```
+
+The first step of `"bdf"` and `"adams"` follows CVODES: a state that starts at zero with a non-zero
+rate bounds it by about `abstol` over that rate, here $B$. From there the step grows by up to a
+factor of $10^4$, so the small start costs two or three steps
+([the first step](methods-stepping.html#the-first-step)).
+
+## Integration methods
+
+The chain is solved with every method, once as given and once stiff, with `k1 = 1000`.
+
+```{r methods}
+models <- list(bdf = chain, adams = adams, rb4 = rb4, tsit5 = tsit5)
+stiff  <- replace(parms, "k1", 1000)
+count  <- function(p) sapply(models, function(m)
+  unlist(solveODE(m, times, p)$diagnostics[c("accepted", "fevals", "setups")]))
+count(parms)
+count(stiff)
+```
+
+Further arguments of `solveODE()` and `cppODE()` adjust the integrator:
+
+- `maxOrder` bounds the order of `"bdf"` (1 to 5) and `"adams"` (1 to 12).
+- `stald = TRUE` lowers the BDF order when the step leaves the stability region of the order.
+- `useNDF = FALSE` (in `cppODE()`) takes the classical BDF coefficients instead of the NDF ones.
+- `sparse` (in `cppODE()`) chooses sparse LU by KLU (`TRUE`), dense LU (`FALSE`) or decides from
+  the sparsity of the Jacobian (`NULL`, default). KLU is optional at install time,
+  [Installation](installation.html).
+- `useDenseOutput = FALSE` (in `cppODE()`) makes `"rb4"` and `"tsit5"` land on every output time
+  instead of interpolating.
+
+```{r order}
+sapply(1:5, function(q) solveODE(chain, times, parms, maxOrder = q)$diagnostics$accepted)
+```
+
+### Choice of integrator
+
+| situation | choice | details |
+|:--|:--|:--|
+| stiff or unknown | `"bdf"` (default) | [Stepping: BDF](methods-stepping.html#backward-differentiation-formula-bdf) |
+| large, sparse Jacobian | `"bdf"` with `sparse = TRUE` | [Installation](installation.html) |
+| stiff, frequent events or switches, moderate size | `"rb4"`, one-step, restarts at full order | [Stepping: Rosenbrock](methods-stepping.html#rosenbrock-rb4), [Events](methods-events.html#restart-after-an-event) |
+| non-stiff | `"tsit5"` | [Stepping: Tsitouras](methods-stepping.html#tsitouras-tsit5) |
+| non-stiff, smooth, long horizon | `"adams"` | [Stepping: Adams-Moulton](methods-stepping.html#adams-moulton-adams) |
+| BDF unstable at high order on oscillating modes | `stald = TRUE` or `maxOrder` | [Step-size control](methods-stepping.html#adaptive-step-size-control) |
+| the CVODES implementation of SUNDIALS | `cvode()` | [chapter 8](guide-cvode.html), [cvode()](methods-cvode.html) |
+
+[← Get started](cppDE.html) | [2. Events, switches and forcings →](guide-events.html)

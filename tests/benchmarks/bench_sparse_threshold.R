@@ -312,7 +312,7 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
 
   # --- Plot 1: Runtime vs system dimension, colored by LU, shaped by sparsity ---
   p1 <- ggplot(results, aes(x = n_states, y = median_ms,
-                            colour = lu_label, shape = sparsity_band)) +
+                            color = lu_label, shape = sparsity_band)) +
     geom_point(size = 3, alpha = 0.8) +
     geom_errorbar(aes(ymin = pmax(0.1, median_ms - sd_ms),
                       ymax = median_ms + sd_ms),
@@ -325,7 +325,7 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
       subtitle = sprintf("Brusselator 2D with variable reach, t=[0,%g], %d reps", TEND, N_REPS),
       x = "System dimension (2N^2)",
       y = "Median runtime (ms)",
-      colour = "LU solver",
+      color = "LU solver",
       shape  = "Sparsity"
     ) +
     theme_minimal(base_size = 12) +
@@ -350,13 +350,13 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
 
   if (!is.null(speedup_data) && nrow(speedup_data) > 0) {
     p2 <- ggplot(speedup_data, aes(x = sparsity_pct, y = speedup,
-                                   colour = factor(n_states),
+                                   color = factor(n_states),
                                    shape = solver_label)) +
       geom_point(size = 3.5) +
-      geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
+      geom_hline(yintercept = 1, linetype = "dashed", color = "gray40") +
       annotate("text", x = 40, y = 1.05,
-               label = "breakeven", hjust = 0, colour = "grey40", size = 3.5) +
-      scale_colour_viridis_d(name = "Dimension") +
+               label = "breakeven", hjust = 0, color = "gray40", size = 3.5) +
+      scale_color_viridis_d(name = "Dimension") +
       labs(
         title = "KLU Speedup over LAPACK vs Jacobian Sparsity",
         subtitle = "Values > 1 = KLU wins",
@@ -378,17 +378,17 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
     )
 
     p3 <- ggplot(speedup_data, aes(x = n_states, y = speedup,
-                                   colour = solver_label, shape = solver_label)) +
+                                   color = solver_label, shape = solver_label)) +
       geom_point(size = 3) +
       geom_line(linewidth = 0.6, alpha = 0.6) +
-      geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
+      geom_hline(yintercept = 1, linetype = "dashed", color = "gray40") +
       facet_wrap(~ sparsity_band, ncol = 3) +
       scale_x_log10() +
       labs(
         title = "KLU Speedup vs System Size by Sparsity Band",
         x = "System dimension",
         y = "Speedup (dense / sparse)",
-        colour = "Solver",
+        color = "Solver",
         shape  = "Solver"
       ) +
       theme_minimal(base_size = 12) +
@@ -400,7 +400,7 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
 
   # --- Plot 4: LU setups ---
   p4 <- ggplot(results, aes(x = n_states, y = setups,
-                            colour = lu_label, shape = sparsity_band)) +
+                            color = lu_label, shape = sparsity_band)) +
     geom_point(size = 3, alpha = 0.8) +
     facet_wrap(~ solver_label, scales = "free_y") +
     scale_x_log10() +
@@ -408,7 +408,7 @@ if (requireNamespace("ggplot2", quietly = TRUE)) {
       title = "LU Setups (Factorizations) vs System Size",
       x = "System dimension (2N^2)",
       y = "Number of LU setups",
-      colour = "LU solver",
+      color = "LU solver",
       shape  = "Sparsity"
     ) +
     theme_minimal(base_size = 12) +

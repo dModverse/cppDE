@@ -602,7 +602,7 @@ p_cross <- ggplot(cross_data,
               alpha = 0.12, color = NA) +
   geom_line(linewidth = 0.8) +
   geom_point(size = 1.5) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "grey40") +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray40") +
   scale_x_continuous(trans = pseudo_log_trans,
                      breaks = sort(unique(cross_data$n_states))) +
   scale_y_continuous(trans = pseudo_log_trans) +

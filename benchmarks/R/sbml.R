@@ -479,7 +479,7 @@ sbml_to_ode <- function(sbml) {
     body <- paste(tm, collapse = " + ")
     row <- species[match(s, species$id), ]
     ## Kinetic laws are extents (amount/time).  A species in
-    ## concentration units therefore needs division by its volume.
+    ## concentration units therefore needs division by the compartment volume.
     if (row$is_amount) body else sprintf("(%s) / (%s)", body, row$compartment)
   }, "")
 

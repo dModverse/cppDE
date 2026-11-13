@@ -26,23 +26,17 @@
 #' the events at that time.
 #'
 #' A comparison `<`, `<=`, `>`, `>=` whose sides differ by an amount that reads
-#' a state or the time, in `piecewise()`, a logical operator or a product, and
-#' `Heaviside()` or `sign()` of such an amount, switch the right-hand side
-#' where that amount crosses zero. The solver locates the crossing as a root,
-#' to a few doubles whatever `roottol` says, and continues on the other branch,
-#' so a pulse such as `piecewise(1, time > ts && time <= t2, 0)` is not stepped
-#' over. Every method and derivative mode takes the jump of f there, second
-#' order included, also where a parameter moves the switching time. A switch
-#' adds no output row and is not limited by `maxroot`. Each branch is evaluated
-#' a step beyond the switch, so it has to be defined there. Where both branches
-#' push the solution onto the surface, it slides along it (Filippov): f is the
-#' mix `a*f_on + (1 - a)*f_off` that keeps the surface's argument at zero, and
-#' the slide ends where one branch turns away. `"kin - v*(x > 0)"` with
-#' `kin < v` holds x at 0, the limit of Michaelis-Menten kinetics for Km to 0.
-#' Several switches slide at once on the mix of all combinations of their
-#' branches whose weights keep every surface; a set of slides without such a
-#' mix stops with an error.
-#' `==` and `!=` are evaluated as written.
+#' a state or the time, inside `piecewise()`, a logical operator or a product,
+#' and `Heaviside()` or `sign()` of such an amount, switch the right-hand side where the amount crosses zero,
+#' for instance `"piecewise(1, time > ts && time <= t2, 0)"` or
+#' `"kin - v*(x > 0)"`. The solver locates each crossing as a root, so a short
+#' pulse is not stepped over, and the sensitivities take the jump. A switch adds
+#' no output row and is not limited by `maxroot`. Each branch is evaluated a step
+#' beyond the switch, so it has to be defined there. Where both branches push
+#' the solution onto the switching surface, it slides along it.
+#' [Events, switches and saltation](https://dmodverse.github.io/cppDE/articles/methods-events.html#sliding)
+#' describes how crossings and slides are solved. `==` and `!=` are evaluated as
+#' written.
 #'
 #' @param rhs Named character vector of ODE right-hand sides, see
 #'   [expressions]. Names are the state variables.
@@ -106,7 +100,13 @@
 #' @seealso [expressions] for the syntax of equations; [solveODE()] for
 #'   integration; [cvode()] for the
 #'   SUNDIALS-backed alternative; [cppFUN()] for algebraic functions;
-#'   the [methods](https://dmodverse.github.io/cppDE/articles/methods-codegen.html) for behaviour.
+#'   [Code generation](https://dmodverse.github.io/cppDE/articles/methods-codegen.html),
+#'   [Stepping and error control](https://dmodverse.github.io/cppDE/articles/methods-stepping.html),
+#'   [Forward sensitivities](https://dmodverse.github.io/cppDE/articles/methods-forward.html),
+#'   [Events, switches and saltation](https://dmodverse.github.io/cppDE/articles/methods-events.html)
+#'   [Reverse mode: the discrete adjoint](https://dmodverse.github.io/cppDE/articles/methods-reverse.html)
+#'   and [Events in reverse mode](https://dmodverse.github.io/cppDE/articles/methods-reverse-events.html)
+#'   on the cppDE site.
 #' @export
 cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = NULL,
                    compile = TRUE, modelname = NULL, outdir = tempdir(),

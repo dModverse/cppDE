@@ -1,0 +1,211 @@
+---
+title: "4. Reverse mode"
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", message = FALSE, fig.width = 8,
+                      fig.height = 3.6, out.width = "100%", dpi = 96, fig.retina = 2)
+do.call(knitr::read_chunk, list("helpers.R"))
+```
+
+```{r longFormat, include = FALSE}
+```
+
+```{r style, include = FALSE}
+```
+
+Reverse mode returns the gradient of a functional of the trajectory in one backward sweep, at a
+cost independent of the number of parameters. cppDE differentiates the discretization itself
+([discrete adjoint](methods-reverse.html)): forward and reverse derivatives agree to the
+integration tolerance, and to rounding with `sensErrCon = FALSE` in forward mode, which puts both
+on the step grid of the values.
+
+```{r library}
+library(cppDE)
+library(ggplot2)
+```
+
+## Model definition
+
+`derivMode` of [`cppODE()`](../reference/cppODE.html) selects the derivatives a model returns:
+`"forward"` (default) the tangent, `"reverse"` the cotangent, `"forward-reverse"` the cotangent
+together with tangent and curvature, `"forward-forward"` (the same as `deriv2 = TRUE`) the
+Hessian of every state. The chapter compares the reverse builds of the decay chain with a
+forward-forward build.
+
+```{r models}
+eqns  <- c(A = "-k1*A", B = "k1*A - k2*B")
+parms <- c(A = 1, B = 0, k1 = 0.5, k2 = 0.2)
+times <- seq(0, 10, by = 0.1)
+
+fwd  <- cppODE(eqns, derivMode = "forward-forward", modelname = "g4_fwd", compile = FALSE)
+rev  <- cppODE(eqns, derivMode = "reverse", modelname = "g4_rev", compile = FALSE)
+fr   <- cppODE(eqns, derivMode = "forward-reverse", modelname = "g4_fr", compile = FALSE)
+fast <- cppODE(c(x = "-k*x + sin(100*time)*q"), derivMode = "reverse",
+               modelname = "g4_fast", compile = FALSE)
+
+compile(fwd, rev, fr, fast, output = "guide4", cores = 2)
+```
+
+## Cotangents and gradients
+
+A reverse model takes a `cotangent` $w$ of shape [time, state] in
+[`solveODE()`](../reference/solveODE.html) and returns `$cotangent`, the gradient
+
+$$\frac{\partial}{\partial \theta} \sum_{t, i} w_{t,i}\, x_i(t)$$
+
+in the initial values and parameters $\theta$, one row each. A cotangent with a single non-zero
+entry gives one row of the sensitivity matrix.
+
+```{r cotangent}
+w <- matrix(0, length(times), 2, dimnames = list(NULL, c("A", "B")))
+w[101, "B"] <- 1
+outR <- solveODE(rev, times, parms, cotangent = w)
+outR$cotangent
+
+outF <- solveODE(fwd, times, parms)
+outF$tangent[101, "B", ]                # ∂B(10)/∂θ from forward mode
+outR$cotangent[, 1] - solveODE(fwd, times, parms, sensErrCon = FALSE)$tangent[101, "B", ]
+```
+
+A third dimension holds several seeds, swept back together on one forward pass; `$cotangent`
+then has one column per seed.
+
+```{r seeds}
+W <- array(0, c(length(times), 2, 2),
+           dimnames = list(NULL, c("A", "B"), c("A10", "B10")))
+W[101, "A", "A10"] <- 1
+W[101, "B", "B10"] <- 1
+solveODE(rev, times, parms, cotangent = W)$cotangent
+```
+
+## Gradient of an objective
+
+For $L = \sum_t (B(t) - y_t)^2$ the cotangent is $\partial L / \partial B(t) = 2\,(B(t) - y_t)$.
+It depends on the solution, so the forward pass runs first: with `keepStore = TRUE` and no
+cotangent, `solveODE()` returns the values and keeps the checkpoints as `$store`. A solve given
+the `store` at the same `times` and `parms` integrates nothing and runs the backward sweep alone.
+
+```{r objective}
+y   <- 0.4 * exp(-0.3 * times) * (1 - exp(-times))
+first <- solveODE(rev, times, parms, keepStore = TRUE)
+res <- first$variable[, "B"] - y
+
+wL <- cbind(A = 0, B = 2 * res)
+grad <- solveODE(rev, times, parms, cotangent = wL, store = first$store)$cotangent
+cbind(reverse = grad[, 1], forward = 2 * colSums(res * outF$tangent[, "B", ]))
+```
+
+A store may be reused for any number of cotangents and is freed at the next garbage collection,
+which does not count the checkpoint memory. [`releaseStore()`](../reference/releaseStore.html)
+frees it at once; a solve given a released store integrates again.
+
+```{r release}
+releaseStore(first$store)
+```
+
+## Control of the backward sweep
+
+By default the sweep runs on the step grid of the forward pass. A grid that resolves the states
+need not resolve their derivatives: in $\dot x = -k x + \sin(100\, t)\, q$ at $q = 0$ the state is
+smooth while $\partial x/\partial q$ follows the fast forcing, and the exact gradient of
+$\sum_t x(t)$ in $q$ has a closed form. Tighter tolerances reduce the error of the sweep without removing it, since
+the states set the grid.
+[`adjointControl()`](../reference/adjointControl.html), passed as `adjoint`, sets the sweep:
+`refine = TRUE` holds each step to `reltol` and `abstol` and sweeps a failing step again in
+substeps, `gradtol` adds an absolute tolerance on the contribution of each step to the gradient,
+and `trace = TRUE` returns the grid as `$adjoint`
+([Grid and refinement of the sweep](methods-reverse-checks.html)).
+
+```{r refine}
+tf <- seq(0, 2, by = 0.1)
+pf <- c(x = 1, k = 1, q = 0)
+Wf <- cbind(x = rep(1, length(tf)))
+exact <- sum((sin(100*tf) - 100*cos(100*tf) + 100*exp(-tf)) / 10001)
+
+val <- solveODE(fast, tf, pf, cotangent = Wf)
+tgt <- solveODE(fast, tf, pf, cotangent = Wf, abstol = 1e-12, reltol = 1e-12)
+chk <- solveODE(fast, tf, pf, cotangent = Wf,
+                adjoint = adjointControl(refine = TRUE, gradtol = 1e-9, trace = TRUE))
+c(exact = exact, valueGrid = val$cotangent[["q", 1]], tight = tgt$cotangent[["q", 1]],
+  refined = chk$cotangent[["q", 1]])
+c(steps = length(chk$adjoint$h), substeps = sum(chk$adjoint$substeps))
+```
+
+The refined sweep differentiates a slightly different trajectory than the one the forward pass
+computed. `$correction` is the first-order change of each seeded functional between the two, so
+value plus `correction` is the value whose gradient `$cotangent` is
+([value correction](methods-reverse-checks.html#value-correction)).
+
+```{r correction}
+chk$correction
+```
+
+`$adjoint` holds `time` and `h` of every step of the sweep, the adjoint state `lambda` at each step
+start, and under `refine` the `substeps` and `failures` per step.
+
+```{r trace, fig.height = 3}
+ggplot(data.frame(time = chk$adjoint$time, substeps = chk$adjoint$substeps),
+       aes(time, substeps)) +
+  geom_step() +
+  scale_y_log10()
+```
+
+## Hessian of an objective
+
+`derivMode = "forward-reverse"` differentiates the sweep along the `tangent`
+([forward over reverse](methods-forward-reverse.html)). Besides `$tangent` and `$cotangent` it
+returns `$curvature`, [state and parameter, direction, seed], the derivative of `$cotangent` along
+each tangent direction: under the default identity tangent, the Hessian of the seeded
+functional. A cotangent that depends on the solution, such as $2\,(B - y)$, passes the
+cotangent derivative along the tangent as the argument `curvature`, [time, state, seed, direction], here
+$2\,\partial B / \partial \theta$; without it the Hessian misses that term, the gradient not.
+
+```{r curvature}
+first <- solveODE(fr, times, parms, cotangent = wL)
+res   <- first$variable[, "B"] - y
+wL    <- cbind(A = 0, B = 2 * res)
+
+cv <- array(0, c(length(times), 2, 1, 4), dimnames = list(NULL, c("A", "B"), NULL, NULL))
+cv[, "B", 1, ] <- 2 * first$tangent[, "B", ]
+outFR <- solveODE(fr, times, parms, cotangent = wL, curvature = cv)
+H <- outFR$curvature[, , 1]
+H
+```
+
+The same Hessian from the forward-forward model, Gauss-Newton term plus residual term:
+
+```{r hessian-check}
+S  <- outF$tangent[, "B", ]
+H2 <- 2 * crossprod(S) + 2 * apply(res * outF$hessian[, "B", , ], c(2, 3), sum)
+max(abs(H - H2))
+```
+
+The first call computes residual and tangent, any cotangent serves there. `keepStore` is a
+reverse-only option, so a forward-reverse objective solves twice. A `tangent` of
+fewer columns gives Hessian-vector products, here the product with $v = (0, 0, 1, -1)$:
+
+```{r hvp}
+v  <- matrix(c(0, 0, 1, -1), 4, 1, dimnames = list(names(parms), "v"))
+cv <- array(0, c(length(times), 2, 1, 1), dimnames = list(NULL, c("A", "B"), NULL, NULL))
+cv[, "B", 1, 1] <- 2 * first$tangent[, "B", ] %*% v
+Hv <- solveODE(fr, times, parms, tangent = v, cotangent = wL, curvature = cv)$curvature[, , 1]
+cbind(Hv, H %*% v)
+```
+
+`sensErrCon = TRUE` (default) includes the tangents in the error test of the forward pass;
+`FALSE` gives a step grid that does not depend on the directions.
+
+## Choice of derivative mode
+
+| need | `derivMode` | result | details |
+|:--|:--|:--|:--|
+| sensitivities of every state, Gauss-Newton | `"forward"` | `$tangent` | [Forward sensitivities](methods-forward.html) |
+| gradient of one functional, many parameters | `"reverse"` | `$cotangent` | [Reverse mode](methods-reverse.html) |
+| derivatives on a grid that misses them | `"reverse"`, `adjointControl(refine = TRUE)` | `$cotangent`, `$correction` | [Grid and refinement](methods-reverse-checks.html) |
+| Hessian of one functional | `"forward-reverse"` | `$curvature` | [Forward over reverse](methods-forward-reverse.html) |
+| Hessian of every state | `"forward-forward"`, `deriv2 = TRUE` | `$hessian` | [Sensitivities](guide-sensitivities.html) |
+| events in reverse mode | any of the above | | [Events in reverse mode](methods-reverse-events.html) |
+| SUNDIALS adjoint | `cvode()` | `$cotangent` | [cvode() and the CVODES adjoint](methods-cvode.html#asa) |
+
+[← 3. Sensitivities](guide-sensitivities.html) | [5. Steady states →](guide-steady-states.html)

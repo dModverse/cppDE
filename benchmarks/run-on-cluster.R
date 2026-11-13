@@ -10,7 +10,7 @@
 
 ##  The problems are parsed locally and travel inside the transferred workspace,
 ##  so a compute node needs only cppDE, dMod2 and a C++ compiler. Each array task
-##  takes one shard of the problem list and returns its rows, merged here.
+##  takes one shard of the problem list and returns the rows of that shard, merged here.
 
 ##  Array tasks land on whatever nodes SLURM has free, so ratios stay valid,
 ##  both solvers of a cell running in one task, while absolute milliseconds are
@@ -66,7 +66,7 @@ OPT <- list(
   `min-sweep-states` = "8",
   ## Memory guards (R/harness.R) as a second line: SLURM already reserves the
   ## node's memory, so what these buy is that a model too large for the allocation
-  ## fails to build and is skipped rather than the whole task cancelled.
+  ## fails to build and is skipped rather than the whole task canceled.
   `compile-slots` = "",           # "" = min(bench-cores, 4); 0 disables
   `max-compile-gb` = "8",
   `max-worker-gb` = "",           # needs the `unix` package on the nodes
@@ -263,7 +263,7 @@ cat(sprintf("equivalent local run:\n  Rscript benchmarks/run-benchmarks.R --tier
             OPT$tier, OPT$modes, bench_cores))
 
 ## The job script: --jobscript as given, otherwise dMod2's Helix template with
-## its partition line set to --partition, written to JOBDIR at submission.
+## the partition line set to --partition, written to JOBDIR at submission.
 if (nzchar(OPT$jobscript)) {
   if (!file.exists(OPT$jobscript)) stop("--jobscript ", OPT$jobscript, " does not exist")
   if ("partition" %in% SET)
@@ -322,7 +322,7 @@ cat(sprintf("\nsubmitting '%s' to %s with %s\n  %d cores allocated, %d workers, 
 setwd(JOBDIR)
 job <- dMod2::distributedComputing(
   {
-    ## Runs on a compute node. `taskId` is this task's shard index and `cores` its
+    ## Runs on a compute node. `taskId` is this task's shard index and `cores` the
     ## allocation, of which --bench-cores run workers; the benchmark functions and
     ## `shards` arrive in the workspace.
 

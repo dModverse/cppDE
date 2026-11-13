@@ -15,7 +15,6 @@ knitr::opts_chunk$set(
   fig.width = 9,
   fig.height = 4,
   out.width = "100%",
-  dev = "svglite",
   message = FALSE,
   warning = FALSE
 )
@@ -35,13 +34,8 @@ equations in R. Derivatives with respect to the parameters are propagated
 forward on dual numbers or backward by a discrete adjoint, to first and second
 order.
 
-The [site](https://dmodverse.github.io/cppDE/) has the reference,
-[Getting started](https://dmodverse.github.io/cppDE/articles/cppDE.html), the
-[methods](https://dmodverse.github.io/cppDE/articles/methods-codegen.html)
-behind the generated code and the
-[benchmarks](https://dmodverse.github.io/cppDE/articles/benchmarks.html)
-against SUNDIALS CVODES. [dMod2](https://dmodverse.github.io/dMod2/) builds
-its modelling framework on cppDE.
+[dMod2](https://dmodverse.github.io/dMod2/) builds a modeling framework on
+cppDE.
 
 ## Features
 
@@ -56,17 +50,17 @@ its modelling framework on cppDE.
 - **Second order**: exact Hessians, forward over forward or forward over reverse
 - **Events and switches**: time- and root-triggered events, and `piecewise()`
   or comparisons on states and time located as roots; a switch whose branches
-  both push onto its surface slides along it (Filippov). First- and
+  both push onto the switching surface slides along it (Filippov). First- and
   second-order sensitivities take every jump by the saltation correction
 - **Code generation on an expression graph**: Jacobians and derivative
   contractions by automatic differentiation, emitted as straight-line C++, with
-  automatic sparsity detection and KLU factorisation for large systems
-- **`cvode()`**: the same models on SUNDIALS CVODES, with its forward
+  automatic sparsity detection and KLU factorization for large systems
+- **`cvode()`**: the same models on SUNDIALS CVODES, with forward
   sensitivities and adjoint
 - **`cppFUN()`**: the same code generation for algebraic functions, with
   Jacobian, Hessian and vector-Jacobian products
 - **Batched solving**: `solveODEBatch()` integrates many conditions in one
-  `.Call` over OpenMP threads, without the fork and serialisation of
+  `.Call` over OpenMP threads, without the fork and serialization of
   `parallel::mclapply()`
 
 ## Installation
@@ -78,49 +72,11 @@ devtools::install_github("dModverse/cppDE")
 
 Model code is generated and compiled at run time, so a **C++17 compiler** and
 **Python with SymPy** are required. Windows users need
-[Rtools](https://cran.r-project.org/bin/windows/Rtools/).
-
-### Optional system dependencies
-
-The package installs and runs without any system library. Three features are
-gated on one, detected by `./configure` at install time:
-
-| Feature | Needs | Without it |
-|:--|:--|:--|
-| `cvode()` backend | SUNDIALS (>= 6.0) | the native solvers are unaffected |
-| sparse Jacobian path | SuiteSparse / KLU | `sparse = TRUE` says how to enable it |
-| parallel `solveODEBatch()` | a toolchain with OpenMP | correct results, conditions run serially |
-
-The three are independent; `cppODE()` uses KLU without SUNDIALS. OpenMP needs
-nothing installed on Linux or with Rtools; on macOS, Apple's clang needs
-`libomp` (`brew install libomp`).
-
-Either install the libraries as system packages,
-
-| Platform | SUNDIALS | SuiteSparse / KLU |
-|:--|:--|:--|
-| Debian/Ubuntu | `sudo apt install libsundials-dev` | `sudo apt install libsuitesparse-dev` |
-| Fedora | `sudo dnf install sundials-devel` | `sudo dnf install suitesparse-devel` |
-| Arch | `sudo pacman -S sundials` | `sudo pacman -S suitesparse` |
-| macOS (Homebrew) | `brew install sundials` | `brew install suite-sparse` |
-
-or let cppDE build pinned releases into a per-user cache, which needs no
-administrator rights:
-
-```r
-cppDE::installLibs("sundials")         # or "suitesparse"
-```
-
-`./configure` finds the cache on every install, so the build is needed once.
-See `?installLibs` for building during the install, build options, and removing
-the cache.
-`CPPDE_EXTRA_CXXFLAGS` is appended to the flags of every model `compile()`.
-
-To see what was detected:
-
-```r
-writeLines(readLines(system.file("cvodeConfig.dcf", package = "cppDE")))
-```
+[Rtools](https://cran.r-project.org/bin/windows/Rtools/). SUNDIALS (for
+`cvode()`), SuiteSparse/KLU (for sparse Jacobians) and OpenMP (for parallel
+batches) are optional; [Installation and optional
+libraries](https://dmodverse.github.io/cppDE/articles/installation.html) lists
+how to install them and how to diagnose a failing build or solve.
 
 ## Example
 
@@ -142,46 +98,37 @@ out$tangent[11, , ]      # [state, parameter] at t = 10
 
 ## Documentation
 
-The site, <https://dmodverse.github.io/cppDE/>, has the reference and these articles:
+The site, <https://dmodverse.github.io/cppDE/>, has the reference and these
+articles:
 
-- [Getting started](https://dmodverse.github.io/cppDE/articles/cppDE.html): sensitivities of
-  first and second order, reverse-mode gradients, events, switches and sliding, forcings,
-  steady states, `cvode()` and `cppFUN()` on small models.
-- [Sensitivities across events, checked symbolically](https://dmodverse.github.io/cppDE/articles/saltation.html):
-  forward and reverse sensitivities across events, switches and sliding against symbolic
-  solutions to second order.
-- [Fitting magnetisation dynamics](https://dmodverse.github.io/cppDE/articles/fitCoPt.html): a
-  Landau-Lifshitz-Gilbert model fitted to pump-probe measurements by Gauss-Newton on forward
-  sensitivities, with a moving-average noise model, a multistart and profile likelihoods.
-- The methods in ten articles, and the benchmarks against SUNDIALS CVODES.
+- [Get started](https://dmodverse.github.io/cppDE/articles/cppDE.html)
+- [Guide](https://dmodverse.github.io/cppDE/articles/guide-model.html): every entry point, chapter by chapter
+- [Installation and optional libraries](https://dmodverse.github.io/cppDE/articles/installation.html)
+- [Methods](https://dmodverse.github.io/cppDE/articles/methods-overview.html):
+  what the generated code computes
+- Examples: [Sensitivities across events, checked
+  symbolically](https://dmodverse.github.io/cppDE/articles/saltation.html) and
+  [Fitting magnetization
+  dynamics](https://dmodverse.github.io/cppDE/articles/fitCoPt.html)
+- [Benchmarks](https://dmodverse.github.io/cppDE/articles/benchmarks.html)
+  against SUNDIALS CVODES
 
 ## License
 
-cppDE is distributed under the **MIT License**; see `LICENSE` / `LICENSE.md`
-for the full text.
+cppDE is distributed under the MIT License (`LICENSE`, `LICENSE.md`). Portions
+of the C++ solver core in `inst/include/cppde/` are derived from third-party
+projects and remain under their upstream licenses: the Nordsieck multistep
+stepper from [SUNDIALS/CVODE(S)](https://computing.llnl.gov/projects/sundials)
+(BSD-3-Clause, Lawrence Livermore National Security and Southern Methodist
+University), the Rosenbrock4 stepper from
+[Boost.Numeric.Odeint](https://www.boost.org/doc/libs/release/libs/numeric/odeint/)
+(Boost Software License 1.0, Karsten Ahnert, Mario Mulansky and Christoph
+Koke). Both licenses are permissive and compatible with MIT. Using or
+redistributing cppDE requires preserving their notices in
+[`inst/COPYRIGHTS`](https://github.com/dModverse/cppDE/blob/master/inst/COPYRIGHTS),
+which lists the files concerned and reproduces the license texts, and the
+attribution blocks in the headers.
 
-Portions of the C++ solver core in `inst/include/cppde/` are derived from
-third-party projects and remain subject to their upstream licenses:
-
-- The Nordsieck multistep stepper (BDF/NDF and Adams-Moulton) in
-  `cppde_multistepper.hpp`, `cppde_multistepper_controller.hpp` and
-  `cppde_newton.hpp` is a port of the corresponding routines in
-  [SUNDIALS/CVODE(S)](https://computing.llnl.gov/projects/sundials)
-  (Copyright © 2002-2024 Lawrence Livermore National Security and Southern
-  Methodist University), distributed under the **BSD-3-Clause** license.
-- The Rosenbrock4 stepper architecture in `cppde_rosenbrock4.hpp` (and the
-  surrounding stage-matrix, dense-output and stepper-protocol infrastructure)
-  is derived from
-  [Boost.Numeric.Odeint](https://www.boost.org/doc/libs/release/libs/numeric/odeint/)
-  by Karsten Ahnert, Mario Mulansky and Christoph Koke, distributed under the
-  **Boost Software License 1.0**.
-
-Full upstream copyright notices and license texts are reproduced in
-[`inst/COPYRIGHTS`](https://github.com/dModverse/cppDE/blob/master/inst/COPYRIGHTS). Both upstream licenses are permissive and
-compatible with MIT; using or redistributing cppDE requires preserving the
-notices in `inst/COPYRIGHTS` and the relevant header attribution blocks.
-
-The optional system libraries linked at run time are not vendored: SUNDIALS
-(BSD-3-Clause) for the `cvode()` backend and SuiteSparse-KLU (LGPL-2.1+) for
-the sparse-Jacobian path. Their own licenses govern the libraries at the
-user's installation site.
+The optional libraries linked at run time are not vendored: SUNDIALS
+(BSD-3-Clause) and SuiteSparse/KLU (LGPL-2.1+) are governed by their own
+licenses at the site where they are installed.

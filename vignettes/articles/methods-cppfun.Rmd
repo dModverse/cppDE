@@ -1,42 +1,42 @@
 ---
-title: "cppFUN() and its derivative directions"
+title: "Derivative directions of cppFUN()"
 ---
 
-`cppFUN()` compiles a system of algebraic expressions
+Here $x$ denotes the variables of the function, not ODE states; other
+symbols are those of the [notation table](methods-overview.html#notation).
+R interface: [`cppFUN()`](../reference/cppFUN.html) and
+[`evaluateMany()`](../reference/evaluateMany.html).
+
+`cppFUN()` compiles an algebraic system
 []{#eq-funcpp}
 $$
   y_i = g_i(x_1, \dots, x_{n_x}, p_1, \dots, p_{n_p}),
-  \qquad i = 1, \dots, n_y, \tag{52}
+  \qquad i = 1, \dots, n_y, \tag{1}
 $$
-with its first and second derivatives and no time integration. The
-variables $x$ are the rows of an $n_{\mathrm{obs}} \times n_x$ matrix,
-one per observation; the parameters $p$ are shared by all rows. Typical
-uses are observation maps, which connect integrator output to data and
-whose derivatives enter the gradient of a likelihood, and
-reparametrisations $p = \Phi(\theta)$, whose Jacobian is the tangent of
-[(13)](methods-forward.html#eq-sensitivity-theta).
+with the first and second derivatives of $g$, named as the derivatives
+of `solveODE()`. The variables $x$ are the rows of an
+$n_{\mathrm{obs}} \times n_x$ matrix, one per observation; the parameters
+$p$ are shared by all rows. Typical uses: observation maps and
+reparametrizations $(x_0, p) = \Phi(\theta)$, the Jacobian being the
+tangent of [Forward (2)](methods-forward.html#eq-sensitivity-theta).
 
-The expressions are parsed into the [expression graph](methods-codegen.html#codegen), from which the generator emits one function template
-over the scalar type that evaluates $g$ for one observation, instantiated
-on `double`, on `cppde::dual<double>` and on the nested
-dual `cppde::dual2nd<double>`. The vector-Jacobian product is
-a reverse sweep on the same graph, emitted as a second template and
-instantiated on `double` and on the dual.
+From the [expression graph](methods-codegen.html#codegen) the generator
+emits two templates over the scalar type:
 
-Every entry runs compiled code. With the default `compile = FALSE`
-the constructor only writes the source; the object must be passed to
-`compile()` before use, and its functions stop with an error
-until then.
+- $g$ for one observation, instantiated on `double`, `cppde::dual<double>`
+  and the nested `cppde::dual2nd<double>`;
+- the vector-Jacobian product as a reverse sweep on the same graph,
+  instantiated on `double` and the dual.
+
+With the default `compile = FALSE` the constructor only writes the
+source, and the functions stop with an error until `compile()`.
 
 ## Entry points and derivative directions
 
-`derivMode` names the derivative products built, any of
-`"forward"`, the default, `"reverse"` and
-`"forward-reverse"`, which implies `"reverse"`. A product left
-out costs no entries and no compile time. `deriv`
-and `deriv2` switch the first- and second-order entries;
-`deriv2 = TRUE` requires `"forward"`. The R functions of the returned
-object and the compiled entries they call are
+`derivMode` names the products built, any of `"forward"` (default),
+`"reverse"` and `"forward-reverse"` (implies `"reverse"`); a product left
+out costs no entries and no compile time. `deriv` and `deriv2` switch the
+first- and second-order entries; `deriv2 = TRUE` requires `"forward"`.
 
 | R function | direction | compiled entry |
 |:-------------------------|:--------|:------------|
@@ -48,77 +48,61 @@ object and the compiled entries they call are
 | `vjp(x, p, cotangent)` | reverse | `_vjp_c` |
 | `vjp(x, p, cotangent, tangentX, tangentP, curvature)` | forward-reverse | `_vjp_ad_c` |
 
-Table: R functions of a `cppFUN()` object and the compiled entries they
-call, each prefixed by the model name; `x` and `p` stand for the
-arguments `vars` and `params`. The `_c` entries are `.Call` interfaces
-that take their arguments by reference; `_eval`, `_eval_ad`, `_eval_ad2`
-and `_vjp` also exist as `.C` interfaces, used only for a shared object
-without the `.Call` symbol. Under `"forward-reverse"`, `_vjp_ad` is also
-a plain C entry that native code can call from its own threads.
+Table: R functions and compiled entries, prefixed by the model name;
+`x`, `p` stand for `vars`, `params`. `_c` entries are `.Call` interfaces
+taking arguments by reference; `.C` versions of `_eval`, `_eval_ad`,
+`_eval_ad2` and `_vjp` serve a shared object without the `.Call` symbol.
+Under `"forward-reverse"`, `_vjp_ad` is also a thread-safe plain C
+entry.
 
-**Forward direction.** `jac` evaluates $g$ on duals and
-returns $\partial y/\partial\theta$ as an array
-$[n_{\mathrm{obs}}, n_y, n_\theta]$; `hess` evaluates it on
-nested duals and returns $\partial^2 y/\partial\theta^2$ as
-$[n_{\mathrm{obs}}, n_y, n_\theta, n_\theta]$. The directions $\theta$
-are set by the tangents of the next section. Without them the identity
-over the variables and the differentiated parameters is used, which
-gives the Jacobian or Hessian with respect to $(x, p)$.
-`evaluate` returns value and derivatives from one pass as
-`y`, `tangent` and, with `deriv2 = TRUE`,
-`hessian`; separate calls of `func`, `jac` and
-`hess` would evaluate $g$ up to three times.
-`evaluateBatch` runs `evaluate` over a list of argument
-sets in one call, distributed over OpenMP threads with dynamic
-scheduling, and falls back to a loop for fewer than two sets.
-`evaluateMany()` does the same for argument sets each with its own
-`cppFUN()` object, in one parallel region.
+**Forward direction.** `jac` evaluates $g$ on duals, `hess` on nested
+duals; they return arrays $[n_{\mathrm{obs}}, n_y, M]$ and
+$[n_{\mathrm{obs}}, n_y, M, M]$. Tangents (next section) set the
+directions $\theta \in \mathbb{R}^M$, by default the identity over the
+variables and differentiated parameters. `evaluate` returns `y`,
+`tangent` and, with `deriv2 = TRUE`, `hessian` from one pass instead of up
+to three. `evaluateBatch` runs `evaluate` over a list of argument sets on
+OpenMP threads with dynamic scheduling, as a loop for fewer than two sets.
+`evaluateMany()` does the same for one argument set each of several
+`cppFUN()` objects, in one parallel region.
 
 **Reverse direction.** For a cotangent $w$ of the outputs,
 $[n_{\mathrm{obs}}, n_y]$ or $[n_{\mathrm{obs}}, n_y, n_{\mathrm{seed}}]$,
-`vjp` returns
+`vjp` returns the value $y$ and
 []{#eq-funcpp-vjp}
 $$
   (w_x)_{o j s} = \sum_{i} w_{o i s}\,
       \frac{\partial g_i}{\partial x_j}(x_o, p),
   \qquad
   (w_p)_{k s} = \sum_{o} \sum_{i} w_{o i s}\,
-      \frac{\partial g_i}{\partial p_k}(x_o, p), \tag{53}
+      \frac{\partial g_i}{\partial p_k}(x_o, p), \tag{2}
 $$
-as `cotangentX` and `cotangentP`, together with the value
-$y$; the parameter part sums over the observations, which share $p$.
-The contraction is one reverse sweep per observation and cotangent
-column, at a cost independent of the number of upstream parameters, and
-forms neither the Jacobian nor the Hessian. Statements of the sweep
-that do not depend on the cotangent are evaluated once per observation,
-outside the loop over cotangent columns.
+as `cotangentX` and `cotangentP`. The contraction is one reverse sweep per
+observation and cotangent column, at a cost independent of the number of
+upstream parameters, without forming Jacobian or Hessian. Statements independent of
+the cotangent run once per observation.
 
-Given the tangents $v_x$ and $v_p$ of the inputs in $n_{\mathrm{dir}}$
-directions as `tangentX` and `tangentP`, or the
-derivative $\dot w$ of the cotangent along them as `curvature`,
-`vjp` runs the same template on duals and additionally returns
+With input tangents $v_x$, $v_p$ in $n_{\mathrm{dir}}$ directions
+(`tangentX`, `tangentP`) or the derivative $\dot w$ of the cotangent along
+them (`curvature`), `vjp` runs the same template on duals and also returns
 []{#eq-funcpp-vjp-curvature}
 $$
   \frac{\mathrm{d}}{\mathrm{d}v}\bigl(w^{\mathsf T} J\bigr)
     = w^{\mathsf T}\,\frac{\partial J}{\partial (x, p)}\,v
       + \dot w^{\mathsf T} J,
-  \qquad J = \frac{\partial g}{\partial (x, p)}, \tag{54}
+  \qquad J = \frac{\partial g}{\partial (x, p)}, \tag{3}
 $$
-as `curvatureX` and `curvatureP`. This is forward over
-reverse (see [second derivatives](methods-forward-reverse.html)): an observation map contributes its
-curvature to a backward chain without forming a Hessian.
+as `curvatureX` and `curvatureP`, forward over reverse
+([second derivatives](methods-forward-reverse.html)) without a Hessian.
 
 ## Tangent, hessian, cotangent and curvature
 
-A map has a tangent and a Hessian, a functional a cotangent and a
-curvature. For the upstream map $\Phi: \theta \mapsto (x, p)$ these are
-the `tangent` $\partial\Phi(\theta)$ and the `hessian`
-$\partial^2\Phi(\theta)$; for a scalar functional $L$ of the outputs
-$y$, the `cotangent` $\partial L(y)$ and the `curvature`
-$\partial^2 L(y)\,\partial y$, the derivative of the cotangent along the
-tangent. An argument and its result share a name (table below): a forward argument lives on the inputs and
-its result on the outputs, a reverse argument on the outputs and its
-result on the inputs.
+The upstream map $\Phi: \theta \mapsto (x, p)$ has the `tangent`
+$\partial\Phi(\theta)$ and the `hessian` $\partial^2\Phi(\theta)$. A
+scalar functional $L$ of the outputs has the `cotangent` $\partial L(y)$
+and the `curvature` $\partial^2 L(y)\,\partial y$, the derivative of the
+cotangent along the tangent. Forward arguments live on the inputs,
+reverse arguments on the outputs, results on the other side.
 
 | `solveODE()` | `cppFUN()` argument | `cppFUN()` result |
 |:-------------|:--------------------|:------------------|
@@ -127,43 +111,35 @@ result on the inputs.
 | `cotangent` | `cotangent`            | `cotangentX`, `cotangentP` |
 | `curvature` | `curvature`            | `curvatureX`, `curvatureP` |
 
-Table: Names of the four derivative objects in R. `solveODE()` uses one
-name for the argument and the element of its result; the `cppFUN()`
-results are elements of the lists that `evaluate` and `vjp` return.
+Table: The four derivative objects in R. `solveODE()` uses one name for
+argument and result; `cppFUN()` results are elements of the lists from
+`evaluate` and `vjp`.
 
-Forward over forward takes the `hessian` of the inputs and
-returns that of the outputs, the second derivatives of every output in
-every pair of tangent directions. Forward over reverse takes the
-`curvature` of the outputs and returns that of the inputs, the
-Hessian of the seeded functional applied to the tangent, or, with the
-identity tangent, the columns of that Hessian.
+Forward over forward maps input to output `hessian` in every pair of
+tangent directions. Forward over reverse maps output to input `curvature`,
+the Hessian of the seeded functional applied to the tangent; the identity
+tangent gives the Hessian columns.
 
-**Chain rule.** `cppFUN()` takes the tangent and the hessian
-of its inputs in two blocks each:
+**Chain rule.** Tangent and hessian of the inputs come in two blocks each:
 
-- `tangentX[obs, name, theta]`: $\partial x_i/\partial\theta_a$,
-  per observation row, variable and direction $\theta_a$;
-- `tangentP[name, theta]`: $\partial p_j/\partial\theta_a$, the
-  same for all observations;
+- `tangentX[obs, name, theta]`: $\partial x_i/\partial\theta_a$, per observation row;
+- `tangentP[name, theta]`: $\partial p_j/\partial\theta_a$, shared by all observations;
 - `hessianX[obs, name, theta1, theta2]`:
-  $\partial^2 x_i/\partial\theta_a\partial\theta_b$, optional, zero by
-  default;
+  $\partial^2 x_i/\partial\theta_a\partial\theta_b$, optional, zero by default;
 - `hessianP[name, theta1, theta2]`:
-  $\partial^2 p_j/\partial\theta_a\partial\theta_b$, optional, zero by
-  default.
+  $\partial^2 p_j/\partial\theta_a\partial\theta_b$, optional, zero by default.
 
-They may also be supplied as the attributes `deriv` and
-`deriv2` of the variables and parameters. Tangent rows of
-parameters in `fixed` are zero, and symbols absent from the
-tangent contribute zero.
+Attributes `deriv` and `deriv2` of variables and parameters are an
+alternative. Parameters in `fixed` and symbols absent from the tangent
+have zero tangent rows.
 
 With the tangent $\partial\Phi \in \mathbb{R}^{n_{\mathrm{obs}} \times
-n_{\mathrm{diff}} \times n_\theta}$ over the
+n_{\mathrm{diff}} \times M}$ over the
 $n_{\mathrm{diff}} = n_x + n_p$ inputs and the hessian $\partial^2\Phi$,
 the chain rule gives the Jacobian
 $$
   \frac{\partial y}{\partial\theta}\bigg|_{\mathrm{obs}}
-    = J\bigl(x_{\mathrm{obs}}, p\bigr) \cdot \partial\Phi_{\mathrm{obs}}, \tag{55}
+    = J\bigl(x_{\mathrm{obs}}, p\bigr) \cdot \partial\Phi_{\mathrm{obs}}, \tag{4}
 $$
 and the Hessian of output $i$
 $$
@@ -171,32 +147,27 @@ $$
     = \partial\Phi_{\mathrm{obs}}^{\mathsf T} \, H_i\bigl(x_{\mathrm{obs}}, p\bigr) \,
       \partial\Phi_{\mathrm{obs}}
     + \sum_{j} J_{i, j}\bigl(x_{\mathrm{obs}}, p\bigr) \,
-        \partial^2\Phi_{\mathrm{obs}, j, \cdot, \cdot}, \tag{56}
+        \partial^2\Phi_{\mathrm{obs}, j, \cdot, \cdot}, \tag{5}
 $$
-whose second term vanishes when $\Phi$ is affine.
-
-Neither $J$ nor $H$ is formed: both contractions follow from seeding
-the tangent slots of the duals. Each input scalar $x_i$ becomes
+whose second term vanishes for affine $\Phi$. Neither $J$ nor $H$ is
+formed; seeding the dual tangent slots gives both contractions. Each
+input becomes
 $$
   \tilde x_i = (x_i + \partial\Phi_{i,\cdot}\,\varepsilon_{\mathrm{in}})
              + \bigl(\partial\Phi_{i,\cdot}
                      + \partial^2\Phi_{i,\cdot,\cdot}\,\varepsilon_{\mathrm{in}}\bigr)\,\varepsilon_{\mathrm{out}},
 $$
-a nested dual whose inner tangent slots hold $\partial x_i/\partial\theta$
-and whose outer tangent slot $k$ is an inner dual with value
-$\partial x_i/\partial\theta_k$ and inner tangents
-$\partial^2 x_i/\partial\theta_k\partial\theta$. The multiplication rule
-then propagates the $\partial\Phi^{\mathsf T} H\, \partial\Phi$ and
-$J \cdot \partial^2\Phi$ terms in one evaluation; the inner tangents of
-$\tilde y$ are $\partial y/\partial\theta$, and the cross slots
-$\tilde y[k][m]$ are $\partial^2 y/\partial\theta_k\partial\theta_m$.
+a nested dual: inner tangents $\partial x_i/\partial\theta$, outer slot
+$k$ an inner dual with value $\partial x_i/\partial\theta_k$ and inner
+tangents $\partial^2 x_i/\partial\theta_k\partial\theta$. One evaluation
+propagates both terms of (5). The inner tangents of $\tilde y$ are
+$\partial y/\partial\theta$, the cross slots $\tilde y[k][m]$ are
+$\partial^2 y/\partial\theta_k\partial\theta_m$.
 
-## Pass-through of unmodelled inputs
+## Pass-through of unmodeled inputs
 
-With `attach.input = TRUE`, inputs that do not appear among the
-variables and parameters of [(52)](#eq-funcpp) are appended to the output
-unchanged: their values are copied, their Jacobian rows are zero for a
-variable and the identity for a parameter, and their Hessian rows are
-zero. An observation map then need not repeat every column of the
-integrator output as an identity, as with the partial-shape
-`tangent` of `solveODE()`.
+With `attach.input = TRUE`, inputs that are not variables or parameters of
+[(1)](#eq-funcpp) pass to the output unchanged: values copied, Jacobian
+rows zero for a variable and the identity for a parameter, Hessian rows
+zero. An observation map then need not repeat every integrator column as
+an identity, as with the partial-shape `tangent` of `solveODE()`.

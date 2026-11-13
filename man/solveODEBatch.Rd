@@ -176,4 +176,6 @@ if (codegenAvailable()) {
 \seealso{
 \code{\link[=solveODE]{solveODE()}}; \code{\link[=prepareBatch]{prepareBatch()}} and \code{\link[=solveBatch]{solveBatch()}} for repeated
 solves of the same conditions; \code{\link[=batchAvailable]{batchAvailable()}}.
+\href{https://dmodverse.github.io/cppDE/articles/guide-batches.html}{Batches of conditions} in the
+Guide.
 }

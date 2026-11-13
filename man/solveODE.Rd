@@ -152,6 +152,12 @@ derivative of each \code{cotangent} entry along the tangent. Under the identity
 tangent the columns are the Hessian of the seeded functional. The order of
 the last two dimensions is that of a Hessian, not that of the argument
 \code{curvature}.
+\item \code{correction}: under \code{derivMode = "reverse"} with
+\code{adjointControl(refine = TRUE)}, length \code{n_seed}, named as the seed
+columns: the first-order change of each seeded functional from the
+computed trajectory to the one the refined sweep differentiated. Value
+plus \code{correction} is the value whose gradient \code{cotangent} is. See
+\href{https://dmodverse.github.io/cppDE/articles/methods-reverse-checks.html#value-correction}{The value of the refined sweep}.
 \item \code{diagnostics}: solver statistics, printed by \code{\link[=diagnostics]{diagnostics()}}:
 \code{return_code} (0 on success, negative codes as in SUNDIALS CVODE),
 \code{message}, \code{accepted} and \code{rejected} (step counts), \code{fevals}, \code{jevals}
@@ -267,4 +273,10 @@ if (codegenAvailable()) {
 \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} for model compilation;
 \code{\link[=solveODEBatch]{solveODEBatch()}} for many conditions in one call; \code{\link[=adjointControl]{adjointControl()}};
 \code{\link[=forcingValues]{forcingValues()}}; \code{\link[=diagnostics]{diagnostics()}} for printing solver statistics.
+\href{https://dmodverse.github.io/cppDE/articles/methods-stepping.html}{Stepping and error control},
+\href{https://dmodverse.github.io/cppDE/articles/methods-forward.html}{Forward sensitivities},
+\href{https://dmodverse.github.io/cppDE/articles/methods-reverse.html}{Reverse mode: the discrete adjoint} and
+\href{https://dmodverse.github.io/cppDE/articles/methods-forward-reverse.html}{Second derivatives: forward over reverse}
+on the cppDE site; \href{https://dmodverse.github.io/cppDE/articles/installation.html}{Installation and optional libraries}
+for diagnosing a failing solve.
 }

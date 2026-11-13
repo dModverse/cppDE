@@ -45,7 +45,7 @@ containing no sparse system cannot see a regression in the KLU path, and
 one containing no event cannot see a regression in event handling. So
 the problems are not picked by size but by **trait coverage**:
 
-| trait | why it is its own class |
+| trait | why it is a separate class |
 |---|---|
 | `stiff-extreme` | rate constants spanning many decades |
 | `stiff-moderate` | stiff without extreme scale separation |
@@ -67,7 +67,7 @@ calls); the regime traits that cannot be read off the equations
 
 Tier membership is an **explicit list**, not a computed cover, so that
 numbers stay comparable across runs as problems are added. What *is*
-computed is the check: every run prints its coverage and warns loudly if
+computed is the check: every run prints the coverage and warns loudly if
 a trait has dropped to zero.
 
 ```
@@ -120,8 +120,8 @@ Two runs meant two result folders that could not be read against each
 other, the pinned times came from a different process, a different
 build, and often a different machine than the auto-detected ones. Now
 both live in one `results.csv`, distinguished by the **`pinned`** column
-(`auto` / `dense` / `sparse`), and every pinned cell shares its worker
-and its neighbourhood with the auto cell it has to be compared to.
+(`auto` / `dense` / `sparse`), and every pinned cell shares the worker
+and the neighborhood of the auto cell it has to be compared to.
 
 | | |
 |---|---|
@@ -176,7 +176,7 @@ intracellular processes*, **Bioinformatics** 35(17):3073–3082,
 <https://github.com/Benchmarking-Initiative/Benchmark-Models-PEtab>.
 
 `fetch-models.R` clones it into `benchmarks/cache/` (git-ignored; the
-models keep their own licence and are never vendored into this repo).
+models keep their own license and are never vendored into this repo).
 
 The models are read **directly from their SBML**, not transcribed by
 hand: `R/sbml.R` is a small SBML reader covering exactly what the
@@ -199,12 +199,12 @@ not exercise:
 
 Robertson, HIRES, OREGO (Oregonator), E5, Van der Pol at μ = 1000,
 Pollution (20 species / 25 reactions), plus two problems whose size is a
-free knob: a 1-D Brusselator method-of-lines discretisation and a
+free knob: a 1-D Brusselator method-of-lines discretization and a
 FitzHugh–Nagumo chain, both with banded Jacobians for the sparse path.
 
 ---
 
-## Modelling decisions, and why
+## Modeling decisions, and why
 
 These are the points where a PEtab problem does not map one-to-one onto
 "integrate this ODE". Each is applied identically to both backends, so
@@ -247,7 +247,7 @@ integrate the same one.
 
 **Conditions.** `--conditions all` runs every experimental condition of
 each model, which is the realistic unit of work for a fitting run: one
-optimiser step solves them all. The default is one condition per model
+optimizer step solves them all. The default is one condition per model
 (the one with the richest finite time grid). The right-hand side is
 compiled once and reused across conditions, except where condition
 values change how a `piecewise` folds, which is detected and handled.
@@ -265,7 +265,7 @@ values change how a `piecewise` folds, which is detected and handled.
 | `01/02-work-precision` | how much time does a given accuracy cost? (the standard ODE-solver diagram; down-and-left is better) |
 | `03-speedup` | per problem, how does cppDE compare to CVODE? Bars grow from parity, on a log₂ ratio axis |
 | `04-scaling` | how does cost grow with the number of states? |
-| `05-sens-overhead` | what does one solve-with-gradient cost, in units of plain solves? The grey line is the *M+1* cost of finite differences |
+| `05-sens-overhead` | what does one solve-with-gradient cost, in units of plain solves? The gray line is the *M+1* cost of finite differences |
 | `06-summary` | one geometric-mean number per mode, over every matched cell |
 | `07-sens2-cost` | what a full Hessian costs versus M: cppDE only, a cost curve rather than a comparison |
 
@@ -295,7 +295,7 @@ run.
 | script | via | placement |
 |---|---|---|
 | `run-on-cluster.R` | `distributedComputing()` on `slurmCluster()` | a SLURM array job; the scheduler reserves cores and memory |
-| `run-on-hosts.R` | `distributedComputing()` on `sshNodes()` | this machine or plain ssh hosts; a host runs its shards in turn in the background, placed by you |
+| `run-on-hosts.R` | `distributedComputing()` on `sshNodes()` | this machine or plain ssh hosts; a host runs the shards assigned to it in turn in the background, placed by you |
 
 ```sh
 Rscript benchmarks/run-on-hosts.R --dry-run --tier full --shards 4
@@ -312,7 +312,7 @@ Rscript benchmarks/run-on-cluster.R --collect --jobname cppde_bench
 
 Both scripts run `distributedComputing()` from `results/.jobs/`, which
 holds the job's manifest (`<jobname>_folder/job.rds`) and, for
-`localhost`, its job folder. `--collect` recovers the job from there and
+`localhost`, the job folder. `--collect` recovers the job from there and
 replays the submission's options from `results/.jobs/<jobname>.hosts.rds`
 (`<jobname>.rds` for the cluster), so it needs nothing but the job name.
 It merges the shards into a normal results folder (CSV, README and
@@ -320,13 +320,13 @@ figures) tagged `_hosts_` or `_cluster_`.
 
 `run-on-cluster.R` submits through a job script template: by default
 dMod2's Helix template, `system.file("slurm", "helix.sh", package =
-"dMod2")`, with its `#SBATCH --partition=` line set to `--partition` and
+"dMod2")`, with the `#SBATCH --partition=` line set to `--partition` and
 written to `results/.jobs/<jobname>.sh`. `--jobscript` names a template
 of your own, see `?dMod2::slurmTemplate`.
 
 Without a scheduler, **placement is entirely yours**. `--machines` names
 each host once and `--shards n` deals *n* shards over them in turn. A
-host gets `--bench-cores` cores and runs its shards one after the other,
+host gets `--bench-cores` cores and runs the shards dealt to it one after the other,
 each with one worker per core, so one host with `--shards 4` runs four
 shards in sequence; `--submit` prints the shards and workers per host.
 Keep `--bench-cores` inside the machine, remembering that a worker can
@@ -344,7 +344,7 @@ missing. `localhost` runs on this machine without ssh. Every other host
 runs `Rscript` through a *non-login* ssh shell, so whatever a module
 system or `~/.profile` sets up has to be reachable from `~/.bashrc`, and
 `--libs` puts library paths in front. Authentication must be
-non-interactive, a key or an agent. Each shard writes its output to
+non-interactive, a key or an agent. Each shard writes the output to
 `<jobname>_folder/<k>/task_<i>.out`, below `results/.jobs/` for
 `localhost` and below the home directory on a remote host; `--log` tails
 these files.
@@ -413,8 +413,8 @@ turns any of these refusals into a warning.
 
 Under SLURM the allocation already reserves memory, so there the guards
 are a second line: what they add is that an oversized model fails to
-build and is skipped, rather than the task being cancelled for exceeding
-its reservation.
+build and is skipped, rather than the task being canceled for exceeding
+the reservation.
 
 ---
 
@@ -476,7 +476,7 @@ That matters because a benchmark under load is not simply "the same
 numbers, later". Cores on a socket share last-level cache and memory
 bandwidth, SMT siblings share execution units, and, usually the largest
 effect, CPUs clock down as more cores go busy, so a core that runs at
-its turbo ceiling alone runs measurably slower with twenty neighbours.
+the turbo ceiling alone runs measurably slower with twenty neighbors.
 
 Those effects are largely *uniform*, so a **ratio** between two solvers
 on the same cell cancels much of them, which is why cells are never
@@ -511,7 +511,7 @@ The value is written to the `cores` column of `results.csv` and to
 fact. Workers get `OMP_NUM_THREADS=1` so a threaded BLAS cannot
 oversubscribe on top of the fan-out.
 
-Translating the SBML models is parallelised too, unconditionally, it
+Translating the SBML models is parallelized too, unconditionally, it
 happens before anything is timed.
 
 ---
@@ -524,7 +524,7 @@ the expression-graph generator. The workarounds in `R/sbml.R` remain:
 1. **Parameter names that are C++ reserved words generate uncompilable
    code.** SymPy's C++ printer renames a reserved word by appending an
    underscore (`default` → `default_`), while cppDE declares the
-   parameter under its original name. The generated file then fails with
+   parameter under the original name. The generated file then fails with
    `'default_' was not declared in this scope`. This is not exotic: the
    SBML default compartment is called `default`, so it affects a large
    share of the collection. *Workaround:* `san_id()` renames such

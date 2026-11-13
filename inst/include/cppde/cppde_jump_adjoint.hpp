@@ -76,7 +76,7 @@ void collapse_restart(const std::vector<T>& w_carry, std::size_t n,
 //  The adjoint of one jump. In value the Heun sandwich collapses to the
 //  saltation dx = R'(dx_before + f_before s) - f_after s, with s the event
 //  time's differential. See "The adjoint of an event" in
-//  https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
+//  https://dmodverse.github.io/cppDE/articles/methods-reverse-events.html.
 // ---------------------------------------------------------------------------
 template<class T = double>
 struct jump_workspace {
@@ -173,8 +173,8 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
 
   // Forward: x_e = x_b + f_b s, x_* = x_b + (f_b + f_e) s / 2, x_a = R(x_*),
   // x_k = x_a - f_a s = the stored state, x_out = x_a - (f_a + f_k) s / 2.
-  // Transposed below; see "Transposing the root sandwich" in
-  // https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
+  // Transposed below; see "Transposing the root transport" in
+  // https://dmodverse.github.io/cppDE/articles/methods-reverse-events.html.
   use_switch_modes(ma);
   zero_armed(ws.fa, n);
   sys.first(x_after, ws.fa, t);

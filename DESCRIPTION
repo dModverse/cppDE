@@ -33,14 +33,17 @@ Language: en-US
 License: MIT + file LICENSE
 URL: https://dmodverse.github.io/cppDE/, https://github.com/dModverse/cppDE
 BugReports: https://github.com/dModverse/cppDE/issues
-SystemRequirements: C++17; Python (>= 3.9) with SymPy. Two further
-    features are gated on external libraries that ./configure detects at
-    install time: the cvode() backend and the sparse Jacobian path.
-    Neither is required to install or use the package, and neither is
-    listed here for that reason: when one is absent, only the
-    corresponding feature is disabled and reports how to enable it. The
-    libraries can be installed as system packages or built from source
-    by cppDE itself; see ?cppDE::installLibs and the README.
+SystemRequirements: C++17; Python (>= 3.9) with SymPy. Three further
+    features depend on libraries that ./configure detects at install time:
+    the cvode() backend on SUNDIALS (>= 6.0), the sparse Jacobian path on
+    SuiteSparse/KLU, and parallel batches of conditions on OpenMP. None is
+    required to install or use the package, and none is listed here for
+    that reason: when one is absent, only the corresponding feature is
+    disabled. cvode() and sparse = TRUE then stop with instructions to
+    enable them, and a batch runs the conditions one after another.
+    SUNDIALS and KLU can be installed as system packages or built from
+    source by cppDE itself; see ?cppDE::installLibs and the article
+    "Installation and optional libraries" on the package site.
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
 Depends:
@@ -55,7 +58,7 @@ Suggests:
     testthat,
     knitr,
     rmarkdown,
-    ggplot2,
+    ggplot2 (>= 3.5.0),
     tidyr,
     dplyr,
     scales

@@ -475,9 +475,9 @@ p_cross <- ggplot(cross_data,
               alpha = 0.15, color = NA) +
   geom_line(linewidth = 0.8) +
   geom_point(size = 1.5) +
-  geom_hline(yintercept = 1, linetype = "dashed", color = "grey40") +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "gray40") +
   annotate("text", x = Inf, y = 1.05, label = "sparse wins above",
-           hjust = 1.1, vjust = 0, size = 2.5, color = "grey40") +
+           hjust = 1.1, vjust = 0, size = 2.5, color = "gray40") +
   scale_x_log10(breaks = sort(unique(cross_data$n_states))) +
   scale_y_log10() +
   facet_grid(eps_label + deriv_label ~ method) +

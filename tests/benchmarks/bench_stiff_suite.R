@@ -424,7 +424,7 @@ problems$bruss_med <- build_bruss2d(20L, "bruss20", "Brusselator2D_20x20")
 # =====================================================================
 
 # N_zones zones in a line, each with an air temperature and a multi-layer wall
-# to its neighbour. The air node is driven by the wall, a proportional HVAC
+# to the neighboring zone. The air node is driven by the wall, a proportional HVAC
 # term and an internal gain.
 build_hvac <- function(N_zones = 400L, N_layers = 20L) {
   N_zones <- as.integer(N_zones); N_layers <- as.integer(N_layers)

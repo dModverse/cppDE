@@ -121,7 +121,7 @@ BENCH_TIERS <- list(
                 "brusselator"),     # + large (128 states)             2.2 ms
     petab   = c("Boehm_JProteomeRes2014",    # transcendental          0.5 ms
                 "Crauste_CellSystems2017",   # numerically hard canary 0.6 ms
-                "Sneyd_PNAS2002",            # 6-state signalling      0.4 ms
+                "Sneyd_PNAS2002",            # 6-state signaling      0.4 ms
                 "Borghans_BiophysChem1997",  # rational + many-sens    1.7 ms
                 "Beer_MolBioSystems2014"),   # timed event             0.4 ms
     tol = "loose_tight",

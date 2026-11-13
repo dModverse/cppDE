@@ -206,7 +206,7 @@ petab_case <- function(loaded, condition = NULL, max_sens = 64L,
         if (!is.na(num)) {
           cond_map[[target]] <- num
         } else {
-          ## the cell names another parameter, use its nominal value
+          ## the cell names another parameter, use the nominal value of that parameter
           ref <- san_id(v)
           if (!is.na(nominal[ref])) {
             cond_map[[target]] <- unname(nominal[ref])

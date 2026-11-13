@@ -190,8 +190,8 @@ if (!nzchar(.juliaBin)) {
     cat("  (Julia: ForwardDiff over solve + dual-aware internalnorm so sens are tolerance-controlled)\n")
   .sep2()
 
-  # R prepends its own lib dir to LD_LIBRARY_PATH. Julia inheriting that can pick
-  # up R's BLAS over its bundled MKL and segfault inside the dual matmul during
+  # R prepends the R lib dir to LD_LIBRARY_PATH. Julia inheriting that can pick
+  # up R's BLAS over the MKL bundled with Julia and segfault inside the dual matmul during
   # ForwardDiff, so it is cleared for the child process.
   .rc <- system2(.juliaBin,
                  args = c(sprintf("--project=%s", shQuote(.scriptDir)),

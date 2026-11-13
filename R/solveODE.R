@@ -695,6 +695,12 @@
 #'   tangent the columns are the Hessian of the seeded functional. The order of
 #'   the last two dimensions is that of a Hessian, not that of the argument
 #'   `curvature`.
+#' - `correction`: under `derivMode = "reverse"` with
+#'   `adjointControl(refine = TRUE)`, length `n_seed`, named as the seed
+#'   columns: the first-order change of each seeded functional from the
+#'   computed trajectory to the one the refined sweep differentiated. Value
+#'   plus `correction` is the value whose gradient `cotangent` is. See
+#'   [The value of the refined sweep](https://dmodverse.github.io/cppDE/articles/methods-reverse-checks.html#value-correction).
 #' - `diagnostics`: solver statistics, printed by [diagnostics()]:
 #'   `return_code` (0 on success, negative codes as in SUNDIALS CVODE),
 #'   `message`, `accepted` and `rejected` (step counts), `fevals`, `jevals`
@@ -720,6 +726,12 @@
 #' @seealso [cppODE()] and [cvode()] for model compilation;
 #'   [solveODEBatch()] for many conditions in one call; [adjointControl()];
 #'   [forcingValues()]; [diagnostics()] for printing solver statistics.
+#'   [Stepping and error control](https://dmodverse.github.io/cppDE/articles/methods-stepping.html),
+#'   [Forward sensitivities](https://dmodverse.github.io/cppDE/articles/methods-forward.html),
+#'   [Reverse mode: the discrete adjoint](https://dmodverse.github.io/cppDE/articles/methods-reverse.html) and
+#'   [Second derivatives: forward over reverse](https://dmodverse.github.io/cppDE/articles/methods-forward-reverse.html)
+#'   on the cppDE site; [Installation and optional libraries](https://dmodverse.github.io/cppDE/articles/installation.html)
+#'   for diagnosing a failing solve.
 #'
 #' @example inst/examples/solveODE.R
 #' @export
@@ -793,6 +805,8 @@ solveODE <- function(model, times, parms,
 #'
 #' @seealso [solveODE()]; [prepareBatch()] and [solveBatch()] for repeated
 #'   solves of the same conditions; [batchAvailable()].
+#'   [Batches of conditions](https://dmodverse.github.io/cppDE/articles/guide-batches.html) in the
+#'   Guide.
 #' @example inst/examples/solveODEBatch.R
 #' @export
 solveODEBatch <- function(model, conditions,

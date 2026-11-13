@@ -221,7 +221,7 @@ _none_
 | `01`/`02-work-precision` | achieved error against cost, one panel per problem; down-and-left is better |
 | `03-speedup` | per-problem ratio against CVODE, bars growing from parity |
 | `04-scaling` | cost against number of states, log-log |
-| `05-sens-overhead` | gradient cost in units of plain solves; grey line is the finite-difference cost |
+| `05-sens-overhead` | gradient cost in units of plain solves; gray line is the finite-difference cost |
 | `06-summary` | one geometric-mean number per mode |
 | `07-sens2-cost` | Hessian cost against M (cppDE only) |
 | `08-sparse-gain` | dense/sparse ratio per model and backend, bars growing from parity |

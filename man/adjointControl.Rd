@@ -65,6 +65,8 @@ if (codegenAvailable()) {
 }
 }
 \seealso{
-\code{\link[=solveODE]{solveODE()}}; \href{https://dmodverse.github.io/cppDE/articles/methods-reverse.html#refine}{Checking the sweep}
-in the methods of the cppDE site.
+\code{\link[=solveODE]{solveODE()}};
+\href{https://dmodverse.github.io/cppDE/articles/methods-reverse.html}{Reverse mode: the discrete adjoint} and
+\href{https://dmodverse.github.io/cppDE/articles/methods-reverse-checks.html}{Grid and refinement of the sweep} on the
+cppDE site.
 }

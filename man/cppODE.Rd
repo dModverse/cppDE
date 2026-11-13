@@ -133,23 +133,17 @@ the output nor the span of the integration. A grid of a single time applies
 the events at that time.
 
 A comparison \code{<}, \code{<=}, \code{>}, \code{>=} whose sides differ by an amount that reads
-a state or the time, in \code{piecewise()}, a logical operator or a product, and
-\code{Heaviside()} or \code{sign()} of such an amount, switch the right-hand side
-where that amount crosses zero. The solver locates the crossing as a root,
-to a few doubles whatever \code{roottol} says, and continues on the other branch,
-so a pulse such as \code{piecewise(1, time > ts && time <= t2, 0)} is not stepped
-over. Every method and derivative mode takes the jump of f there, second
-order included, also where a parameter moves the switching time. A switch
-adds no output row and is not limited by \code{maxroot}. Each branch is evaluated
-a step beyond the switch, so it has to be defined there. Where both branches
-push the solution onto the surface, it slides along it (Filippov): f is the
-mix \code{a*f_on + (1 - a)*f_off} that keeps the surface's argument at zero, and
-the slide ends where one branch turns away. \code{"kin - v*(x > 0)"} with
-\code{kin < v} holds x at 0, the limit of Michaelis-Menten kinetics for Km to 0.
-Several switches slide at once on the mix of all combinations of their
-branches whose weights keep every surface; a set of slides without such a
-mix stops with an error.
-\code{==} and \code{!=} are evaluated as written.
+a state or the time, inside \code{piecewise()}, a logical operator or a product,
+and \code{Heaviside()} or \code{sign()} of such an amount, switch the right-hand side where the amount crosses zero,
+for instance \code{"piecewise(1, time > ts && time <= t2, 0)"} or
+\code{"kin - v*(x > 0)"}. The solver locates each crossing as a root, so a short
+pulse is not stepped over, and the sensitivities take the jump. A switch adds
+no output row and is not limited by \code{maxroot}. Each branch is evaluated a step
+beyond the switch, so it has to be defined there. Where both branches push
+the solution onto the switching surface, it slides along it.
+\href{https://dmodverse.github.io/cppDE/articles/methods-events.html#sliding}{Events, switches and saltation}
+describes how crossings and slides are solved. \code{==} and \code{!=} are evaluated as
+written.
 }
 \examples{
 \donttest{
@@ -213,5 +207,11 @@ if (codegenAvailable()) {
 \link{expressions} for the syntax of equations; \code{\link[=solveODE]{solveODE()}} for
 integration; \code{\link[=cvode]{cvode()}} for the
 SUNDIALS-backed alternative; \code{\link[=cppFUN]{cppFUN()}} for algebraic functions;
-the \href{https://dmodverse.github.io/cppDE/articles/methods-codegen.html}{methods} for behaviour.
+\href{https://dmodverse.github.io/cppDE/articles/methods-codegen.html}{Code generation},
+\href{https://dmodverse.github.io/cppDE/articles/methods-stepping.html}{Stepping and error control},
+\href{https://dmodverse.github.io/cppDE/articles/methods-forward.html}{Forward sensitivities},
+\href{https://dmodverse.github.io/cppDE/articles/methods-events.html}{Events, switches and saltation}
+\href{https://dmodverse.github.io/cppDE/articles/methods-reverse.html}{Reverse mode: the discrete adjoint}
+and \href{https://dmodverse.github.io/cppDE/articles/methods-reverse-events.html}{Events in reverse mode}
+on the cppDE site.
 }

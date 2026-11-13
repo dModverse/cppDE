@@ -308,7 +308,7 @@ preflight <- function(hosts) {
     if (!rep$cppde || !rep$cvode || !rep$cxx || !rep$dmod2 || !isTRUE(rep$solve))
       bad <- c(bad, h)
 
-    ## What this submission is about to ask of this particular box: its shards
+    ## What this submission is about to ask of this particular box: the shards
     ## run one after the other, so the workers of one shard are the peak.
     workers <- bench_cores
     cat(sprintf("  %-24s %s cores, %s GB RAM (%s GB available), load %s -> %d shard(s) in turn x %d worker(s)\n",
@@ -438,7 +438,7 @@ merge_results <- function(res, host = NULL) {
 ##  Modes that only need the job name
 ## ---------------------------------------------------------------------
 
-## A shard writes its output to task_<i>.out in its job folder: below JOBDIR
+## A shard writes the output to task_<i>.out in the job folder: below JOBDIR
 ## for "localhost", below the home directory on a remote host.
 if (tf(OPT$log)) {
   n <- as.integer(OPT$`log-lines`)
@@ -545,7 +545,7 @@ maxs2    <- as.integer(OPT$`max-sens2`)
 max_sens <- as.integer(OPT$`max-sens`)
 
 ## The workspace is copied to every host. Naming what travels keeps `problems`
-## out of it: R's serialiser writes the shards' cases twice if the undivided
+## out of it: R's serializer writes the shards' cases twice if the undivided
 ## list is present.
 
 ## BENCH_SEM is an environment, not a function, and the guards resolve it by
@@ -597,7 +597,7 @@ setwd(JOBDIR)
 job <- dMod2::distributedComputing(
   {
     ## Runs on a host. `taskId` is this task's shard index and `cores` the cores
-    ## of its host, one worker each; `shards` and the benchmark functions arrive
+    ## of the host, one worker each; `shards` and the benchmark functions arrive
     ## in the workspace.
 
     ## A task attaches dMod2 and nothing else, so cppDE is loaded explicitly

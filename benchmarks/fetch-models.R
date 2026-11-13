@@ -8,7 +8,7 @@
 ##  https://doi.org/10.1093/bioinformatics/btz020
 
 ##  Fetched into benchmarks/cache/petab, which git does not track: the models
-##  stay under their own licence and are never vendored into this repository.
+##  stay under their own license and are never vendored into this repository.
 
 ROOT <- local({
   a <- commandArgs(trailingOnly = FALSE)

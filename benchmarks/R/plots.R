@@ -12,8 +12,8 @@ for (p in c("ggplot2", "scales")) if (!requireNamespace(p, quietly = TRUE))
 library(ggplot2)
 
 ## Categorical palette: slots 1-4 of the validated default order, verified for
-## all-pairs colour-vision separation, so the same colours work in scatter and
-## bar alike. Shape is mapped alongside colour as a secondary encoding.
+## all-pairs color-vision separation, so the same colors work in scatter and
+## bar alike. Shape is mapped alongside color as a secondary encoding.
 BENCH_COLS <- c(
   cppDE_ndf = "#2a78d6",
   CVODE_bdf  = "#eb6834",
@@ -37,16 +37,16 @@ theme_bench <- function(base_size = 11) {
   theme_minimal(base_size = base_size) +
     theme(
       panel.grid.minor = element_blank(),
-      panel.grid.major = element_line(linewidth = 0.3, colour = "grey88"),
-      panel.border     = element_rect(fill = NA, colour = "grey85", linewidth = 0.4),
-      axis.title       = element_text(colour = "grey20"),
-      axis.text        = element_text(colour = "grey35"),
+      panel.grid.major = element_line(linewidth = 0.3, color = "gray88"),
+      panel.border     = element_rect(fill = NA, color = "gray85", linewidth = 0.4),
+      axis.title       = element_text(color = "gray20"),
+      axis.text        = element_text(color = "gray35"),
       strip.text       = element_text(face = "bold", size = base_size - 1,
-                                      colour = "grey15"),
-      strip.background = element_rect(fill = "grey96", colour = NA),
+                                      color = "gray15"),
+      strip.background = element_rect(fill = "gray96", color = NA),
       plot.title       = element_text(face = "bold", size = base_size + 3),
-      plot.subtitle    = element_text(colour = "grey35", size = base_size - 1),
-      plot.caption     = element_text(colour = "grey45", size = base_size - 2,
+      plot.subtitle    = element_text(color = "gray35", size = base_size - 1),
+      plot.caption     = element_text(color = "gray45", size = base_size - 2,
                                       hjust = 0),
       legend.position  = "top",
       legend.title     = element_blank(),
@@ -54,12 +54,12 @@ theme_bench <- function(base_size = 11) {
 }
 
 scale_solver <- function(...) list(
-  scale_colour_manual(values = BENCH_COLS, ...),
+  scale_color_manual(values = BENCH_COLS, ...),
   scale_shape_manual(values = BENCH_SHAPES, ...))
 
 label_mode <- function(x) unname(MODE_LABELS[x])
 
-## Modes as a factor ordered by MODE_LABELS; an unlabelled mode keeps its
+## Modes as a factor ordered by MODE_LABELS; an unlabeled mode keeps the
 ## own name instead of becoming NA.
 mode_factor <- function(x) {
   lab <- unname(MODE_LABELS[x])
@@ -105,7 +105,7 @@ plot_work_precision <- function(df, mode = "nosens", max_panels = 12L) {
   d <- d[d$panel %in% keep, ]
   d$panel <- factor(d$panel, levels = keep)
 
-  ggplot(d, aes(err, time_ms, colour = solver, shape = solver)) +
+  ggplot(d, aes(err, time_ms, color = solver, shape = solver)) +
     geom_line(linewidth = 0.6, alpha = 0.85) +
     geom_point(size = 2.1) +
     facet_wrap(~ panel, scales = "free", ncol = 4) +
@@ -150,7 +150,7 @@ plot_speedup <- function(df, baseline = "CVODE_bdf") {
   brk <- brk[log2(brk) >= min(agg$lr) - 0.3 & log2(brk) <= max(agg$lr) + 0.3]
 
   ggplot(agg, aes(problem, lr, fill = solver)) +
-    geom_hline(yintercept = 0, colour = "grey40", linewidth = 0.5) +
+    geom_hline(yintercept = 0, color = "gray40", linewidth = 0.5) +
     geom_col(position = position_dodge(width = 0.75), width = 0.68) +
     coord_flip() +
     facet_wrap(~ mode, nrow = 1) +
@@ -177,7 +177,7 @@ plot_scaling <- function(df) {
   agg$mode <- factor(label_mode(as.character(agg$mode)),
                      levels = unname(MODE_LABELS))
 
-  ggplot(agg, aes(nstates, time_ms, colour = solver, shape = solver)) +
+  ggplot(agg, aes(nstates, time_ms, color = solver, shape = solver)) +
     geom_point(size = 2.2, alpha = 0.9) +
     geom_smooth(method = "lm", formula = y ~ x, se = FALSE,
                 linewidth = 0.6, linetype = "22") +
@@ -213,8 +213,8 @@ plot_sens_overhead <- function(df) {
   agg <- stats::aggregate(overhead ~ problem + solver + nsens, data = m,
                           FUN = geo_mean)
 
-  ggplot(agg, aes(nsens, overhead, colour = solver, shape = solver)) +
-    geom_abline(slope = 1, intercept = 1, colour = "grey55",
+  ggplot(agg, aes(nsens, overhead, color = solver, shape = solver)) +
+    geom_abline(slope = 1, intercept = 1, color = "gray55",
                 linetype = "22", linewidth = 0.5) +
     geom_point(size = 2.3, alpha = 0.9) +
     scale_solver() + log_x_count + log_y +
@@ -248,11 +248,11 @@ plot_sens2_cost <- function(df) {
                           data = m[is.finite(m$rel), , drop = FALSE], FUN = geo_mean)
   if (!nrow(agg)) return(NULL)
 
-  ggplot(agg, aes(nsens, rel, colour = solver)) +
+  ggplot(agg, aes(nsens, rel, color = solver)) +
     geom_point(size = 2.4, alpha = 0.9) +
-    geom_text(aes(label = problem), hjust = -0.12, size = 2.7, colour = "grey35",
+    geom_text(aes(label = problem), hjust = -0.12, size = 2.7, color = "gray35",
               show.legend = FALSE) +
-    scale_colour_manual(values = c(cppDE_ff = BENCH_COLS[["cppDE_ndf"]],
+    scale_color_manual(values = c(cppDE_ff = BENCH_COLS[["cppDE_ndf"]],
                                    cppDE_fr = "#eb6834"),
                         labels = c(cppDE_ff = "forward-forward",
                                    cppDE_fr = "forward-reverse")) +
@@ -262,7 +262,7 @@ plot_sens2_cost <- function(df) {
     labs(title = "Cost of the Hessian of the summed outputs",
          subtitle = "cppDE only, CVODES has no second-order sensitivities",
          x = "number of sensitivity parameters M",
-         y = "cost relative to a plain solve", colour = NULL,
+         y = "cost relative to a plain solve", color = NULL,
          caption = paste("Forward-forward adds M(M+1)/2 second-order directions,",
                          "forward-reverse M tangents through one backward sweep.")) +
     theme_bench()
@@ -287,10 +287,10 @@ plot_summary <- function(df, baseline = "CVODE_bdf") {
                      levels = unname(MODE_LABELS))
 
   ggplot(agg, aes(solver, speedup, fill = solver)) +
-    geom_hline(yintercept = 1, colour = "grey40", linewidth = 0.5) +
+    geom_hline(yintercept = 1, color = "gray40", linewidth = 0.5) +
     geom_col(width = 0.55) +
     geom_text(aes(label = sprintf("%.2f×  (n=%d)", speedup, n)),
-              vjust = -0.6, size = 3.4, colour = "grey20") +
+              vjust = -0.6, size = 3.4, color = "gray20") +
     facet_wrap(~ mode, nrow = 1) +
     scale_fill_manual(values = BENCH_COLS) +
     scale_y_continuous(expand = expansion(mult = c(0, 0.18))) +
@@ -328,7 +328,7 @@ plot_sparse_gain <- function(df) {
                              log2(brk) <= max(agg$lr) + 0.3])))
 
   ggplot(agg, aes(problem, lr, fill = backend)) +
-    geom_hline(yintercept = 0, colour = "grey40", linewidth = 0.5) +
+    geom_hline(yintercept = 0, color = "gray40", linewidth = 0.5) +
     geom_col(position = position_dodge(width = 0.75), width = 0.68) +
     coord_flip() +
     facet_wrap(~ mode, nrow = 1) +
@@ -357,11 +357,11 @@ plot_sparse_crossover <- function(df) {
   brk <- sort(unique(c(1, brk[log2(brk) >= min(agg$lr) - 0.3 &
                              log2(brk) <= max(agg$lr) + 0.3])))
 
-  ggplot(agg, aes(nstates, lr, colour = backend, shape = backend)) +
-    geom_hline(yintercept = 0, colour = "grey40", linewidth = 0.5) +
+  ggplot(agg, aes(nstates, lr, color = backend, shape = backend)) +
+    geom_hline(yintercept = 0, color = "gray40", linewidth = 0.5) +
     geom_point(size = 2.4, alpha = 0.9) +
     facet_wrap(~ mode, nrow = 1) +
-    scale_colour_manual(values = BACKEND_COLS, labels = BACKEND_LABELS) +
+    scale_color_manual(values = BACKEND_COLS, labels = BACKEND_LABELS) +
     scale_shape_manual(values = c(cppde = 16, cvode = 17),
                        labels = BACKEND_LABELS) +
     log_x_count +
@@ -369,7 +369,7 @@ plot_sparse_crossover <- function(df) {
     labs(title = "Where the sparse path starts to pay",
          subtitle = "one point per model; above parity the sparse path was faster",
          x = "number of states", y = "dense time / sparse time",
-         colour = NULL, shape = NULL) +
+         color = NULL, shape = NULL) +
     theme_bench()
 }
 
@@ -387,7 +387,7 @@ save_plots <- function(df, outdir, device = "png", width = 11, height = 7,
   ## added alongside it.
   auto <- df[pinned_col(df) == "auto", , drop = FALSE]
   n_sweep <- length(unique(sparse_gain_table(df)$problem))
-  ## A results.csv from a pinned-only run (the sweep as its own run, as it
+  ## A results.csv from a pinned-only run (the sweep as a separate run, as it
   ## used to be) has no auto rows at all; those figures are then skipped
   ## rather than built from nothing.
   on_auto <- function(f, ...) if (nrow(auto)) f(auto, ...) else NULL

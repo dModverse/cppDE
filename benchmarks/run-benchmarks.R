@@ -352,7 +352,7 @@ if (OPTS$suite %in% c("all", "petab")) {
                 nrow(idx), cores))
 
     ## Translating SBML happens before anything is timed, so it can be
-    ## parallelised without affecting a single measurement.
+    ## parallelized without affecting a single measurement.
     build_case <- function(i) tryCatch(
       petab_problems(idx$yaml[i],
                      conditions = if (identical(n_conditions, "all")) "all" else NULL,

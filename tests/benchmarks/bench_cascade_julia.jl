@@ -13,7 +13,7 @@
 # backend, just split across multiple sweeps instead of one.
 #
 # Per-solver timing stats are written to CSV so the R driver can fold
-# them into its summary table.
+# them into the summary table.
 #
 # Usage:
 #   julia --project=<this dir> bench_cascade_julia.jl \

@@ -153,16 +153,16 @@ plotWaterfall <- function(ms) {
   ## The axis spans at least two decades, so that fits within the noise of the
   ## optimum sit on one level.
   ggplot(df, aes(rank, delta)) +
-    geom_step(colour = "grey70") +
-    geom_point(aes(colour = status), size = 2) +
+    geom_step(color = "gray70") +
+    geom_point(aes(color = status), size = 2) +
     expand_limits(y = c(0, 100)) +
     scale_y_continuous(trans = scales::pseudo_log_trans(base = 10),
                        breaks = c(0, 10^(0:8))) +
-    scale_colour_manual(values = c(global = "#1b7837", local = "#b2182b",
-                                   `iteration limit` = "grey55"),
+    scale_color_manual(values = c(global = "#1b7837", local = "#b2182b",
+                                   `iteration limit` = "gray55"),
                         drop = FALSE) +
     labs(x = "start, sorted by final objective", y = "objective - best",
-         colour = NULL, title = "Waterfall",
+         color = NULL, title = "Waterfall",
          subtitle = sprintf("%d of %d starts reach the best optimum",
                             sum(ms$status == "global"), length(ms$value)))
 }
@@ -220,7 +220,7 @@ maObjective <- function(u, logSigma, w, C = 100) {
 ## -----------------------------------------------------------------
 
 ## One parameter is stepped away from the optimum and the others are
-## re-optimised from the previous point. The step doubles, up to `stepCap`, while the objective rises
+## re-optimized from the previous point. The step doubles, up to `stepCap`, while the objective rises
 ## by less than 0.1 per step; a step that rises by more than 0.5 is retried
 ## at half the size. Each side walks until the data part has risen past the
 ## threshold, `maxSteps` points are taken or the walk is `range` away from the
@@ -341,17 +341,17 @@ plotProfiles <- function(prof, truth = NULL,
                        axis(nm, pr[attr(pr, "centre"), "value"])
                      }, numeric(1)))
 
-  subtitle <- "dashed grey: 95 percent threshold, dot: best fit"
-  g <- ggplot(curves, aes(value, delta, colour = part, linetype = part)) +
-    geom_hline(yintercept = thr, linetype = 2, colour = "grey40") +
+  subtitle <- "dashed gray: 95 percent threshold, dot: best fit"
+  g <- ggplot(curves, aes(value, delta, color = part, linetype = part)) +
+    geom_hline(yintercept = thr, linetype = 2, color = "gray40") +
     geom_line(linewidth = 0.7) +
     geom_point(data = best, aes(value, 0), inherit.aes = FALSE,
-               colour = "#b2182b", size = 2) +
-    scale_colour_manual(values = c(data = "black", prior = "#2166ac")) +
+               color = "#b2182b", size = 2) +
+    scale_color_manual(values = c(data = "black", prior = "#2166ac")) +
     scale_linetype_manual(values = c(data = "solid", prior = "longdash")) +
     facet_wrap(~parameter, scales = "free_x", ncol = 3) +
     coord_cartesian(ylim = c(max(min(0, curves$delta), -thr), 1.1 * thr)) +
-    labs(x = NULL, y = expression(Delta * chi^2), colour = NULL,
+    labs(x = NULL, y = expression(Delta * chi^2), color = NULL,
          linetype = NULL, title = "Profile likelihood", subtitle = subtitle)
   if (is.null(truth)) return(g)
 
@@ -360,7 +360,7 @@ plotProfiles <- function(prof, truth = NULL,
                                          levels = levels),
                       value = mapply(axis, names(truth), truth))
   g + geom_vline(data = marks, aes(xintercept = value), inherit.aes = FALSE,
-                 colour = "#1b7837") +
+                 color = "#1b7837") +
     labs(subtitle = paste0(subtitle, ", green: ", markLabel))
 }
 
@@ -387,11 +387,11 @@ plotResidualACF <- function(res, lag.max = 40) {
   }))
   df$group <- factor(df$group, names(res))
   ggplot(df, aes(lag, acf)) +
-    geom_ribbon(aes(ymin = -band, ymax = band), fill = "grey85") +
-    geom_hline(yintercept = 0, colour = "grey50") +
-    geom_segment(aes(xend = lag, yend = 0), colour = "#2166ac") +
+    geom_ribbon(aes(ymin = -band, ymax = band), fill = "gray85") +
+    geom_hline(yintercept = 0, color = "gray50") +
+    geom_segment(aes(xend = lag, yend = 0), color = "#2166ac") +
     facet_wrap(~group, ncol = 4) +
     labs(x = "lag [samples]", y = "autocorrelation",
          title = "Autocorrelation of the residuals",
-         subtitle = "grey band: 95 percent range for white noise")
+         subtitle = "gray band: 95 percent range for white noise")
 }

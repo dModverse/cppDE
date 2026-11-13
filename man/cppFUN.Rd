@@ -110,8 +110,8 @@ likelihood-based inference and reparametrizations for \code{\link[=solveODE]{sol
 \code{derivMode} selects which derivative products are built. Every returned
 function runs compiled code: an object built with \code{compile = FALSE} is
 evaluable only after \code{\link[=compile]{compile()}}. See
-\href{https://dmodverse.github.io/cppDE/articles/methods-cppfun.html}{cppFUN() and its derivative directions}
-for the computational paths and the pass-through of unmodelled inputs.
+\href{https://dmodverse.github.io/cppDE/articles/methods-cppfun.html}{Derivative directions of cppFUN()}
+for the computational paths and the pass-through of unmodeled inputs.
 }
 \details{
 \subsection{Inputs}{
@@ -166,5 +166,6 @@ if (codegenAvailable()) {
 \seealso{
 \link{expressions} for the syntax of equations; \code{\link[=compile]{compile()}} for
 compilation; \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} for ODE integration; \code{\link[=ptc]{ptc()}} for
-steady states; \href{https://dmodverse.github.io/cppDE/articles/methods-cppfun.html}{cppFUN() and its derivative directions}.
+steady states; \href{https://dmodverse.github.io/cppDE/articles/methods-cppfun.html}{Derivative directions of cppFUN()}
+on the cppDE site.
 }

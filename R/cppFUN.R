@@ -9,8 +9,8 @@
 #' `derivMode` selects which derivative products are built. Every returned
 #' function runs compiled code: an object built with `compile = FALSE` is
 #' evaluable only after [compile()]. See
-#' [cppFUN() and its derivative directions](https://dmodverse.github.io/cppDE/articles/methods-cppfun.html)
-#' for the computational paths and the pass-through of unmodelled inputs.
+#' [Derivative directions of cppFUN()](https://dmodverse.github.io/cppDE/articles/methods-cppfun.html)
+#' for the computational paths and the pass-through of unmodeled inputs.
 #'
 #' @details
 #' ## Inputs
@@ -120,7 +120,8 @@
 #'
 #' @seealso [expressions] for the syntax of equations; [compile()] for
 #'   compilation; [cppODE()] and [cvode()] for ODE integration; [ptc()] for
-#'   steady states; [cppFUN() and its derivative directions](https://dmodverse.github.io/cppDE/articles/methods-cppfun.html).
+#'   steady states; [Derivative directions of cppFUN()](https://dmodverse.github.io/cppDE/articles/methods-cppfun.html)
+#'   on the cppDE site.
 #' @example inst/examples/cppFUN.R
 #' @export
 cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parameters = NULL,
