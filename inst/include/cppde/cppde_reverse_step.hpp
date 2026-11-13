@@ -74,7 +74,7 @@ struct has_step_snapshot<S, std::void_t<decltype(std::declval<S&>().set_step_sna
 // ----------------------------------------------------------------------------
 //  tsit5: an explicit one-step method keeps nothing across a step boundary.
 //
-//  FSAL is an optimisation, not a dependence: the recycled k1 is f(x, t) at the
+//  FSAL is an optimization, not a dependence: the recycled k1 is f(x, t) at the
 //  checkpointed x, so the replay recomputes it bit for bit and k7 is not stored.
 // ----------------------------------------------------------------------------
 
@@ -113,7 +113,7 @@ struct step_checkpoint<cppde::tsit5<Value>, T>
 // ----------------------------------------------------------------------------
 //  rosenbrock4: a one-step method too, so the same carry. Its stages are linear
 //  solves rather than explicit combinations, and the replay recovers each stage
-//  value from the same factorisation it sweeps with, so none of them is stored.
+//  value from the same factorization it sweeps with, so none of them is stored.
 // ----------------------------------------------------------------------------
 
 template<class Value, class JacobianPattern, class T>

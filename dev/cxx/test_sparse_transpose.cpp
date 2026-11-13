@@ -1,6 +1,6 @@
 // The sparse solve and its transpose against a dense reference.
 //
-// The reverse mode uses one factorisation in both directions: forward to
+// The reverse mode uses one factorization in both directions: forward to
 // recover a value a stage solved for, transposed to pass a cotangent back
 // through it. The forward half has been exercised by every stiff solve the
 // package has ever run; the transposed half had not been, and the first stiff
@@ -70,7 +70,7 @@ int main() {
     std::vector<int> ipiv(n);
     int N = n, one = 1, info = 0;
     F77_CALL(dgetrf)(&N, &N, A.data(), &N, ipiv.data(), &info);
-    if (info != 0) { std::printf("FAIL  dense factorisation\n"); return 1; }
+    if (info != 0) { std::printf("FAIL  dense factorization\n"); return 1; }
     char nt = 'N', tr = 'T';
     F77_CALL(dgetrs)(&nt, &N, &one, A.data(), &N, ipiv.data(),
                      ref_fwd.data(), &N, &info FCONE);

@@ -12,7 +12,7 @@ Author: Simon Beyer
 import re
 import keyword
 import sympy as sp
-from cppsympy import TokenError, normalise_logic, parse_error
+from cppsympy import TokenError, normalize_logic, parse_error
 
 def _sbml_piecewise(*args):
     """SBML's flat `piecewise(v1, c1, v2, c2, ..., otherwise)` as sp.Piecewise.
@@ -121,7 +121,7 @@ def _safe_sympify(expr_str, local_symbols=None):
     """
     Safely parse a string expression to SymPy, avoiding singleton conflicts.
     """
-    expr_str = normalise_logic(str(expr_str).strip())
+    expr_str = normalize_logic(str(expr_str).strip())
     if expr_str == "0":
         return sp.Integer(0)
     
@@ -134,7 +134,7 @@ def _safe_sympify(expr_str, local_symbols=None):
 
     # Pre-declare any bare identifier as a Symbol so it shadows a SymPy global
     # like sp.beta or sp.gamma, which parse_expr would otherwise pull in through
-    # its default global_dict and break an expression such as "10^beta".
+    # the default global_dict and break an expression such as "10^beta".
     for name in _IDENT_RE.findall(expr_str):
         if name not in safe_local and name not in _PY_RESERVED:
             safe_local[name] = sp.Symbol(name, real=True)

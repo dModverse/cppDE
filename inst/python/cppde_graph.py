@@ -18,7 +18,7 @@ import re
 from fractions import Fraction
 
 from cppsympy import (check_r_syntax, derivative_template, from_sympy,
-                      normalise_logic, parse_error, safe_sympify)
+                      normalize_logic, parse_error, safe_sympify)
 
 # ---------------------------------------------------------------------------
 # Operations
@@ -1163,7 +1163,7 @@ def _flat_sums(src):
 
 
 def _literal(n):
-    """Value of a numeric literal or its negation, else None."""
+    """Value of a numeric literal or the negation of one, else None."""
     neg = type(n) is ast.UnaryOp and type(n.op) is ast.USub
     if neg:
         n = n.operand
@@ -1229,7 +1229,7 @@ class Parser:
         if text == "":
             raise parse_error(text, "empty expression", label=label)
         try:
-            src = normalise_logic(text).replace('^', '**')
+            src = normalize_logic(text).replace('^', '**')
             try:
                 tree = ast.parse(src, mode='eval')
             except RecursionError:
@@ -1528,7 +1528,7 @@ class AD:
                                        (g.add(x, one), Fraction(-1, 2))]))]
         if name == "atanh":
             return [(0, g.inv(g.sub(one, g.pow(x, Fraction(2)))))]
-        # A kink or step takes the derivative of the branch its value takes, as
+        # A kink or step takes the derivative of the branch the value takes, as
         # the forward duals do: delta is 0, and a tie goes to the dual's winner.
         if name == "abs":
             return [(0, g.call("sign", x))]

@@ -16,13 +16,13 @@
  x exp(d / x), exponent capped at +-zmax, and projected onto C x = T by
  x exp(C' lambda).
 
- Converged: every row within rtol of its turnover sum_k |dG_i/dx_k| |x_k| plus
- atol times its largest |dG_i/dx_k|, or, for dt >= dtNewton, a step within
+ Converged: every row within rtol of the row turnover sum_k |dG_i/dx_k| |x_k| plus
+ atol times the largest |dG_i/dx_k| of the row, or, for dt >= dtNewton, a step within
  rtol |x| + atol. Newton steps from there bring every variable to within
  rtol (|x| + atol) of the root, as long as they contract.
 
  With flow and stability, the root is checked on ker C: where the leading
- eigenvalue lambda of J has a positive real part, the search leaves along its
+ eigenvalue lambda of J has a positive real part, the search leaves along the
  eigenvector, first to the side the iterates came from while their steps kept
  dt lambda < 1, with dt <= 1 / (2 lambda) until it is away from the root.
 
@@ -64,7 +64,7 @@ struct Controls {
   double stabilityTol = 0;
 };
 
-// The model with every variable outside `act` held at its value.
+// The model with every variable outside `act` held at the value in `xfull`.
 struct System {
   eval_ad_fn fn;
   int nv, np, no, na, nf, k;
@@ -215,8 +215,8 @@ void project(std::vector<double>& x, const std::vector<double>& C, const std::ve
   }
 }
 
-// The leading eigenvalue of the rows of f in J on ker C: its real and imaginary part, the
-// largest modulus, and the real part of its eigenvector. Without ker C, re = -inf.
+// The leading eigenvalue of the rows of f in J on ker C: the real and imaginary part, the
+// largest modulus, and the real part of the eigenvector. Without ker C, re = -inf.
 struct Lead {
   double re = -kInf, im = 0, scale = 0;
   std::vector<double> v;
@@ -455,7 +455,7 @@ struct Ptc {
     return s < 0 ? -1.0 : 1.0;
   }
 
-  // A converged root of the flow that is stable, leaving an unstable one along its leading
+  // A converged root of the flow that is stable, leaving an unstable one along the leading
   // direction. False with the reason where there is none.
   bool stable(std::vector<double>& x, std::string& reason) {
     Lead L = leading(J, m, n, sys.C, sys.k);
@@ -476,7 +476,7 @@ struct Ptc {
     double vv = 0;
     for (double vt : L.v) vv += vt * vt;
     char buf[200];
-    std::snprintf(buf, sizeof buf, "unstable root, leading eigenvalue %.2e%s, and no stable root along its direction",
+    std::snprintf(buf, sizeof buf, "unstable root, leading eigenvalue %.2e%s, and no stable root along the eigenvector",
                   L.re, L.im > 0 ? " (oscillatory)" : "");
     for (double s : {first, -first}) {
       std::vector<double> x2(n);

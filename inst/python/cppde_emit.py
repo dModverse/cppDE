@@ -1,7 +1,7 @@
 """Scheduling and printing of graph nodes as C++ or Python statements.
 
 `schedule` turns stores into statements. A node becomes a temporary if it is
-used twice or its line exceeds MAX_INLINE; a once-used select stays inline.
+used twice or the line it takes exceeds MAX_INLINE; a once-used select stays inline.
 Temporaries are ordered parameter-only, then time/forcing-dependent, then the
 rest.
 
@@ -393,7 +393,7 @@ class Printer:
         return self.style == "double" or (self.style == "template" and self.ad_level == 0)
 
     def _atan2(self, ya, xa):
-        # Around its value point (x0, y0), atan2(y, x) equals atan2(y0, x0) plus the
+        # Around the value point (x0, y0), atan2(y, x) equals atan2(y0, x0) plus the
         # atan of cross over dot product, exactly, so every derivative order holds.
         y, x = "(%s)" % self.expr(ya), "(%s)" % self.expr(xa)
         y0, x0 = "cppde::value_of(%s)" % y, "cppde::value_of(%s)" % x
@@ -616,7 +616,7 @@ def model_slots(n_states, params_base=None, style="cpp", params="params",
     """Leaf speller for the flat ODE layout.
 
     State i -> x[i], initial value i -> params[i], parameter k ->
-    params[params_base + k], forcing j -> (*F[j])(t), its rate ->
+    params[params_base + k], forcing j -> (*F[j])(t), the rate of forcing j ->
     F[j]->derivative(t), VEC (name, i) -> vectors.get(name, name)[i],
     map row r -> _lin[r], mode k -> cppde::switch_mode(k). An index may be
     index text. A LOOPVAR leaf

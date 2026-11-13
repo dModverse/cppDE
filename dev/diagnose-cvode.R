@@ -74,7 +74,7 @@ kv("LD_LIBRARY_PATH", Sys.getenv("LD_LIBRARY_PATH", "<unset>"))
 hr("solving, serial")
 print(solveODE(m, seq(0, 5, 1), c(A = 1, k = 0.5))$variable)
 
-## Only reached if the serial solve survived.  The benchmark runs its
+## Only reached if the serial solve survived.  The benchmark runs the
 ## problems under mclapply, so a failure that appears only after a fork
 ## has to be told apart from one that was there all along.
 hr("solving, forked (mclapply, 2 workers)")

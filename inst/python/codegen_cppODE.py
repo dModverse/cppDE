@@ -36,7 +36,7 @@ def generate_ode_cpp(
         num_type, ad_level, arena: the C++ scalar (see cppde_model.Scalar).
         sparse: None (decide), True or False.
         skip_jacobian: emit a Jacobian stub (explicit methods).
-        emit_contractions: emit adjoint_terms; emit_jvp adds its jvp_* and
+        emit_contractions: emit adjoint_terms; emit_jvp adds the jvp_* and
             dfdt_* pairs (reverse mode with Rosenbrock4).
         fixed_states, fixed_params: unused.
 
@@ -73,8 +73,8 @@ def generate_ode_cpp(
         strategy = model.jacobian_strategy()
         stats["strategy"] = strategy
         stats["entry_work"], stats["rhs_nodes"] = model.entry_work()
-        if strategy == "colour":
-            stats["colours"] = model.colouring()[1]
+        if strategy == "color":
+            stats["colors"] = model.coloring()[1]
         jac_lines = cppde_model.cpp_jacobian(model, scalar, use_sparse, strategy)
 
     adj_lines = []
@@ -220,7 +220,7 @@ def decide_sparse(sparse, n_states, jac_nnz, has_jacobian=True):
 
 
 def analyze_klu_settings(n, jac_nnz_rows, jac_nnz_cols):
-    """KLU settings from the Jacobian pattern: BTF when its digraph has more
+    """KLU settings from the Jacobian pattern: BTF when the pattern digraph has more
     than one strongly connected component; COLAMD when the coefficient of
     variation of the row degrees exceeds 0.5, else AMD.
 

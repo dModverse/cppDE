@@ -14,7 +14,7 @@
 #' @param solve Names of the variables to solve for. Default all.
 #' @param rows Names of the outputs of `fun` paired with `solve`, in the same
 #'   order. Default `solve`.
-#' @param C,total Constraint matrix with columns named by `solve`, and its
+#' @param C,total Constraint matrix with columns named by `solve`, and the
 #'   right-hand side: `C x = total`. Default none.
 #' @param flow Logical, default `TRUE`: the outputs are the right-hand side of
 #'   an ODE. `FALSE` for plain equations.
@@ -22,10 +22,10 @@
 #'   they must start positive.
 #' @param controls Named list:
 #'   * `reltol` (default `1e-10`) and `abstol` (`1e-14`): each residual is
-#'     measured against `reltol` times its turnover
+#'     measured against `reltol` times the turnover
 #'     \eqn{\sum_k |\partial f_i / \partial x_k|\, |x_k|}{
-#'     sum_k |df_i/dx_k| |x_k|} plus `abstol` times its largest Jacobian
-#'     entry. Newton steps from there, while they contract, bring each
+#'     sum_k |df_i/dx_k| |x_k|} plus `abstol` times the largest Jacobian
+#'     entry of the residual. Newton steps from there, while they contract, bring each
 #'     variable to within `reltol * (abs(x) + abstol)` of the root.
 #'   * `flowTol` (`1`): relative local error of a pseudo-time step.
 #'   * `maxit` (`400`): maximum number of iterations of one descent; a continuation
@@ -34,10 +34,10 @@
 #'     rate if `flow = TRUE`.
 #'   * `zmax` (`5`): the largest change of the logarithm of a variable per step.
 #'   * `stability` (`TRUE`): with `flow = TRUE`, a root must be stable on the
-#'     kernel of `C`. From an unstable one the search continues along its
-#'     unstable direction, first to the side the iterates came from.
+#'     kernel of `C`. From an unstable root the search continues along
+#'     the unstable direction, first to the side the iterates came from.
 #'   * `stabilityTol` (`0`): with `stability`, a root counts as stable while the
-#'     real part of its leading eigenvalue on the kernel of `C` is at most
+#'     real part of the leading Jacobian eigenvalue on the kernel of `C` is at most
 #'     `stabilityTol`. A small positive value accepts a state that leaves the
 #'     root more slowly than a time scale of interest, such as near a Hopf
 #'     bifurcation.
@@ -90,6 +90,6 @@ ptc <- function(fun, x, parms, solve = names(x), rows = solve, C = NULL, total =
   list(x = xo, converged = res$converged, iterations = res$iterations, message = res$message)
 }
 
-# The solver behind ptc() as an external pointer to its C entry cppde_ptc_v1, for packages that
+# The solver behind ptc() as an external pointer to the C entry cppde_ptc_v1, for packages that
 # call it from compiled code; the signature is documented in src/ptc.cpp.
 .ptcEntry <- function() .Call(C_cppde_ptc_entry)

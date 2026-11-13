@@ -22,7 +22,7 @@ with_path <- function(path, code) {
 
 # -- codegenAvailable() ---------------------------------------------------------
 
-test_that("codegenAvailable() answers TRUE or FALSE and checks its backend", {
+test_that("codegenAvailable() answers TRUE or FALSE and checks the backend", {
   expect_true(isTRUE(codegenAvailable()) || isFALSE(codegenAvailable()))
   expect_error(codegenAvailable("python"), "should be one of")
   # The cvode backend needs the native requirements and SUNDIALS on top.
@@ -38,7 +38,7 @@ test_that("codegenAvailable() is FALSE without a compiler on the PATH", {
 
 # -- installLibs() --------------------------------------------------------------
 
-test_that("installLibs() checks its tools before it touches anything", {
+test_that("installLibs() checks the tools before it touches anything", {
   skip_on_os("windows")
   dir <- tempfile("libs_")
   expect_error(installLibs("all", dir = dir), "should be one of")
@@ -68,7 +68,7 @@ test_that("installLibs() points Windows to Rtools", {
 
 # -- adjointControl() -----------------------------------------------------------
 
-test_that("adjointControl() returns its three settings and checks each", {
+test_that("adjointControl() returns three settings and checks each", {
   ctl <- adjointControl()
   expect_s3_class(ctl, "cppDEadjointControl")
   expect_identical(unclass(ctl), list(refine = FALSE, gradtol = NULL, trace = FALSE))
@@ -82,7 +82,7 @@ test_that("adjointControl() returns its three settings and checks each", {
     expect_error(adjointControl(gradtol = bad), "'gradtol' must be a positive number")
 })
 
-test_that("an adjoint trace prints its size", {
+test_that("an adjoint trace prints the trace size", {
   g <- structure(list(time = c(0, 1, 2), h = c(1, 1, 1),
                       lambda = array(0, c(3L, 2L, 4L)), eta = matrix(0, 3L, 4L)),
                  class = "cppDEadjoint")

@@ -281,7 +281,7 @@ test_that("a store from another point is refused, not quietly used", {
 #  the hessian; forward-reverse runs the backward sweep itself over a dual and
 #  answers with the curvature. Contracted against the same cotangent the two are
 #  the same matrix, so each is the other's oracle, and the gap is the
-#  discretisation gap the file header describes.
+#  discretization gap the file header describes.
 # ---------------------------------------------------------------------------
 
 # The Hessian of w' x, from the forward second derivatives.
@@ -316,7 +316,7 @@ test_that("forward-reverse answers the Hessian forward-forward answers", {
 })
 
 test_that("every method answers the same Hessian backwards", {
-  # Four discretisations of one Hessian. Sharper than it looks: the four adapt
+  # Four discretizations of one Hessian. Sharper than it looks: the four adapt
   # their own grids, so agreement at 1e-5 says the sweep differentiates what
   # each of them actually did.
   W <- NULL; ref <- NULL

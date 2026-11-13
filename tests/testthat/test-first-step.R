@@ -16,7 +16,7 @@ do.call(compile, c(unname(models), list(output = "test_first_step", cores = test
 parms <- c(x = 1e3, k = 0.1)
 exact <- function(t) 1e3 * exp(-0.1 * t)
 
-test_that("a solve starting late under a tight tolerance takes its first step", {
+test_that("a solve starting late under a tight tolerance takes the first step", {
   for (m in methods) for (t0 in c(0, 280, 1e4)) {
     out <- solveODE(models[[m]], t0 + c(0, 0.5, 70), parms,
                     abstol = 1e-12, reltol = 1e-12, onFailure = "stop")

@@ -21,7 +21,7 @@
 #' [suppressPackageStartupMessages()].
 #'
 #' @return List with `api` (the BLAS whose thread count cppDE steers, `NA` when
-#'   no entry point resolved), `threads` (its current thread count, `NA` without
+#'   no entry point resolved), `threads` (the current thread count, `NA` without
 #'   a getter) and `guard` (whether the `fork()` handler is installed).
 #' @seealso [batchAvailable()]
 #' @example inst/examples/forkGuard.R

@@ -48,7 +48,7 @@ log() { echo "configure: $*"; }
 # directory, it is R's workspace, and deleting it breaks the very
 # cleanup that has to run.
 # ---------------------------------------------------------------------
-# Signal set and behaviour follow the autoconf boilerplate
+# Signal set and behavior follow the autoconf boilerplate
 # (trap 'as_fn_exit 1' 1 2 13 15), spelled with names rather than numbers
 # because R CMD check flags numeric signals as a possible bashism.
 on_abort() {
@@ -253,7 +253,7 @@ append_probe_err() {
 }
 
 # ---------------------------------------------------------------------
-# rpath flavour: DT_RPATH rather than DT_RUNPATH.
+# rpath flavor: DT_RPATH rather than DT_RUNPATH.
 #
 # Every -L emitted below is paired with an -rpath, so that a model .so
 # loaded through dyn.load() resolves libsundials_*.so at run time.
@@ -270,7 +270,7 @@ else
   log "linker rejects --disable-new-dtags: falling back to DT_RUNPATH"
 fi
 
-# -L plus rpath for directory $1, in the flavour settled above.
+# -L plus rpath for directory $1, in the flavor settled above.
 rpath_flags() {
   printf -- '-L%s -Wl,-rpath,%s%s' "$1" "$1" "$dtags_flag"
 }

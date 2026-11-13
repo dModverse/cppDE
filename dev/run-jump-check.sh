@@ -5,7 +5,7 @@
 #
 #   sh dev/run-jump-check.sh
 set -e
-# The toolchain writes its intermediates where TMPDIR points, and on Windows
+# The toolchain writes intermediates where TMPDIR points, and on Windows
 # that can inherit a directory the user cannot write.
 : "${TMPDIR:=${HOME:-.}/.cache/cppde-jumpcheck}"
 mkdir -p "$TMPDIR"

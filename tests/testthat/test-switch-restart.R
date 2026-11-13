@@ -1,5 +1,5 @@
 # A switch whose root sits at zero where the integration starts or restarts:
-# at t0, at the time of a fixed event, and after its own crossing. The mode
+# at t0, at the time of a fixed event, and after a crossing of the same switch. The mode
 # follows the side the solution leaves to, the sensitivities take the jump of f
 # once, and a solution that both branches push onto the surface slides.
 
@@ -70,7 +70,7 @@ test_that("a switch at t0 or at an event time takes the jump of f once", {
   }
 })
 
-test_that("its second-order tangents vanish as those of the closed form", {
+test_that("the second-order tangents vanish as those of the closed form", {
   for (ts in rs_ts) {
     out <- tight(rs_mods$d2, rs_times, c(x = 0, ts = ts))
     expect_equal(max(abs(out$hessian)), 0, tolerance = 1e-9, info = ts)

@@ -160,7 +160,7 @@ void apply_root_jump_adjoint(const std::vector<T>& x_before,
   const T t_ad = T(t);
 
   // The shift, s = -(g - value(g)) / g_dot: zero in value, dt*/dv in the
-  // tangent. It reads off the stored state because the localisation is
+  // tangent. It reads off the stored state because the localization is
   // tangent-blind, so that state holds dx/dv at a fixed time and g contracts
   // it to the event time's. Zero without gradients, which collapses everything
   // below to the bare reset transpose.

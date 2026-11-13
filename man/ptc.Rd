@@ -30,7 +30,7 @@ variables start there, the others keep their values.}
 \item{rows}{Names of the outputs of \code{fun} paired with \code{solve}, in the same
 order. Default \code{solve}.}
 
-\item{C, total}{Constraint matrix with columns named by \code{solve}, and its
+\item{C, total}{Constraint matrix with columns named by \code{solve}, and the
 right-hand side: \verb{C x = total}. Default none.}
 
 \item{flow}{Logical, default \code{TRUE}: the outputs are the right-hand side of
@@ -42,10 +42,10 @@ they must start positive.}
 \item{controls}{Named list:
 \itemize{
 \item \code{reltol} (default \code{1e-10}) and \code{abstol} (\code{1e-14}): each residual is
-measured against \code{reltol} times its turnover
+measured against \code{reltol} times the turnover
 \eqn{\sum_k |\partial f_i / \partial x_k|\, |x_k|}{
-  sum_k |df_i/dx_k| |x_k|} plus \code{abstol} times its largest Jacobian
-entry. Newton steps from there, while they contract, bring each
+  sum_k |df_i/dx_k| |x_k|} plus \code{abstol} times the largest Jacobian
+entry of the residual. Newton steps from there, while they contract, bring each
 variable to within \code{reltol * (abs(x) + abstol)} of the root.
 \item \code{flowTol} (\code{1}): relative local error of a pseudo-time step.
 \item \code{maxit} (\code{400}): maximum number of iterations of one descent; a continuation
@@ -54,10 +54,10 @@ from an unstable root starts another.
 rate if \code{flow = TRUE}.
 \item \code{zmax} (\code{5}): the largest change of the logarithm of a variable per step.
 \item \code{stability} (\code{TRUE}): with \code{flow = TRUE}, a root must be stable on the
-kernel of \code{C}. From an unstable one the search continues along its
-unstable direction, first to the side the iterates came from.
+kernel of \code{C}. From an unstable root the search continues along
+the unstable direction, first to the side the iterates came from.
 \item \code{stabilityTol} (\code{0}): with \code{stability}, a root counts as stable while the
-real part of its leading eigenvalue on the kernel of \code{C} is at most
+real part of the leading Jacobian eigenvalue on the kernel of \code{C} is at most
 \code{stabilityTol}. A small positive value accepts a state that leaves the
 root more slowly than a time scale of interest, such as near a Hopf
 bifurcation.

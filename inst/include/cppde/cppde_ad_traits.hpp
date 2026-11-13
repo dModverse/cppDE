@@ -2,7 +2,7 @@
  Centralized AD type traits for cppDE.
 
  is_ad / is_dual2nd / inner_type / scalar_type / scalar_value plus the bulk
- helpers max_deriv_size and bulk_inject_results. Specialised for
+ helpers max_deriv_size and bulk_inject_results. Specialized for
  cppde::dual<T> and cppde::dual2nd<T>.
 
  The bulk helpers are written generically over any AD type that exposes the
@@ -20,7 +20,7 @@
 
 #include <cppde/cppde_types.hpp>
 
-// Forward declaration for the dual backend so traits can specialise without
+// Forward declaration for the dual backend so traits can specialize without
 // pulling in the full headers from every call site.
 namespace cppde {
   template<class T> class dual;
@@ -38,7 +38,7 @@ template<class T> struct is_ad : std::false_type {};
 template<class T> struct is_ad<cppde::dual<T>>    : std::true_type {};
 template<class T> struct is_ad<cppde::dual2nd<T>> : std::true_type {};
 
-// is_dual2nd<T>: matches only cppde::dual2nd<S>, not its base class. The
+// is_dual2nd<T>: matches only cppde::dual2nd<S>, not the base class dual<dual<S>>. The
 // LU, slab and multistepper paths dispatch on it to extraction routines that
 // read the gradient from outer.tan_[k].x().
 template<class T> struct is_dual2nd : std::false_type {};
@@ -86,7 +86,7 @@ inline double scalar_value(const cppde::dual2nd<T>& v) {
 // ============================================================================
 //  store_as<T>(v): the value in the type a store keeps it in
 //
-//  A reverse trajectory checkpoints states in its own scalar type. In plain
+//  A reverse trajectory checkpoints states in the scalar type of the run. In plain
 //  double that is the value alone; over the same type the run integrates in it
 //  is the whole number, tangents included, which is what forward over reverse
 //  needs.
@@ -95,10 +95,10 @@ inline double scalar_value(const cppde::dual2nd<T>& v) {
 // ============================================================================
 //  arm_tangents(v): bind v's tangent storage before a callee's arena scope
 //
-//  A generated model body opens a dual_arena::scope of its own, so a tangent
+//  A generated model body opens a private dual_arena::scope, so a tangent
 //  it allocates for one of the caller's numbers dies when that scope pops. The
-//  stepper avoids this by holding its buffers in a tangent slab; a caller that
-//  hands the model a buffer of its own arms it instead. Nothing to do for a
+//  stepper avoids this by holding the stepper buffers in a tangent slab; a caller that
+//  hands the model a caller-owned buffer arms it instead. Nothing to do for a
 //  plain scalar.
 // ============================================================================
 
@@ -125,7 +125,7 @@ inline void arm_width(T&, unsigned) {}
 template<class T> struct is_heap_dual : std::false_type {};
 template<class S> struct is_heap_dual<cppde::dual<S>> : std::true_type {};
 
-// A second-order dual also binds the rows of its second derivatives, as wide as
+// A second-order dual also binds the rows of the second derivatives, as wide as
 // the first.
 template<class S>
 inline void arm_width(cppde::dual<S>& v, unsigned w) {
@@ -211,7 +211,7 @@ inline unsigned max_deriv_size(const dense_matrix<AD>& M)
 }
 
 // Max number of active derivative directions in a csc_matrix. The sparse
-// solver's dual specialisation reads the entries' derivatives contiguously and
+// solver's dual specialization reads the entries' derivatives contiguously and
 // never asks; the nested-dual one keeps the matrix and does.
 template<class AD,
          std::enable_if_t<is_ad<AD>::value, int> = 0>

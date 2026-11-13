@@ -1,7 +1,7 @@
 /*
  Which fixed-time events a solve applies.
 
- A solve runs from the first to the last time of its grid, zero included when
+ A solve runs from the first to the last time of the grid, zero included when
  the model injects it. A fixed event takes effect at the first time and inside
  the grid, and never at or beyond the last time. Two solves over [t0, t1] and
  [t1, t2], the second started from the state the first ends on, then apply

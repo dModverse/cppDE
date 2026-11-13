@@ -129,9 +129,9 @@ def generate_cvode_cpp(
             if s:
                 rootfunc_nodes.append(model.parse(s))
 
-    # Each event: the post-event value g of its state with its partials in x, p
-    # and t; a time event adds its time and dt/dp, a root event the condition r
-    # and its partials.
+    # Each event: the post-event value g of the target state with the partials of g in x, p
+    # and t; a time event adds the event time and dt/dp, a root event the condition r
+    # and the partials of r.
     ev = cppde_model.CvodeEvent(model)
     time_events = []
     root_events = []
@@ -314,7 +314,7 @@ def _fail_main(code, msg):
 
 
 def _fail_seg(code, msg):
-    """Failure statement of the ASA restart, which returns -1 to its caller."""
+    """Failure statement of the ASA restart, which returns -1 to the caller."""
     return '{ asa_msg = "%s"; return -1; }' % msg
 
 
@@ -357,7 +357,7 @@ def _render_source(
     include_time_zero=True,
     data_code="",
 ):
-    """The C++ source. Each builder returns its locals, which the later
+    """The C++ source. Each builder returns the local variables, which the later
     builders and _assemble take by name; **_ drops the rest."""
     ctx = dict(locals())
     for build in (
@@ -389,7 +389,7 @@ def _common_parts(
         time_events, **_):
     """Flags, forcings and the sensitivity storage every source shares."""
     deriv_flag = "true" if deriv else "false"
-    # The modes of the state switches live as long as the solve and its sweep.
+    # The modes of the state switches live as long as the solve and the sweep.
     mode_scope = ((
         "  signed char _switch_mode[%d] = {0};\n"
         "  cppde::switch_mode_scope _cppde_mode_scope(_switch_mode, %d);\n")
@@ -480,7 +480,7 @@ def _root_registration(
     """root_fn with the user roots first and the event roots after them."""
 
     # root_fn writes the user rootfunc into gout[0..n_user-1] and the event roots
-    # after it. On CV_ROOT_RETURN a user root terminates, an event root applies its
+    # after it. On CV_ROOT_RETURN a user root terminates, an event root applies the
     # state change and saltation, then reinits and continues unless terminal.
     n_event_roots   = len(root_events)
     # Two exit roots per switch end a slide (cppde_sliding.hpp).
@@ -517,8 +517,8 @@ static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
         ] + ["0"] * (2 * n_modes)
         direction_list = ", ".join(direction_entries)
 
-        # A state switch whose new branch holds the state on its surface leaves
-        # its root at zero, which is no reason for a warning.
+        # A state switch whose new branch holds the state on the switching surface leaves
+        # the root at zero, which is no reason for a warning.
         quiet = "    CVodeSetNoInactiveRootWarn(cvode_mem);\n" if n_modes else ""
 
         def rootfunc_init(fail):
@@ -610,21 +610,21 @@ struct RootEvent {
   int  var_idx;
   int  direction;
   bool terminal;
-  // Event map g(x, t, p) and its partials (for saltation)
+  // Event map g(x, t, p) and the partials (for saltation)
   std::function<double(const double* x, double t)> g_fn;
   std::function<double(const double* x, double t, int i)> dg_dx_fn;
   std::function<double(const double* x, double t, int k)> dg_dp_fn;
   std::function<double(const double* x, double t)> dg_dt_fn;
-  // Root condition r(x, t, p) and its partials (for the IFT of dt_root/dp)
+  // Root condition r(x, t, p) and the partials (for the IFT of dt_root/dp)
   std::function<double(const double* x, double t, int i)> dr_dx_fn;
   std::function<double(const double* x, double t, int k)> dr_dp_fn;
   std::function<double(const double* x, double t)> dr_dt_fn;
-  // A state switch: the mode its root sets, which holds where r > 0 (r >= 0
+  // A state switch: the mode the root sets, which holds where r > 0 (r >= 0
   // when closed); var_idx is -1 and the event map unset. -1 for an event.
   int  mode = -1;
   bool closed = false;
   std::function<double(const double* x, double t)> r_fn;
-  // For a switch, the gradients of its rate r' = dr/dt + grad r . f in x and p.
+  // For a switch, the gradients of the rate r' = dr/dt + grad r . f in x and p.
   std::function<double(const double* x, double t, int i)> rate_dx_fn;
   std::function<double(const double* x, double t, int k)> rate_dp_fn;
 };
@@ -790,8 +790,8 @@ def _event_helpers(
             event_builder_block += (
                 "  // The modes of the state switches: read off the state, or set by\n"
                 "  // the crossing of their root, after which a reset among the events\n"
-                "  // reads every other mode afresh. A root on its surface, where the\n"
-                "  // reset left it, keeps its mode; cv_enter_surface decides it.\n"
+                "  // reads every other mode afresh. A root on the surface, where the\n"
+                "  // reset left it, keeps the mode; cv_enter_surface decides it.\n"
                 "  std::vector<double> cv_switch_t(event_roots.size(),\n"
                 "                                  std::numeric_limits<double>::quiet_NaN());\n"
                 "  auto cv_on_surface = [&](size_t j, const double* x, double t) {\n"
@@ -835,7 +835,7 @@ def _event_helpers(
         event_builder_block = ""
 
     if has_time_events:
-        # First-order saltation for a parameterised time event (Barton & Lee), with
+        # First-order saltation for a parameterized time event (Barton & Lee), with
         # Gdot = sum_i dg/dx_i f_old[i] + dg/dt - f_new[var]:
         #   S_new[var] = sum_i dg/dx_i S_old[i] + dg/dp_k + Gdot dt_e/dp_k
 
@@ -1346,7 +1346,7 @@ def _step_dispatch(
                          "      asa_segs.back().used = true;\n")
         else:
             step_call = "      int flag = CVode(cvode_mem, target, y, &tret, CV_NORMAL);\n"
-        # A switch on the surface at the target is taken before its row is
+        # A switch on the surface at the target is taken before the target row is
         # written, as one CVODE reports there.
         target_return = ("cv_surface_mark(tret_out)" if n_modes else "0")
         surface_call = ("      if (!std::isnan(cv_surface_at) && cv_enter_surface() < 0) return -1;\n"
@@ -1684,7 +1684,7 @@ def _asa_plain(asa_seg, reverse, **_):
 
     for (int c = 0; c < n_seed && return_code == 0; ++c) {
       // lambda at T is the seed row for the final observation; every earlier
-      // row is added when the sweep reaches its time.
+      // row is added when the sweep reaches the observation time.
       {
         double* lam = N_VGetArrayPointer(yB);
         for (int i = 0; i < NEQ; ++i)
@@ -1700,7 +1700,7 @@ def _asa_plain(asa_seg, reverse, **_):
             CVodeSStolerancesB(cvode_mem, indexB, reltol, abstol) < 0 ||
             CVodeSetUserDataB(cvode_mem, indexB, &ud) < 0) {
           return_code = cppde::RC_LINIT_FAIL;
-          solver_msg = "adjoint initialisation failed";
+          solver_msg = "adjoint initialization failed";
           break;
         }
         // The backward problem gets the caller's maxsteps, not the CVODES
@@ -1729,7 +1729,7 @@ def _asa_plain(asa_seg, reverse, **_):
                               args.gradtol > 0.0 ? SUNTRUE : SUNFALSE);
         }
       } else {
-        // Later columns re-initialise the one backward problem: CVodeB advances
+        // Later columns re-initialize the one backward problem: CVodeB advances
         // every backward problem that exists.
         if (CVodeReInitB(cvode_mem, indexB, out_t.back(), yB) < 0) {
           return_code = cppde::RC_UNRECOGNIZED_ERR;
@@ -1761,11 +1761,11 @@ def _asa_plain(asa_seg, reverse, **_):
                                      (size_t)n_out_b * NEQ * c];
           if (w != 0.0) { lam[i] += w; jumped = true; }
         }
-        // A seeded jump is a new initial condition, so CVODES is re-initialised
+        // A seeded jump is a new initial condition, so CVODES is re-initialized
         // there, and only there: a re-init restarts the method at order one.
         if (jumped && k > 0) {
-          // Reading the quadrature out and re-initialising it with that value
-          // restarts its history and keeps what it has integrated.
+          // Reading the quadrature out and re-initializing it with that value
+          // restarts the quadrature history and keeps what it has integrated.
           if (NPAR_ADJ > 0) {
             sunrealtype tq_;
             if (CVodeGetQuadB(cvode_mem, indexB, &tq_, qB) < 0) {
@@ -1819,14 +1819,14 @@ def _asa_segments(
         asa_seg, asa_sweep_block, has_root_events, has_time_events, n_modes,
         need_cvode_root, reverse, **_):
     """Adjoint sensitivity analysis over the stretches between jumps."""
-    # The forward run is cut at every jump into stretches, each on its own
+    # The forward run is cut at every jump into stretches, each on a separate
     # CVODES memory and checkpoints. The backward sweep runs them last to first
     # and passes lambda and the quadrature through each jump's adjoint.
     asa_structs = asa_decl = asa_cleanup = ""
     if asa_seg:
         asa_structs = """
-// One stretch of the forward run between jumps: its CVODES memory (null when
-// nothing was integrated on it), its backward problem, and what it spans.
+// One stretch of the forward run between jumps: the CVODES memory (null when
+// nothing was integrated on it), the backward problem, and what it spans.
 struct AsaSeg {
   void* mem = nullptr;
   SUNMatrix A = nullptr;
@@ -1837,7 +1837,7 @@ struct AsaSeg {
   bool used = false;
   double t0 = 0.0, t1 = 0.0;
   int row0 = 0, row1 = 0;     // output rows [row0, row1)
-  int jump0 = 0, jump1 = 0;   // jumps applied at its start [jump0, jump1)
+  int jump0 = 0, jump1 = 0;   // jumps applied at the start [jump0, jump1)
   std::vector<signed char> modes;   // of the state switches, none without
 };
 
@@ -2027,7 +2027,7 @@ struct AsaJump {
                 CVodeSStolerancesB(mem, S.indexB, reltol, abstol) < 0 ||
                 CVodeSetUserDataB(mem, S.indexB, &ud) < 0) {
               return_code = cppde::RC_LINIT_FAIL;
-              solver_msg = "adjoint initialisation failed";
+              solver_msg = "adjoint initialization failed";
               break;
             }
             CVodeSetMaxNumStepsB(mem, S.indexB, maxsteps);
@@ -2058,7 +2058,7 @@ struct AsaJump {
           }
 
           // Backwards to each earlier row and on to the stretch's start; a
-          // seeded row re-initialises the backward problem, as without events.
+          // seeded row re-initializes the backward problem, as without events.
           while (return_code == 0) {
             const double tk = (k >= S.row0) ? std::max(out_t[k], S.t0) : S.t0;
             if (tk < tB && !same_time(tk, tB)) {
@@ -2172,8 +2172,8 @@ static int jac_fn(sunrealtype t, N_Vector y, N_Vector fy,
 }}
 """
         # CVODES assumes the replay from a checkpoint takes the steps the run
-        # took. KLU's refactorisation depends on earlier pivots, a full
-        # factorisation at every setup on the matrix alone.
+        # took. KLU's refactorization depends on earlier pivots, a full
+        # factorization at every setup on the matrix alone.
         if reverse:
             jac_impl += """
 static int klu_setup_fresh(SUNLinearSolver S, SUNMatrix A) {
@@ -2282,7 +2282,7 @@ def _asa_restart(
                     if n_modes else "")
 
     # The backward problem lambda' = -J' lambda gets the forward solver kind and
-    # its Jacobian -J', formed from jac_fn into a scratch matrix of the forward
+    # the Jacobian -J', formed from jac_fn into a scratch matrix of the forward
     # pattern.
     asa_ud_members = ""
     jacB_decl = jacB_impl = lsB_setup = ""
@@ -2833,7 +2833,7 @@ extern "C" SEXP solve_{modelname}(SEXP argsSEXP)
   std::vector<cppde::rbatch::solve_result> R_(K);
   SEXP out = PROTECT(Rf_allocVector(VECSXP, K));
 {cv_prealloc_block}
-  // Phase B: no R API.  Each condition builds its own SUNContext.
+  // Phase B: no R API.  Each condition builds a separate SUNContext.
   cppde::rbatch::run_batch(K, nt, [&](int k) noexcept {{ solve_impl(A[k], R_[k]); }});
 
   // Phase C: back on the R side.
@@ -2856,7 +2856,7 @@ extern "C" SEXP solve_{modelname}(SEXP argsSEXP)
 def _cv_slide_setup(sw0):
     """The rate r' of each switch root along f, and the slide entry after a crossing."""
     return (
-        "  // r' of switch k along f, with the size of its terms.\n"
+        "  // r' of switch k along f, with the size of the terms.\n"
         "  ud.slide_rate = [&event_roots](int k, const double* x, double t,\n"
         "                                 const double* f, double* terms) {\n"
         f"    const auto& e = event_roots[{sw0} + k];\n"
@@ -2890,7 +2890,7 @@ def _cv_slide_setup(sw0):
         "                 \"their branches that keeps the solution on all their surfaces\";\n"
         "  };\n"
         "  // Switch k slides where both branches, the other slides mixed, move onto\n"
-        "  // its surface at (x, t).\n"
+        "  // the surface at (x, t).\n"
         "  auto cv_maybe_slide = [&](int k, const double* x, double t) {\n"
         "    int s[2];\n"
         "    N_Vector xv = N_VMake_Serial(NEQ, const_cast<double*>(x), y->sunctx);\n"
@@ -2979,7 +2979,7 @@ static bool cv_solve(UserData* ud, const std::vector<int>& S, sunrealtype t, N_V
   return step <= 1e-10;
 }
 
-// The mix of ud->slide_fm with weights a, or with `d` >= 0 its derivative in a_d.
+// The mix of ud->slide_fm with weights a, or with `d` >= 0 the derivative in a_d.
 static void cv_mix(UserData* ud, const std::vector<double>& a, double* out, int d = -1) {
   for (int i = 0; i < NEQ; ++i) {
     double s = 0.0;

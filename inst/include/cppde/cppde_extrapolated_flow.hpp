@@ -13,13 +13,13 @@
  * substep, as SEULEX takes it [Hairer, Wanner II, IV.9]. A chain is a
  * W-method: it is consistent for any J, so its error has an expansion in h_j
  * and the Aitken-Neville tableau over n_j = 1, 2, 3, ... raises the order by
- * one per column. A chain costs one factorisation, n_j right-hand sides and
- * n_j solves; the factorisations of all chains share the one Jacobian.
+ * one per column. A chain costs one factorization, n_j right-hand sides and
+ * n_j solves; the factorizations of all chains share the one Jacobian.
  *
  * The extrapolated state is a fixed linear combination of the chains' end
  * states, so its adjoint is the same combination of the chains' adjoints, and
  * the tableau is built on those directly: the cotangent of the start state
- * and the interval's share of the gradient. Two neighbouring entries of the
+ * and the interval's share of the gradient. Two neighboring entries of the
  * tableau give the error estimate the local test of CVODES' backward problem
  * reads. An interval the last column does not pass is halved.
  *
@@ -121,17 +121,17 @@ public:
   }
 
 private:
-  // The Jacobian at (x, t), kept for the factorisations of every chain.
+  // The Jacobian at (x, t), kept for the factorizations of every chain.
   template<class System>
-  void linearise(System& sys, const std::vector<T>& x, double t) {
+  void linearize(System& sys, const std::vector<T>& x, double t) {
     m_lu.resize(x);
     m_lu.call_jacobian(sys.second, x, t);
     m_lu.cache_jacobian(m_n);
     m_fresh = true;
   }
   // The chains of one Jacobian come in shrinking steps, so after the first
-  // only the diagonal grows; backwards in time it shrinks and is factorised anew.
-  void factorise(double h) {
+  // only the diagonal grows; backwards in time it shrinks and is factorized anew.
+  void factorize(double h) {
     if (m_fresh || h < 0.0) m_lu.factorize_W(m_n, 1.0 / h);
     else m_lu.refactorize_W_larger_diagonal(m_n, 1.0 / h);
     m_fresh = false;
@@ -250,7 +250,7 @@ private:
   {
     const double H = b - a;
     if (!(std::abs(H) > 0.0)) { lam_in = lam_out; return 0; }
-    linearise(sys, x, a);
+    linearize(sys, x, a);
     const bool can_split = depth < max_depth && (2 << depth) <= m_max_pieces;
     int used = 0, j = 0;
     bool ok = false;
@@ -258,7 +258,7 @@ private:
     for (; j < max_columns; ++j) {
       const int nj = seq(j);
       const double h = H / nj;
-      factorise(h);
+      factorize(h);
       chain(sys, x, a, h, nj);
       chain_adjoint(adj, x, a, h, nj, lam_out, m_a);
       used += nj;
@@ -295,13 +295,13 @@ private:
   {
     const double H = b - a;
     if (!(std::abs(H) > 0.0)) { out = x; return; }
-    linearise(sys, x, a);
+    linearize(sys, x, a);
     const bool can_split = depth < max_depth && (2 << depth) <= m_max_pieces;
     bool ok = false;
     int j = 0;
     for (; j < max_columns; ++j) {
       const int nj = seq(j);
-      factorise(H / nj);
+      factorize(H / nj);
       chain(sys, x, a, H / nj, nj);
       m_a = m_X[nj];
       extrapolate(j, m_a);

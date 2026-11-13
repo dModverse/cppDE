@@ -34,7 +34,7 @@ prepareBatch(
 \item{model}{A model handle from \code{\link[=cppODE]{cppODE()}} or \code{\link[=cvode]{cvode()}}.}
 
 \item{conditions}{A named or unnamed list of per-condition argument lists.
-Recognised names are \code{times}, \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent},
+Recognized names are \code{times}, \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent},
 \code{curvature}, \code{fixed}, \code{forcings}, \code{abstol}, \code{reltol}, \code{maxattempts},
 \code{maxsteps}, \code{hini}, \code{roottol}, \code{maxroot}, \code{keepStore}, \code{store},
 \code{sensErrCon}, \code{adjoint}, \code{maxOrder} and \code{stald}; each overrides the
@@ -131,7 +131,7 @@ An object of class \code{"cppDEbatch"} for \code{\link[=solveBatch]{solveBatch()
 }
 \description{
 Validates and converts a set of conditions once, so that repeated solves
-with \code{\link[=solveBatch]{solveBatch()}}, an optimiser evaluating the same model at new
+with \code{\link[=solveBatch]{solveBatch()}}, an optimizer evaluating the same model at new
 parameters, only pass the numbers that changed. \code{\link[=solveODEBatch]{solveODEBatch()}} repeats
 that work on every call.
 }
@@ -139,7 +139,7 @@ that work on every call.
 \donttest{
 if (codegenAvailable()) {
   ## Marshal the conditions once, then re-solve with new numbers, as inside an
-  ## optimiser.
+  ## optimizer.
   f <- cppODE(c(x = "-k*x"), deriv = FALSE)
   conditions <- list(a = list(parms = c(x = 1, k = 0.1)),
                      b = list(parms = c(x = 2, k = 0.1)))

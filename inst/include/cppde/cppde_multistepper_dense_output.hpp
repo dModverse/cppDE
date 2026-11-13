@@ -152,7 +152,7 @@ public:
   // ====================================================================
   //  calc_state: Nordsieck polynomial evaluation, valid on
   //  [previous_time(), current_time()]. Pure arithmetic, so an AD type takes
-  //  its derivatives through it.
+  //  the derivatives through it.
   // ====================================================================
 
   template<class StateOut>
@@ -229,8 +229,8 @@ public:
   //  limit_step
   //
   //  Shortens the next step to end at t_stop where it would reach beyond it.
-  //  The history is rescaled here, since the step keeps its size for a change
-  //  below its own rescale threshold and would then end past t_stop.
+  //  The history is rescaled here, since the step keeps the size for a change
+  //  below the rescale threshold and would then end past t_stop.
   // ====================================================================
 
   void limit_step(time_type t_stop)

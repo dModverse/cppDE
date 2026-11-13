@@ -20,12 +20,12 @@
  Aliasing safety in compound assignment:
    The pattern `*this = *this + o;` (cppde_dual_math.hpp operator+= path) binds
    `*this + o` to an Expr that holds a const-ref to *this. Two layers protect
-   against aliasing during materialisation:
+   against aliasing during materialization:
      (1) DualLeaf snapshots `.x()` and the `tan_` pointer at construction, so
-         binding a fresh tan_ buffer on the LHS during materialisation does
-         not make the leaf read uninitialised arena memory.
+         binding a fresh tan_ buffer on the LHS during materialization does
+         not make the leaf read uninitialized arena memory.
      (2) BinExpr/UnaryExpr cache `y_` (and `fp_` for unary) at ctor, so
-         val_ = root.val() in the materialiser uses the OLD value of *this.
+         val_ = root.val() in the materializer uses the OLD value of *this.
    Tangent writes still happen at index i AFTER the read of leaf.tan(i) for
    the same i, so per-i in-place writes remain safe (forward-mode tangents
    are index-independent).
@@ -95,7 +95,7 @@ template<class X> struct is_et_operand
   // =============================================================================
   // Leaf: dual<T> reference. Snapshots .x() and the tan_ pointer at
   // construction, so a compound assignment such as *this = *this + o still reads
-  // the old value and the old buffer after materialisation has replaced them.
+  // the old value and the old buffer after materialization has replaced them.
   // =============================================================================
 template<class T>
 struct DualLeaf : Expr<DualLeaf<T>> {
@@ -285,7 +285,7 @@ struct AbsOp {
 // =============================================================================
 // pow nodes: three forms: pow(dual,dual), pow(dual,scalar), pow(scalar,dual).
 // Cache fa, fb, y in ctor; tan(i) = fa*l_t + fb*r_t. For the mixed-scalar
-// forms the missing operand contributes 0 to its tangent factor.
+// forms the missing operand contributes 0 to the tangent factor.
 // =============================================================================
 
 // pow(dual, dual): y = a^b

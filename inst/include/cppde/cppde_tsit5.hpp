@@ -148,8 +148,8 @@ public:
   // The stage matrix binds m_k1's tangents to column 0 and m_k7's to column 6,
   // and those bindings hold across steps, so reusing k7 as the next k1 is a
   // copy of the column slice rather than a rebinding. It goes through the
-  // slab-aware copy: at second order a tangent element holds a pointer of
-  // its own, which a flat memcpy would alias into column 0 instead of copying.
+  // slab-aware copy: at second order a tangent element holds a pointer to
+  // separate storage, which a flat memcpy would alias into column 0 instead of copying.
     if (m_fsal_valid && m_k1.m_v.size() == n) {
       vec_copy_with_slab(m_k1.m_v, m_K.slab(0), m_k7.m_v, m_K.slab(6));
     } else {

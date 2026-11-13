@@ -2,12 +2,12 @@
  Modes of the state switches of the right-hand side.
 
  A comparison of the model that reads a state is held as a mode, one boolean
- per switch, which the generated right-hand side, its Jacobian and every
+ per switch, which the generated right-hand side, the Jacobian and every
  derivative code read instead of the comparison. The integration loops locate
  the root of the comparison's argument and set the mode there, see
  cppde_event_engine.hpp; between two roots f is smooth in x.
 
- The generated solve hands its modes over per thread, since a batch runs
+ The generated solve hands the modes over per thread, since a batch runs
  several solves at once. Plain types and free of R.
 
  Copyright (C) 2026 Simon Beyer
@@ -47,12 +47,12 @@ struct switch_mode_scope {
 // right-hand side sets either value while it evaluates a branch.
 inline bool switch_mode(int k) { return switch_mode_sink().m[k] != 0; }
 
-// The value of a mode that slides along its surface.
+// The value of a mode that slides along the switching surface.
 constexpr signed char sliding_mode = 2;
 
 namespace detail {
 
-// A mode holds where its argument is positive, or zero for a non-strict
+// A mode holds where the comparison argument is positive, or zero for a non-strict
 // comparison.
 inline bool mode_holds(double g, bool closed) {
   return g > 0.0 || (closed && g == 0.0);

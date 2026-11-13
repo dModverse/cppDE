@@ -84,7 +84,7 @@ def generate_fun_cpp(exprs, variables, parameters=None,
         parameters: shared symbols, fixed ones included.
         ad: emit `_eval_ad` (dual); with `deriv2` also `_eval_ad2` (dual2nd).
         vjp: emit `_vjp`.
-        vjp_fr: emit `_vjp` and its forward-reverse form `_vjp_ad`.
+        vjp_fr: emit `_vjp` and the forward-reverse form `_vjp_ad`.
         outdir: output directory (required).
 
     Returns:
@@ -334,7 +334,7 @@ def _write_guarded(buf, emit_fn, nan_fill):
     body = rest.rstrip()
     if not body.endswith("}"):
         raise RuntimeError("guarded emitter did not end on a closing brace")
-    body = body[:-1].rstrip("\n")             # drop its own closer
+    body = body[:-1].rstrip("\n")             # drop the closing brace
 
     buf.write(head + "{\n")
     buf.write("    try {\n")
@@ -651,7 +651,7 @@ def _write_vjp_ad_impl(buf, model, modelname):
 
     Both terms of d/dv (w' J), J differentiated along the input tangents and J
     contracted with the cotangent's tangents, generated as one derivative of the
-    adjoint graph. Code outside a loop does not depend on its index.
+    adjoint graph. Code outside a loop does not depend on the loop index.
     """
     n_vars = len(model.variables)
     n_params = len(model.parameters)
@@ -894,7 +894,7 @@ def _write_eval_ad2_batch(buf, modelname):
 
 
 def _write_eval_ad2_function(buf, out_names, ctx, modelname, as_impl=False):
-    """`<model>_eval_ad2_impl` (`as_impl`) or its .C wrapper `<model>_eval_ad2`:
+    """`<model>_eval_ad2_impl` (`as_impl`) or the .C wrapper `<model>_eval_ad2`:
     y, dy and d2y in one pass on cppde::dual2nd<double>. The seeds dX2, dP2
     are optional: nullptr in the impl, has_dX2 / has_dP2 == 0 in the wrapper.
 

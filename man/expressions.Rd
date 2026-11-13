@@ -53,8 +53,8 @@ Every function works with every backend and derivative mode. \code{floor()},
 \code{ceiling()}, \code{round()} and \code{trunc()} have the derivative 0; \code{round()}
 rounds half to even, as R does. At a kink or step the derivative is that of
 the branch the value takes, forward and reverse alike: \code{sign()} and
-\code{Heaviside()} have the derivative 0, and a tie of \code{max()} takes its first
-argument, of \code{min()} its second. In the right-hand side of an ODE model they
+\code{Heaviside()} have the derivative 0, and a tie of \code{max()} takes the derivative of
+the first argument, of \code{min()} that of the second. In the right-hand side of an ODE model they
 take parameters and forcings only: of a state or of the time they jump
 where no root is located, which is an error. Write such a step with
 comparisons, \code{"piecewise(0, x < 1, 1, x < 2, 2)"}.
@@ -62,7 +62,7 @@ comparisons, \code{"piecewise(0, x < 1, 1, x < 2, 2)"}.
 
 \section{Switches}{
 
-\code{piecewise()} takes its arguments in SBML order: the first value whose
+\code{piecewise()} takes the arguments in SBML order: the first value whose
 condition holds, else \code{otherwise}. A comparison \code{<}, \code{<=}, \code{>} or \code{>=} on a
 state or on the time switches the right-hand side, inside \code{piecewise()} or
 as a factor, and so do \code{Heaviside()} and \code{sign()} of such an amount. The

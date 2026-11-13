@@ -6,7 +6,7 @@
 //
 // Six linear solves against one shared W = -J + I/(gamma*dt), and the reverse
 // pass never solves them the way the forward does. Each becomes the equation
-// W g = rhs with g recovered from the same factorisation the sweep uses
+// W g = rhs with g recovered from the same factorization the sweep uses
 // transposed, so the checkpoint holds nothing but the step start.
 //
 // Covered: the unit seeds and a mixed one, over one, two and four chained steps,
@@ -265,7 +265,7 @@ static void compare(const char* name, unsigned n_steps, const double* w)
     close(wS, got, std::string(name) + tag);
   }
 
-  // The stages come back out of the factorisation rather than a checkpoint, so
+  // The stages come back out of the factorization rather than a checkpoint, so
   // the run in double and the checkpointed one agreeing on the step end is the
   // check that they came back right.
   for (std::size_t i = 0; i < NX; ++i)

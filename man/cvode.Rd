@@ -84,7 +84,7 @@ use \code{SUNLinSol_LapackDense} rather than \code{SUNLinSol_Dense}.
 Generates a C++ ODE solver linked against SUNDIALS CVODES, from the system
 or from \code{\link[=installLibs]{installLibs()}}, compiles it via \verb{R CMD SHLIB}, and returns a handle
 for use with \code{\link[=solveODE]{solveODE()}}. Sensitivities are computed by the CVODES forward
-sensitivity solver (\code{deriv = TRUE}) or by its adjoint
+sensitivity solver (\code{deriv = TRUE}) or by the CVODES adjoint
 (\code{derivMode = "reverse"}). The compiled model exposes the same R interface
 as a model from \code{\link[=cppODE]{cppODE()}}; the differences between the two backends are
 described in \href{https://dmodverse.github.io/cppDE/articles/methods-cvode.html}{cvode() and its adjoint}.

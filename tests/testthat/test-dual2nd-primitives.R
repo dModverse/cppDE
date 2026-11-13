@@ -28,7 +28,7 @@ pts <- rbind(c(a = 1.5, b = 2.5, c = 3, x = 0.7),
              c(a = 0.4, b = 1.1, c = 2, x = 0.5))
 
 test_that("value, gradient and Hessian of every primitive match D()", {
-  # Identity seeds: each parameter is its own direction, no curvature in Phi.
+  # Identity seeds: each parameter is a separate direction, no curvature in Phi.
   dP  <- diag(4); dimnames(dP) <- list(pars, pars)
   dP2 <- array(0, c(4, 4, 4), dimnames = list(pars, pars, pars))
   for (i in seq_len(nrow(pts))) {

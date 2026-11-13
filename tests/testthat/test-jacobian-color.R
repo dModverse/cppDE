@@ -1,4 +1,4 @@
-# The coloured Jacobian against the entry-wise one, for both backends, forward
+# The colored Jacobian against the entry-wise one, for both backends, forward
 # sensitivities and the reverse sweep.
 
 skip_on_cran()
@@ -18,12 +18,12 @@ build_col <- function(strategy, backend, name, ...) {
 }
 
 mods_col <- list(
-  cpp_c = build_col("colour", cppODE, "cpp"), cpp_e = build_col("entries", cppODE, "cpp"),
-  rev_c = build_col("colour", cppODE, "rev", derivMode = "reverse"),
+  cpp_c = build_col("color", cppODE, "cpp"), cpp_e = build_col("entries", cppODE, "cpp"),
+  rev_c = build_col("color", cppODE, "rev", derivMode = "reverse"),
   rev_e = build_col("entries", cppODE, "rev", derivMode = "reverse"))
 if (isTRUE(cvodeConfig$available))
-  mods_col <- c(mods_col, list(cv_c = build_col("colour", cvode, "cv"), cv_e = build_col("entries", cvode, "cv")))
-do.call(compile, c(unname(mods_col), list(output = "test_jacobian_colour", cores = test_cores())))
+  mods_col <- c(mods_col, list(cv_c = build_col("color", cvode, "cv"), cv_e = build_col("entries", cvode, "cv")))
+do.call(compile, c(unname(mods_col), list(output = "test_jacobian_color", cores = test_cores())))
 
 test_that("the strategy reaches the generator", {
   src <- function(m) gsub(as.character(m)[1], "", readLines(attr(m, "srcfile")))
@@ -31,14 +31,14 @@ test_that("the strategy reaches the generator", {
   expect_false(identical(src(mods_col$rev_c), src(mods_col$rev_e)))
 })
 
-test_that("coloured and entry-wise Jacobians give the same forward sensitivities", {
+test_that("colored and entry-wise Jacobians give the same forward sensitivities", {
   a <- solveODE(mods_col$cpp_c, times_col, pars_col, abstol = 1e-10, reltol = 1e-10)
   b <- solveODE(mods_col$cpp_e, times_col, pars_col, abstol = 1e-10, reltol = 1e-10)
   expect_equal(a$variable, b$variable, tolerance = 1e-8)
   expect_equal(a$tangent, b$tangent, tolerance = 1e-8)
 })
 
-test_that("coloured and entry-wise Jacobians give the same reverse gradient", {
+test_that("colored and entry-wise Jacobians give the same reverse gradient", {
   W <- matrix(1, length(times_col), n_col)
   a <- solveODE(mods_col$rev_c, times_col, pars_col, abstol = 1e-10, reltol = 1e-10, cotangent = W)
   b <- solveODE(mods_col$rev_e, times_col, pars_col, abstol = 1e-10, reltol = 1e-10, cotangent = W)
@@ -46,7 +46,7 @@ test_that("coloured and entry-wise Jacobians give the same reverse gradient", {
   expect_equal(a$cotangent, b$cotangent, tolerance = 1e-8)
 })
 
-test_that("the coloured CVODE Jacobian matches the entry-wise one", {
+test_that("the colored CVODE Jacobian matches the entry-wise one", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE not available")
   a <- solveODE(mods_col$cv_c, times_col, pars_col, abstol = 1e-10, reltol = 1e-10)
   b <- solveODE(mods_col$cv_e, times_col, pars_col, abstol = 1e-10, reltol = 1e-10)

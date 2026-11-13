@@ -19,7 +19,7 @@
  onto this matrix to apply (q+1) × (q+1) Pascal / outer-product updates on the
  slot axis.
 
- dual2nd has a two-block specialisation. Any other non-slab T (plain double,
+ dual2nd has a two-block specialization. Any other non-slab T (plain double,
  nested dual) gets an empty stub, so multistepper<double, …> pays no size or
  codegen cost and nested-dual paths take the per-element loops.
 
@@ -88,7 +88,7 @@ public:
       n_cols_ = n_cols;
       storage_.assign(total_size(), inner_type{});
     }
-    // Bind each slab onto its slice and rebind its facade's tan_ pointers.
+    // Bind each slab onto the matching slice and rebind the tan_ pointers of the facade.
     for (unsigned j = 0; j < K; ++j) {
       if (facades[j] == nullptr) continue;
       slabs_[j].prime_external(*facades[j],
@@ -127,7 +127,7 @@ private:
 };
 
 // =============================================================================
-//  nordsieck_block specialisation for dual2nd<S>: K-slot two-block storage
+//  nordsieck_block specialization for dual2nd<S>: K-slot two-block storage
 //
 //    outer_block_ : K * n_rows * n_cols              dual<S>
 //    hess_block_  : K * n_rows * n_cols * n_cols     S

@@ -5,14 +5,14 @@
  Copyright (C) 2026 Simon Beyer
 
  This header defines stepper_traits<Stepper>, a type-trait struct that
- the EventEngine uses to adapt its behaviour to the stepper family:
+ the EventEngine uses to adapt the event handling to the stepper family:
 
- - needs_restart_after_event: true if the stepper must discard its
+ - needs_restart_after_event: true if the stepper must discard the
                               history and restart at order 1 after
                               a state discontinuity (events)
 
- The default (unspecialised) traits match Rosenbrock4 and other
- single-step methods.  The multistepper specialisation is matched via
+ The default (unspecialized) traits match Rosenbrock4 and other
+ single-step methods.  The multistepper specialization is matched via
  a nested tag typedef: see below.
 
  Distributed under the Boost Software License, Version 1.0.
@@ -58,7 +58,7 @@ template<class T>
 struct has_multistepper_tag<T, std::void_t<typename T::is_multistepper_tag>>
 : std::true_type {};
 
-// Specialisation for any type with the multistepper tag
+// Specialization for any type with the multistepper tag
 template<class Stepper>
 struct stepper_traits<Stepper,
                      std::enable_if_t<has_multistepper_tag<Stepper>::value>>
@@ -69,7 +69,7 @@ struct stepper_traits<Stepper,
 //  Trait propagation through wrapper layers
 //
 //  A wrapper exposing a stepper_type typedef inherits that stepper's traits
-//  unless it specialises stepper_traits itself, so a caller can query the
+//  unless it specializes stepper_traits itself, so a caller can query the
 //  outermost wrapper without knowing the nesting depth.
 // ============================================================================
 

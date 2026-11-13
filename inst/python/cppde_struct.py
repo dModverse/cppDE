@@ -229,7 +229,7 @@ def _target_join(shape, idx):
 
 
 class _Cone:
-    """Key of one cone: its structure with leaves and value points as slots
+    """Key of one cone: the cone structure with leaves and value points as slots
     numbered by first occurrence. A sum with at least `lim`
     terms of one structure becomes a reduction: those terms are keyed once,
     in a cone of their own each."""
@@ -566,7 +566,7 @@ def _unit_order(an, loops):
 
 
 def _dep_sorted(seq, deps):
-    """`seq` reordered so that every class follows its dependencies, keeping
+    """`seq` reordered so that every class follows the classes it depends on, keeping
     the given order where possible."""
     done = set()
     out = []

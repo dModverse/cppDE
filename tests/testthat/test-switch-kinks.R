@@ -69,7 +69,7 @@ kk_seed <- function(s) {
   W
 }
 
-test_that("a condition on a held comparison switches with its mode", {
+test_that("a condition on a held comparison switches with the comparison mode", {
   ref <- kk_closed()
   out <- tight(kk_mods$d2, kk_times, kk_p)
   expect_equal(unname(out$variable[, "y"]), ref$y, tolerance = 1e-9)

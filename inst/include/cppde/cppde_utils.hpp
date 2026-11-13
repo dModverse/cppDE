@@ -304,7 +304,7 @@ inline double estimate_initial_dt(
 //  cppde_hin: port of CVODES cvHin (sundials/src/cvodes/cvodes.c).
 //
 //  Used by the multistep methods: the bounds of CVODES's first step, with y''
-//  from the system's generated ydd() instead of cvHin's secant, so its
+//  from the system's generated ydd() instead of cvHin's secant, so the
 //  refinement ends in one round. See "The first step" of
 //  https://dmodverse.github.io/cppDE/articles/methods-stepping.html. The WRMS
 //  norm sweeps AD components unless sens_err_con is off, which makes the first
@@ -363,7 +363,7 @@ inline double cppde_hin(
   // --- 4. The refinement from the geometric-mean seed ---
   //
   // cvHin refines a secant estimate of y'' over trial steps. With y'' exact at
-  // the start its iteration ends after one round at what follows.
+  // the start the iteration ends after one round at what follows.
   const double hg = std::sqrt(hlb * hub);
   std::vector<Value> ydd(n);
   system.ydd(x0, f0, t0, ydd);

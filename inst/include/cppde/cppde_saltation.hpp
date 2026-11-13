@@ -37,7 +37,7 @@ namespace detail {
 // ============================================================================
 
 /// The coefficient of the second-order IFT correction, dt* -> dt* + c2 dt*^2,
-/// c2 = -g_ddot / (2 g_dot). Its own function because the backward sweep needs
+/// c2 = -g_ddot / (2 g_dot). A separate function because the backward sweep needs
 /// the same coefficient: ds/ds_lin is 1 + 2 c2 s_lin, one in value and a
 /// tangent in the second order.
 template<class state_type, class time_type>
@@ -48,11 +48,11 @@ inline double root_ift_curvature(
     double g_dot_s)
 {
   if (!evt.g_dot_dot)
-    throw std::logic_error("a root event without the second time derivative of its condition");
+    throw std::logic_error("a root event without the second time derivative of the root condition");
   return -0.5 * evt.g_dot_dot(x_before, t_event) / g_dot_s;
 }
 
-// r' = dg/dt + sum_i dg/dx_i f_i at (x, t), and the sum of its terms' sizes.
+// r' = dg/dt + sum_i dg/dx_i f_i at (x, t), and the sum of the sizes of the terms.
 template<class state_type, class time_type>
 inline typename state_type::value_type root_rate(
     const RootEvent<state_type, time_type>& evt, const state_type& x,
@@ -60,7 +60,7 @@ inline typename state_type::value_type root_rate(
 {
   using value_type = typename state_type::value_type;
   const size_t n = x.size();
-  // Armed, so a callee that opens its own arena scope writes the tangents here.
+  // Armed, so a callee that opens a separate arena scope writes the tangents here.
   state_type grad_g(n);
   for (auto& v : grad_g) ad_traits::arm_tangents(v);
   evt.dg_dx(x, t, grad_g);
@@ -220,7 +220,7 @@ inline void saltation_root_analytical_batch(
 // Analytical saltation correction for fixed-time events (AD path)
 //
 // The residual dt_corr = t_event - scalar(t_event) has scalar part zero and
-// holds dt_event/dp in its AD components. The sandwich around it is the one
+// holds dt_event/dp in the AD components. The sandwich around it is the one
 // the root path uses.
 // ============================================================================
 

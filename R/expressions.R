@@ -42,14 +42,14 @@
 #' `ceiling()`, `round()` and `trunc()` have the derivative 0; `round()`
 #' rounds half to even, as R does. At a kink or step the derivative is that of
 #' the branch the value takes, forward and reverse alike: `sign()` and
-#' `Heaviside()` have the derivative 0, and a tie of `max()` takes its first
-#' argument, of `min()` its second. In the right-hand side of an ODE model they
+#' `Heaviside()` have the derivative 0, and a tie of `max()` takes the derivative of
+#' the first argument, of `min()` that of the second. In the right-hand side of an ODE model they
 #' take parameters and forcings only: of a state or of the time they jump
 #' where no root is located, which is an error. Write such a step with
 #' comparisons, `"piecewise(0, x < 1, 1, x < 2, 2)"`.
 #'
 #' @section Switches:
-#' `piecewise()` takes its arguments in SBML order: the first value whose
+#' `piecewise()` takes the arguments in SBML order: the first value whose
 #' condition holds, else `otherwise`. A comparison `<`, `<=`, `>` or `>=` on a
 #' state or on the time switches the right-hand side, inside `piecewise()` or
 #' as a factor, and so do `Heaviside()` and `sign()` of such an amount. The

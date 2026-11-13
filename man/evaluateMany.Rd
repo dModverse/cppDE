@@ -26,8 +26,8 @@ one call from R and one parallel region.
 \examples{
 \donttest{
 if (codegenAvailable()) {
-  ## Two functions of one variable, compiled together, each with its own
-  ## argument set; the parameter seeds give the derivatives in a and b.
+  ## Two functions of one variable, compiled together and evaluated on separate
+  ## argument sets; the parameter seeds give the derivatives in a and b.
   f1 <- cppFUN(c(y = "a * x"), variables = "x", parameters = "a",
                modelname = "many_a", outdir = tempdir())
   f2 <- cppFUN(c(y = "exp(-b * x)"), variables = "x", parameters = "b",

@@ -135,7 +135,7 @@ case "${1:-}" in
 esac
 
 # -O1, not -O0: CPPDE_ET_INLINE is always_inline, which gcc can refuse to
-# honour at -O0. Skipped where the sanitizer runtimes are not installed.
+# honor at -O0. Skipped where the sanitizer runtimes are not installed.
 if $CXX $STD -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
         $INC ${KLU:-} -o "$OUT.asan" "$SRC" $LIBS 2>/dev/null; then
   ASAN_OPTIONS=detect_stack_use_after_scope=1 "$OUT.asan" > /dev/null

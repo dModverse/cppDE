@@ -312,7 +312,7 @@ def check_model_syntax(corpus):
         for style, scalar, lvl in SCALARS:
             for kw in (dict(sparse=False), dict(sparse=True),
                        dict(sparse=False, emit_contractions=True, emit_jvp=True)):
-                for strat in ("entries", "colour"):
+                for strat in ("entries", "color"):
                     CO.cppde_model.JACOBIAN_STRATEGY = strat
                     try:
                         r = CO.generate_ode_cpp(rhs, params, num_type=scalar,
@@ -365,7 +365,7 @@ def check_cvode_syntax(corpus):
         ("llg_klu", llg, llg_p, [], dict(deriv=True, sparse=True)),
     ]
     for name, rhs, params, forcings, kw in runs:
-        for strat in ("entries", "colour"):
+        for strat in ("entries", "color"):
             CV.cppde_model.JACOBIAN_STRATEGY = strat
             try:
                 r = CV.generate_cvode_cpp(rhs, params, "cv_%s_%s" % (name, strat), d,
@@ -430,7 +430,7 @@ def near(a, b, floor):
 
 
 def cancel_floor(values):
-    """Rounding left by cancelling terms: 1e-12 of the largest finite output
+    """Rounding left by canceling terms: 1e-12 of the largest finite output
     of the same function."""
     return 1e-12 * max([abs(v) for v in values if math.isfinite(v)] + [0.0])
 
@@ -653,8 +653,8 @@ def run_jac(fn, m, pt, sparse, n, W=None, x=None, p=None, t=None):
 
 
 def check_jacobian(corpus, models_limit=None):
-    """ode_system and jacobian (entries, colour; dense, sparse) against the
-    legacy SymPy derivatives; colour against entries."""
+    """ode_system and jacobian (entries, color; dense, sparse) against the
+    legacy SymPy derivatives; color against entries."""
     import cppde_model as CM
     t = H.Tally("jacobian: functors vs SymPy")
     tp = H.Tally("jacobian: pattern, decide_sparse, KLU")
@@ -670,7 +670,7 @@ def check_jacobian(corpus, models_limit=None):
             ev_d = H.Evaluator(dd, names)
             f = py_body(m, CM.ode_statements(m), ["x", "dxdt", "t", "params", "F"])
             fns = {(s, sp_): py_body(m, CM.jacobian_statements(m, sp_, s), JAC_ARGS)
-                   for s in ("entries", "colour") for sp_ in (False, True)}
+                   for s in ("entries", "color") for sp_ in (False, True)}
         except Exception as e:
             t.skip("%s: %s" % (label, str(e)[:100]))
             continue
@@ -695,14 +695,14 @@ def check_jacobian(corpus, models_limit=None):
                 t.compare(a, b, H.TOL, "%s f[%d]: %r vs %r" % (label, i, a, b))
             wantJ = dict(zip(flatJ, ev_J(env)))
             want_d = ev_d(env)
-            # a coloured row is only as finite as its worst entry (0 * inf)
+            # a colored row is only as finite as the worst entry in it (0 * inf)
             bad_rows = {i for (i, j), b in wantJ.items() if not math.isfinite(b)}
             for (strat, sparse), fn in fns.items():
                 negJ, dfdt, _ = run_jac(fn, m, pt, sparse, m.n)
                 for i in range(m.n):
                     for j in range(m.n):
                         b = wantJ.get((i, j), 0.0)
-                        if strat == "colour" and i in bad_rows:
+                        if strat == "color" and i in bad_rows:
                             b = math.nan
                         t.compare(-negJ[i][j], b, 1e-12, "%s %s/%s J[%d,%d]: %r vs %r"
                                   % (label, strat, "csc" if sparse else "dense",
@@ -733,7 +733,7 @@ def check_jacobian_reuse(corpus, models_limit=None):
             t.skip("%s: %s" % (label, e))
             continue
         import cppde_model as CM
-        for strat in ("entries", "colour"):
+        for strat in ("entries", "color"):
             for sparse in (True, False):
                 fn = py_body(m, CM.jacobian_statements(m, sparse, strat), JAC_ARGS)
                 pt = H.Point(m, rng, 0)
@@ -774,7 +774,7 @@ def check_jacobian_dual(corpus, models_limit=None):
             continue
         if not pidx:
             continue
-        for strat in ("entries", "colour"):
+        for strat in ("entries", "color"):
             fn = py_body(m, CM.jacobian_statements(m, False, strat), JAC_ARGS)
             for _ in range(2):
                 pt = H.Point(m, rng, 0)
@@ -1079,7 +1079,7 @@ def _lin_functions(m):
     import cppde_model as CM
     fs = {"f": ("x", rhs_function(m))}
     fs.update(compile_functions(m))
-    for strat in ("entries", "colour"):
+    for strat in ("entries", "color"):
         for sparse in (False, True):
             fs[(strat, sparse)] = ("jac", py_body(
                 m, CM.jacobian_statements(m, sparse, strat), JAC_ARGS))
@@ -1180,8 +1180,8 @@ def check_linear_codegen(corpus):
 _VEC_DEFAULT = None
 
 
-def _set_vectorise(value):
-    """Loop threshold of the generator, "" for its default."""
+def _set_vectorize(value):
+    """Loop threshold of the generator, "" for the generator default."""
     global _VEC_DEFAULT
     import cppde_struct as cs
     if _VEC_DEFAULT is None:
@@ -1196,7 +1196,7 @@ def _model_statements(m, emit_jvp=True):
     for name, kind, stores in m.contraction_stores(emit_jvp):
         out[name] = (kind, CM.stores_prelude(m, stores, "double")
                      + [CM.block(m.g, stores, "_t")], ARGS)
-    for strat in ("entries", "colour"):
+    for strat in ("entries", "color"):
         for sparse in (False, True):
             out[(strat, sparse)] = ("jac", CM.jacobian_statements(m, sparse, strat),
                                     JAC_ARGS)
@@ -1246,7 +1246,7 @@ def _run(m, key, kind, fn, pt):
     return call(fn, kind, m, pt)
 
 
-def check_vectorise(corpus):
+def check_vectorize(corpus):
     """Every model function with and without loops, bit for bit."""
     t = H.Tally("loops: functions with and without, identical")
     ta = H.Tally("loops: with sums as loops, 1e-13")
@@ -1256,9 +1256,9 @@ def check_vectorise(corpus):
         for label, rhs, params, forcings in list(H.VECTOR_MODELS) + ode_models(corpus):
             try:
                 m = H.OdeModel(rhs, params, forcings)
-                _set_vectorise(0)
+                _set_vectorize(0)
                 plain = _model_statements(m)
-                _set_vectorise("")
+                _set_vectorize("")
                 vec = _model_statements(m)
             except Exception as e:
                 t.skip("%s: %s" % (label, str(e)[:100]))
@@ -1292,7 +1292,7 @@ def check_vectorise(corpus):
                                        % (label, key, i, x, y), singular=ill)
             print("  %-16s %4d states, %3d loops" % (label, m.n, nl))
     finally:
-        _set_vectorise("")
+        _set_vectorize("")
     print("  %d models with loops" % looped)
     ok = t.report()
     return ta.report() and ok
@@ -1351,7 +1351,7 @@ def _cv_call(fn, pt, x=None, **kw):
 
 def check_cvode(corpus):
     """CVODE callbacks against SymPy: f, +J, the sensitivity right-hand side,
-    the adjoint and its quadrature, event and root partials."""
+    the adjoint and the adjoint quadrature, event and root partials."""
     import cppde_model as CM
     t = H.Tally("cvode: callbacks vs SymPy")
     rng = random.Random(61)
@@ -1373,7 +1373,7 @@ def check_cvode(corpus):
             f = py_body(m, CM.cvode_rhs_statements(m), CV_ARGS)
             jac = {(s_, sp_): py_body(m, CM.jacobian_statements(m, sp_, s_, cvode=True),
                                       CV_ARGS)
-                   for s_ in ("entries", "colour") for sp_ in (False, True)}
+                   for s_ in ("entries", "color") for sp_ in (False, True)}
             sens_p = set(range(np_))
             sens = py_body(m, CM.cvode_sens_statements(m, sens_p), CV_ARGS)
             xb, qb = CM.cvode_adjoint_statements(m)
@@ -1406,7 +1406,7 @@ def check_cvode(corpus):
                 for i in range(m.n):
                     for j in range(m.n):
                         b = Jv.get((i, j), 0.0)
-                        if s_ == "colour" and any(not math.isfinite(Jv.get((i, c), 0.0))
+                        if s_ == "color" and any(not math.isfinite(Jv.get((i, c), 0.0))
                                                   for c in range(m.n)):
                             b = math.nan
                         t.compare(dense[i][j], b, 1e-12, "%s %s/%s J[%d,%d]: %r vs %r"
@@ -1507,7 +1507,7 @@ CHECKS = {
     "fun": check_fun,
     "linear": check_linear,
     "linear-codegen": check_linear_codegen,
-    "vectorise": check_vectorise,
+    "vectorize": check_vectorize,
     "vector-size": check_vector_size,
     "model-syntax": check_model_syntax,
     "cvode": check_cvode,

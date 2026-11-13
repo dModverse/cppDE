@@ -2,7 +2,7 @@
 #
 # ASA is not an oracle. It solves the adjoint as its own ODE over checkpointed
 # forward states rather than differentiating the steps the forward run took, so
-# it is a third discretisation. What it is good for is a second implementation
+# it is a third discretization. What it is good for is a second implementation
 # of the same mathematics, by a different group, against which a systematic
 # error in ours would show.
 
@@ -177,7 +177,7 @@ test_that("ASA and the native adjoint answer the same question", {
   asa <- do.call(solveODE, c(list(ma, times, pars, cotangent = W), tol))
 
   # Two implementations with nothing in common but the mathematics. They differ
-  # by the discretisation, so this is a loose tolerance on purpose; a systematic
+  # by the discretization, so this is a loose tolerance on purpose; a systematic
   # error in either would be orders wider.
   expect_equal(unname(asa$cotangent[, 1]),
                unname(rev$cotangent[rownames(asa$cotangent), 1]),

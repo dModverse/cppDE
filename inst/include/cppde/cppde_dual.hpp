@@ -33,7 +33,7 @@
 namespace cppde {
 
 // Forward declaration of the ET CRTP base (cppde_dual_expr.hpp). A templated
-// assignment from any ET node lets `dxdt[i] = a*b + c*d` materialise the whole
+// assignment from any ET node lets `dxdt[i] = a*b + c*d` materialize the whole
 // tree into dxdt[i] without intermediate arena allocations.
 namespace dual_expr {
   template<class Derived> struct Expr;
@@ -44,7 +44,7 @@ namespace dual_expr {
 //
 // A trivially destructible and trivially default-constructible type gets a bare
 // bump. A non-trivial default ctor still has to run, or a nested dual would find
-// a stale tan_ and skip its own allocation. A real dtor adds dtor tracking.
+// a stale tan_ and skip the allocation. A real dtor adds dtor tracking.
 namespace detail {
 
 template<class T>
@@ -112,7 +112,7 @@ public:
   dual& operator=(const U& v) {
     val_ = static_cast<T>(v);
     // Keep the buffer and zero the tangent values. Dropping to size_ = 0 would
-    // be equivalent downstream, but a slab-bound dual would lose its binding on
+    // be equivalent downstream, but a slab-bound dual would lose the binding on
     // every `dual = scalar`, and the bound paths take the BLAS route anyway.
     if (size_ > 0) {
       for (unsigned i = 0; i < size_; ++i) tan_[i] = T();
@@ -152,7 +152,7 @@ public:
   }
 
   // -- expression-template assignment / construction --------------------------
-  // Materialises an Expr<D> tree straight into this dual: one scalar pass for
+  // Materializes an Expr<D> tree straight into this dual: one scalar pass for
   // the value, one arena allocation or in-place reuse, one fused tangent loop.
   // Definitions live in cppde_dual_expr.hpp, once Expr<D> is complete.
   template<class D>
@@ -162,7 +162,7 @@ public:
   dual(const dual_expr::Expr<D>& e);
 
   // In-place compound assignment from an Expr<D>. Without these overloads the
-  // compiler routes through operator+=(const dual&) and synthesises a temporary
+  // compiler routes through operator+=(const dual&) and synthesizes a temporary
   // that allocates a tangent buffer per element, the dominant cost in axpy.
   template<class D>
   dual& operator+=(const dual_expr::Expr<D>& e);
@@ -232,7 +232,7 @@ public:
 
   // Bind a zeroed tangent buffer now, without claiming a dependence, so a write
   // inside a callee's own dual_arena::scope reuses it instead of allocating there.
-  // A dual with no width of its own takes the caller's declared one, if any.
+  // A dual with no width set takes the caller's declared one, if any.
   void arm() {
     if (size_ == 0) {
       const unsigned w = dual_arena::default_tangent_width();

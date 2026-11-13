@@ -95,7 +95,7 @@ static void run(int n) {
   direct.factorize(Wt);
   direct.solve(b);                    // W^T x = b, the long way round
   transposed.factorize(W);
-  transposed.solve_transposed(b2);    // the same, on the factorisation of W
+  transposed.solve_transposed(b2);    // the same, on the factorization of W
 
   const std::string tag = "n=" + std::to_string(n);
   for (int i = 0; i < n; ++i) {

@@ -40,9 +40,9 @@ namespace detail {
 // ============================================================================
 // Unified stepper reset
 //
-// In this order: a multistep method discards its history and restarts at order
-// one, a dense-output stepper reinitialises both buffers, a controlled stepper
-// resets its PI controller, anything else does nothing.
+// In this order: a multistep method discards the history and restarts at order
+// one, a dense-output stepper reinitializes both buffers, a controlled stepper
+// resets the PI controller, anything else does nothing.
 // ============================================================================
 
 template<class S, class State, class Time, class = void>
@@ -122,7 +122,7 @@ struct no_dt_estimator {};
 // Which events fire and when is a control decision, so the reverse mode reads
 // it off this note rather than deciding again; what the jump did to the state
 // is arithmetic and gets replayed. t_before is where the state entering the
-// jump was read, which is the localised root time for a root event and the
+// jump was read, which is the localized root time for a root event and the
 // output time for a fixed one.
 // ============================================================================
 
@@ -131,7 +131,7 @@ struct event_note {
   double t          = 0.0;
   double t_before   = 0.0;
   bool   root       = false;   // root-triggered, so the saltation batch applies
-  bool   restart    = false;   // the stepper was reinitialised on the far side
+  bool   restart    = false;   // the stepper was reinitialized on the far side
   // A restart after the stepper stalled, see advance(): past a jump of the
   // right-hand side in t, or in place. The state follows f(t_before, x_before)
   // from t_before to t; no event fired.
@@ -178,7 +178,7 @@ public:
  void set_termination(TerminationFunc f) { m_termination = std::move(f); }
 
  // Called after every accepted step of the dense loop, where the reverse mode
- // drops its checkpoint; it reads the stepper itself. The controlled loop is
+ // drops a checkpoint; it reads the stepper itself. The controlled loop is
  // not hooked, so the reverse mode needs dense output.
  void set_step_observer(StepObserver f) { m_step_obs = std::move(f); }
 
@@ -220,7 +220,7 @@ private:
    }
  }
 
- // A switch leaving its surface shows no sign change; it counts as left once
+ // A switch leaving the surface shows no sign change; it counts as left once
  // |g| exceeds the root's residual and rounding. Two such flips in a row mean
  // the solution slides along the surface.
  void leave_surface(size_t i, double g, const State& x_lo, const Time& t_lo,
@@ -231,14 +231,14 @@ private:
    if (!(std::abs(g) > 4.0 * surface_noise(e, x_lo, t_lo))) return;
    if (m_off_surface[i])
      throw std::runtime_error(
-         "a state switch chatters: the solution slides along its switching "
+         "a state switch chatters: the solution slides along the switching "
          "surface, which is not supported");
    m_off_surface[i] = true;
    triggered.push_back({i, on ? 1e-300 : -1e-300, g});
  }
 
- // What a root reads on its surface at (x, t): its residual there plus the
- // rounding of its terms, |g_x| |x| + |g_t| |t| a few doubles deep.
+ // What a root reads on the surface at (x, t): the residual there plus the
+ // rounding of the terms of g, |g_x| |x| + |g_t| |t| a few doubles deep.
  double surface_noise(const RootEvent<State, Time>& e, const State& x, const Time& t) {
    return std::abs(scalar_value(e.func(x, t))) +
           16.0 * std::numeric_limits<double>::epsilon() * root_terms(e, x, t);
@@ -257,8 +257,8 @@ private:
    return m;
  }
 
- // A mode read afresh after a jump, except on its surface: there the jump left
- // its root where it was, and the crossing that put it there, or leave_surface
+ // A mode read afresh after a jump, except on the switch surface: there the jump left
+ // the root where it was, and the crossing that put it there, or leave_surface
  // after the restart, decides the mode.
  void reread_mode(size_t i, const State& xs, const Time& ts) {
    const auto& e = m_root[i];
@@ -325,7 +325,7 @@ private:
 
  // Events triggered together share one dt* and one roundtrip, except
  // switches alone: two that coincide at the nominal parameters move apart with
- // them, so each takes its own saltation, in the order triggered.
+ // them, so each takes a separate saltation, in the order triggered.
  void saltate_switches_apart(State& x_root, const State& x_before, const Time& t_root,
                              const std::vector<TriggeredEvent>& triggered) {
    std::vector<TriggeredEvent> apart;
@@ -375,7 +375,7 @@ private:
        "branches that keeps the solution on all their surfaces");
  }
 
- // Switch k slides where both branches move onto its surface at (x, t).
+ // Switch k slides where both branches move onto the surface at (x, t).
  void enter_slide(int k, const State& x, const Time& t) {
    if constexpr (is_sliding_system<System>::value) {
      int off = 0, on = 0;
@@ -399,7 +399,7 @@ private:
    }
  }
 
- // The modes after a crossing: a triggered switch takes the side its root
+ // The modes after a crossing: a triggered switch takes the side the root
  // crossed to, and a reset among the events reads every other mode afresh.
  void switch_after_roots(const std::vector<TriggeredEvent>& triggered,
                          const State& xs, const Time& ts) {
@@ -446,8 +446,8 @@ private:
  }
 
  // An event puts the state on a different trajectory, so the step size is
- // re-estimated from the post-event state the way the solve estimated its
- // first. A multistep method also loses its history at this point.
+ // re-estimated from the post-event state the way the solve estimated the
+ // first. A multistep method also loses the history at this point.
  void recalibrate_dt(State& x, Time t, Time& dt) {
    if constexpr (!std::is_same_v<DtEstimator, no_dt_estimator>) {
      dt = m_dt_estimator(x, t);
@@ -748,7 +748,7 @@ public:
        snapshot_modes(m_modes_after);
        recalibrate_dt(x, *it, dt);
        m_st.initialize(x, *it, dt);
-       // No restart note: the trajectory's own start is initialised below, and
+       // No restart note: the trajectory's own start is initialized below, and
        // the reverse mode reads that from the first checkpoint.
        event_note<State> e;
        e.t = e.t_before = scalar_value(*it);
@@ -774,7 +774,7 @@ public:
    dt = m_st.current_time_step();
    checker.set_last_dt(scalar_value(t_end) - scalar_value(t_start));
 
-   // x_at_start is read by root localisation and the termination
+   // x_at_start is read by root localization and the termination
    // predicate only.
    const bool track_bracket = dense_always;
 
@@ -930,7 +930,7 @@ private:
  // One accepted step of the dense stepper. A stepper that stalls at a jump of
  // the right-hand side in t is bridged over it; the bridge is no step, leaves
  // no checkpoint, and the stepper restarts past it before the next step. A
- // stall with no jump ahead restarts the stepper where it stands: its history
+ // stall with no jump ahead restarts the stepper where it stands: the history
  // may still hold the right-hand side from before a jump a step went across.
  // --------------------------------------------------------------------------
  template<class Checker>
@@ -1046,7 +1046,7 @@ private:
    return jump(hi, f_lo) > 0.5 ? hi : nan;
  }
 
- // Restarts the stepper on its current state, noted for the reverse mode as a
+ // Restarts the stepper on the current state, noted for the reverse mode as a
  // crossing that began at (t_before, x_before).
  void restart_crossing(double t_before, const State& x_before) {
    State x = m_st.current_state();
@@ -1063,15 +1063,15 @@ private:
    }
  }
 
- // How closely a root is localised. A switch is not an event the caller times,
- // and its time enters the state through the jump of f, so it gets the bracket
+ // How closely a root is localized. A switch is not an event the caller times,
+ // and the switch time enters the state through the jump of f, so it gets the bracket
  // of a few doubles whatever root_tol says.
  double root_tol_for(size_t idx, double tol, double t) const {
    if (m_root[idx].mode < 0) return tol;
    return std::min(tol, 1e-13 * std::max(1.0, std::abs(t)));
  }
 
- // The roots of `triggered` localised on the dense output, each from where its
+ // The roots of `triggered` localized on the dense output, each from where the
  // bracket opens. Those at the earliest of them, within the root tolerance,
  // stay; a later one crosses after the restart and is found again there.
  void localize_cluster_dense(std::vector<TriggeredEvent>& triggered,
@@ -1092,7 +1092,7 @@ private:
    keep_cluster(triggered, at, best, tol);
  }
 
- // The same for the controlled loop, which localises by stepping again from
+ // The same for the controlled loop, which localizes by stepping again from
  // the lower end of each bracket; x and t end on the earliest root.
  template<class Checker>
  void localize_cluster_controlled(std::vector<TriggeredEvent>& triggered,
@@ -1196,7 +1196,7 @@ private:
  // Whether any root is a state switch, and the modes around the last jump.
  bool m_has_modes = false;
  std::vector<signed char> m_modes_before, m_modes_after;
- // Per switch: whether its mode was last set on leaving the surface, see
+ // Per switch: whether the mode was last set on leaving the surface, see
  // leave_surface().
  std::vector<bool> m_off_surface;
  std::vector<double> m_switch_t;   // when each switch last flipped

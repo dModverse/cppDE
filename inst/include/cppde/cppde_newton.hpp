@@ -277,7 +277,7 @@ newton_result ndf_newton_solve(
     { auto _t = prof.timer(prof_cat::lu_solve);
       lu.solve(tempv); }
 
-    // W was factorised at gammap and the residual is scaled by the current
+    // W was factorized at gammap and the residual is scaled by the current
     // gamma, so gamrat = gamma / gammap restores the step CVODES takes on
     // I - gammap J; under BDF CVODES then scales by 2 / (1 + gamrat).
     if (std::abs(gamrat - 1.0) > 1e-14) {

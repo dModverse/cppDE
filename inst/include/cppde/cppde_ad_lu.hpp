@@ -1,7 +1,7 @@
 /*
  AD-aware dense LU solver for cppDE.
 
- The base case factorises and solves in the loops of cppde_small_la.hpp up to
+ The base case factorizes and solves in the loops of cppde_small_la.hpp up to
  small_la::max_n unknowns and by LAPACK dgetrf/dgetrs above.
  Nested AD types (dual<dual<T>>) are handled by recursive IFT peeling.
 
@@ -91,7 +91,7 @@ public:
   }
 
   // Solve in-place against the transpose: b <- W^-T b. The reverse mode's
-  // implicit-function step, where the same factorisation serves both directions.
+  // implicit-function step, where the same factorization serves both directions.
   void solve_transposed(std::vector<Scalar>& b) const
   { solve_rhs('T', b.data(), 1); }
 
@@ -154,7 +154,7 @@ public:
     if (m_W_val.rows() != n)
       m_W_val.resize(n, n);
     if constexpr (cppde::ad_traits::is_dual2nd<F>::value) {
-      // dual2nd: synthesise the value-layer dual<S> from the inline
+      // dual2nd: synthesize the value-layer dual<S> from the inline
       // gradient (outer.tan_[k].x()).
       for (int k = 0; k < nn; ++k)
         assign_first_order(m_W_val.data[k], W.data[k]);
@@ -262,7 +262,7 @@ public:
     bulk_inject_results(b, m_b_val, m_rhs_all, n, n_derivs);
   }
 
-  // W^-T b on the same factorisation. The peeling transposes with the matrix:
+  // W^-T b on the same factorization. The peeling transposes with the matrix:
   // the value layer solves W_val^T x = b_val, and each derivative layer solves
   // W_val^T x' = b' - (dW)^T x_val. Used once per step by the written adjoint,
   // so the derivative layers go one at a time rather than batched.
@@ -329,7 +329,7 @@ public:
 
     // Batched solve over nrhs column-major right-hand sides: one value-layer
     // solve, one IFT correction as a dgemm or a fused pass, one derivative-layer
-    // solve. Saves nrhs - 1 inner dispatches and amortises the buffers.
+    // solve. Saves nrhs - 1 inner dispatches and amortizes the buffers.
   void solve_batch(std::vector<F>& B_flat, int nrhs) const
   {
     if (nrhs <= 0) return;

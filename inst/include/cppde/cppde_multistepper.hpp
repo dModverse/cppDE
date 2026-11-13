@@ -758,7 +758,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     m_crate = 1.0;
     m_nstlp = m_nst;
   }
-  // No else: with callSetup false the stale W factorised at gammap is reused.
+  // No else: with callSetup false the stale W factorized at gammap is reused.
   // The Newton residual uses the current gamma, so convergence holds as long as
   // gamrat stays within DGMAX, which is what triggers callSetup above.
 
@@ -1569,7 +1569,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   //
   //  by Horner from the top slot down. With primed slabs and a plain inner type
   //  the Horner runs on a slab-bound scratch, so the tangent half is one tight
-  //  loop over the contiguous block instead of n element-wise materialisations.
+  //  loop over the contiguous block instead of n element-wise materializations.
   //  Without a slab it collapses to the same per-element Horner.
   // ====================================================================
 

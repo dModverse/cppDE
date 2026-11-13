@@ -1,6 +1,6 @@
 # The BLAS fork guard: BLAS pinned to one thread for the width of every fork()
 # and restored in the parent. A regression here deadlocks a forked worker rather
-# than returning a wrong answer, so the fork case runs in its own process under
+# than returning a wrong answer, so the fork case runs in a separate process under
 # a timeout and asserts on the exit status.
 
 skip_on_cran()

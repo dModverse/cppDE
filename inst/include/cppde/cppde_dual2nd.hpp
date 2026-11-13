@@ -1,7 +1,7 @@
 /*
  cppde::dual2nd<T>: second-order forward-mode AD type.
 
- dual2nd publicly inherits from dual<dual<T>>, so its storage layout and
+ dual2nd publicly inherits from dual<dual<T>>, so the storage layout and
  accessor surface (.x(), .d(j), .size(), .depend(), .diff(), operator[]) serve
  the generic AD machinery and the LU's IFT recursion.
 
@@ -77,7 +77,7 @@ public:
     return *this;
   }
 
-    // The scalar of v into the value layer, and its tangents where that layer
+    // The scalar of v into the value layer, and the tangents of v where that layer
     // is bound; binds nothing.
   void set_value_layer(const inner_dual_t& v) {
     inner_dual_t& own = base::x();
@@ -88,7 +88,7 @@ public:
     // ---------------------------------------------------------------------------
     // Triangular accessors. The gradient lives in outer.tan_[i].x(), which is
     // what d1_at(i) reads. dd_at(i, j) is the canonical lower-triangle Hessian
-    // slot and canonicalises an unordered index pair.
+    // slot and canonicalizes an unordered index pair.
     // ---------------------------------------------------------------------------
 
     // First-order tangent df/dtheta_i, the tan_-side copy. The mutable overload
@@ -102,7 +102,7 @@ public:
   }
 
     // Second-order tangent d^2f/dtheta_i dtheta_j, stored at
-    // outer.tan_[max(i,j)].tan_[min(i,j)]. Both overloads canonicalise the pair,
+    // outer.tan_[max(i,j)].tan_[min(i,j)]. Both overloads canonicalize the pair,
     // the mutable one needs armed storage.
   T& dd_at(unsigned i, unsigned j) {
     const unsigned r = (j <= i) ? i : j;
@@ -115,7 +115,7 @@ public:
     return static_cast<const base*>(this)->d(r).d(c);
   }
 
-    // Raw (i, j) inner-tangent slot, without canonicalisation. mirror_upper_dd
+    // Raw (i, j) inner-tangent slot, without canonicalization. mirror_upper_dd
     // copies the lower triangle into the upper one with it, so the LU's IFT
     // extraction finds a populated [j][i] cell.
   T& dd_raw(unsigned i, unsigned j) {
@@ -147,7 +147,7 @@ public:
   const T& scalar() const { return base::x().x(); }
 
     // -- Expression-template assignment / construction -------------------------
-    // Materialises an Expr2nd<D> tree into this dual2nd's storage, defined in
+    // Materializes an Expr2nd<D> tree into this dual2nd's storage, defined in
     // cppde_dual2nd_expr.hpp. Deduction matches CRTP derivations only, so the
     // dual2nd-to-dual2nd and scalar paths fall back to the base operators.
   template<class D>
@@ -157,7 +157,7 @@ public:
   inline dual2nd(const dual2nd_expr::Expr2nd<D>& e);
 
   // Compound assignment from Expr2nd: route through (*this op other) which
-  // builds a BinExpr2 and materialises into *this. The eager nested base
+  // builds a BinExpr2 and materializes into *this. The eager nested base
   // operator+=(const dual<dual<T>>&) is preserved for plain dual2nd
   // operands via inheritance.
   template<class D>
@@ -198,7 +198,7 @@ private:
   }
 
     // As copy_from, but an unbound outer layer takes the buffer of o and a
-    // bound one takes its rows.
+    // bound one takes the rows of o.
   void move_from(dual2nd& o) noexcept {
     set_value_layer(static_cast<const base&>(o).x());
     base& b = *this;
@@ -217,9 +217,9 @@ private:
   }
 };
 
-// The first-order dual of v, its scalar and inline gradient outer.tan_[k].x(),
+// The first-order dual of v, the scalar and inline gradient outer.tan_[k].x(),
 // written into the tangent storage dst already has, so that a buffer filled on
-// every solve allocates on its first fill only.
+// every solve allocates on the first fill only.
 template<class S>
 inline void assign_first_order(cppde::dual<S>& dst, const cppde::dual2nd<S>& v) {
   const unsigned m = v.size();

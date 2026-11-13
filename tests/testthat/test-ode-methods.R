@@ -93,7 +93,7 @@ test_that("every method returns the closed-form states and sensitivities", {
 })
 
 test_that("all methods keep their order on an explicitly time-dependent system", {
-  # A wrong df/dt term costs a Rosenbrock method its order and inflates its
+  # A wrong df/dt term costs a Rosenbrock method the order and inflates the
   # step count.
   exact <- function(t) (1 - 1/26) * exp(-t) + (cos(5 * t) + 5 * sin(5 * t)) / 26
   for (m in methods_all) {
@@ -275,7 +275,7 @@ test_that("a forcing that multiplies a state reaches the Jacobian", {
     b <- solveODE(forced, tt, pm, forcings = list(u = u_data), abstol = 1e-12, reltol = 1e-12)
     (a$variable - b$variable) / (2 * h)
   }, matrix(0, length(tt), 2L))
-  # Loose because each adaptive solve takes its own grid; a missing forcing term
+  # Loose because each adaptive solve takes a different grid; a missing forcing term
   # is orders of magnitude larger.
   for (k in seq_along(p))
     expect_equal(unname(res$tangent[, , k]), unname(fd[, , k]), tolerance = 1e-3,

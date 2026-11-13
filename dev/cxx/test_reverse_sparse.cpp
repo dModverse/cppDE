@@ -1,11 +1,11 @@
-// The trajectory backwards over a sparse factorisation.
+// The trajectory backwards over a sparse factorization.
 //
-// The reverse pass leans on one factorisation in both directions: forward to
+// The reverse pass leans on one factorization in both directions: forward to
 // recover what a stage solved for, transposed to pass a cotangent back. The
 // transposed KLU kernel is checked against LAPACK in test_sparse_transpose.cpp,
 // but no sparse model had ever been run through the reverse stepper itself,
 // which left the seam between the two untested: the pattern the Jacobian
-// builds, the refactorisation the pivot-growth check triggers, and the
+// builds, the refactorization the pivot-growth check triggers, and the
 // per-step transposed solve.
 //
 // Same model, same tolerances and same seeds as
@@ -354,7 +354,7 @@ static void forward_sens(const store_of<S>& store, std::size_t n_carry,
 }
 
 // Replays the recorded sequence in double, for a finite-difference probe of the
-// same prescribed discretisation both modes differentiate.
+// same prescribed discretization both modes differentiate.
 template<class S>
 static void replay_values(const store_of<S>& store, std::vector<double>& x_obs,
                           bool verify_carry = false, const char* name = "")

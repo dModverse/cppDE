@@ -29,7 +29,7 @@ Description: Generates, compiles and runs 'C++' code for models given as
     parameters and, forward over reverse, Hessian-vector products. Events
     triggered by time or state, forcings, and batches of conditions solved
     in parallel are supported.
-Language: en-GB
+Language: en-US
 License: MIT + file LICENSE
 URL: https://dmodverse.github.io/cppDE/, https://github.com/dModverse/cppDE
 BugReports: https://github.com/dModverse/cppDE/issues

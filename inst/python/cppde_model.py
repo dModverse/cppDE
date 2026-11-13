@@ -9,7 +9,7 @@ import cppde_emit as em
 import cppde_graph as cg
 import cppde_struct as cs
 
-# The Jacobian strategy, 'entries' or 'colour'; None chooses by the work of each.
+# The Jacobian strategy, 'entries' or 'color'; None chooses by the work of each.
 JACOBIAN_STRATEGY = None
 
 
@@ -38,7 +38,7 @@ def hold_switches(g, roots):
     """`roots` with every switch that reads a state or the time read from a mode.
 
     A comparison <, <=, >, >= whose sides differ by an amount that reads a
-    state or the time becomes MODE leaf k, which holds where its argument g is
+    state or the time becomes MODE leaf k, which holds where the argument g is
     positive (or zero, for <= and >=). Heaviside(g) and sign(g) take two
     modes, on g and on -g, so that they keep their value at g = 0. == and !=
     stay as they are: they switch on a set of measure zero. A comparison of
@@ -67,7 +67,7 @@ def hold_switches(g, roots):
         return g.cmp(">=" if closed else ">", d, g.ZERO)
 
     # Children first, each switch read off the children as already held, so a
-    # condition on a held comparison follows its mode.
+    # condition on a held comparison follows the mode of that comparison.
     memo = {}
     for n in g.topo(roots):
         args = tuple(memo.get(a, a) for a in g.args[n])
@@ -124,11 +124,11 @@ class OdeModel:
     Attributes:
         g: cppde_graph.Graph; ad: cppde_graph.AD.
         rhs_plain: root node per state as parsed, with every switch on a state
-            read from its mode (see hold_switches).
+            read from the switch mode (see hold_switches).
         switches: (g, closed) per mode k: mode k holds where g > 0, or g >= 0
             when closed.
         rhs: the same with long linear sums as map rows.
-        linmap: cppde_struct.LinMap or None; nlin its number of rows.
+        linmap: cppde_struct.LinMap or None; nlin the number of map rows.
     """
 
     def __init__(self, rhs, params, forcings=None, linear=None):
@@ -223,7 +223,7 @@ class OdeModel:
     # -- Jacobian -------------------------------------------------------------
 
     def pattern(self):
-        """Per state, the sorted columns of its Jacobian row."""
+        """Per state, the sorted columns of the Jacobian row."""
         return self.cached("pattern", self._pattern)
 
     def _pattern(self):
@@ -326,10 +326,10 @@ class OdeModel:
                     g_ent[(i, j - n_x)] = d
         return a_ent, g_ent
 
-    def colouring(self):
-        """(colour per column or -1, number of colours) of a greedy
-        distance-2 colouring of the column intersection graph."""
-        def colour():
+    def coloring(self):
+        """(color per column or -1, number of colors) of a greedy
+        distance-2 coloring of the column intersection graph."""
+        def color():
             pat = self.pattern()
             cols = [[] for _ in range(self.n)]
             for i, row in enumerate(pat):
@@ -351,17 +351,17 @@ class OdeModel:
                 for i in cols[j]:
                     used[i].add(c)
             return col, max(col) + 1 if any(c >= 0 for c in col) else 0
-        return self.cached("colouring", colour)
+        return self.cached("coloring", color)
 
     def jacobian_strategy(self):
-        """'entries' or 'colour': JACOBIAN_STRATEGY, else by the work of each."""
+        """'entries' or 'color': JACOBIAN_STRATEGY, else by the work of each."""
         if JACOBIAN_STRATEGY is not None:
             return JACOBIAN_STRATEGY
         w, es = self.entry_work()
         if w <= max(4 * es, 50000):
             return "entries"
-        if self.colouring()[1] <= self.n / 4:
-            return "colour"
+        if self.coloring()[1] <= self.n / 4:
+            return "color"
         return "entries"
 
     # -- stores of the contractions -----------------------------------------
@@ -604,7 +604,7 @@ def jacobian_statements(model, sparse, strategy, T="double", cvode=False,
         stmts += stores_prelude(model, stores, T)
         stmts.append(block(g, stores, "_t"))
     else:
-        col, chi = model.colouring()
+        col, chi = model.coloring()
         cptr, cidx = [0], []
         for c in range(chi):
             cidx += [j for j in range(n) if col[j] == c]
@@ -632,23 +632,23 @@ def jacobian_statements(model, sparse, strategy, T="double", cvode=False,
                       + dfdt, "_o")
         write = (("vec", "W.Ax", "_sdst[_k]") if sparse
                  else ("mat", "J", "_srow[_k]", "_sdst[_k]"))
-        colour = [("table", "_cptr", cptr), ("table", "_cidx", cidx),
+        color = [("table", "_cptr", cptr), ("table", "_cidx", cidx),
                   ("table", "_sptr", sptr), ("table", "_srow", srow),
                   ("table", "_sdst", sdst),
                   ("raw", {"cpp": "std::vector<double> v(%d, 0.0);" % n,
                            "py": "v = [0.0] * %d" % n}),
                   ("raw", {"cpp": "std::vector<%s> _jv(%d);" % (T, n),
                            "py": "_jv = [0.0] * %d" % n})]
-        colour += lin_prelude(model, [t for _, t, _ in tstores + dfdt], T)
+        color += lin_prelude(model, [t for _, t, _ in tstores + dfdt], T)
         linv = lin_prelude(model, [t for _, t, _ in tstores], "double",
                            src="v", out="_linv", decl=False)
         if linv:
-            colour.append(("raw", {"cpp": "std::vector<double> _linv(%d);" % model.nlin,
+            color.append(("raw", {"cpp": "std::vector<double> _linv(%d);" % model.nlin,
                                    "py": "_linv = [0.0] * %d" % model.nlin}))
         if bound:
-            colour.append(("array", "_jo", len(bound)))
-        colour += [outer] + itables
-        colour.append(("for", "_c", str(chi), [
+            color.append(("array", "_jo", len(bound)))
+        color += [outer] + itables
+        color.append(("for", "_c", str(chi), [
             ("loop", "_k", "_cptr[_c]", "_cptr[_c + 1]",
              [("assign", ("vec", "v", "_cidx[_k]"), "1.0")])]
             + linv
@@ -657,7 +657,7 @@ def jacobian_statements(model, sparse, strategy, T="double", cvode=False,
                 [("assign", write, "-_jv[_srow[_k]]")]),
                ("loop", "_k", "_cptr[_c]", "_cptr[_c + 1]",
                 [("assign", ("vec", "v", "_cidx[_k]"), "0.0")])]))
-        stmts += colour
+        stmts += color
     if sparse:
         stmts += [("assign", ("vec", "W.Ax", k), zero) for k in missing]
     return stmts
@@ -719,7 +719,7 @@ def _cvode_jacobian(model, sparse, strategy):
         stmts += stores_prelude(model, stores, "double")
         stmts.append(block(g, stores, "_t"))
         return stmts
-    col, chi = model.colouring()
+    col, chi = model.coloring()
     cptr, cidx = [0], []
     for c in range(chi):
         cidx += [j for j in range(n) if col[j] == c]
@@ -793,7 +793,7 @@ def _init_param_index(model):
 def cvode_sens_statements(model, sens_params):
     """sens_rhs1_fn body: ySdot = J yS + (df/dp) Phi'[params, iS], as one
     JVP. State j is seeded with yS_arr[j], parameter k with _Mp[k]; `<state>_0`
-    is read as its parameter row."""
+    is read as the parameter row of the initial value."""
     g = model.g
     seeds = {g.state(j): g.vec("yS_arr", j) for j in range(model.n)}
     for k in sens_params:
@@ -1102,7 +1102,7 @@ class EventCode:
     """C++ of the events of one model in one scalar (see generate_event_code).
 
     Args:
-        model: OdeModel (its right-hand side feeds g_dot and G_tt).
+        model: OdeModel (the right-hand side feeds g_dot and G_tt).
         scalar: Scalar.
     """
 

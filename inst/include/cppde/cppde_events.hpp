@@ -1,7 +1,7 @@
 /*
  Event specifications and the reset maps applied without transport.
 
- A fixed event fires at a time the caller supplies, a root event when its
+ A fixed event fires at a time the caller supplies, a root event when the
  condition crosses zero. Both apply one reset to one state.
 
  Copyright (C) 2026 Simon Beyer
@@ -78,12 +78,12 @@ struct RootEvent {
   // every root that is not terminal has one.
   std::function<double(const state_type&, const time_type&)> g_dot_dot;
 
-  // A state switch of the right-hand side: the index of the mode its root sets,
+  // A state switch of the right-hand side: the index of the mode the root sets,
   // -1 for an event. The mode holds where func > 0, or >= 0 when closed.
   int mode = -1;
   bool closed = false;
 
-  // For a state switch, the gradient in the state and the partial in t of its
+  // For a state switch, the gradient in the state and the partial in t of the
   // rate r' = dg/dt + grad g . f, by the codegen, with the modes as they are
   // set: what the weights of a slide differentiate.
   std::function<void(const state_type&, const time_type&, state_type&)> rate_dx;

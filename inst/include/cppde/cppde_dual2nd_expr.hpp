@@ -11,15 +11,15 @@
 
  Operators on dual2nd<T> values, scalar mixes, and Expr2nd<D> trees all
  build BinExpr2 / BinScalarRight2 / BinScalarLeft2 / UnaryExpr2 / pow*
- nodes, never materialising an intermediate dual2nd. The full tree is
- materialised exactly once on assignment into a dual2nd<T> via
+ nodes, never materializing an intermediate dual2nd. The full tree is
+ materialized exactly once on assignment into a dual2nd<T> via
  dual2nd::operator=(const Expr2nd<D>&) (declared in cppde_dual2nd.hpp,
  defined here below).
 
  Aliasing safety for `*this = *this + o`:
  1. Leaves snapshot the scalar value at ctor and hold const-pointers /
     const-refs to the source storage. Tangent reads go through the source.
- 2. The materialiser orders writes as:
+ 2. The materializer orders writes as:
        (a) scalar layer
        (b) lower-triangle Hessian (reads source's d1 + d2; writes inner
            tangent slots which do NOT alias the d1 storage)
@@ -557,7 +557,7 @@ struct et2_pair_enabled
   // Binary operator overloads, eight per operator over {dual2nd, Expr2nd,
   // scalar}. The signatures are concrete rather than generic, so partial
   // ordering prefers them to the eager nested-dual operators, which would
-  // otherwise match dual2nd through its base class.
+  // otherwise match dual2nd through the base class.
   // ===========================================================================
 #define CPPDE_DEFINE_ET2_BINOP(SYM, OPTAG)                                    \
   /* dual2nd op dual2nd */                                                    \
@@ -787,7 +787,7 @@ struct Select2 : Expr2nd<Select2<L, R>> {
   CPPDE_ET2_INLINE value_type eval_d2(unsigned i, unsigned j) const {
     return c_ ? l_.eval_d2(i, j) : r_.eval_d2(i, j);
   }
-  // Both branches count here, unlike the value and the tangents: materialise()
+  // Both branches count here, unlike the value and the tangents: materialize()
   // leaves the target's tangent buffers alone when a tree does not depend, so a
   // literal branch has to stay on the writing path and zero what was there.
   CPPDE_ET2_INLINE bool any_depend() const {
@@ -852,7 +852,7 @@ inline auto value_of(const dual2nd_expr::Expr2nd<D>& e) {
 }
 
   // ===========================================================================
-  // Materialise an Expr2nd<D> tree into a dual2nd<T> at assignment.
+  // Materialize an Expr2nd<D> tree into a dual2nd<T> at assignment.
   //
   // Aliasing-safe order:
   //   1. scalar layer
@@ -864,7 +864,7 @@ namespace dual2nd_expr {
 
 template<class T, class E,
          std::enable_if_t<is_expr2nd_v<E>, int> = 0>
-CPPDE_ET2_INLINE void materialise(dual2nd<T>& lhs, const E& e) {
+CPPDE_ET2_INLINE void materialize(dual2nd<T>& lhs, const E& e) {
   // 1. Scalar.
   lhs.scalar() = e.eval_value();
 
@@ -907,7 +907,7 @@ template<class D>
 CPPDE_ET2_INLINE
 dual2nd<T>&
 dual2nd<T>::operator=(const dual2nd_expr::Expr2nd<D>& e) {
-  dual2nd_expr::materialise(*this, e.self());
+  dual2nd_expr::materialize(*this, e.self());
   return *this;
 }
 
@@ -915,11 +915,11 @@ template<class T>
 template<class D>
 CPPDE_ET2_INLINE
 dual2nd<T>::dual2nd(const dual2nd_expr::Expr2nd<D>& e) : base() {
-  dual2nd_expr::materialise(*this, e.self());
+  dual2nd_expr::materialize(*this, e.self());
 }
 
 // Compound assignment helpers: build (*this op other) as a BinExpr2 and
-// materialise the whole tree back into *this.
+// materialize the whole tree back into *this.
 template<class T>
 template<class D>
 CPPDE_ET2_INLINE dual2nd<T>&

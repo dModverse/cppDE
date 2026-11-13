@@ -185,7 +185,7 @@
 
   ## --- Coerce tangent to flat [n_phi_rows, n_theta_active] ---
   ## The reorder is skipped when the order already matches, the common case when
-  ## an optimiser reuses one shape. State-only padding fills a preallocated matrix.
+  ## an optimizer reuses one shape. State-only padding fills a preallocated matrix.
   coerce_tangent <- function(x, n_cols, col_names, arg) {
     if (!is.numeric(x)) stop("'", arg, "' must be numeric")
 
@@ -573,7 +573,7 @@
 #' ## Shapes of `tangent` and `hessian`
 #'
 #' `tangent` is the Jacobian \eqn{\Phi'(\theta)} and `hessian` the second
-#' derivative \eqn{\Phi''(\theta)} of a reparametrisation
+#' derivative \eqn{\Phi''(\theta)} of a reparametrization
 #' \eqn{p = \Phi(\theta)} of the initial states and parameters; the results are
 #' then derivatives in \eqn{\theta}. `tangent` takes one of three shapes, told
 #' apart by its row count and row names. `hessian` has the rows of `tangent` and
@@ -691,7 +691,7 @@
 #'   `return_code` (0 on success, negative codes as in SUNDIALS CVODE),
 #'   `message`, `accepted` and `rejected` (step counts), `fevals`, `jevals`
 #'   and `setups` (right-hand side evaluations, Jacobian evaluations, matrix
-#'   factorisations), `last_dt` and `last_order` (size and order of the last
+#'   factorizations), `last_dt` and `last_order` (size and order of the last
 #'   successful step), `t_reached`, and the model's `method`, `useNDF` and,
 #'   on a [cvode()] model, `backend`.
 #' - `trace`: with `stepTrace = TRUE`, a `data.frame` with one row per step
@@ -704,7 +704,7 @@
 #'   `newton_conv` (1 when the corrector converged), `mode` (`"BDF"`, `"NDF"`,
 #'   `"ADAMS"`, `"ONESTEP"`, or `"CVODE"` and `"CVODE_event"` on a [cvode()]
 #'   model), `nfe`, `njev` and `nsetups` (cumulative counters) and
-#'   `setup_reason` (what triggered the last factorisation). A [cvode()] model
+#'   `setup_reason` (what triggered the last factorization). A [cvode()] model
 #'   reports `NaN` where CVODES exposes no value.
 #' - `adjoint`: under `adjointControl(trace = TRUE)`, see [adjointControl()].
 #' - `store`: with `keepStore = TRUE`, an external pointer to the checkpoints.
@@ -760,7 +760,7 @@ solveODE <- function(model, times, parms,
 #'
 #' @param model A model handle from [cppODE()] or [cvode()].
 #' @param conditions A named or unnamed list of per-condition argument lists.
-#'   Recognised names are `times`, `parms`, `tangent`, `hessian`, `cotangent`,
+#'   Recognized names are `times`, `parms`, `tangent`, `hessian`, `cotangent`,
 #'   `curvature`, `fixed`, `forcings`, `abstol`, `reltol`, `maxattempts`,
 #'   `maxsteps`, `hini`, `roottol`, `maxroot`, `keepStore`, `store`,
 #'   `sensErrCon`, `adjoint`, `maxOrder` and `stald`; each overrides the
@@ -946,7 +946,7 @@ batchAvailable <- function(model) {
 #'
 #' @description
 #' Validates and converts a set of conditions once, so that repeated solves
-#' with [solveBatch()], an optimiser evaluating the same model at new
+#' with [solveBatch()], an optimizer evaluating the same model at new
 #' parameters, only pass the numbers that changed. [solveODEBatch()] repeats
 #' that work on every call.
 #'
@@ -1169,7 +1169,7 @@ diagnostics.default <- function(result) {
                     "-2"  = "Too much accuracy requested for the requested step (CV_TOO_MUCH_ACC).",
                     "-3"  = "Error test failures too numerous (CV_ERR_FAILURE).",
                     "-4"  = "Convergence test failures too numerous / no progress (CV_CONV_FAILURE).",
-                    "-5"  = "Linear solver initialisation failed (CV_LINIT_FAIL).",
+                    "-5"  = "Linear solver initialization failed (CV_LINIT_FAIL).",
                     "-6"  = "Linear solver setup failed unrecoverably (CV_LSETUP_FAIL).",
                     "-7"  = "Linear solver solve failed unrecoverably (CV_LSOLVE_FAIL).",
                     "-8"  = "RHS function failed unrecoverably (CV_RHSFUNC_FAIL).",
@@ -1177,7 +1177,7 @@ diagnostics.default <- function(result) {
                     "-10" = "RHS function had repeated recoverable errors (CV_REPTD_RHSFUNC_ERR).",
                     "-11" = "RHS function had a recoverable error that could not be handled (CV_UNREC_RHSFUNC_ERR).",
                     "-12" = "Root function failed unrecoverably (CV_RTFUNC_FAIL).",
-                    "-13" = "Nonlinear solver initialisation failed (CV_NLS_INIT_FAIL).",
+                    "-13" = "Nonlinear solver initialization failed (CV_NLS_INIT_FAIL).",
                     "-14" = "Nonlinear solver setup failed (CV_NLS_SETUP_FAIL).",
                     "-15" = "Inequality constraint check failed (CV_CONSTR_FAIL).",
                     "-16" = "Nonlinear solver failed (CV_NLS_FAIL).",
@@ -1189,7 +1189,7 @@ diagnostics.default <- function(result) {
                     "-25" = "Bad t value in CVodeGetDky (CV_BAD_T).",
                     "-26" = "Bad dky argument in CVodeGetDky (CV_BAD_DKY).",
                     "-27" = "Output time too close to initial time (CV_TOO_CLOSE).",
-                    "-99" = "Unrecognised error (CV_UNRECOGNIZED_ERR).",
+                    "-99" = "Unrecognized error (CV_UNRECOGNIZED_ERR).",
                     paste0("Unknown return code: ", rc)
   )
 

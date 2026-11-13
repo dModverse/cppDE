@@ -1,10 +1,10 @@
 /*
- Dense kernels of the step path in plain loops: the LU factorisation with partial
- pivoting and its solves, and the products of the corrector and Nordsieck updates.
+ Dense kernels of the step path in plain loops: the LU factorization with partial
+ pivoting and the solves with it, and the products of the corrector and Nordsieck updates.
 
- OpenBLAS takes the work buffers of its level-2 and level-3 routines from an
+ OpenBLAS takes the work buffers of the level-2 and level-3 routines from an
  allocator behind one process-wide lock. Called once per step from the threads of
- a batch, that lock serialises them; these loops take none. All matrices are
+ a batch, that lock serializes them; these loops take none. All matrices are
  column-major.
 
  Copyright (C) 2026 Simon Beyer
@@ -20,11 +20,11 @@
 namespace cppde {
 namespace small_la {
 
-// Systems up to this many unknowns are factorised and solved here, larger ones by
+// Systems up to this many unknowns are factorized and solved here, larger ones by
 // LAPACK, whose blocked kernels outweigh the lock there.
 constexpr int max_n = 64;
 
-// LU factorisation P A = L U of the n x n matrix `a` in place, L unit lower, as
+// LU factorization P A = L U of the n x n matrix `a` in place, L unit lower, as
 // dgetf2 does; `ipiv[k]` is the row swapped with row k, 0-based. Returns 0, or
 // k + 1 for the first zero pivot k, whose column is then left as it is.
 inline int getrf(int n, double* a, int* ipiv)

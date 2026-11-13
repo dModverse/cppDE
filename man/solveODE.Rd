@@ -154,7 +154,7 @@ the last two dimensions is that of a Hessian, not that of the argument
 \code{return_code} (0 on success, negative codes as in SUNDIALS CVODE),
 \code{message}, \code{accepted} and \code{rejected} (step counts), \code{fevals}, \code{jevals}
 and \code{setups} (right-hand side evaluations, Jacobian evaluations, matrix
-factorisations), \code{last_dt} and \code{last_order} (size and order of the last
+factorizations), \code{last_dt} and \code{last_order} (size and order of the last
 successful step), \code{t_reached}, and the model's \code{method}, \code{useNDF} and,
 on a \code{\link[=cvode]{cvode()}} model, \code{backend}.
 \item \code{trace}: with \code{stepTrace = TRUE}, a \code{data.frame} with one row per step
@@ -167,7 +167,7 @@ coefficient, and its ratio to the value at the last factorisation),
 \code{newton_conv} (1 when the corrector converged), \code{mode} (\code{"BDF"}, \code{"NDF"},
 \code{"ADAMS"}, \code{"ONESTEP"}, or \code{"CVODE"} and \code{"CVODE_event"} on a \code{\link[=cvode]{cvode()}}
 model), \code{nfe}, \code{njev} and \code{nsetups} (cumulative counters) and
-\code{setup_reason} (what triggered the last factorisation). A \code{\link[=cvode]{cvode()}} model
+\code{setup_reason} (what triggered the last factorization). A \code{\link[=cvode]{cvode()}} model
 reports \code{NaN} where CVODES exposes no value.
 \item \code{adjoint}: under \code{adjointControl(trace = TRUE)}, see \code{\link[=adjointControl]{adjointControl()}}.
 \item \code{store}: with \code{keepStore = TRUE}, an external pointer to the checkpoints.
@@ -203,7 +203,7 @@ outputs going in and on the inputs coming out.
 \subsection{Shapes of \code{tangent} and \code{hessian}}{
 
 \code{tangent} is the Jacobian \eqn{\Phi'(\theta)} and \code{hessian} the second
-derivative \eqn{\Phi''(\theta)} of a reparametrisation
+derivative \eqn{\Phi''(\theta)} of a reparametrization
 \eqn{p = \Phi(\theta)} of the initial states and parameters; the results are
 then derivatives in \eqn{\theta}. \code{tangent} takes one of three shapes, told
 apart by its row count and row names. \code{hessian} has the rows of \code{tangent} and

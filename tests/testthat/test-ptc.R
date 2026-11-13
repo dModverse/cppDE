@@ -75,7 +75,7 @@ test_that("ptc accepts an unstable root whose growth is below stabilityTol", {
   expect_equal(unname(r$x[c("x", "y")]), c(1, 1), tolerance = 1e-8)
 })
 
-test_that("ptc brings a tiny state to its relative tolerance from any start", {
+test_that("ptc brings a tiny state to the relative tolerance from any start", {
   # a tiny state meets the residual test long before it is accurate
   p <- c(kf = 4, ks = 3e-14, kd = 0.03)
   for (x0 in c(1, 1e-3)) {

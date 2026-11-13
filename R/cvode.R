@@ -3,7 +3,7 @@
 #' Generates a C++ ODE solver linked against SUNDIALS CVODES, from the system
 #' or from [installLibs()], compiles it via `R CMD SHLIB`, and returns a handle
 #' for use with [solveODE()]. Sensitivities are computed by the CVODES forward
-#' sensitivity solver (`deriv = TRUE`) or by its adjoint
+#' sensitivity solver (`deriv = TRUE`) or by the CVODES adjoint
 #' (`derivMode = "reverse"`). The compiled model exposes the same R interface
 #' as a model from [cppODE()]; the differences between the two backends are
 #' described in [cvode() and its adjoint](https://dmodverse.github.io/cppDE/articles/methods-cvode.html).

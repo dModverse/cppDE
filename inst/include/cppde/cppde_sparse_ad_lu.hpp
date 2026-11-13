@@ -83,7 +83,7 @@ private:
   // ============================================================================
   //  sparse_lu_solver<AD_T>: recursive AD case (IFT peeling)
   //
-  //  As in the dense case: extract the value part, factorise, propagate the
+  //  As in the dense case: extract the value part, factorize, propagate the
   //  derivatives through the IFT. The CSC structure is shared between levels and
   //  copied once, and the solve buffers persist across calls.
   // ============================================================================
@@ -250,7 +250,7 @@ public:
     bulk_inject_results(b, m_b_val, m_rhs_all, n, n_derivs);
   }
 
-  // W^-T b on the same factorisation, the peeling transposed with the matrix.
+  // W^-T b on the same factorization, the peeling transposed with the matrix.
   // See dense_lu_solver::solve_transposed in cppde_ad_lu.hpp.
   void solve_transposed(std::vector<F>& b) const
   {
@@ -310,7 +310,7 @@ public:
   }
 
   // Batched solve for nrhs RHS vectors (column-major). Fully BLAS-3 / KLU-batched
-  // at the recursion level: amortises buffer extraction and IFT work across the
+  // at the recursion level: amortizes buffer extraction and IFT work across the
   // batch and feeds the inner solver one bulk solve_batch call per layer.
   void solve_batch(std::vector<F>& B_flat, int nrhs) const
   {

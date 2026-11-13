@@ -2,7 +2,7 @@
  Keep BLAS single-threaded where a threaded BLAS would break the process.
 
  Two hazards: MKL's default libiomp5 next to the models' libgomp puts two
- OpenMP runtimes in one process, which is undefined behaviour; and a threaded
+ OpenMP runtimes in one process, which is undefined behavior; and a threaded
  BLAS pool does not survive fork(), so the child's first threaded call hangs.
 
  The environment cannot fix either, because a runtime reads OMP_NUM_THREADS
@@ -84,8 +84,8 @@ struct blas_thread_api {
 
   blas_thread_api() {
     // FlexiBLAS first.  It dispatches to whichever backend is loaded and
-    // exports the other vendors' names as aliases onto its own counter, so
-    // wherever it is in play its own name is the one to report.
+    // exports the other vendors' names as aliases onto the FlexiBLAS counter, so
+    // wherever it is in play the FlexiBLAS name is the one to report.
     add("FlexiBLAS", "flexiblas_set_num_threads",  "flexiblas_get_num_threads");
     add("MKL",       "MKL_Set_Num_Threads",        "MKL_Get_Max_Threads");
     add("OpenBLAS",  "openblas_set_num_threads",   "openblas_get_num_threads");
@@ -98,7 +98,7 @@ inline blas_thread_api& blas_api() {
   return api;
 }
 
-// OpenMP's own thread count.  A BLAS that threads through OpenMP takes its team
+// OpenMP's own thread count.  A BLAS that threads through OpenMP takes the team
 // width from here and not from the vendor counter, so pinning the vendor alone
 // leaves a forked child spinning.  Fork guard only: a solve must not touch this
 // lever, cppDE's batch parallelism is that same runtime.

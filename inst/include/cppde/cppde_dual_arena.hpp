@@ -73,7 +73,7 @@ public:
   std::size_t             depth_ = 0;           // open scopes
 #ifdef CPPDE_DEBUG_ARENA
   // Debug aid: one malloc per allocation, freed by the scope that made it, so
-  // that valgrind sees a tangent used after its scope or past its end.
+  // that valgrind sees a tangent used after the scope ends or beyond the tangent length.
   std::vector<void*>      blocks_;
 #endif
   // per-call-site scratch of cppde_tls.hpp, freed with the arena
@@ -91,7 +91,7 @@ public:
                   "alloc_trivial requires trivially-destructible T");
     T* p = static_cast<T*>(bump(alignof(T), n * sizeof(T)));
 #ifdef CPPDE_POISON_ARENA
-    // Debug aid: a tangent read before its write shows up as NaN instead of as
+    // Debug aid: a tangent read before the first write shows up as NaN instead of as
     // whatever the previous solve left at that address.
     if constexpr (std::is_floating_point_v<T>)
       for (std::size_t i = 0; i < n; ++i)
@@ -170,9 +170,9 @@ public:
     }
   };
 
-  // How wide a dual arms itself when it has no width of its own. Without
+  // How wide a dual arms itself when no width is set on it. Without
   // one, arm() allocates nothing and every tangent read returns the
-  // out-of-bounds zero, which a backward sweep cannot survive: it zero-arms its
+  // out-of-bounds zero, which a backward sweep cannot survive: it zero-arms the
   // buffers before writing to them. A scope rather than a global, so the
   // forward mode opens none and leaves a tangent-less temporary alone.
   static unsigned& default_tangent_width() noexcept {

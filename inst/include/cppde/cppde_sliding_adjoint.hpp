@@ -59,7 +59,7 @@ struct sliding_adjoint {
     if (m.S.empty()) return false;
     if (c->inexact)
       throw std::runtime_error(
-          "a switch slides along its surface, which the reverse mode of a "
+          "a switch slides along the switching surface, which the reverse mode of a "
           "sparse model does not support");
     if (!c->solve(m.S, x, t, m.a, &m.r)) core_type::no_mix();
     m.fm = c->fm;
@@ -342,7 +342,7 @@ struct sliding_adjoint {
 // The event terms of a model where switches slide. A root read while others
 // slide has the rate of the mix, sum_c w_c r'_{i,c}, whose gradient adds
 // sum_j dR_i/da_j grad a_j; an exit root, a_k - 1 or -a_k, has the parameter
-// derivative of a_k. Its rate's gradients enter only scaled by a quantity zero
+// derivative of a_k. The gradients of the rate enter only scaled by a quantity zero
 // at an exit, where f is continuous, so they are left zero.
 template<class EvAdj, class Slider>
 struct sliding_event_adjoint {

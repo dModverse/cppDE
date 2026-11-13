@@ -50,7 +50,7 @@ PKG_CONFIG="${PKG_CONFIG:-pkg-config}"
 
 log() { echo "configure.win: $*"; }
 
-# Normalise a Windows path to forward slashes (bash-safe expansion).
+# Normalize a Windows path to forward slashes (bash-safe expansion).
 fwd_slash() { echo "$1" | sed 's|\\|/|g'; }
 
 # --- Toolchain handles for compile probes ---

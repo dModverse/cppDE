@@ -353,7 +353,7 @@ static void forward_sens(const store_of<S>& store, std::size_t n_carry,
 }
 
 // Replays the recorded sequence in double, for a finite-difference probe of the
-// same prescribed discretisation both modes differentiate.
+// same prescribed discretization both modes differentiate.
 template<class S>
 static void replay_values(const store_of<S>& store, std::vector<double>& x_obs,
                           bool verify_carry = false, const char* name = "")

@@ -5,7 +5,7 @@ ODE and Jacobian C++ code generator for cppDE
 This module provides entry points for generating C++ code:
 
 - generate_ode_cpp(...)
-    Generates C++ code for the ODE right-hand side and its Jacobian,
+    Generates C++ code for the ODE right-hand side and the Jacobian,
     using SymPy for parsing and symbolic differentiation.
 
 - generate_event_code(...)
@@ -59,7 +59,7 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
     convert_xor,
 )
-from cppsympy import (CppdePrinter, TokenError, is_boolean, normalise_logic,
+from cppsympy import (CppdePrinter, TokenError, is_boolean, normalize_logic,
                       parse_error)
 from functools import lru_cache
 from concurrent.futures import ThreadPoolExecutor
@@ -124,7 +124,7 @@ _PY_RESERVED = frozenset(keyword.kwlist) | {'True', 'False', 'None'}
 
 def _safe_sympify(expr_str, local_symbols=None):
     """Safely parse a string expression to SymPy."""
-    expr_str = normalise_logic(str(expr_str).strip())
+    expr_str = normalize_logic(str(expr_str).strip())
     if expr_str == "0":
         return sp.Integer(0)
 
@@ -478,7 +478,7 @@ def generate_ode_cpp(
     dict with keys: "ode_code", "jac_code", "jac_matrix", "time_derivs",
                     "states", "params", "forcings"
     """
-    # The scalar's properties are stated by the caller, not read off its
+    # The scalar's properties are stated by the caller, not read off the
     # name; see ScalarType.
     num_type = ScalarType(num_type, ad_level, arena)
     # Normalize inputs
@@ -531,7 +531,7 @@ def generate_ode_cpp(
     # FAST PATH: Template-based structural deduplication
     # =====================================================================
 
-    # Structurally repeated equations (MOL-discretised PDEs) fingerprint to a
+    # Structurally repeated equations (MOL-discretized PDEs) fingerprint to a
     # canonical form, are parsed and differentiated once per distinct form, and
     # expand per instance: O(n_templates) sp.diff calls instead of O(n_states).
     dedup_result = None
@@ -557,7 +557,7 @@ def generate_ode_cpp(
         jac_cpp_lines = _generate_noop_jacobian(n_states, num_type)
 
     elif dedup_result is not None:
-        # Template dedup succeeded: use its results
+        # Template dedup succeeded: use the dedup results
         ode_cpp_lines = dedup_result["ode_cpp_lines"]
         jac_cpp_lines = dedup_result["jac_cpp_lines"]
         jac_matrix = dedup_result["jac_matrix"]
@@ -601,7 +601,7 @@ def generate_ode_cpp(
     if emit_contractions:
         if skip_jacobian:
             # An explicit method emits no Jacobian and does not need one to
-            # integrate, but its step adjoint contracts J' lambda all the same.
+            # integrate, but the step adjoint contracts J' lambda all the same.
             # Derived here for the contraction alone; the emitted Jacobian stays
             # the stub.
             states_syms_list = [states_syms[st] for st in states_list]
@@ -613,7 +613,7 @@ def generate_ode_cpp(
         jvp_matrix = jvp_dfdp_nnz = dfdt_matrix = dfdt_dfdp_nnz = None
         v_slots = ()
         # df/dt as the model computes it: the explicit time derivative plus,
-        # for every forcing, the chain term through its own rate. Needed by every
+        # for every forcing, the chain term through the forcing rate. Needed by every
         # jump, so it is built whatever the stepper is.
         fd_syms = [sp.Symbol(f"_fd{j}") for j in range(len(forcings_list))]
         fd_slots = tuple((str(fd), f"F[{j}]->derivative(t)")
@@ -628,8 +628,8 @@ def generate_ode_cpp(
             dfdt_exprs.append(d)
         if emit_jvp:
             # A Rosenbrock stage solves against a matrix built from J and adds a
-            # multiple of df/dt, so its adjoint needs the derivative of both.
-            # Jv is one expression per state over the nonzeros of its row, and
+            # multiple of df/dt, so the stage adjoint needs the derivative of both.
+            # Jv is one expression per state over the nonzeros of the state row, and
             # the derivatives of these come from the same two routines.
             states_syms_list = [states_syms[st] for st in states_list]
             v_syms = [sp.Symbol(f"_jv{k}") for k in range(n_states)]
@@ -1146,7 +1146,7 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
                                fd_slots=(), dfdt_exprs=None):
     """The contractions a written step adjoint asks the model for.
 
-    `jac_t_vec` is J' lambda over the states and sizes its own output; a caller
+    `jac_t_vec` is J' lambda over the states and sizes the output; a caller
     that has to size it first has to know the model's dimensions at the call
     site, and one that gets it wrong writes past the end with nothing to say so.
 
@@ -1159,7 +1159,7 @@ def _generate_contraction_code(jac_matrix, dfdp_nnz, states_list, params_list,
     `jvp_x_t_vec` and `jvp_p_t_vec_axpy` are the same two over J(x, p, t) v,
     whose derivative is a second one, and `dfdt_x_t_vec` and
     `dfdt_p_t_vec_axpy` the same two over df/dt. A Rosenbrock stage solves
-    against a matrix built from J and adds a multiple of df/dt, so its adjoint
+    against a matrix built from J and adds a multiple of df/dt, so the stage adjoint
     needs all four; nothing else does, and they are emitted only where they are.
     """
     lines = [
@@ -1260,14 +1260,14 @@ def _emit_cse_temps(temps, states_list, params_list, n_states, num_type,
                     forcings_list, vectors=()):
     """Emit `const num_type _cse_tN = expr;` lines from sp.cse temps.
 
-    Materialising into num_type (rather than `auto`) forces ET evaluation at
+    Materializing into num_type (rather than `auto`) forces ET evaluation at
     the temp boundary so subsequent references are scalar dual loads instead
     of re-walks of the ET tree."""
     lines = []
     for sym, sub in temps:
         sub_cpp = _to_cpp(sub, states_list, params_list, n_states, num_type,
                           forcings_list, vectors=vectors)
-        # A piecewise condition can be lifted into its own temp, and that one
+        # A piecewise condition can be lifted into a separate temp, and that one
         # holds a truth value, not a model quantity.
         temp_type = "bool" if is_boolean(sub) else num_type
         lines.append(f"    const {temp_type} {sym.name} = {sub_cpp};")
@@ -1296,7 +1296,7 @@ def _arena_scope_lines(num_type):
     temps, but no per-call scope is safe.
 
     A plain double has no arena to bound, and says so through ScalarType.arena
-    rather than through its name."""
+    rather than through the type name."""
     if _uses_arena(num_type) and _ad_level(num_type) == 1:
         return ["    cppde::dual_arena::scope _rhs_arena_scope;"]
     return []
@@ -1378,7 +1378,7 @@ def _generate_jac_code_plain(jac_matrix, time_derivs, exprs, forcing_syms, forci
 
     # CSE across all non-zero Jacobian entries: in MM/Hill kinetics, the same
     # denominator (Km + x_j) often shows up in many df/dx_k entries: CSE lifts
-    # those into _cse_t* temps materialised once per call.
+    # those into _cse_t* temps materialized once per call.
     jac_exprs = [e for _, _, e in jac_entries_plain]
     jac_temps, jac_simplified = _cse_temps(jac_exprs, prefix='_cse_jt')
     # The forcing list has to reach the printer here as well: a forcing that
@@ -1824,7 +1824,7 @@ def _generate_root_gradient_lambdas(root_expr, states_list, params_list,
 
     # --- Emit dg_dx lambda ---
     # All n_states partials go into the output vector, zero entries explicitly:
-    # out may be uninitialised.
+    # out may be uninitialized.
     dg_dx_lines = []
     dg_dx_lines.append(f"    // dg/dx for root event {event_idx} (analytical, codegen)")
     dg_dx_lines.append(f"    [full_params, &F](const {state_type}& x, const {num_type}& t, {state_type}& out) {{")
@@ -1918,7 +1918,7 @@ def fixed_event_time_exprs(events_df, states_list, params_list, n_states,
                            forcings_list=None):
     """C expressions for the fixed-event times, in plain double.
 
-    An event whose time is not among the requested output times adds its own
+    An event whose time is not among the requested output times adds a separate
     row to the result, so the batch entry has to know the event times before
     the solve if it wants to size the output exactly. The expressions address
     the same flat [states, params] vector the solver is handed, so evaluating
@@ -2007,7 +2007,7 @@ def _event_grad_case(expr, states_list, params_list, n_states, num_type,
         if d == 0:
             continue
         ps.append(f"      out[{n_states + k}] += sc*({cpp(d)});")
-    # An initial value reads as a parameter slot of its own.
+    # An initial value reads as a separate parameter slot.
     for j, s in enumerate(states_list):
         sym = local_symbols.get(f"{s}_0")
         if sym is None or sym not in free:
@@ -2023,7 +2023,7 @@ def _event_time_grad_case(expr, states_list, params_list, n_states, num_type,
                           forcings_list, local_symbols):
     """One event expression's explicit time derivative, as a switch case body.
 
-    A forcing inside h has its own rate, which SymPy cannot take in t.
+    A forcing inside h has a rate, which SymPy cannot take in t.
     """
     if expr is None or expr == sp.Integer(0):
         return []
@@ -2162,7 +2162,7 @@ def generate_event_code(events_df, states_list, params_list, n_states,
         When provided, enables analytical G_tt computation for the
         second-order IFT correction.
     """
-    # The scalar's properties are stated by the caller, not read off its
+    # The scalar's properties are stated by the caller, not read off the
     # name; see ScalarType.
     num_type = ScalarType(num_type, ad_level, arena)
     if forcings_list is None:
@@ -2471,7 +2471,7 @@ def generate_rootfunc_code(rootfunc, states_list, params_list, n_states,
     1. rootfunc = "equilibrate": steady-state detection
     2. rootfunc = list of expressions: stop when any crosses zero
     """
-    # The scalar's properties are stated by the caller, not read off its
+    # The scalar's properties are stated by the caller, not read off the
     # name; see ScalarType.
     num_type = ScalarType(num_type, ad_level, arena)
     if forcings_list is None:
@@ -2589,7 +2589,7 @@ def decide_sparse(sparse, n_states, jac_nnz, has_jacobian=True):
     """
     Dense vs sparse linear solver, shared by the cppDE and CVODE backends.
 
-    `sparse` arrives already normalised by R (None = auto, True/False = pinned);
+    `sparse` arrives already normalized by R (None = auto, True/False = pinned);
     the KLU-availability downgrade happens there, above this call.
 
     Auto-detection selects sparse from 8 states unless the structural Jacobian

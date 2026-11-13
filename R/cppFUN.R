@@ -5,7 +5,7 @@
 #' expressions \eqn{y = g(x, p)} on one or more rows of input, with
 #' optional first- and second-order derivatives. There is no time
 #' integration; the principal use cases are observation maps for
-#' likelihood-based inference and reparametrisations for [solveODE()].
+#' likelihood-based inference and reparametrizations for [solveODE()].
 #' `derivMode` selects which derivative products are built. Every returned
 #' function runs compiled code: an object built with `compile = FALSE` is
 #' evaluable only after [compile()]. See

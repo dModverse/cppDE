@@ -18,7 +18,7 @@ dir.create(logdir, recursive = TRUE)
 Sys.setenv(CPPDE_TAP_REAL = system.file("python", package = "cppDE"),
            CPPDE_TAP_LOG = logdir,
            NOT_CRAN = "true")
-## cppDE imports the logging wrappers of dev/python/tap instead of its generators.
+## cppDE imports the logging wrappers of dev/python/tap instead of the shipped generators.
 suppressPackageStartupMessages(library(cppDE))
 utils::assignInNamespace(".cppde_py_dir", function() file.path(root, "dev", "python", "tap"), "cppDE")
 

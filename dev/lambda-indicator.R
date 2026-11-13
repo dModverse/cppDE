@@ -12,7 +12,7 @@
 ##
 ##   eta_k = lambda_{k+1}' e_k     e_k the step's embedded error estimate.
 ##                                 The dual-weighted residual. O(tol) per
-##                                 step, and its sum estimates the error
+##                                 step, and the sum estimates the error
 ##                                 in J.
 ##   wdt_k = dJ/dh_k               the transport derivative, lambda' f.
 ##                                 O(J), not O(error): it says how much J
@@ -41,7 +41,7 @@
 ##
 ## Reference values come from a solve at rtol_ref. Errors are measured per
 ## component with a floor: a gradient whose components span decades, as
-## Robertson's does, is not summarised by a norm divided by its largest
+## Robertson's does, is not summarized by a norm divided by the largest
 ## entry.
 ##
 ## Models: a decay, a stiff one and an event one.
@@ -94,7 +94,7 @@ models <- list(
 )
 
 # --- Build ------------------------------------------------------------------
-# A value model beside the reverse one: its solve fixes the output row count,
+# A value model beside the reverse one: the value solve fixes the output row count,
 # which a root event makes larger than length(times), and the first dimension
 # of the cotangent has to match it.
 
@@ -112,7 +112,7 @@ build <- function(name, m) {
   ## J = sum over observed times and states, weighted 1, 1/2, 1/3, ... over
   ## the states. A weight that is constant across states is annihilated by a
   ## linear conservation law. Robertson conserves y1+y2+y3, so an all-ones
-  ## cotangent makes J the constant 1 per time point and its gradient exactly
+  ## cotangent makes J the constant 1 per time point and the gradient of J exactly
   ## zero. Nothing about the study needs a residual-shaped objective; what
   ## matters is that lambda is not trivial.
   m$cotangent <- array(rep(1 / seq_len(n_x), each = n_out),
@@ -128,7 +128,7 @@ gradient <- function(m, rtol, grid = FALSE) {
 }
 
 # The functional the cotangent defines: J = sum over observed times and states of
-# W * x. The reverse pass returns its gradient, so this is the value its
+# W * x. The reverse pass returns the gradient of J, so J is the value the
 # adjoint belongs to.
 functional <- function(r, m) sum(r$variable * m$cotangent[, , 1])
 
@@ -174,7 +174,7 @@ study <- function(name, m) {
   }))
 
   ## The ratios are the point: an indicator that tracks a quantity keeps a flat
-  ## ratio to it over the decades, whatever its prefactor.
+  ## ratio to it over the decades, whatever the prefactor.
   out$eta_over_J <- out$sum_eta  / out$errJ
   out$eta_over_G <- out$sum_eta  / out$errG
   out$wdt_over_G <- out$sum_wdth / out$errG

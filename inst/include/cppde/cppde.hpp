@@ -97,7 +97,7 @@
 //  Reverse-mode sweep
 //
 //  Checkpoint per accepted step, one backwards pass. The step-level machinery
-//  is stepper-agnostic; each stepper family supplies its own checkpoint. The
+//  is stepper-agnostic; each stepper family supplies a checkpoint type. The
 //  trajectory layer stores those checkpoints, and cppde_adjoint_step.hpp walks
 //  them backwards, seeding the observation times through the dense output.
 // ============================================================================

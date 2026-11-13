@@ -1,6 +1,6 @@
 /**
  * @file cppde_switch_surface.hpp
- * @brief Where a state switch stands on its surface, read the same way by the
+ * @brief Where a state switch stands on the switching surface, read the same way by the
  * native event engine and the generated CVODE source.
  *
  * Copyright (C) 2026 Simon Beyer
@@ -33,7 +33,7 @@ inline int rate_sign(double rdot, double terms) {
 
 enum class surface_side { keep, on, off, slide };
 
-// The side a switch on its surface takes, from the signs of r' with its mode
+// The side a switch on the surface takes, from the signs of r' with the mode
 // off and on: the one both branches move to, a slide where both move onto the
 // surface, and the current mode where they part or one stays on it.
 inline surface_side surface_choice(int off, int on) {
@@ -44,7 +44,7 @@ inline surface_side surface_choice(int off, int on) {
 }
 
 // The weight of combination c of the slides in a, the product over slide i of
-// a_i where bit i of c is set and 1 - a_i where it is not; with `d` >= 0 its
+// a_i where bit i of c is set and 1 - a_i where it is not; with `d` >= 0 the
 // derivative in a_d.
 template<class V>
 V combo_weight(const std::vector<V>& a, std::size_t c, int d = -1) {

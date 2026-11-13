@@ -5,7 +5,7 @@
  (see sundials/cvode.h) so that solveODE()'s `return_code` can be
  interpreted uniformly across the CVODE backend and the native cppDE
  backend.  The CVODE backend simply passes the raw `CVode()` flag through;
- the native backend maps its own exceptions to the closest CVODE flag.
+ the native backend maps the exceptions it throws to the closest CVODE flag.
 
  Copyright (C) 2026 Simon Beyer
  */

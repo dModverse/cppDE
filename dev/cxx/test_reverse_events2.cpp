@@ -3,10 +3,10 @@
 //
 // What this adds over --reverse-events is the order, and over the R tests the
 // shared grid: both directions replay the sequence the value run recorded, so a
-// residue is algebra and not discretisation. What it adds over
+// residue is algebra and not discretization. What it adds over
 // dev/jump-adjoint-check.cpp is the store. That check holds the jump's
 // transpose against saltation_root_analytical_batch, and both sides share the
-// convention that the localisation is tangent-blind; it is sharp for the
+// convention that the localization is tangent-blind; it is sharp for the
 // transposition and blind to the convention. Here the store supplies the
 // pre-jump state, as it does in a real solve.
 //
@@ -339,7 +339,7 @@ static void value_run(cppde::reverse::trajectory_store<SAD, D>& store,
 
 // ---------------------------------------------------------------------------
 //  The oracle: the recorded sequence replayed over a nested dual. Every
-//  decision comes from the store, so this is the same discretisation.
+//  decision comes from the store, so this is the same discretization.
 // ---------------------------------------------------------------------------
 
 template<class SAD, class S>

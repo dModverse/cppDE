@@ -1,5 +1,5 @@
 # Switches on a state: a comparison, Heaviside() or sign() whose argument
-# reads a state is held as a mode and switched at the located root of its
+# reads a state is held as a mode and switched at the located root of the
 # argument, so the sensitivities take the jump of f there.
 
 skip_on_cran()
@@ -10,7 +10,7 @@ library(cppDE)
 sw_rhs <- c(x = "piecewise(k, x < 1, 0)")
 # A relay: the force flips sign whenever x crosses zero, in both directions.
 relay <- c(x = "y", y = "piecewise(-k, x > 0, k) - c*y")
-# f is continuous across x = 1 and its derivative in x is not.
+# f is continuous across x = 1 and the derivative of f in x is not.
 kink <- c(x = "piecewise(-a*x, x > 1, -a - b*(x - 1))")
 # Heaviside() and sign() of a state, both switching where x passes 1.
 hs <- c(x = "c", y = "k*sign(x - 1)", z = "Heaviside(1 - x)")
@@ -65,7 +65,7 @@ sw_before <- sw_times < sw_tau
 sw_x <- pmin(sw_p[["x"]] + sw_p[["k"]] * sw_times, 1)
 sw_dx <- cbind(x = as.numeric(sw_before), k = sw_times * sw_before)
 
-test_that("the switch is located and the tangents take its jump", {
+test_that("the switch is located and the tangents take the jump", {
   for (nm in c("ss_d2", "ss_adams", "ss_rb4", "ss_tsit5", "ss_rb4_grid")) {
     out <- tight(mods[[nm]], sw_times, sw_p)
     expect_equal(nrow(out$variable), length(sw_times), info = nm)
@@ -234,7 +234,7 @@ test_that("Heaviside() and sign() of a state switch where their argument does", 
   }
 })
 
-test_that("a jump across the switch sets the mode on its far side", {
+test_that("a jump across the switch sets the mode on the far side", {
   times <- seq(0, 5, by = 0.5)
   p <- c(x = 0.2, k = 0.4)
   out <- tight(mods$ev, times, p)
@@ -252,7 +252,7 @@ test_that("a jump across the switch sets the mode on its far side", {
 
 # -- Batches ------------------------------------------------------------------
 
-test_that("a batch switches every condition where its own root lies", {
+test_that("a batch switches every condition where the root of that condition lies", {
   conds <- list(early = list(parms = c(x = 0.2, k = 0.5)),
                 late = list(parms = c(x = 0.5, k = 0.2)),
                 above = list(parms = c(x = 1.2, k = 0.5)))

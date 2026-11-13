@@ -65,7 +65,7 @@ CPPDE_DEFINE_SCALAR_UNARY(erfc)
 
 #undef CPPDE_DEFINE_SCALAR_UNARY
 
-// abs: std::abs has no unsigned overload (and its integral one lives in
+// abs: std::abs has no unsigned overload (and the integral one lives in
 // <cstdlib>), so route unsigned types around it instead of letting the call
 // go ambiguous.
 template<class T, std::enable_if_t<std::is_arithmetic_v<T>, int> = 0>
@@ -80,7 +80,7 @@ inline auto pow(A a, B b) { return std::pow(a, b); }
 
 // min / max return by value on the common type: std::min / std::max return a
 // reference to a parameter, which would dangle for a mixed-type call that has
-// to materialise a converted temporary.
+// to materialize a converted temporary.
 template<class A, class B,
          std::enable_if_t<detail::all_arithmetic_v<A, B>, int> = 0>
 inline std::common_type_t<A, B> min(A a, B b) {
@@ -612,7 +612,7 @@ template<class T, class U,
 inline bool operator>=(const U& a, const dual<T>& b) { return static_cast<T>(a) >= b.x(); }
 
 // steady_all_levels(f, x, tol, atol): every |f| <= tol |x| + atol over a value
-// and all of its tangent slots, with f the time derivative of x. The steady-state
+// and all tangent slots, with f the time derivative of x. The steady-state
 // check of rootfunc = "equilibrate".
 template<class T>
 inline std::enable_if_t<std::is_arithmetic_v<T>, bool>

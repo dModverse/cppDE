@@ -57,9 +57,9 @@ struct detail_null_sparse_lu {
   //  Self-contained iteration-matrix solver, held by a stepper as a member.
   //
   //    call_jacobian(jac_func, x, t)     evaluate the Jacobian
-  //    factorize_W(n, inv_gamma_dt)      build W = 1/(gamma*h)*I - J, factorise
+  //    factorize_W(n, inv_gamma_dt)      build W = 1/(gamma*h)*I - J, factorize
   //    refactorize_W_gamma_only(n, val)  O(n) diagonal update, sparse only
-  //    refactorize_W_from_cache(n, val)  restore the cached J, factorise again
+  //    refactorize_W_from_cache(n, val)  restore the cached J, factorize again
   //    cache_jacobian(n)                 snapshot J for later reuse
   //    solve(b)                          W^-1 b
   //    invalidate() / has_valid_*()      state tracking
@@ -145,8 +145,8 @@ public:
     }
   }
 
-  // W again for a larger inv_gamma_dt on the Jacobian factorised last: the
-  // diagonal only grows, so a sparse refactorisation keeps the tested pivots.
+  // W again for a larger inv_gamma_dt on the Jacobian factorized last: the
+  // diagonal only grows, so a sparse refactorization keeps the tested pivots.
   void refactorize_W_larger_diagonal(size_t n, value_type inv_gamma_dt)
   {
     if constexpr (is_sparse && std::is_same<value_type, double>::value) {
@@ -210,7 +210,7 @@ public:
 
   // ====================================================================
   //  solve_transposed: W^-T b, the reverse mode's half of the same
-  //  factorisation. Value type only, the derivative side of an implicit
+  //  factorization. Value type only, the derivative side of an implicit
   //  equation being the caller's own sweep.
   // ====================================================================
 
@@ -233,11 +233,11 @@ public:
   //  Lagged Jacobian / LU state tracking
   // ====================================================================
 
-  // Work of one factorisation over that of one pair of triangular solves.
+  // Work of one factorization over that of one pair of triangular solves.
   double refactor_solve_ratio()
   {
     static_assert(std::is_same<value_type, double>::value,
-                  "refactor_solve_ratio reads a double factorisation");
+                  "refactor_solve_ratio reads a double factorization");
     if constexpr (is_sparse) return m_sparse_lu.refactor_solve_ratio();
     else return static_cast<double>(m_W_temp.rows()) / 3.0;
   }
@@ -357,8 +357,8 @@ private:
 
   // ====================================================================
   //  Dense refactorize from cache: W = inv_gamma_dt * I + (cached -J).
-  //  The cached matrix is copied into m_W_temp, then the dense factorise adds
-  //  the diagonal and moves: one copy, one diagonal pass, one factorisation.
+  //  The cached matrix is copied into m_W_temp, then the dense factorize adds
+  //  the diagonal and moves: one copy, one diagonal pass, one factorization.
   // ====================================================================
 
   void refactorize_W_from_cache_dense(size_t n, value_type inv_gamma_dt)
@@ -467,7 +467,7 @@ private:
 };
 
 // ============================================================================
-//  Tag to bool conversion, for stepper templates parameterised on
+//  Tag to bool conversion, for stepper templates parameterized on
 //  dense_lu_tag / sparse_lu_tag
 // ============================================================================
 

@@ -127,7 +127,7 @@ static void arithmetic_suite(const char* label, unsigned N) {
 
 // =============================================================================
 // Comparisons and select, the shapes an SBML piecewise turns into: the relation
-// sits on an unmaterialised node, and one branch of the select is a literal.
+// sits on an unmaterialized node, and one branch of the select is a literal.
 // =============================================================================
 
 template <class D>
@@ -220,7 +220,7 @@ static void aliasing_suite(const char* label, unsigned N) {
 }
 
 // =============================================================================
-// Lifetime stress: materialise a deep tree, then clobber the stack and re-read
+// Lifetime stress: materialize a deep tree, then clobber the stack and re-read
 // a value captured beforehand. Under -fsanitize=address with
 // detect_stack_use_after_scope=1 a node that outlived its operands becomes a
 // hard failure instead of a plausible-looking wrong number.

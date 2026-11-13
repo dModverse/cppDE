@@ -1,4 +1,4 @@
-# A fixed-time event fires on the window of its solve, from the first time of
+# A fixed-time event fires on the window of the solve, from the first time of
 # the grid up to but not including the last. Outside it the event adds no row
 # and moves neither end of the integration; at the first time it is applied
 # before the solve starts, at the last time not at all. Two consecutive solves
@@ -54,7 +54,7 @@ solve <- function(model, times, parms, ...)
   do.call(solveODE, c(list(model, times, parms, ...), tol))
 
 # The tangent of a solve over [t1, t2] started from the state `first` ends on,
-# chained through the tangent of `first` at its last row: the first-order
+# chained through the tangent of `first` at the last row: the first-order
 # sensitivities of one solve over both windows.
 chain_tangent <- function(first, second, row) {
   T1 <- first$tangent[nrow(first$variable), , ]

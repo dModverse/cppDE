@@ -177,7 +177,7 @@ public:
   //  prepare_sensitivities
   //
   //  Stores n_sens and primes the slabs this stepper owns. The controller primes
-  //  its own xerr. No-op unless the value type is a heap-backed dual.
+  //  the xerr buffer. No-op unless the value type is a heap-backed dual.
   // ====================================================================
 
   void prepare_sensitivities(unsigned n_sens)
@@ -597,7 +597,7 @@ public:
     }
   }
 
-  /// W^-T b on the factorisation the step itself used. The stage solves are
+  /// W^-T b on the factorization the step itself used. The stage solves are
   /// direct, so the adjoint has to transpose that matrix and no other.
   void stage_solve_transposed(state_type& b) { m_lu.solve_transposed(b); }
 

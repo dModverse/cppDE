@@ -85,7 +85,7 @@ int threadsFor(int K, int requested) {
 }  // namespace
 
 // innames, parameters, fixed: of the function; sets: the argument sets of evaluateBatch(); n_out
-// its outputs. With a list of parameters, the four are lists and a vector, one entry per set, for
+// the output count. With a list of parameters, the four are lists and a vector, one entry per set, for
 // sets of different functions. Returns list(sets, theta), the sets as the AD batch entry reads
 // them and the direction names per set, or NULL where a set needs the R path.
 extern "C" SEXP cppde_eval_prep(SEXP inn, SEXP par, SEXP fix, SEXP sets, SEXP deriv2SEXP, SEXP nOutSEXP) {
@@ -325,7 +325,7 @@ using EvalAd2 = void (*)(double*, double*, double*, double*, double*, double*, i
                          double*, int*, int*, int*, int*, int*);
 
 // fns: the addresses of the raw AD entries (`<model>_eval_ad`, `_eval_ad2` with deriv2), one per
-// set; sets: from cppde_eval_prep(). Each set by its own function, all in one parallel region;
+// set; sets: from cppde_eval_prep(). Each set by the function given for it, all in one parallel region;
 // the results as the AD batch entries return them, NaN where a function throws.
 extern "C" SEXP cppde_eval_many(SEXP fns, SEXP sets, SEXP deriv2SEXP, SEXP nthreadsSEXP) {
   const bool deriv2 = Rf_asLogical(deriv2SEXP) == TRUE;

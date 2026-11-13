@@ -3,13 +3,13 @@
 
  One [n_rows × n_cols] block, owned by the stepper or controller, holds the
  tangents; each element's tan_ points into one row (set via rebind_storage).
- dual = expr materialisations reuse that row in place, so the hot path makes
+ dual = expr materializations reuse that row in place, so the hot path makes
  no arena allocations.
 
  The slab is sized once per solve via prepare_sensitivities(n_sens) and never
  grown afterward, which keeps the embedded tan_ pointers stable.
 
- dual2nd has a two-block specialisation. For any other T (double, nested dual)
+ dual2nd has a two-block specialization. For any other T (double, nested dual)
  tangent_slab is an empty stub, so multistepper<double, …> instances pay no
  size or codegen cost for the slab machinery.
 
@@ -31,7 +31,7 @@
 
 namespace cppde {
 // Forward declaration: dual2nd<S> is defined in cppde_dual2nd.hpp;
-// the slab specialisation below references it for nested-AD slabbing.
+// the slab specialization below references it for nested-AD slabbing.
 template<class S> class dual2nd;
 
 namespace detail {
@@ -40,7 +40,7 @@ namespace detail {
 //  is_dynamic_dual<T>
 //
 //  True for cppde::dual<S> with a non-AD scalar S, that is every dual the
-//  slab can back. A nested dual is excluded: its inner tangents would need one
+//  slab can back. A nested dual is excluded: the inner tangents would need one
 //  buffer per outer tangent, which this layout does not model.
 // =============================================================================
 
@@ -52,16 +52,16 @@ struct is_dynamic_dual<cppde::dual<S>>
   : std::bool_constant<!std::is_class_v<S> || std::is_arithmetic_v<S>>
 {};
 
-// dual2nd<S> is slab-backed through the two-level specialisation below. In
-// external mode nordsieck_block owns the storage and hands each slot its
-// pointers; in own-storage mode the slab allocates its blocks itself.
+// dual2nd<S> is slab-backed through the two-level specialization below. In
+// external mode nordsieck_block owns the storage and hands each slot the
+// pointers; in own-storage mode the slab allocates the blocks itself.
 template<class S>
 struct is_dynamic_dual<cppde::dual2nd<S>>
   : std::bool_constant<!std::is_class_v<S> || std::is_arithmetic_v<S>>
 {};
 
 // Trait: is T a dual2nd? Used by tangent_slab to dispatch to the nested
-// specialisation.
+// specialization.
 template<class T>
 struct is_dual2nd : std::false_type {};
 template<class S>
@@ -71,7 +71,7 @@ struct is_dual2nd<cppde::dual2nd<S>> : std::true_type {};
 //  tangent_slab<T>: contiguous [n_rows × n_cols] storage for dual<S>.
 //
 //  The primary template handles every T with is_dynamic_dual; any other T uses
-//  the empty stub specialisation below.
+//  the empty stub specialization below.
 // =============================================================================
 
 template<class T, bool = is_dynamic_dual<T>::value>
@@ -173,7 +173,7 @@ public:
 };
 
 // =============================================================================
-//  tangent_slab specialisation for cppde::dual2nd<S>: two blocks
+//  tangent_slab specialization for cppde::dual2nd<S>: two blocks
 //
 //     outer_storage_:  n_rows * m        dual<S>   (outer.tan_)
 //     hess_storage_:   n_rows * m * m    S         (Hessian rows)
@@ -215,7 +215,7 @@ public:
   }
 
   // 4-arg prime_external: outer rows in the caller's block, the Hessian block
-  // owned here. stage_matrix<dual2nd> binds its stages this way.
+  // owned here. stage_matrix<dual2nd> binds the stages this way.
   void prime_external(std::vector<value_type>& v, outer_inner_t* outer_base,
                       unsigned n_rows, unsigned n_cols) {
     n_rows_ = n_rows;
@@ -463,7 +463,7 @@ inline void vec_zero_with_slab(
       }
     }
     // Slab unprimed: zero values via *=0 to preserve any arena tan_
-    // buffers (so they stay live for the next vec_axpy materialisation).
+    // buffers (so they stay live for the next vec_axpy materialization).
     const S zero = S(0);
     for (std::size_t i = 0; i < n; ++i) y[i] *= zero;
   } else {

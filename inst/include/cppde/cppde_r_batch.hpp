@@ -194,7 +194,7 @@ inline const bool fork_guard_installed = install_fork_guard();
 }  // namespace detail
 
   // The thread count actually used for a batch of K conditions. It is 1 inside a
-  // forked child, and 1 inside an existing OpenMP region: a caller parallelising
+  // forked child, and 1 inside an existing OpenMP region: a caller parallelizing
   // over the wider axis owns the threads, and a second level oversubscribes.
 inline int batch_threads(int K, int requested) {
 #ifdef _OPENMP

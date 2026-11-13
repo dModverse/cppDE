@@ -1,7 +1,7 @@
 \donttest{
 if (codegenAvailable()) {
   ## Marshal the conditions once, then re-solve with new numbers, as inside an
-  ## optimiser.
+  ## optimizer.
   f <- cppODE(c(x = "-k*x"), deriv = FALSE, compile = FALSE)
   r <- cppODE(c(x = "-k*x"), derivMode = "reverse", compile = FALSE)
   compile(f, r, output = "solveBatch_example")

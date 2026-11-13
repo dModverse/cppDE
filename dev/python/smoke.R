@@ -20,12 +20,12 @@ root <- normalizePath(local({
 gen_dir <- file.path(root, "inst", "python")
 legacy_dir <- file.path(root, "dev", "python", "legacy")
 
-## cppDE imports its generators from `dir` for the rest of this R process.
+## cppDE imports the generators from `dir` for the rest of this R process.
 use_generators <- function(dir)
   utils::assignInNamespace(".cppde_py_dir", function() dir, "cppDE")
 
 ## Runs `code` on the current generators, imported from gen_dir before codegen
-## imports them, so that codegen finds them patched; a legacy case keeps its
+## imports them, so that codegen finds them patched; a legacy case keeps the
 ## frozen generators unpatched.
 patch_gen <- function(code) {
   if (isTRUE(get0(".legacy", envir = globalenv()))) return(invisible())
@@ -60,7 +60,7 @@ S1 <- list(
            kin = 0.4, tau = 2),
   forcings = list(u = data.frame(time = c(0, 2, 5), value = c(0.1, 0.3, 0.05))),
   times = seq(0, 5, length.out = 11),
-  ## the switch time is not an event: its sensitivity misses the jump
+  ## the switch time is not an event: the sensitivity misses the jump
   no_fd = "ts")
 
 chain <- function(n) {
@@ -132,7 +132,7 @@ rev2_vs_fwd2 <- function(M, method, outdir, tag, sparse = NULL) {
 }
 
 
-## Jacobian strategy of the generator for the rest of this case ("" = its own).
+## Jacobian strategy of the generator for the rest of this case ("" = the generator default).
 set_jac <- function(strategy) {
   if (nzchar(strategy))
     patch_gen(sprintf("import cppde_model\ncppde_model.JACOBIAN_STRATEGY = '%s'", strategy))
@@ -347,7 +347,7 @@ cv_vs_native <- function(M, outdir, tag, sparse = NULL, reverse = FALSE) {
        val = c(rc$variable[oc, ], rc$tangent[oc, , ]))
 }
 
-## cppFUN S4: jac/hess against differences, vjp against jac, its curvature
+## cppFUN S4: jac/hess against differences, vjp against jac, the vjp curvature
 ## against hess.
 fun_s4 <- function(outdir, tag) {
   eq <- c(y1 = "piecewise(a*x^2, x > c, b*sqrt(x))",
@@ -432,19 +432,19 @@ if (phase == "3") {
   case("S2 ff rb4 sparse entries", function(d)
          fwd2_vs_fd(S2s, "rb4", d, "s2e", sparse = TRUE, jac = "entries"),
        limit = 1e-5, vs_legacy = TRUE, pair_limit = 1e-8)
-  case("S2 ff rb4 sparse colour", function(d)
-         fwd2_vs_fd(S2s, "rb4", d, "s2c", sparse = TRUE, jac = "colour"),
+  case("S2 ff rb4 sparse color", function(d)
+         fwd2_vs_fd(S2s, "rb4", d, "s2c", sparse = TRUE, jac = "color"),
        limit = 1e-5)
-  case("S2 forward bdf dense colour", function(d)
-         fwd_vs_fd(S2, "bdf", d, "s2dc", sparse = FALSE, jac = "colour"),
+  case("S2 forward bdf dense color", function(d)
+         fwd_vs_fd(S2, "bdf", d, "s2dc", sparse = FALSE, jac = "color"),
        limit = 1e-6)
   case("S2 forward bdf dense entries", function(d)
          fwd_vs_fd(S2, "bdf", d, "s2de", sparse = FALSE, jac = "entries"),
        limit = 1e-6)
-  pairs[["S2 colour vs entries (rb4 ff)"]] <- list(
-    a = "S2 ff rb4 sparse colour", b = "S2 ff rb4 sparse entries", limit = 1e-10)
-  pairs[["S2 colour vs entries (bdf)"]] <- list(
-    a = "S2 forward bdf dense colour", b = "S2 forward bdf dense entries", limit = 1e-10)
+  pairs[["S2 color vs entries (rb4 ff)"]] <- list(
+    a = "S2 ff rb4 sparse color", b = "S2 ff rb4 sparse entries", limit = 1e-10)
+  pairs[["S2 color vs entries (bdf)"]] <- list(
+    a = "S2 forward bdf dense color", b = "S2 forward bdf dense entries", limit = 1e-10)
 }
 
 if (phase == "4") {
@@ -556,7 +556,7 @@ res <- parallel::clusterApplyLB(cl, names(cases), function(nm, cases) {
   suppressPackageStartupMessages(library(cppDE))
   assign(".legacy", cases[[nm]]$legacy, envir = globalenv())
   use_generators(if (cases[[nm]]$legacy) legacy_dir else gen_dir)
-  ## One worker runs many cases: every case imports its own generators.
+  ## One worker runs many cases: every case imports the generators it uses.
   cache <- cppDE:::.cppde_py_cache
   rm(list = ls(cache), envir = cache)
   if (reticulate::py_available())

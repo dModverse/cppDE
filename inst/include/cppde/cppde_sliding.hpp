@@ -7,10 +7,10 @@
  * sum_c w_c(a) f_c over the combinations c of their modes, w_c the product of
  * a_k or 1 - a_k, with the weights a chosen so that r'_k = dg_k/dt +
  * grad g_k . f is zero for every k in S. For one switch
- * a = r'_off / (r'_off - r'_on). A slide ends where its weight reaches 0 or 1,
- * a root of its own, and the solution leaves to that side; f is continuous
+ * a = r'_off / (r'_off - r'_on). A slide ends where the weight reaches 0 or 1,
+ * a separate root, and the solution leaves to that side; f is continuous
  * there. a is formed in the model's scalar type, so dual sensitivities take
- * its dependence on x and the parameters; its derivatives in x and t come from
+ * the dependence of a on x and the parameters; the derivatives in x and t come from
  * the implicit function theorem on the generated gradients of the rates r'.
  *
  * Copyright (C) 2026 Simon Beyer
@@ -81,8 +81,8 @@ struct sliding_core {
 
   // The weights a of the slides S at (x, t): the mix of the combinations in fm
   // under which r' of every root in S is zero. Newton in double, then in the
-  // model's scalar so a takes its derivatives; false where it does not
-  // converge. A weight may leave [0, 1] by a step before its exit is located.
+  // model's scalar so a takes derivatives; false where it does not
+  // converge. A weight may leave [0, 1] by a step before the exit is located.
   // `rr` receives r' of root k under combination c.
   bool solve(const std::vector<int>& S, const State& x, const Time& t, std::vector<V>& a,
              std::vector<std::vector<V>>* rr = nullptr) {
@@ -165,8 +165,8 @@ struct sliding_core {
     mix(a, dxdt);
   }
 
-  // r' of switch k with its mode held at `on`, the other slides mixed, and the
-  // size of its terms.
+  // r' of switch k with the mode held at `on`, the other slides mixed, and the
+  // size of the terms of r'.
   V rate(int k, bool on, const State& x, const Time& t, double& terms) {
     signed char& m = switch_mode_sink().m[k];
     const signed char keep = m;
@@ -208,7 +208,7 @@ struct sliding_core {
       for (std::size_t k = 0; k < ns; ++k) {
         const auto& ev = roots[root_of[S[k]]];
         if (!ev.rate_dx || !ev.rate_dt)
-          throw std::logic_error("a sliding switch without the derivatives of its rate");
+          throw std::logic_error("a sliding switch without the derivatives of the sliding rate");
         for (auto& v : gk) {
           v = V(0.0);
           ad_traits::arm_tangents(v);
@@ -436,7 +436,7 @@ struct sliding_system {
 
   const typename core_type::Roots& roots() const { return first.c->roots; }
 
-  // Signs of r' of switch k with its mode off and on, the other slides mixed.
+  // Signs of r' of switch k with the mode off and on, the other slides mixed.
   void rate_signs(int k, const State& x, const Time& t, int& off, int& on) const {
     dual_arena::scope scope;
     double terms = 0.0;

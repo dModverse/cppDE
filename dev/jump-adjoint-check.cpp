@@ -13,7 +13,7 @@
 static constexpr unsigned ND = 5;   // x0, x1, p0, p1, p2
 static constexpr std::size_t NS = 2, NP = 3;
 
-// Values. x1 sits on the surface, which is where the engine localises it.
+// Values. x1 sits on the surface, which is where the engine localizes it.
 static const double X0 = 1.20, X1 = 0.55, P0 = 0.70, P1 = 0.35, P2 = 0.40;
 static const double GC = 0.55;             // root: g = x1 - GC
 static const double TD = 0.30;             // how hard f1 reads the clock
@@ -39,7 +39,7 @@ struct no_scope { };
 template<bool On>
 using maybe_scope = std::conditional_t<On, cppde::dual_arena::scope, no_scope>;
 
-// Two shapes of the same contraction. Generated = false arms its output and
+// Two shapes of the same contraction. Generated = false arms the output and
 // opens no scope; Generated = true is what the codegen emits, an unarmed
 // assign followed by the model's own arena scope. The buffer binding is the
 // one thing a hand-written oracle gets wrong by being careful.
@@ -177,7 +177,7 @@ static void report(const char* what,
               gmax, hmax, hmax / (href > 0 ? href : 1.0));
 }
 
-// The sandwich forward over a flat dual, then its transpose. Generated picks
+// The sandwich forward over a flat dual, then the transpose. Generated picks
 // which buffer shape the contractions present to the sweep.
 template<bool Generated>
 static void run_reverse(const std::vector<cppde::detail::TriggeredEvent>& trig,
@@ -260,7 +260,7 @@ int main() {
     cppde::detail::saltation_root_analytical_batch(xo, xb, te, sys, ev, trig);
 
     // What the sweep returns is g_a = sum_i w_i dx_i/dtheta_a with w an input,
-    // so its tangent in direction b holds dw/dtheta_b against dx/dtheta_a and
+    // so the tangent of g_a in direction b holds dw/dtheta_b against dx/dtheta_a and
     // w against the second derivative. a is the route, b the direction.
     for (unsigned a = 0; a < ND; ++a) {
       for (std::size_t i = 0; i < NS; ++i) grad_ff[a] += W[i] * xo[i].d1_at(a);
@@ -270,7 +270,7 @@ int main() {
     }
   }
 
-  // ---- test: the same sandwich forward, then its transpose -----------------
+  // ---- test: the same sandwich forward, then the transpose -----------------
   double grad_rv[ND] = {0}, hess_rv[ND][ND] = {{0}};
   double grad_gn[ND] = {0}, hess_gn[ND][ND] = {{0}};
   run_reverse<false>(trig, grad_rv, hess_rv);

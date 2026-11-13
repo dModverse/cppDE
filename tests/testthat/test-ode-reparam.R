@@ -5,7 +5,7 @@ skip_on_cran()
 # -- Models --------------------------------------------------------------------
 
 # Every model the file solves, one shared object per backend. Tests that compare
-# an identity seeding with a reparametrised one call the same model twice.
+# an identity seeding with a reparametrized one call the same model twice.
 rhs_x  <- c(x = "-k*x")
 rhs_AB <- c(A = "-k1*A + k2*B",
             B =  "k1*A - k2*B")
@@ -198,7 +198,7 @@ test_that("CVODE reparam matches Native reparam (no events)", {
 test_that("CVODE reparam with time event: chain-rule saltation (post-hoc parity)", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
 
-  # dx/dt = -k*x with a parameterised-time event: at t = t_e, x += dose.
+  # dx/dt = -k*x with a parameterized-time event: at t = t_e, x += dose.
   # Reparametrize theta = (x0, log(k), t_e, dose); Phi'(theta) has
   # a non-identity on the k row (dp_k/dtheta_lk = k).
   pars <- c(x = 1.0, k = 0.3, t_e = 2.0, dose = 0.5)
@@ -289,7 +289,7 @@ test_that("hessian chain-rule parity: direct vs post-hoc composition", {
 
 # -- A call may answer fewer directions than the model has ------------------
 
-test_that("native: a theta subset integrates on its own", {
+test_that("native: a theta subset integrates alone", {
   # Call with only M = 2 active thetas.
   mod <- mod_x
   pars <- c(x = 1.0, k = 0.5); k <- 0.5; x0 <- 1.0

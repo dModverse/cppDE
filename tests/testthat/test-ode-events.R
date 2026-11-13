@@ -94,7 +94,7 @@ test_that("a root landing exactly on an output time still fires", {
   pars  <- c(S = 2, C = 4)
 
   # The last row at a requested time holds the post-event state, whether or
-  # not the localised root inserted its own rows next to it.
+  # not the localized root inserted separate rows next to it.
   atTimes <- function(res, var)
     res$variable[vapply(tt, function(s) max(which(res$time == s)), 1L), var]
 
@@ -106,7 +106,7 @@ test_that("a root landing exactly on an output time still fires", {
   expect_equal(atTimes(res, "S"), atTimes(ref, "S"))
 })
 
-test_that("both backends localise a root at the same time", {
+test_that("both backends localize a root at the same time", {
   skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
   # The root is off the grid here, so both backends have to place the firing
   # time themselves rather than inherit it from a requested time.

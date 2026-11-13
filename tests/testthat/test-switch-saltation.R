@@ -1,4 +1,4 @@
-# The saltation of a switch: taken however slowly its root crosses, and once
+# The saltation of a switch: taken however slowly the root crosses, and once
 # per switch where two cross at the same time but move apart with the
 # parameters.
 
@@ -49,7 +49,7 @@ test_that("two switches at one time take a saltation each", {
                unname(apply(sa_d2y * W[, "y", 1], c(2, 3), sum)), tolerance = 1e-7)
 })
 
-test_that("a slow crossing takes its saltation", {
+test_that("a slow crossing takes the saltation", {
   out <- sa_solve(sa_mods$d2)
   expect_equal(unname(out$variable[, "v"]), pmax(sa_times - 1, 0), tolerance = 1e-9)
   expect_equal(unname(out$tangent[, "v", "u"]) * sa_p[["e"]], sa_on, tolerance = 1e-8)

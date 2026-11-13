@@ -34,7 +34,7 @@
 #include <cppde/cppde_jump_adjoint.hpp>
 
 // The hot loops here run over buffers that are always distinct. Saying so is
-// what lets them vectorise.
+// what lets them vectorize.
 #if defined(__GNUC__) || defined(__clang__)
 #  define CPPDE_RESTRICT __restrict__
 #elif defined(_MSC_VER)
@@ -76,7 +76,7 @@ struct slot_operator {
 
   /// out[j*n + i] += sum_k this(k, j) * w[k*n + i], the transposed apply.
   /// The two arrays are always distinct buffers, which the compiler cannot see
-  /// and which decides whether the inner loop vectorises.
+  /// and which decides whether the inner loop vectorizes.
   template<class T>
   void apply_transposed(const T* CPPDE_RESTRICT w, std::size_t n,
                         T* CPPDE_RESTRICT out) const {
@@ -645,7 +645,7 @@ private:
     solver.prepare(cp.y, cp.t + ops.h, 1.0 / ops.gamma, ops.gamma);
   }
 
-  /// The step adjoint of one seed column on the operators and factorisation
+  /// The step adjoint of one seed column on the operators and factorization
   /// ms_step_prepare() built for the step.
   template<class CP, class AdjTerms, class Solver>
   void ms_step_column(const CP& cp, const obs_ref<T_>* ob, std::size_t nob,
@@ -1042,7 +1042,7 @@ void apply_rosenbrock_adjoint(Stepper& st, System& sys,
 
   // The embedded solution is X_6 alone, so the two adjoints differ by the
   // response to the seed on e: the local error of this step's adjoint, at
-  // the embedded order, on the same stages and factorisation.
+  // the embedded order, on the same stages and factorization.
   if (w_in_emb) {
     for (int i = 1; i <= S + 1; ++i) {
       ws.mu[i].assign(n, T(0.0));

@@ -25,7 +25,7 @@ pw_pulse <- function(nm, ...)
   cppODE(c(x = "-k*x + c*piecewise(1, time > ts && time <= t2, 0)",
            y = "k*x - y"),
          modelname = nm, compile = FALSE, ...)
-# Every operator, each in a state of its own. x runs with time, so a condition on
+# Every operator, each in a separate state. x runs with time, so a condition on
 # x is a switch on a state and one on time a switch in time.
 pw_ops <- c(
   x = "1",
@@ -95,7 +95,7 @@ test_that("a piecewise is emitted as cppde::select, not as a ternary", {
 
 # -- Solve and sensitivities --------------------------------------------------
 
-test_that("a time switch integrates and differentiates like its closed form", {
+test_that("a time switch integrates and differentiates like the closed form", {
   # Switching on time keeps the crossing independent of the parameters, so the
   # forward tangents of the switched system are the exact derivatives.
   f <- pw_mod$time_switch
@@ -218,7 +218,7 @@ test_that("select propagates value, gradient and Hessian on both branches", {
 })
 
 test_that("a branch that is a literal clears the tangents it replaces", {
-  # The second-order materialiser leaves the target's tangent buffers alone
+  # The second-order materializer leaves the target's tangent buffers alone
   # when a tree has no dependence, and dxdt is reused across calls, so a
   # select landing on a literal has to stay on the writing path.
   f <- pw_mod$freeze
@@ -264,8 +264,8 @@ test_that("the R and C spellings of the logical operators parse", {
 
 test_that("every operator reads as in R, on both backends", {
   # The reference evaluates the same strings in R and integrates them piece by
-  # piece between the switching points; x equals time. Its finite differences
-  # in t1 and t2 take the jumps at the switching times the tangents carry.
+  # piece between the switching points; x equals time. The finite differences of the reference
+  # in t1 and t2 take the jumps at the switching times the tangents hold.
   times <- seq(0, 4, by = 0.25)
   pars <- c(a = 2, b = 3, t1 = 1.3, t2 = 2.6, h = 0.5, mode = 1)
   p <- c(setNames(rep(0, length(pw_ops)), names(pw_ops)), pars)

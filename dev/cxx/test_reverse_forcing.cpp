@@ -363,7 +363,7 @@ static void forward_sens(const store_of<S>& store, std::size_t n_carry,
 }
 
 // Replays the recorded sequence in double, for a finite-difference probe of the
-// same prescribed discretisation both modes differentiate.
+// same prescribed discretization both modes differentiate.
 template<class S>
 static void replay_values(const store_of<S>& store, std::vector<double>& x_obs,
                           bool verify_carry = false, const char* name = "")
@@ -414,7 +414,7 @@ static void replay_values(const store_of<S>& store, std::vector<double>& x_obs,
       if (verify_carry && k + 1 < store.n_steps()) {
         // Looser than in the forcing-free harness, and the reason is the
         // reference rather than the adjoint: under dual the corrector's
-        // stopping rule maximises over the sensitivity directions, so it
+        // stopping rule maximizes over the sensitivity directions, so it
         // leaves the iteration at a slightly different point than the double
         // run did, and the carry inherits that. The forcing steepens the
         // right-hand side and the drift grows with it, to about 3e-9 here.

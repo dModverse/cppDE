@@ -7,10 +7,10 @@
 ## that contribution is missing from every sensitivity cppDE returns
 ## today. This script measures whether it is worth recovering.
 ##
-## The observable is the discretisation error e_h(theta) = y_h - y_ref.
-## Its theta-derivative is exactly the missing term. A smooth e_h means
+## The observable is the discretization error e_h(theta) = y_h - y_ref.
+## The theta-derivative of e_h is exactly the missing term. A smooth e_h means
 ## the term is small and well defined; a sawtooth along the step-count
-## switches means it interpolates between jumps and is an artefact.
+## switches means it interpolates between jumps and is an artifact.
 ## =================================================================
 rm(list = ls(all.names = TRUE))
 
@@ -56,7 +56,7 @@ sweep_one <- function(model, pars, times, pname, pvals, rtol, atol) {
   list(y = y, steps = steps)
 }
 
-# Forward sensitivity at the sweep centre, for the scale the error is judged on.
+# Forward sensitivity at the sweep center, for the scale the error is judged on.
 sens_at <- function(model, pars, times, pname, rtol, atol) {
   r <- solveODE(model, times, pars, abstol = atol, reltol = rtol)
   idx <- which(dimnames(r$tangent)$sens == pname)
@@ -86,8 +86,8 @@ analyse <- function(label, eqns, pars, times, pname, rel_span, atol, method = "b
   res <- list()
   for (rt in RTOLS) {
     sw <- sweep_one(mod_v, pars, times, pname, pvals, rt, atol)
-    e  <- sw$y - ref$y                       # discretisation error over theta
-    de <- apply(e, 2, function(col) diff(col) / dtheta)   # its theta-derivative
+    e  <- sw$y - ref$y                       # discretization error over theta
+    de <- apply(e, 2, function(col) diff(col) / dtheta)   # theta-derivative of e
     S  <- sens_at(mod_s, pars, times, pname, rt, atol)
 
     # Relative size of the missing term, per state, worst over the sweep.
@@ -112,8 +112,8 @@ rob <- analyse("robertson", eq_rob, p_rob, t_rob, "k1",
                rel_span = 1e-3, atol = 1e-10)
 
 # --- Plots -------------------------------------------------------------------
-# Top: the discretisation error over theta. Smooth means the missing term is a
-# real derivative; steps mean it is an artefact of where the controller switches.
+# Top: the discretization error over theta. Smooth means the missing term is a
+# real derivative; steps mean it is an artifact of where the controller switches.
 # Bottom: the accepted step count, which locates those switches.
 
 plot_case <- function(a, state, main) {
@@ -123,7 +123,7 @@ plot_case <- function(a, state, main) {
   ymax <- max(sapply(a$res, function(r) max(abs(r$e[, state]))))
   plot(a$pvals, a$res[[1]]$e[, state], type = "n", ylim = c(-ymax, ymax),
        xlab = a$pname, ylab = paste0("e_h [", state, "]"), main = main)
-  abline(h = 0, col = "grey70")
+  abline(h = 0, col = "gray70")
   for (i in cols) lines(a$pvals, a$res[[i]]$e[, state], col = i)
   legend("topright", legend = sprintf("rtol %.0e", sapply(a$res, `[[`, "rtol")),
          col = cols, lty = 1, bty = "n", cex = 0.8)

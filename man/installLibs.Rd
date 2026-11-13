@@ -50,8 +50,8 @@ independently:
 path of \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} requires. It does not involve
 SUNDIALS.
 \item \code{"sundials"} installs SUNDIALS/CVODES for the \code{\link[=cvode]{cvode()}} backend.
-SUNDIALS links its sparse solver wrappers against an external KLU at
-its own build time, so this installs SuiteSparse as well.
+SUNDIALS links the sparse solver wrappers against an external KLU when
+SUNDIALS is built, so this installs SuiteSparse as well.
 }
 
 The build needs network access and runs for several minutes. It is never
@@ -106,7 +106,7 @@ points at the deleted directory and affected models fail to load.
 \section{What gets built}{
 
 Only the components cppDE calls: the \code{klu} module of SuiteSparse with
-its \code{amd}, \code{colamd} and \code{btf} dependencies, and CVODES plus the dense
+the \code{amd}, \code{colamd} and \code{btf} dependencies, and CVODES plus the dense
 and KLU sparse linear solvers of SUNDIALS. MPI and OpenMP are disabled
 and no examples are built. The prefix is keyed by the version pair, so
 changing either version produces a separate build.

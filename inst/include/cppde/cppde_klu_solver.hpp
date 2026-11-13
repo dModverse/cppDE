@@ -106,8 +106,8 @@ public:
     return f;
   }
 
-  // Floating-point work of one refactorisation over that of one pair of
-  // triangular solves, read off the factors the last full factorisation built.
+  // Floating-point work of one refactorization over that of one pair of
+  // triangular solves, read off the factors the last full factorization built.
   // Zero before the first one.
   double refactor_solve_ratio()
   {
@@ -124,8 +124,8 @@ public:
   // ------------------------------------------------------------------
   //  Factorize: analyze (if needed) + factor/refactor
   // ------------------------------------------------------------------
-  // `check_growth` false skips the pivot growth test of a refactorisation,
-  // for a caller that knows the matrix only grew on its diagonal since the
+  // `check_growth` false skips the pivot growth test of a refactorization,
+  // for a caller that knows the matrix only grew on the diagonal since the
   // last tested one.
   void factorize(int n, const int* Ap, const int* Ai, const double* Ax,
                  bool check_growth = true)
@@ -166,7 +166,7 @@ public:
       if (ok && check_growth) {
         klu_rgrowth(const_cast<int*>(Ap), const_cast<int*>(Ai),
                     const_cast<double*>(Ax), m_symbolic, m_numeric, &m_common);
-        // Written so a NaN falls through to the full factorisation.
+        // Written so a NaN falls through to the full factorization.
         if (!(m_common.rgrowth > rgrowth_floor())) ok = 0;
       }
       if (!ok) {
@@ -199,7 +199,7 @@ public:
   { solve(b.data()); }
 
   // ------------------------------------------------------------------
-  //  Solve against the transpose: b <- W^-T b. KLU factorises once and
+  //  Solve against the transpose: b <- W^-T b. KLU factorizes once and
   //  serves both directions, which is what the reverse mode needs.
   // ------------------------------------------------------------------
   void solve_transposed(double* b) const

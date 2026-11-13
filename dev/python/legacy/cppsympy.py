@@ -1,6 +1,6 @@
 """SymPy glue shared by the cppDE code generators.
 
-Holds the C++ printer, the normalisation of the R and C logical operators, and
+Holds the C++ printer, the normalization of the R and C logical operators, and
 the parse-error wrapper. Piecewise is printed as cppde::select(cond, a, b)
 rather than as a ternary: a ternary cannot type check when one branch is an
 expression-template node and the other a literal, because neither converts to
@@ -49,7 +49,7 @@ class CppdePrinter(CXX17CodePrinter):
 def is_boolean(expr):
     """True for a relation or a logical combination of them.
 
-    CSE can lift a piecewise condition into its own temp, which then has to be
+    CSE can lift a piecewise condition into a separate temp, which then has to be
     declared bool rather than the model's numeric type.
     """
     return isinstance(expr, sp.logic.boolalg.Boolean)
@@ -78,7 +78,7 @@ class _BoolOpsToCalls(ast.NodeTransformer):
                         args=[node.operand], keywords=[])
 
 
-def normalise_logic(expr_str):
+def normalize_logic(expr_str):
     """Rewrite `&&`, `||` and `!` into a form SymPy's parser accepts.
 
     They bind below the comparisons while Python's `&` and `|` bind above, so

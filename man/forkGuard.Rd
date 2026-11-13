@@ -8,7 +8,7 @@ forkGuard()
 }
 \value{
 List with \code{api} (the BLAS whose thread count cppDE steers, \code{NA} when
-no entry point resolved), \code{threads} (its current thread count, \code{NA} without
+no entry point resolved), \code{threads} (the current thread count, \code{NA} without
 a getter) and \code{guard} (whether the \code{fork()} handler is installed).
 }
 \description{

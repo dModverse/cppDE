@@ -32,7 +32,7 @@ eq_scale  <- cppODE(rhs_scale, rootfunc = "equilibrate", deriv = FALSE,
 do.call(compile, c(unname(eq_mod), list(eq_scale),
                    output = "test_ode_equilibrate", cores = test_cores()))
 
-# The closed-form steady state and its derivatives in every parameter and
+# The closed-form steady state and the derivatives in every parameter and
 # initial value, the latter entering through the conserved total.
 ss_expr <- expression(
   R  = k_act / k_deact,
@@ -104,7 +104,7 @@ test_that("a start at the steady state ends at once, unless the tangent must set
 
 # -- Relative criterion ---------------------------------------------------------
 
-test_that("equilibrate judges each state relative to its size", {
+test_that("equilibrate judges each state relative to the state size", {
   # CVODE checks at output times, so both run on a grid
   tt <- c(0, 10^seq(0, 6, by = 0.25))
   p  <- c(small = 0, big = 0, ks = 1e-10, kb = 1e5, d = 0.1)

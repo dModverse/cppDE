@@ -27,7 +27,7 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
     convert_xor
 )
-from cppsympy import (CppdePrinter, TokenError, is_boolean, normalise_logic,
+from cppsympy import (CppdePrinter, TokenError, is_boolean, normalize_logic,
                       parse_error)
 import os
 import re
@@ -252,7 +252,7 @@ class CodeGenContext:
     
     def _parse_expr(self, expr_str):
         """Parse a string expression to SymPy."""
-        expr_str = normalise_logic(expr_str)
+        expr_str = normalize_logic(expr_str)
         safe_local = dict(_get_safe_parse_dict_cached())
         safe_local.update(self.all_symbols)
 
@@ -389,7 +389,7 @@ def _parse_expressions(exprs, ctx):
     parsed = {}
     for name, expr_str in exprs.items():
         try:
-            expr_str = normalise_logic(str(expr_str).strip())
+            expr_str = normalize_logic(str(expr_str).strip())
             if expr_str == "0":
                 parsed[name] = sp.Integer(0)
             else:
@@ -454,7 +454,7 @@ def _parse_entry(expr, ctx):
 
     Entries arrive as strings from derivSymb() (or already-parsed sympy).
     Returns sp.Integer(0) for entries that are exactly zero so callers can
-    skip them before CSE, preserving the original sparse-emission behaviour.
+    skip them before CSE, preserving the original sparse-emission behavior.
     """
     if not isinstance(expr, str):
         return expr
@@ -548,7 +548,7 @@ std::fill(dy, dy + ny_ * (size_t)(*n_theta_p), {NAN_});""",
         _write_eval_ad_batch(buf, modelname)
     if emit_vjp:
         # The contraction is a template now, and a template cannot have C
-        # linkage, so it and its dual instantiation sit outside the block.
+        # linkage, so the template and the dual instantiation sit outside the block.
         buf.write("} // extern \"C\"\n\n")
         _write_vjp_impl(buf, jacobian, exprs, out_names, ctx, modelname)
         _write_vjp_ad_impl(buf, modelname, ctx, out_names)
@@ -575,7 +575,7 @@ std::fill(d2y, d2y + ny_ * nt_ * nt_, {NAN_});""",
         )
         _write_eval_ad2_batch(buf, modelname)
 
-    # Jacobian (symbolic, double-only) and its BLAS chain-rule wrapper.
+    # Jacobian (symbolic, double-only) with the BLAS chain-rule wrapper.
     if emit_jacobian:
         n_sym_j = len(jacobian[next(iter(jacobian))])
         _write_guarded(
@@ -590,7 +590,7 @@ std::fill(d2y, d2y + ny_ * nt_ * nt_, {NAN_});""",
             f" * (size_t)(*n_theta), {NAN_});",
         )
 
-    # Hessian (symbolic, double-only) and its BLAS chain-rule wrapper.
+    # Hessian (symbolic, double-only) with the BLAS chain-rule wrapper.
     if emit_hessian:
         n_sym_h = len(hessian[next(iter(hessian))])
         _write_guarded(
@@ -656,13 +656,13 @@ def _write_eval_template(buf, exprs, out_names, ctx, modelname, ad):
     buf.write("\n")
 
     # CSE across all outputs: shared subexpressions are lifted into `const T`
-    # temps materialised once per call. For T=dual this collapses the ET tree
+    # temps materialized once per call. For T=dual this collapses the ET tree
     # walked per observation; for T=double it just shrinks the emitted source.
     ordered = [exprs[nm] for nm in out_names]
     temps, simplified = _cse_exprs(ordered, prefix='_cse_t')
     for sym, sub in temps:
         sub_cpp = _strip_std_prefix(ctx.to_cpp(sub))
-        # A piecewise condition can be lifted into its own temp, and that one
+        # A piecewise condition can be lifted into a separate temp, and that one
         # holds a truth value, not a model quantity.
         temp_type = "bool" if is_boolean(sub) else "T"
         buf.write(f"    const {temp_type} {sym.name} = {sub_cpp};\n")
@@ -694,7 +694,7 @@ def _write_guarded(buf, emit_fn, nan_fill):
     body = rest.rstrip()
     if not body.endswith("}"):
         raise RuntimeError("guarded emitter did not end on a closing brace")
-    body = body[:-1].rstrip("\n")             # drop its own closer
+    body = body[:-1].rstrip("\n")             # drop the closing brace
 
     buf.write(head + "{\n")
     buf.write("    try {\n")
@@ -1001,7 +1001,7 @@ def _write_vjp_impl(buf, jacobian, exprs, out_names, ctx, modelname):
       wp  [n_params, n_seed]                 -> j + n_params * s
 
     wp accumulates over observations because the parameters are shared across
-    them; wx does not, because each observation has its own variables.
+    them; wx does not, because the variables differ by observation.
     """
     n_vars = len(ctx.variables)
     n_params = len(ctx.parameters)

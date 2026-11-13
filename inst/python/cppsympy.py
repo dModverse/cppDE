@@ -1,7 +1,7 @@
 """SymPy helpers of the cppDE code generators.
 
 Parser fallback (`safe_sympify`, `from_sympy`), derivative templates of rare
-functions, `normalise_logic` and `parse_error`.
+functions, `normalize_logic` and `parse_error`.
 """
 
 import ast
@@ -65,7 +65,7 @@ def check_r_syntax(tree):
                              "write 'a < x && x < b'")
 
 
-def normalise_logic(expr_str):
+def normalize_logic(expr_str):
     """Rewrite `&&`, `||` and `!` as And / Or / Not calls, grouped by Python's
     parser; a textual swap to `&` and `|` would bind above the comparisons.
     `&` and `|` read as `&&` and `||`, see `r_operators`."""
@@ -81,7 +81,7 @@ def normalise_logic(expr_str):
 
 def _logic_words(s):
     """`&&`, `||` and prefix `!` as and/or/not; a postfix `!` is kept. A `not`
-    is bracketed up to the end of its operand, so that it may follow `*` or `==`."""
+    is bracketed up to the end of the operand, so that it may follow `*` or `==`."""
     out = []
     close = []
     i = 0
@@ -226,7 +226,7 @@ def safe_sympify(expr_str, local_symbols=None, label=None):
     """
     text = str(expr_str).strip()
     try:
-        expr_str = normalise_logic(text)
+        expr_str = normalize_logic(text)
         check_r_syntax(ast.parse(expr_str.replace('^', '**'), mode='eval'))
     except (ValueError, SyntaxError) as e:
         if isinstance(e, ValueError):

@@ -37,7 +37,7 @@ solveODEBatch(
 \item{model}{A model handle from \code{\link[=cppODE]{cppODE()}} or \code{\link[=cvode]{cvode()}}.}
 
 \item{conditions}{A named or unnamed list of per-condition argument lists.
-Recognised names are \code{times}, \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent},
+Recognized names are \code{times}, \code{parms}, \code{tangent}, \code{hessian}, \code{cotangent},
 \code{curvature}, \code{fixed}, \code{forcings}, \code{abstol}, \code{reltol}, \code{maxattempts},
 \code{maxsteps}, \code{hini}, \code{roottol}, \code{maxroot}, \code{keepStore}, \code{store},
 \code{sensErrCon}, \code{adjoint}, \code{maxOrder} and \code{stald}; each overrides the

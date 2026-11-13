@@ -124,7 +124,7 @@ def generate_cvode_cpp(
 
     # --- dense linear solver ---
 
-    # SUNLinSol_LapackDense routes the factorisation through R's own BLAS and
+    # SUNLinSol_LapackDense routes the factorization through R's own BLAS and
     # LAPACK, SUNLinSol_Dense is SUNDIALS' unblocked one; which applies follows
     # from how SUNDIALS was built. Sparse Jacobians use KLU instead.
     use_lapack = (not use_sparse) and bool(lapack)
@@ -192,8 +192,8 @@ def generate_cvode_cpp(
     # --- Events (time- and root-triggered) ---
 
     # Every event has the post-event value g of the affected state, with the
-    # method already folded in, plus its partials in x, p and t. A time event adds
-    # the event time and its dt/dp, a root event the condition and its partials.
+    # method already folded in, plus the partials of g in x, p and t. A time event adds
+    # the event time and dt/dp, a root event the condition and the partials of it.
     time_events = []
     root_events = []
     if events is not None:
@@ -228,7 +228,7 @@ def generate_cvode_cpp(
             except Exception:
                 pass
             # NA_character_ in a character column reaches us as the string
-            # "NA"; normalise the same set of placeholders codegen_cppODE uses.
+            # "NA"; normalize the same set of placeholders codegen_cppODE uses.
             if isinstance(val, str):
                 if val.strip().lower() in {"", "na", "nan", "none"}:
                     return False
@@ -292,7 +292,7 @@ def generate_cvode_cpp(
             if _valid(time_raw):
                 # --- Time-triggered ---
                 # t_e may be an expression of params; ∂t_e/∂p_k drives the
-                # saltation for parameterised event times.
+                # saltation for parameterized event times.
                 t_event_sym = _safe_sympify(str(time_raw), local_syms)
                 t_expr_cpp = _to_cpp(t_event_sym, states_list, params_list,
                                      n_states, "double", forcings_list)
@@ -443,7 +443,7 @@ def generate_cvode_cpp(
     # differentiated here; only the index order changes.
     #
     # Events are refused rather than approximated. CVODES integrates the adjoint
-    # as its own ODE over checkpointed forward states, and a jump in the state
+    # as a separate ODE over checkpointed forward states, and a jump in the state
     # is a jump in the adjoint that ASA has no way to be told about. The native
     # reverse mode replays the jump instead, which is why it handles events and
     # this does not.
@@ -461,8 +461,8 @@ def generate_cvode_cpp(
         adj_rhs_lines.append(f"    lamdot[{j}] -= ({cpp_of(e)}) * lam[{i}];")
     adj_rhs_body = "\n".join(adj_rhs_lines)
 
-    # The quadrature runs over the flat parameter block, so its index is the
-    # same NEQ + pk the forward reparametrisation uses.
+    # The quadrature runs over the flat parameter block, so the quadrature index is the
+    # same NEQ + pk the forward reparametrization uses.
     adj_quad_lines = [f"    qdot[{k}] = 0.0;" for k in range(n_params)]
     for pk in sorted(df_dp_by_pk.keys()):
         for (i, d_expr) in df_dp_by_pk[pk]:
@@ -624,7 +624,7 @@ def _render_source(
     # --- Rootfunc / event-root registration ---
 
     # root_fn writes the user rootfunc into gout[0..n_user-1] and the event roots
-    # after it. On CV_ROOT_RETURN a user root terminates, an event root applies its
+    # after it. On CV_ROOT_RETURN a user root terminates, an event root applies the
     # state change and saltation, then reinits and continues unless terminal.
     n_user_rootfunc = len(rootfunc_exprs_cpp) if rootfunc_mode == "user" else 0
     n_event_roots   = len(root_events)
@@ -774,12 +774,12 @@ struct RootEvent {{
   int  var_idx;
   int  direction;
   bool terminal;
-  // Event map g(x, t, p) and its partials (for saltation)
+  // Event map g(x, t, p) and the partials (for saltation)
   std::function<double(const double* x, double t)> g_fn;
   std::function<double(const double* x, double t, int i)> dg_dx_fn;
   std::function<double(const double* x, double t, int k)> dg_dp_fn;
   std::function<double(const double* x, double t)> dg_dt_fn;
-  // Root condition r(x, t, p) and its partials (for the IFT of dt_root/dp)
+  // Root condition r(x, t, p) and the partials (for the IFT of dt_root/dp)
   std::function<double(const double* x, double t, int i)> dr_dx_fn;
   std::function<double(const double* x, double t, int k)> dr_dp_fn;
   std::function<double(const double* x, double t)> dr_dt_fn;
@@ -954,7 +954,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
         event_builder_block = ""
 
     if has_time_events:
-        # First-order saltation for a parameterised time event (Barton & Lee), with
+        # First-order saltation for a parameterized time event (Barton & Lee), with
         # Gdot = sum_i dg/dx_i f_old[i] + dg/dt - f_new[var]:
         #   S_new[var] = sum_i dg/dx_i S_old[i] + dg/dp_k + Gdot dt_e/dp_k
 
@@ -1307,7 +1307,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
         do_cvode_step_lambda = ""
 
     # --- Zero-copy sink: the batch entry can size the results before the solve
-    # when nothing dynamic adds points. A time event adds a row unless its time is
+    # when nothing dynamic adds points. A time event adds a row unless the event time is
     # already requested, and those times are per-condition; roots stay dynamic.
     # Under ASA the result contains an adjoint the pre-allocated skeleton has no
     # slot for, and the skeleton is fixed before the solve runs. The native
@@ -1635,7 +1635,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
 
     for (int c = 0; c < n_seed && return_code == 0; ++c) {
       // lambda at T is the seed row for the final observation; every earlier
-      // row is added when the sweep reaches its time.
+      // row is added when the sweep reaches the observation time.
       {
         double* lam = N_VGetArrayPointer(yB);
         for (int i = 0; i < NEQ; ++i)
@@ -1651,7 +1651,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
             CVodeSStolerancesB(cvode_mem, indexB, reltol, abstol) < 0 ||
             CVodeSetUserDataB(cvode_mem, indexB, &ud) < 0) {
           return_code = cppde::RC_LINIT_FAIL;
-          solver_msg = "adjoint initialisation failed";
+          solver_msg = "adjoint initialization failed";
           break;
         }
         // The backward problem gets the caller's own step budget. Otherwise it
@@ -1681,7 +1681,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
       } else {
         // Every further column reuses the one backward problem. CVodeB advances
         // every backward problem that exists, so a second one would leave the
-        // first to be driven past its own start time.
+        // first to be driven past the start time of that problem.
         if (CVodeReInitB(cvode_mem, indexB, out_t.back(), yB) < 0) {
           return_code = cppde::RC_UNRECOGNIZED_ERR;
           solver_msg = "CVodeReInitB failed between seed columns"; break;
@@ -1718,7 +1718,7 @@ static std::vector<RootEvent> build_root_events(const double* params,
         // order one, so doing it at every output time would cost accuracy for
         // nothing on the times the objective does not observe.
         if (jumped && k > 0) {
-          // The quadrature keeps its own Nordsieck history, and a state re-init
+          // The quadrature keeps a separate Nordsieck history, and a state re-init
           // leaves that history describing an interval the state no longer
           // follows. Reading the accumulated value out and handing it straight
           // back restarts the history without losing what it has integrated.
@@ -1922,7 +1922,7 @@ static int sens_rhs1_fn(int Ns, sunrealtype t,
 // ---- Adjoint right-hand side: lambda' = -J(x,p)' lambda ----
 //
 // The transpose of the forward sensitivity multiply, over the same Jacobian
-// entries. CVODES supplies the forward state y by interpolating its own
+// entries. CVODES supplies the forward state y by interpolating the CVODES
 // checkpoints, which is what makes the two discretisations differ: the states
 // the adjoint sees here are not bit-for-bit the ones the forward run stepped
 // through, as they are in the native reverse mode's replay.
@@ -2377,7 +2377,7 @@ extern "C" SEXP solve_{modelname}(
   std::vector<cppde::rbatch::solve_result> R_(K);
   SEXP out = PROTECT(Rf_allocVector(VECSXP, K));
 {cv_prealloc_block}
-  // Phase B: no R API.  Each condition builds its own SUNContext.
+  // Phase B: no R API.  Each condition builds a separate SUNContext.
   cppde::rbatch::run_batch(K, nt, [&](int k) noexcept {{ solve_impl(A[k], R_[k]); }});
 
   // Phase C: back on the R side.

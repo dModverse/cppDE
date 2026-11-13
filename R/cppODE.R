@@ -1195,7 +1195,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # State rows sum the cotangents of x0 (wx0) and of the flat vector (wp).
   if (is_reverse) {
     # The transposed solve a corrector needs. An explicit method has none, and
-    # a Rosenbrock stage transposes the stepper's own factorisation.
+    # a Rosenbrock stage transposes the stepper's own factorization.
     # The system as the forward run took it, sliding where a switch slides; the
     # sweep and its solves read f and J from it.
     solver_decl <- c(
@@ -1290,7 +1290,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         "    auto _cl_jmp = cppde::adjoint::make_jump_terms(",
         "        _cl_sys, _eadj_sl, fixed_events, _cl_sys.roots());",
         # Second order on a multistep method: all columns in one sweep, each step's
-        # Jacobian and factorisation built once for all of them.
+        # Jacobian and factorization built once for all of them.
         if (second_reverse && !written_onestep) c(
           "    if (!args.adjoint_grid) {",
           sprintf("      std::vector<std::vector<%s>> _cols((size_t)n_seed);", rev_num_type),

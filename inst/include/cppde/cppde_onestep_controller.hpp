@@ -76,7 +76,7 @@ struct has_jacobian_api<S, std::void_t<decltype(std::declval<const S&>().has_val
 //
 //  Spelled with the cppde:: math names, so one statement of each formula
 //  serves every value type. The reverse sweep reads the grid off the
-//  checkpoints instead. wrms_state takes an accessor that scalarises AD values.
+//  checkpoints instead. wrms_state takes an accessor that scalarizes AD values.
 // ----------------------------------------------------------------------------
 
 template<class V, class Get>

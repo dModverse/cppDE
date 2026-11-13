@@ -64,7 +64,7 @@ enum class prof_cat : unsigned {
   step_overhead,    // Everything else in do_step / try_step not covered above
   // --- reverse mode ---------------------------------------------------------
   rev_checkpoint,   // Capturing one checkpoint per accepted forward step
-  rev_prepare,      // Jacobian + factorisation for the step's transposed solve
+  rev_prepare,      // Jacobian + factorization for the step's transposed solve
   rev_solve,        // The transposed solve itself
   rev_interp,       // Dense output recorded for an observation inside a step
   rev_operators,    // Reading one step's slot operators off the probe stepper
