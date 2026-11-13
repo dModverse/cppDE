@@ -1,0 +1,34 @@
+pandoc: 3.8.3
+pkgdown: 2.2.1
+pkgdown_sha: ~
+articles:
+  articles/benchmarks: benchmarks.html
+  articles/cppDE: cppDE.html
+  articles/fitCoPt: fitCoPt.html
+  articles/guide-batches: guide-batches.html
+  articles/guide-cvode: guide-cvode.html
+  articles/guide-events: guide-events.html
+  articles/guide-functions: guide-functions.html
+  articles/guide-model: guide-model.html
+  articles/guide-reverse: guide-reverse.html
+  articles/guide-sensitivities: guide-sensitivities.html
+  articles/guide-steady-states: guide-steady-states.html
+  articles/installation: installation.html
+  articles/methods-codegen: methods-codegen.html
+  articles/methods-coefficients: methods-coefficients.html
+  articles/methods-cppfun: methods-cppfun.html
+  articles/methods-cvode: methods-cvode.html
+  articles/methods-events: methods-events.html
+  articles/methods-forward-reverse: methods-forward-reverse.html
+  articles/methods-forward: methods-forward.html
+  articles/methods-overview: methods-overview.html
+  articles/methods-ptc: methods-ptc.html
+  articles/methods-reverse-checks: methods-reverse-checks.html
+  articles/methods-reverse-events: methods-reverse-events.html
+  articles/methods-reverse: methods-reverse.html
+  articles/methods-stepping: methods-stepping.html
+  articles/saltation: saltation.html
+last_built: 2026-11-13T20:13Z
+urls:
+  reference: https://dmodverse.github.io/cppDE/reference
+  article: https://dmodverse.github.io/cppDE/articles

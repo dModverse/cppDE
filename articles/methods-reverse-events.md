@@ -1,0 +1,186 @@
+# Events in reverse mode
+
+Adjoint of an event to first and second order, with the transpose of the
+Heun transport [Events
+(2)](https://dmodverse.github.io/cppDE/articles/methods-events.html#eq-fixed-heun).
+[Notation](https://dmodverse.github.io/cppDE/articles/methods-overview.html#notation);
+arguments `events` and `derivMode = "reverse"` or `"forward-reverse"` of
+[`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md),
+`cotangent` of
+[`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md).
+Derivatives are in \\\theta = (x_0, p)\\; event times \\t_e\\ and root
+functions \\g_e\\ depend on \\\theta\\ through \\p\\.
+
+## Adjoint of an event
+
+An event is a separate map between two steps. The [Heun
+transport](https://dmodverse.github.io/cppDE/articles/methods-events.html#time-triggered-events)
+shifts to the event surface, resets, and shifts back to the grid time,
+each shift over the firing-time residual \\\delta t^{\*}\\, zero in
+value with nonzero derivatives. It reduces to the saltation relation \\
+\mathrm{d}x^{+} = R'\\\left(\mathrm{d}x^{-} + f^{-}\\ \delta
+t^{\*}\right) - f^{+}\\ \delta t^{\*}, \tag{1} \\ with \\R\\ the resets
+and \\R'\\ their Jacobian. For a root event \\g_e(x, t, p) = 0\\,
+\\\delta t^{\*} = -(\nabla_x g_e \cdot \mathrm{d}x + \partial
+g_e/\partial p \cdot \mathrm{d}p) / \dot g_e\\ by the implicit function
+theorem; for a time-triggered event at \\t^{\*} = t_e(p)\\, \\\delta
+t^{\*} = (\partial t_e/\partial p)\cdot \mathrm{d}p\\.
+
+Contracted with the cotangent \\\lambda^{+}\\ after the jump, the
+\\\delta t^{\*}\\ terms of the linear map [(1)](#eq-saltation) collect
+into one scalar \\\eta\\, \\ \eta = \left(\lambda^{+}\right)^{\mathsf T}
+\left(R' f^{-} - f^{+}\right), \qquad \lambda^{-} = R'^{\mathsf
+T}\lambda^{+} + \eta \left(\frac{\partial\\ \delta t^{\*}}{\partial
+x}\right)^{\\\mathsf T}, \tag{2} \\ and the parameter cotangent gains
+\\\eta\\(\partial\\ \delta t^{\*}/\partial p)^{\mathsf T}\\:
+
+| event | state gains | parameters gain |
+|:---|:---|:---|
+| root | \\-(\eta/\dot g_e)\nabla_x g_e\\ | \\-(\eta/\dot g_e)\\\partial g_e/\partial p\\ |
+| time-triggered | nothing | \\\eta\\\partial t_e/\partial p\\ |
+
+\\R'^{\mathsf T}\\ is applied reset by reset, in reverse order: a
+replacement removes the component cotangent, an addition keeps it, a
+multiplication by \\v\\ scales it by \\v\\, plus the derivatives of a
+state- or parameter-dependent \\v\\. The adjoint of a jump needs \\f\\
+at both ends, \\\nabla_x g_e\\, \\\dot g_e\\ and the derivatives of
+reset and event-time expressions; no Jacobian of \\f\\, since every
+shift term has the residual as a factor.
+
+Multistep methods restart after a jump from \\z_0 = x\\, \\z_1 = h\\
+f(x, t)\\, other slots zero, \\h\\ the first step size, so the history
+cotangent \\\bar z_j\\ collapses onto \\x\\: \\ \bar x = \bar z_0 + h\\
+J^{\mathsf T} \bar z_1, \qquad \bar p = h \left(\frac{\partial
+f}{\partial p}\right)^{\\\mathsf T} \bar z_1, \tag{3} \\ and higher
+slots nothing, as at the start of the trajectory.
+
+## Second order at an event
+
+\\\delta t^{\*}\\ is zero in value with a nonzero first derivative, so
+\\ (\delta t^{\*})^{2} = 0, \qquad \mathrm{d}(\delta t^{\*})^{2} = 2\\
+\delta t^{\*}\\\mathrm{d}\\\delta t^{\*} = 0, \qquad
+\mathrm{d}^{2}(\delta t^{\*})^{2} = 2\\(\mathrm{d}\\\delta t^{\*})^{2}
+\neq 0 , \tag{4} \\ so terms of order \\(\delta t^{\*})^{2}\\ drop from
+the gradient but not from the Hessian. Three such terms enter a jump,
+for time-triggered events (\\\delta t^{\*} = t_e -
+\mathrm{scalar}(t_e)\\) as for root events: both use the same transport,
+transposed as a reversed program. If the jump height moves with a
+parameter, [(1)](#eq-saltation) alone is exact in value but wrong in the
+tangents: the backward shift \\\bar x^{\*}\_{+} = \bigl(I - \delta
+t^{\*}\\ J(x^{\*}\_{+})\bigr)^{\mathsf T}\bar x^{+}\\ multiplies
+\\\delta t^{\*}\\ by a factor nonzero in value.
+
+**Curvature of the shift.** Each half of the transport is a Heun step,
+\\ x^{\*} = x^{-} + f^{-}\\ \delta t^{\*} + \tfrac{1}{2}\\ \kappa^{-}\\
+(\delta t^{\*})^{2}, \qquad \kappa = \frac{\partial f}{\partial x} f +
+\frac{\partial f}{\partial t}, \tag{5} \\ with \\\kappa\\\delta t^{\*}\\
+the difference of the two right-hand sides the step evaluates, so no
+Jacobian.
+
+**Post-jump state.** The checkpoint keeps only \\x^{-}\\. A
+reconstruction of \\x^{+}\\ by the bare reset would give \\\partial
+x^{+} / \partial t^{\*} = 0\\, whereas \\ \frac{\partial x^{+}}{\partial
+t^{\*}} = f^{-} - f^{+} , \tag{6} \\ so the reconstruction runs the
+transport, not the reset.
+
+**Quadrature.** The parameter cotangent \\ \bar p\_{k} = \int\_{t_0}^{T}
+q\_{k}\\\mathrm{d}t = \int\_{t_0}^{t^{\*}} q\_{k}\\\mathrm{d}t +
+\int\_{t^{\*}}^{T} q\_{k}\\\mathrm{d}t, \qquad q\_{k} =
+\left(\frac{\partial f}{\partial p\_{k}}\right)^{\\\mathsf T}\\\lambda,
+\tag{7} \\ is split at \\t^{\*}\\, where \\q\_{k}\\ jumps; the moving
+split point contributes \\ \frac{\partial \bar p\_{k}}{\partial \theta}
+\\\supset\\ \Big( q\_{k}(t^{\*-}) - q\_{k}(t^{\*+}) \Big)\\
+\frac{\partial t^{\*}}{\partial \theta} . \tag{8} \\ Only parameters
+whose \\\partial f / \partial p\_{k}\\ depends on a reset state
+contribute.
+
+All three are scaled by the residual, zero in value with tangent
+\\\partial t^{\*} / \partial \theta\\, and leave the gradient unchanged.
+The root-event residual is \\ \delta t^{\*} = -\\\frac{g_e -
+\mathrm{scalar}(g_e)}{\dot g_e}, \qquad \dot g_e = \frac{\partial
+g_e}{\partial t} + \nabla_x g_e \cdot f , \tag{9} \\ read at the
+checkpointed state, which holds \\\partial x / \partial \theta\\ at a
+fixed time since localization ignores tangents; \\\nabla_x g_e\\
+contracts it to the firing time.
+
+## Transpose of the root transport
+
+With the names of [Events
+(2)](https://dmodverse.github.io/cppDE/articles/methods-events.html#eq-fixed-heun),
+the jump is the composition \\ \begin{aligned} x\_{E} &= x^{-} +
+f\_{1}\\ \delta t^{\*}, & x^{\*} &= x^{-} + \tfrac{1}{2}(f\_{1} +
+f\_{2})\\ \delta t^{\*}, & x^{\*}\_{+} &= R(x^{\*}, t^{\*}), \\ x\_{B}
+&= x^{\*}\_{+} - \tilde f\_{1}\\ \delta t^{\*}, & x^{+} &= x^{\*}\_{+} -
+\tfrac{1}{2}(\tilde f\_{1} + \tilde f\_{2})\\ \delta t^{\*}, &
+\end{aligned} \tag{10} \\ with \\f\_{2} = f(x\_{E}, t^{\*})\\, \\\tilde
+f\_{1} = f(x^{\*}\_{+}, t^{\*})\\ and \\f\_{1}\\, \\\tilde f\_{2}\\ at
+the grid time \\t\_\*^{(0)}\\. The program is transposed assignment by
+assignment. A closed form pruned by order in \\\delta t^{\*}\\ is valid
+for the gradient but, by [(4)](#eq-dt-squared), not for the Hessian.
+
+Every assignment containing the residual contributes to it, two through
+the \\\theta\\-dependent \\t^{\*}\\ in \\f\_{2}\\ and \\\tilde f\_{1}\\:
+\\ \overline{\delta t^{\*}} \\\supset\\ \left(\frac{\partial f}{\partial
+t}\right)\_{\\(x^{\*}\_{+}, t^{\*})}\\\\\cdot \bar{\tilde f}\_{1} +
+\left(\frac{\partial f}{\partial t}\right)\_{\\(x\_{E},
+t^{\*})}\\\\\cdot \bar f\_{2} . \tag{11} \\ Both cotangents have a
+factor \\\delta t^{\*}\\: [(11)](#eq-shift-clock) is absent from the
+gradient, at full strength in the Hessian, zero for autonomous \\f\\,
+and missing from a pruned form.
+
+The forward correction \\-\tfrac{1}{2}(\ddot g_e / \dot g_e)\\(\delta
+t^{\*})^{2}\\ of the residual, [Events
+(6)](https://dmodverse.github.io/cppDE/articles/methods-events.html#eq-dt-star-second),
+has the chain factor \\1 + 2 c\_{2}\\ \delta t^{\*}\\, \\c\_{2} = -\ddot
+g_e / (2\dot g_e)\\, one in value with a second-order tangent; the
+transpose applies it to \\\partial\\ \delta t^{\*} / \partial x\\.
+
+The sweep binds the tangent storage of every buffer it passes to a
+generated contraction ([forward over
+reverse](https://dmodverse.github.io/cppDE/articles/methods-forward-reverse.md)).
+Jump-transpose reads of such a buffer are multiplied by \\\delta
+t^{\*}\\, so an unbound buffer leaves value and gradient correct and the
+Hessian wrong by a rank-one term.
+
+**Derivative of the residual.** Since \\\dot g_e\\ depends on the state,
+\\ \frac{\partial\\ \delta t^{\*}}{\partial x} = -\frac{\nabla_x
+g_e}{\dot g_e} - \frac{\delta t^{\*}}{\dot g_e}\\ \nabla_x \dot g_e ,
+\qquad \nabla_x \dot g_e = \nabla_x \frac{\partial g_e}{\partial t} +
+\left(\nabla_x^{2} g_e\right) f + J^{\mathsf T}\nabla_x g_e , \tag{12}
+\\ with the second term absent from the gradient and at full strength in
+the Hessian. The generator differentiates \\\dot g_e\\ as one
+expression, so all three terms of \\\nabla_x \dot g_e\\ are present,
+also those vanishing for a time-independent \\g_e\\ linear in the state;
+in \\\theta\\ it gives \\\partial^{2} g_e/\partial\theta\\\partial t\\,
+\\(\partial \nabla_x g_e/\partial\theta)\cdot f\\ and \\(\partial
+f/\partial\theta)^{\mathsf T}\nabla_x g_e\\. A forcing in \\g_e\\ is
+differentiated in \\t\\ through a rate leaf on the expression graph,
+printed as the derivative of the PCHIP interpolant.
+
+**Time-dependent resets.** A reset value \\v\\ with explicit time
+dependence is applied at \\t^{\*}\\: \\ \frac{\partial
+x^{\*}\_{+}}{\partial t^{\*}} \\\supset\\ c\\ \frac{\partial v}{\partial
+t}, \qquad c = \begin{cases} 1 & \text{add,} \\ 1 & \text{replace,} \\
+x^{\*}\_{k} & \text{multiply,}\end{cases} \tag{13} \\ with \\k\\ the
+reset component, a first-order contribution to \\\eta\\ of
+[(2)](#eq-saltation-adjoint): without it the gradient is wrong. The
+transposed reset therefore receives \\t^{\*}\\ as a dual, so \\\partial
+v/\partial\theta\\ includes \\\partial t^{\*}/\partial\theta\\. Such a
+value evaluates \\t^{\*}\\ directly and is accurate to the root
+tolerance, not the integration tolerance; for a value depending only on
+the state at \\t^{\*}\\, the smooth trajectory damps the localization
+error.
+
+With \\R = \mathrm{id}\\, [(10)](#eq-root-sandwich) is the identity and
+the transpose cancels term by term. Tests compare the transpose with a
+nested-dual evaluation of the transport, and the second order over a
+trajectory with forward over forward on the same steps.
+
+## Moving event rows
+
+If \\t^{\*}\\ depends on a parameter, the row at the firing time moves
+with it. A functional \\w^{\mathsf T} x\\ seeded on that row compares
+states at different times for different parameters and has no
+derivative; a cotangent on the requested output times is well posed.
+
+## References

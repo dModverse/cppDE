@@ -1,0 +1,121 @@
+# Second derivatives: forward over reverse
+
+[`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md)
+computes Hessian-vector products of a scalar functional by
+differentiating the reverse sweep in forward mode. Symbols are those of
+the [notation
+table](https://dmodverse.github.io/cppDE/articles/methods-overview.html#notation).
+R interface: `derivMode = "forward-reverse"` of
+[`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md) and
+`cotangent`, `tangent` and `curvature` of
+[`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md).
+
+## Hessian-vector products
+
+For a fixed cotangent, [Reverse
+(1)](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#eq-adjoint-contraction)
+defines the gradient map \\ \bar\theta : \mathbb{R}^{M} \to
+\mathbb{R}^{M}, \qquad \theta \mapsto \nabla\_\theta L(\theta), \tag{1}
+\\ with Jacobian \\\nabla^2\_\theta L\\. The sweep evaluating
+[(1)](#eq-gradient-map) is generic in the scalar type. On
+\\\mathtt{dual}\langle\mathtt{double}\rangle\\ with \\N\\ tangent slots,
+seeded with \\V \in \mathbb{R}^{M \times N}\\, it returns the exact
+\\(\nabla\_\theta L,\\ \nabla^2\_\theta L\\V)\\
+[\[1\]](#ref-pearlmutter1994fast); \\V = I_M\\ gives the Hessian. For an
+ODE this is the second-order adjoint [\[2\]](#ref-wang1992second),
+[\[3\]](#ref-ozyurt2005cheap). The result `curvature`, of shape
+\\\[n_x + n_p, N, n\_{\text{seed}}\]\\, comes with the `cotangent` and
+`tangent` of the same run.
+
+## Second-order adjoint system
+
+For a direction \\v = (v_0, v_p)\\, the directional sensitivity
+\\\sigma\\ solves [Forward
+(1)](https://dmodverse.github.io/cppDE/articles/methods-forward.html#eq-sensitivity-p)
+contracted with \\v\\, \\ \dot\sigma = \frac{\partial f}{\partial
+x}\\\sigma + \frac{\partial f}{\partial p}\\v_p, \qquad \sigma(t_0) =
+v_0, \tag{2} \\ and the tangent \\\mu\\ of \\\lambda\\ along \\v\\, the
+derivative of [Reverse
+(2)](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#eq-adjoint-ode),
+runs backwards from \\\mu(T^+) = 0\\, \\ \dot\mu_i = -\sum_k
+\frac{\partial f_k}{\partial x_i}\\\mu_k - \sum_k \lambda_k \left(
+\sum_j \frac{\partial^2 f_k}{\partial x_i\\ \partial x_j}\\\sigma_j +
+\sum_m \frac{\partial^2 f_k}{\partial x_i\\ \partial p_m}\\v_m \right),
+\tag{3} \\ with jumps \\\mu(t_o^-) = \mu(t_o^+) + \dot w_o\\, \\\dot
+w_o\\ the derivative of the cotangent row \\w_o\\ along \\v\\, zero for
+a cotangent independent of \\\theta\\. A cotangent formed from the
+solution, such as a weighted residual, passes \\\dot w_o\\ as the
+`curvature` argument, an array \\\[n\_{\mathrm{obs}}, n_x,
+n\_{\mathrm{seed}}, N\]\\; without it the Hessian misses the dependence
+of the cotangent on \\\theta\\, the gradient not. Differentiating
+[Reverse
+(5)](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#eq-adjoint-quadrature)
+along \\v\\ gives the state half \\\mu(t_0)\\ of \\\nabla^2\_\theta
+L\\v\\ and the parameter half \\ \int\_{t_0}^{T}\left( \sum_k
+\frac{\partial f_k}{\partial p_m}\\\mu_k + \sum_k \lambda_k \left(
+\sum_j \frac{\partial^2 f_k}{\partial p_m\\ \partial x_j}\\\sigma_j +
+\sum_l \frac{\partial^2 f_k}{\partial p_m\\ \partial p_l}\\v_l
+\right)\right)\mathrm{d}t . \tag{4} \\
+
+cppDE does not integrate [(2)](#eq-soa-tangent) to
+[(4)](#eq-soa-quadrature); the dual instantiation gives their discrete
+counterpart. The tangent of \\\lambda\\ is \\\mu\\ on the forward grid,
+the tangent of the parameter accumulator is [(4)](#eq-soa-quadrature).
+The second derivatives of \\f\\ in [(3)](#eq-soa-adjoint) and
+[(4)](#eq-soa-quadrature) come from \\J^{\mathsf T}\lambda\\ and
+\\(\partial f/\partial p)^{\mathsf T}\lambda\\ over duals, so the
+first-order sweep needs no further generated expression. For a
+Rosenbrock method these include the contractions of \\J v\\, second
+derivatives of \\f\\.
+
+## Cost and memory
+
+The sweep reads tangents from the checkpoints, so the forward pass is a
+sensitivity run in the same \\N\\ directions. A checkpoint holds
+\\(q+1)\\n_x (N+1)\\ numbers; memory is linear in the number of steps.
+The error test and first step of the forward pass include the tangents
+by `sensErrCon` (default `TRUE`); with `sensErrCon = FALSE` the grid
+does not depend on the directions. The cost, one sensitivity integration
+and one sweep of width \\N\\, is linear in \\N\\. A difference quotient
+of the gradient would cost \\N\\ gradient evaluations and lose half the
+digits.
+
+|  | forward over forward | forward over reverse |
+|:---|:---|:---|
+| argument | `derivMode = "forward-forward"` or `deriv2 = TRUE` | `derivMode = "forward-reverse"` |
+| result | `hessian`: every state, every parameter pair | Hessian of one functional |
+| cost | quadratic in \\M\\ | lower by a factor \\M\\ for a likelihood |
+| use | state Hessians (only route); any functional by contraction | Hessian of a likelihood |
+
+## Linear solves and tangent storage
+
+The matrix of a Rosenbrock stage has tangents, so the transposed solve
+applies the implicit function theorem with the transposed matrix
+(`cppde_ad_lu.hpp` dense, `cppde_sparse_ad_lu.hpp` sparse). The
+iteration matrix of a `bdf` or `adams` corrector has none: the sweep
+solves against it on values, with the tangents as further right-hand
+sides. A generated model body releases on return the tangent storage it
+allocated, so the sweep binds the tangent storage of every buffer before
+passing it to the model, as the stepper does for internal buffers.
+
+## References
+
+\[1\]
+
+B. A. Pearlmutter, “Fast exact multiplication by the Hessian,” *Neural
+Computation*, vol. 6, no. 1, pp. 147–160, 1994, doi:
+[10.1162/neco.1994.6.1.147](https://doi.org/10.1162/neco.1994.6.1.147).
+
+\[2\]
+
+Z. Wang, I. M. Navon, F. X. Le Dimet, and X. Zou, “The second order
+adjoint analysis: Theory and applications,” *Meteorology and Atmospheric
+Physics*, vol. 50, no. 1–3, pp. 3–20, 1992, doi:
+[10.1007/BF01025501](https://doi.org/10.1007/BF01025501).
+
+\[3\]
+
+D. B. Özyurt and P. I. Barton, “Cheap second order directional
+derivatives of stiff ODE embedded functionals,” *SIAM Journal on
+Scientific Computing*, vol. 26, no. 5, pp. 1725–1743, 2005, doi:
+[10.1137/030601582](https://doi.org/10.1137/030601582).

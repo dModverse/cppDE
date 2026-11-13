@@ -1,0 +1,160 @@
+# cvode() and the CVODES adjoint
+
+[`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
+compiles a model against SUNDIALS CVODE/CVODES (\\\ge 6.0\\) of the
+build host for the
+[`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md)
+interface of
+[`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md).
+[Notation](https://dmodverse.github.io/cppDE/articles/methods-overview.html#notation);
+arguments `method`, `derivMode`, `asaCheckpoints` of
+[`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md),
+`gradtol` of
+[`adjointControl()`](https://dmodverse.github.io/cppDE/reference/adjointControl.md).
+
+## Comparison with `cppODE()`
+
+|  | [`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md) | [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md) |
+|:---|:---|:---|
+| `method` | `bdf`, `adams`, `rb4`, `tsit5` | `bdf`, `adams` |
+| `derivMode` | `forward`, `reverse`, `forward-reverse`; `deriv2 = TRUE` | `forward`, `reverse` |
+| forward sensitivities | dual numbers | sensitivity equations, JVPs |
+| reverse mode | discrete adjoint of the computed steps | continuous adjoint (CVODES ASA) |
+| second order | forward over forward, forward over reverse | none |
+| reverse options | `keepStore`, `store`, [`adjointControl()`](https://dmodverse.github.io/cppDE/reference/adjointControl.md) | `asaCheckpoints`, `adjointControl(gradtol = )` |
+| libraries | LAPACK; KLU optional | SUNDIALS \\\ge 6.0\\; KLU optional |
+
+The two ODE backends, with the same model arguments and
+[`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md).
+JVP: Jacobian-vector product. {.table}
+
+## Shared code and arguments
+
+Shared with
+[`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md):
+
+- the code generator; \\J = \partial f / \partial x\\ formed on the
+  [expression
+  graph](https://dmodverse.github.io/cppDE/articles/methods-codegen.html#codegen)
+  and emitted with linear tables and loops;
+- the arguments `events`, `forcings`, `rootfunc`, `fixed`, the returned
+  object, and the column order, shapes (state-only, full, partial) and
+  row names of `tangent` and `parms`;
+- the chain rule \\S\_\theta = S_p\\\partial p / \partial \theta\\ of
+  [Forward
+  (2)](https://dmodverse.github.io/cppDE/articles/methods-forward.html#eq-sensitivity-theta);
+- the linear solver: KLU for \\n_x \ge 8\\ and structural density of
+  \\J\\ at most \\0.4\\ if SuiteSparse was found at install, dense
+  LAPACK otherwise; `sparse = TRUE` requires KLU;
+- PCHIP forcings, discontinuous event resets, root events at zero
+  crossings of a user function.
+
+## Differences between the backends
+
+**Sensitivity right-hand side.** CVODES integrates \\ \dot S_k = J(x,
+p)\\ S_k + \frac{\partial f}{\partial p_k}, \qquad k = 1, \dots, n_p,
+\tag{1} \\ as one generated Jacobian-vector product of \\f\\ per
+direction \\(S_k, \partial p/\partial\theta_k)\\, in `double`, without
+\\J\\ and without tangent storage.
+[`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md)
+evaluates \\f\\ on dual-typed state, [Forward
+(1)](https://dmodverse.github.io/cppDE/articles/methods-forward.html#eq-sensitivity-p),
+for all directions in one pass.
+
+**Methods.** CVODE has only the multistep families
+([stability](https://dmodverse.github.io/cppDE/articles/methods-stepping.html#stiffness-and-the-choice-of-method))
+and first-order sensitivities (no `deriv2 = TRUE`).
+
+**Events.** Generated glue outside CVODES applies the first-order Heun
+transport [Events
+(2)](https://dmodverse.github.io/cppDE/articles/methods-events.html#eq-fixed-heun)
+with the firing time [Events
+(4)](https://dmodverse.github.io/cppDE/articles/methods-events.html#eq-dt-star-first);
+CVODES re-initializes the sensitivities from it.
+
+## Adjoint sensitivity analysis
+
+`cvode(..., derivMode = "reverse")` compiles the CVODES adjoint
+sensitivity analysis (ASA) instead of forward sensitivities and returns
+the `$cotangent` [Reverse
+(1)](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#eq-adjoint-contraction)
+of a native reverse solve, states first; the rest of the call, batch
+entry point included, is unchanged.
+
+**Backward problem.** CVODES integrates [Reverse
+(2)](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#eq-adjoint-ode)
+as a separate ODE [\[1\]](#ref-cao2003adjoint), right-hand sides emitted
+as vector-Jacobian products of \\f\\ ([code
+generation](https://dmodverse.github.io/cppDE/articles/methods-codegen.html#codegen))
+without \\J\\: \\ \dot\lambda = -\left(\frac{\partial f}{\partial
+x}\right)^{\\\mathsf T}\\\lambda, \qquad \dot q = -\left(\frac{\partial
+f}{\partial p}\right)^{\\\mathsf T}\\\lambda, \tag{2} \\ the second the
+quadrature [Reverse
+(5)](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#eq-adjoint-quadrature)
+with \\q(T) = 0\\. Both run from \\T\\ to \\t_0\\, the minus signs
+cancelling against the reversed limits, so \\\lambda(t_0)\\ and
+\\q(t_0)\\ are the state and parameter parts of the gradient. By default
+\\q\\ is outside the error test: gradient entries of very different
+scale would stall the backward step against `reltol` alone.
+`adjointControl(gradtol = g)` adds it with absolute tolerance \\g\\, so
+the step size controls the gradient error, as the [checked
+sweep](https://dmodverse.github.io/cppDE/articles/methods-reverse-checks.html#refine)
+of the native mode does for discrete steps. The backward problem is a
+BDF solve at the tolerances and step budget of the call, with the
+forward linear solver (KLU for a sparse model) and the analytic Jacobian
+\\-J^{\mathsf T}\\, formed from \\J\\ in the forward pattern.
+
+**Checkpoints.** CVODES stores a checkpoint every `asaCheckpoints`
+accepted steps (default \\200\\, trading memory against re-integration)
+and recovers \\x(t)\\ between checkpoints by re-integrating from the
+earlier one and interpolating. With interpolated states, the gradient is
+the derivative of no discretization performed, within
+\\O(\mathrm{tol})\\ of both the exact gradient and the derivative of the
+reported value.
+
+**Jumps at observations.** \\\lambda\\ starts from the last cotangent
+row; at each earlier observation the sweep adds that row, the jump
+condition of [Reverse
+(2)](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#eq-adjoint-ode).
+The problem restarts only at nonzero rows; at every output time it would
+reduce the method to first order at unobserved times.
+
+**Several cotangents.** Cotangent columns share the checkpoints but need
+one backward integration each, where the native mode sweeps the stored
+checkpoints once per column. `keepStore`, `store` and the other
+[`adjointControl()`](https://dmodverse.github.io/cppDE/reference/adjointControl.md)
+options have no counterpart: CVODES manages checkpoints and backward
+step size, and a continuous adjoint has no discrete steps with errors to
+estimate, weight or report.
+
+**Events.** CVODES cannot be re-initialized within a recorded forward
+run, so a model with events is integrated in stretches between jumps (a
+single one without events), each stretch with a CVODES memory,
+checkpoints, root functions and linear solver, starting from the
+post-jump state. The sweep runs them last to first, each from the
+adjoint of the later one, with the jump transpose in between: for \\x^+
+= R(x^-, p, t^{\*})\\, \\\lambda^- = (\partial_x R)^{\mathsf
+T}\lambda^+\\ and the gradient gains \\(\partial_p R)^{\mathsf
+T}\lambda^+\\, plus the terms of a firing time that moves with \\p\\ or,
+for a root \\g_e(x, t, p) = 0\\, with the state, \\\delta t^{\*} =
+-(\nabla_x g_e\\\delta x + \partial_p g_e\\\delta p)/\dot g_e\\, as in
+[the adjoint of an
+event](https://dmodverse.github.io/cppDE/articles/methods-reverse-events.html#event-adjoint)
+of the native mode. Root finding is off on a stretch before the sweep,
+since a root found again while CVODES recomputes the forward solution
+between checkpoints would label the stored data with that root time.
+
+**Restrictions.** A reverse model has no forward sensitivities, and
+[`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md) has no
+second order; Hessians, or gradients consistent with the returned value,
+need the native backend.
+
+## References
+
+\[1\]
+
+Y. Cao, S. Li, L. Petzold, and R. Serban, “Adjoint sensitivity analysis
+for differential-algebraic equations: The adjoint DAE system and its
+numerical solution,” *SIAM Journal on Scientific Computing*, vol. 24,
+no. 3, pp. 1076–1089, 2003, doi:
+[10.1137/S1064827501380630](https://doi.org/10.1137/S1064827501380630).

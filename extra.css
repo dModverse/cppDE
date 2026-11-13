@@ -1,0 +1,56 @@
+/* From 1400 px on, the container takes 92 % of the window, at most 1600 px. */
+@media (min-width: 1400px) {
+  .container, .container-xxl {
+    max-width: min(92vw, 1600px);
+  }
+}
+
+/* The text column fills the container next to the sidebar. */
+@media (min-width: 768px) {
+  .row > main {
+    max-width: none;
+    flex: 1 1 0;
+    min-width: 0;
+  }
+}
+
+/* Prose, tables, code and figures share one width, so that no table sticks out of the text. */
+main p, main li, main dd, main table, main pre, main div.sourceCode, main img, main figure {
+  max-width: 100ch;
+}
+
+/* Justified and hyphenated prose only where the column is wide enough for it. */
+@media (min-width: 768px) {
+  main p, main li, main dd {
+    text-align: justify;
+    hyphens: auto;
+  }
+}
+
+/* Display math wider than the text column scrolls inside it instead of running over the margin. */
+mjx-container[display="true"] {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}
+
+/* A folded code block (pkgdown/extra.js): the summary as a quiet control above the block. */
+main details.fold {
+  max-width: 100ch;
+  margin-bottom: 1rem;
+}
+main details.fold > summary {
+  cursor: pointer;
+  color: var(--bs-secondary-color);
+  font-size: 0.9em;
+}
+main details.fold[open] > summary {
+  margin-bottom: 0.5rem;
+}
+
+/* A figure in a div of class wide takes the full width of the text column. */
+main div.wide img {
+  max-width: 100%;
+}
