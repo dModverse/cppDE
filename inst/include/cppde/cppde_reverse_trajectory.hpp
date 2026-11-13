@@ -11,9 +11,9 @@
  holds them; one before the first step reaches the initial state directly.
 
  The step grid is not differentiated: a step reads the state from the one
- before it, and its size is a constant read off its checkpoint. See "Internal
+ before it, and the step size is a constant read off the checkpoint. See "Internal
  numerical differentiation" in
- https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
+ https://dmodverse.github.io/cppDE/articles/methods-reverse-checks.html.
 
  Copyright (C) 2026 Simon Beyer
  */
@@ -22,6 +22,7 @@
 #define CPPDE_REVERSE_TRAJECTORY_HPP
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include <cppde/cppde_event_engine.hpp>
@@ -45,7 +46,7 @@ namespace reverse {
 //  back, not decided again. What is replayed is the arithmetic: the saltation
 //  sandwich for a root event, the reset for a fixed one, and the restart, which
 //  for a multistep method rebuilds the whole Nordsieck history out of the
-//  post-jump state and so is the only thing the carry then depends on.
+//  post-jump state and so is the only thing the Nordsieck carry then depends on.
 // ============================================================================
 
 template<class T>
@@ -76,7 +77,7 @@ struct event_record {
 //  enough to sit in the integration loop:
 //
 //    capture(stepper, x, t, dt)   after an accepted step, with the step start
-//    observe(t)                   at every observer call
+//    observe(t, x)                at every observer call, with the observed value
 //
 //  observe() records the number of steps taken before it, which is what ties an
 //  observation to the step whose bracket contains it. Zero means the initial
@@ -86,7 +87,7 @@ struct event_record {
 // How much of a multistep history a checkpoint keeps: every slot, which the
 // traces of adjoint_grid read; slot 0, the start state, which the flow of refine
 // reads; or slot 0 of the first step alone, which is all the other sweeps read.
-// A one-step checkpoint keeps its state whatever this says.
+// A one-step checkpoint keeps the state whatever this says.
 enum class history_slots { all, start, first };
 
 template<class Stepper, class T = double>
@@ -101,6 +102,15 @@ public:
     return (m_history == history_slots::start || m_steps.empty()) ? 1 : 0;
   }
 
+  // A multistep iteration matrix (1/gamma_p) I - J(x, t), values only, and the
+  // step whose switch modes J was evaluated under.
+  struct iteration_matrix {
+    std::vector<double> x;
+    double t = 0.0;
+    double inv_gamma_p = 0.0;
+    std::size_t modes_step = 0;
+  };
+
   struct observation {
     double      t;
     std::size_t step;   // accepted steps before it; 0 is the trajectory start
@@ -110,7 +120,8 @@ public:
   };
 
   void clear() {
-    m_steps.clear(); m_obs.clear(); m_events.clear(); m_n = 0;
+    m_steps.clear(); m_obs.clear(); m_obs_x.clear(); m_events.clear(); m_mats.clear();
+    m_n = 0;
     m_modes.clear(); m_n_modes = 0;
   }
 
@@ -138,7 +149,7 @@ public:
     m_modes.insert(m_modes.end(), sw.m, sw.m + sw.n);
   }
 
-  // Sets the modes step k ran under, which every evaluation of f in its sweep
+  // Sets the modes step k ran under, which every evaluation of f in the sweep of step k
   // reads.
   void use_step_modes(std::size_t k) const {
     if (m_n_modes == 0 || (k + 1) * m_n_modes > m_modes.size()) return;
@@ -147,8 +158,8 @@ public:
       sw.m[i] = m_modes[k * m_n_modes + i];
   }
 
-  // A checkpoint the collector filled itself, for a family whose carry cannot be
-  // read off the stepper after the step.
+  // A checkpoint the collector filled itself, for a family whose step-to-step state
+  // cannot be read off the stepper after the step.
   void push(const checkpoint_type& cp) { m_steps.push_back(cp); }
 
   // The post-jump state is observed at the time the jump sits at, before or
@@ -167,11 +178,21 @@ public:
     m_obs.push_back(observation{t, m_steps.size(), ev});
   }
 
-  // The same, recording the state count. A run over a single time takes no
-  // step, and without this the store would have no checkpoint to read it off.
-  void observe(double t, std::size_t n_states) {
-    m_n = n_states;
+  // The same, with the observed value, which the value correction of a refined
+  // sweep compares against; it also records the state count, which a run over
+  // a single time has no checkpoint to read off.
+  template<class X>
+  void observe(double t, const X& x) {
+    m_n = x.size();
     observe(t);
+    for (std::size_t i = 0; i < m_n; ++i)
+      m_obs_x.push_back(static_cast<double>(ad_traits::scalar_value(x[i])));
+  }
+
+  // The value observation i recorded, nullptr where observe() had none.
+  const double* obs_state(std::size_t i) const {
+    return (m_n > 0 && (i + 1) * m_n <= m_obs_x.size()) ? m_obs_x.data() + i * m_n
+                                                         : nullptr;
   }
 
   void push_event(const event_record<T>& e) {
@@ -184,6 +205,10 @@ public:
     m_open_event = idx;
     m_open_t     = e.t;
   }
+
+  void push_matrix(iteration_matrix m) { m_mats.push_back(std::move(m)); }
+  std::size_t n_matrices() const { return m_mats.size(); }
+  const iteration_matrix& matrix(std::size_t i) const { return m_mats[i]; }
 
   std::size_t n_events() const { return m_events.size(); }
   const event_record<T>& event(std::size_t i) const { return m_events[i]; }
@@ -213,10 +238,12 @@ public:
 private:
   std::vector<checkpoint_type> m_steps;
   std::vector<observation>     m_obs;
+  std::vector<double>          m_obs_x;           // n values per observation
   std::vector<event_record<T>> m_events;
+  std::vector<iteration_matrix> m_mats;
   std::size_t                  m_open_event = event_record<T>::npos;
   double                       m_open_t     = 0.0;
-  std::size_t                  m_n          = 0;   // from observe(t, n)
+  std::size_t                  m_n          = 0;   // from observe(t, x)
   std::vector<signed char>     m_modes;           // per step, see note_modes()
   std::size_t                  m_n_modes    = 0;
   history_slots                m_history    = history_slots::all;
@@ -258,11 +285,12 @@ public:
     auto& ctl = m_st.controlled_stepper();
 
     if constexpr (snapshot_family) {
-      // The carry came from the last snapshot before this acceptance; what the
+      // The Nordsieck carry came from the last snapshot before this acceptance; what the
       // step ended on and what the controller then chose come from here.
       m_pending.y.assign(m_st.current_state().begin(), m_st.current_state().end());
       m_pending.q_next = ctl.stepper().current_order();
       m_pending.eta    = static_cast<double>(ctl.stepper().hscale()) / m_pending.dt;
+      record_corrector(ctl.stepper());
       hand_over_history();
       m_store.push(m_pending);
       m_store.note_modes();
@@ -333,6 +361,31 @@ public:
   }
 
 private:
+  // The iterations of the accepted attempt and, where it is new, the matrix
+  // they ran against.
+  template<class St>
+  void record_corrector(const St& st) {
+    const auto& il = st.iterates();
+    const std::size_t n = m_pending.y.size();
+    m_pending.k_iter = il.k;
+    m_pending.s_iter = st.iter_scale();
+    m_pending.iter.resize(static_cast<std::size_t>(il.k) * n);
+    for (int m = 0; m < il.k; ++m)
+      for (std::size_t i = 0; i < n; ++i)
+        m_pending.iter[static_cast<std::size_t>(m) * n + i] =
+            ad_traits::store_as<T>(il.y[static_cast<std::size_t>(m)][i]);
+    if (m_store.n_matrices() == 0 || st.matrix_generation() != m_mat_gen) {
+      typename trajectory_store<Stepper, T>::iteration_matrix M;
+      M.x = st.jac_point();
+      M.t = st.jac_time();
+      M.inv_gamma_p = st.inv_gamma_p();
+      M.modes_step = m_store.n_steps();
+      m_store.push_matrix(std::move(M));
+      m_mat_gen = st.matrix_generation();
+    }
+    m_pending.mat = m_store.n_matrices() - 1;
+  }
+
   void snapshot(double t, double h) {
     if constexpr (snapshot_family) {
       auto& st = m_st.controlled_stepper().stepper();
@@ -346,6 +399,7 @@ private:
   DenseStepper&                 m_st;
   typename trajectory_store<Stepper, T>::checkpoint_type m_pending;
   history_log                   m_hlog;
+  std::uint32_t                 m_mat_gen = 0;
 };
 
 }  // namespace reverse

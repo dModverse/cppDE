@@ -119,6 +119,13 @@ class sparse_lu_solver<AD_T, std::enable_if_t<is_ad<AD_T>::value>>
 
 public:
 
+  // A frozen matrix is factorized on the values alone: a solve passes the
+  // tangents of the right-hand side through it and never the tangents of W.
+  void set_frozen(bool f) {
+    m_frozen = f;
+    if constexpr (is_ad<Inner>::value) m_inner.set_frozen(f);
+  }
+
   void factorize(const csc_matrix<F>& W)
   {
     m_n = W.n;
@@ -138,7 +145,7 @@ public:
 
       // Determine n_derivs from the seeded entries of W.
       unsigned nd = 0;
-      for (int k = 0; k < nnz; ++k) {
+      for (int k = 0; k < nnz && !m_frozen; ++k) {
         unsigned sz = const_cast<F&>(W.Ax[k]).size();
         if (sz > nd) nd = sz;
       }
@@ -167,7 +174,9 @@ public:
       //  Inner = dual<...> (nested AD): store full AD matrix for the
       //  generic element-wise IFT path.
       // ============================================================
-      if (m_W_stored.nnz != nnz) {
+      if (m_frozen) {
+        m_W_stored = csc_matrix<F>();
+      } else if (m_W_stored.nnz != nnz) {
         m_W_stored = W;
       } else {
         std::copy(W.Ax.begin(), W.Ax.end(), m_W_stored.Ax.begin());
@@ -404,10 +413,11 @@ private:
     // ================================================================
 
     // Batched IFT sparse matvec: an outer loop over the batch columns, each
-    // reading its own slice of the batch buffers, with the same inner CSC pass
+    // reading a separate slice of the batch buffers, with the same inner CSC pass
     // as the single right-hand side.
   void ift_sparse_matvec_batch(int n, unsigned n_derivs, int nrhs) const
   {
+    if (m_frozen) return;
     const std::size_t per_col = static_cast<std::size_t>(n) * n_derivs;
     if constexpr (!is_ad<Inner>::value) {
       unsigned nd_W = m_n_derivs_cached;
@@ -452,6 +462,7 @@ private:
   // pattern is walked once and never built a second time.
   void ift_sparse_matvec_transposed(int n, unsigned n_derivs) const
   {
+    if (m_frozen) return;
     if constexpr (!is_ad<Inner>::value) {
       const unsigned nd_W = m_n_derivs_cached;
       if (nd_W == 0) return;
@@ -482,6 +493,7 @@ private:
 
   void ift_sparse_matvec(int n, unsigned n_derivs) const
   {
+    if (m_frozen) return;
     if constexpr (!is_ad<Inner>::value) {
       // =============================================================
       //  Pre-extracted path: iterate CSC with flat double derivatives
@@ -529,6 +541,7 @@ private:
   }
 
   int m_n = 0;
+  bool                      m_frozen = false;
   csc_matrix<F>             m_W_stored;  // Full AD matrix (nested AD path only)
   csc_matrix<Inner> m_W_val;             // Persistent scalar extraction buffer
   sparse_lu_solver<Inner> m_inner;

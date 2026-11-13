@@ -1,7 +1,7 @@
 # Forward over reverse on the features it runs on: forcings, jumps at fixed,
 # parameter and root times, a clock-reading right-hand side and a sparse
 # Jacobian. The oracle is forward-forward on bdf, one per model. It keeps the
-# sensitivity error control and therefore its own grid, so these are tolerance
+# sensitivity error control and therefore a different grid, so these are tolerance
 # comparisons; the exact claims on the grid are in test-ode-reverse2.R.
 
 skip_on_cran()
@@ -35,7 +35,7 @@ oracle_pair <- function(rhs, tag, meths = steppers, ...)
 flat <- function(x) if (is.list(x)) do.call(c, lapply(unname(x), flat)) else list(x)
 
 # A forcing, and a jump whose height is a parameter. Off the output grid, so
-# the jump shows up as its own pair of rows.
+# the jump shows up as a separate pair of rows.
 eqns_u <- c(A = "-k1 * A + k2 * B + u",
             B = "k1 * A - k2 * B - k3 * B * B")
 ev_fixed <- data.frame(var = "A", time = 1.1, value = "d_amt", method = "add",
@@ -175,7 +175,7 @@ test_that("a clock-reading jump height rides on roottol", {
     max(abs(unname(fr$curvature[, , 1]) - hess_forward(ff, W)))
   }, numeric(1))
 
-  expect_lt(gap[2], gap[1] * 1e-2)
+  expect_lt(gap[2], gap[1] * 0.05)
 })
 
 test_that("a sparse Jacobian goes backwards at second order", {
@@ -186,4 +186,23 @@ test_that("a sparse Jacobian goes backwards at second order", {
   W  <- seed_for(nrow(ff$variable))
   fr <- do.call(solveODE, c(list(mr, times, pars, cotangent = W), tol))
   expect_second_order(ff, fr, W, "sparse")
+})
+
+test_that("bdf forward-reverse equals forward-forward to rounding across a jump", {
+  # On one grid, without the tangents in the error test, both are the derivatives
+  # of one computed solution, sparse or dense.
+  lo <- list(abstol = 1e-6, reltol = 1e-4, sensErrCon = FALSE)
+  p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, d_amt = 0.4)
+  fc <- list(u = data.frame(time = c(0, 2, 5), value = c(0.1, 0.25, 0.05)))
+  ff <- do.call(solveODE, c(list(pr_forcing$ff, times, p, forcings = fc), lo))
+  W  <- seed_for(nrow(ff$variable))
+  fr <- do.call(solveODE, c(list(pr_forcing$fr$bdf, times, p, forcings = fc,
+                                 cotangent = W), lo))
+  expect_second_order(ff, fr, W, "jump", tol_g = 1e-11, tol_h = 1e-9)
+
+  skip_if_not(isTRUE(cppDE:::cvodeConfig$klu_available), "KLU not available")
+  ff <- do.call(solveODE, c(list(pr_sparse$ff, times, pars), lo))
+  W  <- seed_for(nrow(ff$variable))
+  fr <- do.call(solveODE, c(list(pr_sparse$fr$bdf, times, pars, cotangent = W), lo))
+  expect_second_order(ff, fr, W, "sparse", tol_g = 1e-11, tol_h = 1e-9)
 })

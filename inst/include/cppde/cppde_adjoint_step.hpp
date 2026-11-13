@@ -2,16 +2,16 @@
  * @file cppde_adjoint_step.hpp
  * @brief The adjoint of one accepted step, written out per stepper family.
  *
- * The accepted grid is frozen, so a step is a fixed map and its adjoint is
+ * The accepted grid is frozen, so a step is a fixed map with an adjoint that is
  * stated. What a multistep step does to the Nordsieck history splits in three:
  *
  *   zn_pred = A zn_in                      rescale and Pascal shift
- *   res(y, zn_pred, theta) = 0             the corrector, closed by the IFT
- *   zn_out  = B zn_pred + c acor           the tail, acor = y - zn_pred[0]
+ *   acor = N(zn_pred, theta)               the k chord-Newton iterations taken
+ *   zn_out  = B zn_pred + c acor           the tail
  *
- * A, B and c are read off the stepper by running its own routines on a unit
+ * A, B and c are read off the stepper by running the stepper routines on a unit
  * slot. The model supplies `jac_t_vec` (J' lambda) and `dfdp_t_vec_axpy`
- * ((df/dp)' lambda, scaled and added). See "The step map and its adjoint" in
+ * ((df/dp)' lambda, scaled and added). See "Adjoint of the step map" in
  * https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
  *
  * Copyright (C) 2026 Simon Beyer
@@ -254,14 +254,14 @@ struct multistep_probe {
 };
 
 // ---------------------------------------------------------------------------
-//  The adjoint of one step: w_pred = B' w_out, mu = (I - gamma J)^-T w_y for
-//  the corrector, w_in = A' w_pred. `solver`'s transposed apply includes the
-//  gamma scale. See "The step map and its adjoint" in
+//  The adjoint of one step: w_pred = B' w_out, the corrector iterations
+//  transposed in reverse order against the frozen iteration matrix, then
+//  w_in = A' w_pred. See "Adjoint of the step map" in
 //  https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
 // ---------------------------------------------------------------------------
 /// What the step above hands down, passed back through the tail onto the
 /// predicted history and onto acor. Separate from the step adjoint itself
-/// because a trajectory adds its observations to the same two.
+/// because a trajectory adds the observations to the same two.
 template<class Stepper, class T>
 void carry_into_pred(const multistep_operators<Stepper>& ops, std::size_t n,
                      const T* CPPDE_RESTRICT w_out,
@@ -281,87 +281,64 @@ void carry_into_pred(const multistep_operators<Stepper>& ops, std::size_t n,
 /// nothing.
 template<class T = double>
 struct multistep_workspace {
-  std::vector<T> w_pred, w_acor, mu, x, q;
+  std::vector<T> w_pred, w_acor, x, rho, abar, g, mu;
 };
 
-/// The step adjoint's first half: the right-hand side of its transposed solve,
-/// left in ws.mu. Split from the second so a caller can time the solve apart.
-template<class Stepper, class T>
-void multistep_adjoint_rhs(const multistep_operators<Stepper>& ops,
-                           std::size_t n, multistep_workspace<T>& ws,
-                           T* w_out_state = nullptr)
-{
-  T* CPPDE_RESTRICT w_pred = ws.w_pred.data();
-  const T* CPPDE_RESTRICT w_acor = ws.w_acor.data();
-
-  ws.mu = ws.w_acor;
-  for (std::size_t i = 0; i < n; ++i) w_pred[i] -= w_acor[i];
-  if (w_out_state) for (std::size_t i = 0; i < n; ++i) w_out_state[i] = w_acor[i];
-  (void)ops;
-}
-
-/// The second half, on a ws.mu the caller has already solved with.
-template<class Stepper, class AdjTerms, class T>
-void multistep_adjoint_finish(const multistep_operators<Stepper>& ops,
-                              std::size_t n, std::size_t n_phi,
-                              const std::vector<T>& y, double t_new,
-                              const AdjTerms& adj,
-                              T* w_in, T* w_theta,
-                              multistep_workspace<T>& ws)
-{
-  T* CPPDE_RESTRICT w_pred = ws.w_pred.data();
-  const T* CPPDE_RESTRICT mu = ws.mu.data();
-
-  for (std::size_t i = 0; i < n; ++i) w_pred[i] += mu[i];
-  if (ops.q_in >= 1) {
-    const double rl1 = ops.rl1;
-    for (std::size_t i = 0; i < n; ++i) w_pred[n + i] -= rl1 * mu[i];
-  }
-
-  if (w_theta) adj.dfdp_t_vec_axpy(y, ws.mu, t_new, ops.gamma, w_theta);
-  ops.A.apply_transposed(ws.w_pred.data(), n, w_in);
-  (void)n_phi;
-}
-
-/// The step adjoint proper, on a predicted-history cotangent that the caller
-/// has already assembled.
+/// The corrector's adjoint. The forward iteration from a_0 = 0 is
+///   a_{m+1} = a_m + s M^-1 [f(zp + a_m) - (rl1 zp1 + a_m) / gamma],
+/// acor = a_k, M frozen. With abar_k = w_acor, for m = k-1 .. 0:
+///   rho = s M^-T abar_{m+1},  abar_m = abar_{m+1} + J(y_m)' rho - rho / gamma,
+/// and J(y_m)' rho, -(rl1/gamma) rho and (df/dtheta)(y_m)' rho go to zp, zp1
+/// and theta. `iter` holds y_0 .. y_{k-1}, slot-major.
 template<class Stepper, class Solver, class AdjTerms, class T>
-void apply_multistep_adjoint_pre(const multistep_operators<Stepper>& ops,
-                                 std::size_t n, std::size_t n_phi,
-                                 const std::vector<T>& y, double t_new,
+void multistep_corrector_adjoint(const multistep_operators<Stepper>& ops,
+                                 std::size_t n, const T* iter, int k_iter,
+                                 double s_iter, double t_new,
                                  Solver& solver, const AdjTerms& adj,
-                                 T* w_in, T* w_theta,
-                                 multistep_workspace<T>& ws,
-                                 T* w_out_state = nullptr)
+                                 T* w_theta, multistep_workspace<T>& ws)
 {
-  multistep_adjoint_rhs(ops, n, ws, w_out_state);
-  solver.transposed(ws.mu);
-  multistep_adjoint_finish(ops, n, n_phi, y, t_new, adj, w_in, w_theta, ws);
+  T* CPPDE_RESTRICT w_pred = ws.w_pred.data();
+  ws.abar = ws.w_acor;
+  const double inv_gamma = 1.0 / ops.gamma;
+  const double c_zn1 = ops.rl1 * inv_gamma;
+  for (int m = k_iter - 1; m >= 0; --m) {
+    ws.rho = ws.abar;
+    solver.transposed(ws.rho);
+    if (s_iter != 1.0) for (T& v : ws.rho) v *= s_iter;
+    ws.x.assign(iter + static_cast<std::size_t>(m) * n,
+                iter + static_cast<std::size_t>(m + 1) * n);
+    zero_armed(ws.g, n);
+    adj.jac_t_vec(ws.x, ws.rho, T(t_new), ws.g);
+    for (std::size_t i = 0; i < n; ++i) {
+      ws.abar[i] += ws.g[i] - inv_gamma * ws.rho[i];
+      w_pred[i] += ws.g[i];
+    }
+    if (ops.q_in >= 1)
+      for (std::size_t i = 0; i < n; ++i) w_pred[n + i] -= c_zn1 * ws.rho[i];
+    if (w_theta) adj.dfdp_t_vec_axpy(ws.x, ws.rho, T(t_new), T(1.0), w_theta);
+  }
 }
 
-template<class Stepper, class Solver, class AdjTerms, class T>
+/// One step adjoint from the cotangent on the Nordsieck carry the step hands on, for a
+/// caller holding the operators, the checkpoint and the prepared matrix.
+template<class Stepper, class CP, class Solver, class AdjTerms, class T>
 void apply_multistep_adjoint(const multistep_operators<Stepper>& ops,
-                             std::size_t n, std::size_t n_phi,
-                             const std::vector<T>& y, double t_new,
-                             const T* w_out,
-                             Solver& solver, const AdjTerms& adj,
-                             T* w_in, T* w_theta,
-                             multistep_workspace<T>& ws,
-                             T* w_out_state = nullptr)
+                             const CP& cp, std::size_t n, double t_new,
+                             const T* w_out, Solver& solver, const AdjTerms& adj,
+                             T* w_in, T* w_theta, multistep_workspace<T>& ws)
 {
   const std::size_t nz_in = static_cast<std::size_t>(ops.q_in + 1) * n;
-  std::vector<T>& w_pred = ws.w_pred;
-  std::vector<T>& w_acor = ws.w_acor;
-  w_pred.assign(nz_in, T(0.0));
-  w_acor.assign(n, T(0.0));
-  carry_into_pred(ops, n, w_out, w_pred.data(), w_acor.data());
-  apply_multistep_adjoint_pre(ops, n, n_phi, y, t_new, solver, adj,
-                              w_in, w_theta, ws, w_out_state);
+  ws.w_pred.assign(nz_in, T(0.0));
+  ws.w_acor.assign(n, T(0.0));
+  carry_into_pred(ops, n, w_out, ws.w_pred.data(), ws.w_acor.data());
+  multistep_corrector_adjoint(ops, n, cp.iter.data(), cp.k_iter, cp.s_iter,
+                              t_new, solver, adj, w_theta, ws);
+  ops.A.apply_transposed(ws.w_pred.data(), n, w_in);
 }
 
 // ---------------------------------------------------------------------------
 //  A whole multistep trajectory backwards, step adjoints and jump adjoints in
-//  reverse order. An observation inside a step takes its row
+//  reverse order. An observation inside a step takes the row
 //  d x_interp / d (zn_pred, acor) from the probe's interpolant, so an observed
 //  step rebuilds the operators rather than taking the cached ones.
 // ---------------------------------------------------------------------------
@@ -369,7 +346,7 @@ template<class Stepper>
 class closed_multistep_trajectory {
 public:
   // The sweep runs in the stepper's own scalar type. In plain double that is
-  // the gradient; over a dual it is the gradient and its directional
+  // the gradient; over a dual it is the gradient and the directional
   // derivatives, which is forward over reverse.
   using scalar_type = typename Stepper::value_type;
 
@@ -395,10 +372,11 @@ public:
       sweep_without_steps(store, n, seeds, adj, jumps, m_wx, m_wp, m_jws);
       return;
     }
+    solver.forget();
 
-    // The cotangent the step above hands down, on its own carry. Across an
-    // intervention it is instead a cotangent on a point inside the step below,
-    // because the restart threw the carry away.
+    // The cotangent the step above hands down, on the Nordsieck carry of that step.
+    // Across an intervention it is instead a cotangent on a point inside the step
+    // below, because the restart threw the Nordsieck carry away.
     std::vector<T> w_carry, w_after, w_before;
     jump_handover<T> handover;
     std::size_t next_obs = store.n_obs();
@@ -417,7 +395,7 @@ public:
 
       T eta_k = T(0.0);
       w_in.clear();
-      ms_step_adjoint(cp, observed, m_obs.data(), m_obs.size(), w_carry, n, n_phi,
+      ms_step_adjoint(store, k, observed, m_obs.data(), m_obs.size(), w_carry, n, n_phi,
                       adj, solver, w_in, m_wp.data(), m_trace ? &eta_k : nullptr);
 
       // lambda is what this step hands the one below it, on the state slot.
@@ -429,7 +407,7 @@ public:
 
       // The intervention this step was entered through, if any. Two maps in the
       // order the forward run applied them, so swept the other way round: the
-      // restart, which collapses the carry onto the state the jump ended on,
+      // restart, which collapses the Nordsieck carry onto the state the jump ended on,
       // and the jump itself.
       if constexpr (Jumps::active) {
         const std::size_t ei = store.event_before(k);
@@ -463,10 +441,10 @@ public:
   }
 
   /// Every seed column at once, step by step from the last: each step's
-  /// operators and factorisation are built once and serve all columns, which
-  /// keep their own carry, handover, observations and cotangents. `seeds[c]` is
+  /// operators and factorization are built once and serve all columns, which
+  /// keep their own Nordsieck cotangent, handover, observations and cotangents. `seeds[c]` is
   /// column c, [n_obs x n_states] row-major; afterwards wx0(c) and wp(c) hold
-  /// its cotangents. Not with trace_lambda, which takes sweep() per column.
+  /// the cotangents of that column. Not with trace_lambda, which takes sweep() per column.
   template<class Store, class AdjTerms, class Solver, class Jumps = no_jumps>
   void sweep_many(const Store& store, std::size_t n_phi, const std::vector<const scalar_type*>& seeds,
                   const AdjTerms& adj, Solver& solver, const Jumps& jumps = Jumps())
@@ -490,6 +468,7 @@ public:
     }
     std::vector<T> w_in, w_after, w_before, jtv;
     zero_armed(jtv, n);
+    solver.forget();
     for (std::size_t k = n_steps; k-- > 0;) {
       const auto& cp = store.step(k);
       store.use_step_modes(k);
@@ -497,7 +476,7 @@ public:
       bool observed = false;
       for (std::size_t s = 0; s < S; ++s)
         observed = step_seeds(store, k, seeds[s], n, m_cols[s].next_obs, m_cols[s].handover, m_cols[s].obs) || observed;
-      ms_step_prepare(cp, observed, solver);
+      ms_step_prepare(store, k, observed, solver);
       for (std::size_t s = 0; s < S; ++s) {
         column& c = m_cols[s];
         w_in.clear();
@@ -577,8 +556,12 @@ public:
       store.use_step_modes(k);
       step_seeds(store, k, seeds, n, next_obs, handover, m_obs);
       x0.assign(cp.start_state(), cp.start_state() + n);
+      // The end state the run computed, where a step follows without an event.
+      const double* xh_end =
+          (k + 1 < n_steps && store.event_before(k + 1) >= store.n_events())
+          ? store.step(k + 1).start_state() : nullptr;
       const int mk = flow.flow_interval(sys, adj, n, n_phi, x0, cp.t, cp.dt,
-                                        m_obs, w_out, w_in);
+                                        m_obs, w_out, w_in, xh_end);
       if (m_trace) {
         for (std::size_t i = 0; i < n; ++i) m_lam[k * n + i] = w_in[i];
         m_ref_m[k] = mk;
@@ -609,28 +592,32 @@ public:
 private:
   using T_ = scalar_type;
 
-  /// The adjoint of one step from its checkpoint: `w_carry` the cotangent on
-  /// the carry the step hands on, empty where an intervention handed a point
-  /// inside the step instead; `w_in` receives the one on the carry it was
-  /// entered with, `wp` the step's share of the gradient, `eta` the cotangent
+  /// The adjoint of one step from the step checkpoint: `w_carry` the cotangent on
+  /// the Nordsieck carry the step hands on, empty where an intervention handed a
+  /// point inside the step instead; `w_in` receives the one on the Nordsieck
+  /// carry the step was entered with, `wp` the step's share of the gradient, `eta` the cotangent
   /// on acor against the step's error estimate.
-  template<class CP, class AdjTerms, class Solver>
-  void ms_step_adjoint(const CP& cp, bool observed, const obs_ref<T_>* ob, std::size_t nob,
+  template<class Store, class AdjTerms, class Solver>
+  void ms_step_adjoint(const Store& store, std::size_t k, bool observed,
+                       const obs_ref<T_>* ob, std::size_t nob,
                        std::vector<T_>& w_carry, std::size_t n, std::size_t n_phi,
                        const AdjTerms& adj, Solver& solver, std::vector<T_>& w_in,
                        T_* wp, T_* eta)
   {
-    ms_step_prepare(cp, observed || nob > 0, solver);
+    const auto& cp = store.step(k);
+    ms_step_prepare(store, k, observed || nob > 0, solver);
     ms_step_column(cp, ob, nob, w_carry, n, n_phi, adj, solver, w_in, wp, eta);
   }
 
-  /// What a step's adjoint shares between seed columns: its operators, and the
-  /// Jacobian and factorisation of its corrector.
-  template<class CP, class Solver>
-  void ms_step_prepare(const CP& cp, bool observed, Solver& solver)
+  /// What a step's adjoint shares between seed columns: the step operators, and
+  /// the factorized iteration matrix the corrector ran against, built under the
+  /// switch modes it was evaluated under.
+  template<class Store, class Solver>
+  void ms_step_prepare(const Store& store, std::size_t k, bool observed, Solver& solver)
   {
+    const auto& cp = store.step(k);
     multistep_operators<Stepper>& ops = m_ops;
-    // An observed step needs its own interpolant, not one kept from another.
+    // An observed step needs a fresh interpolant, not one kept from another.
     if (observed) m_probe.valid = false;
     const double tail_key =
         cp.q_next + 1e3 * cp.eta + 1e6 * static_cast<double>(cp.ops.size());
@@ -642,7 +629,11 @@ private:
                       [&](typename multistep_probe<Stepper>::probe_stepper& pr)
                         { cp.apply_tail(pr, m_null); }, ops);
     }
-    solver.prepare(cp.y, cp.t + ops.h, 1.0 / ops.gamma, ops.gamma);
+    if (cp.k_iter == 0) return;
+    const auto& M = store.matrix(cp.mat);
+    store.use_step_modes(M.modes_step);
+    solver.prepare_frozen(M.x, M.t, M.inv_gamma_p, cp.mat);
+    store.use_step_modes(k);
   }
 
   /// The step adjoint of one seed column on the operators and factorization
@@ -660,7 +651,7 @@ private:
     m_ws.w_pred.assign(nz_in, T(0.0));
     m_ws.w_acor.assign(n, T(0.0));
 
-    // A cotangent at a time inside the step, through its own interpolant. The
+    // A cotangent at a time inside the step, through the interpolant of the step. The
     // probe's states are the slots plus one for acor, so the row it writes is
     // d x_interp / d (zn_pred[0..q], acor).
     for (std::size_t o = 0; o < nob; ++o) {
@@ -677,7 +668,7 @@ private:
         m_ws.w_acor[i] += m_dense_row[acor_slot] * w[i];
     }
 
-    // What the step above handed back, on its carry.
+    // What the step above handed back, on the Nordsieck carry.
     if (!w_carry.empty()) {
       auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
       w_carry.resize(nz_out, T(0.0));
@@ -687,28 +678,22 @@ private:
 
     const double t_new = cp.t + ops.h;
 
-    w_in.assign(nz_in, T(0.0));
-    if (eta) m_wout.assign(n, T(0.0));
-    // Timed either side of the solve, which reports itself.
-    { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
-      multistep_adjoint_rhs(ops, n, m_ws, eta ? m_wout.data() : nullptr); }
-    solver.transposed(m_ws.mu);
-    { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
-      multistep_adjoint_finish(ops, n, n_phi, cp.y, t_new, adj, w_in.data(),
-                               wp, m_ws); }
-
     // eta is the cotangent on acor against the step's own error estimate,
-    // which for a corrector method is acor scaled by the order's constant.
+    // which for a corrector method is acor scaled by the order's constant;
+    // the first iterate is the prediction.
     if (eta) {
       T e = T(0.0);
-      for (std::size_t i = 0; i < n; ++i) {
-        T pred0 = T(0.0);
-        for (int j = 0; j <= ops.q_in; ++j)
-          pred0 += ops.A(0, j) * cp.zn[static_cast<std::size_t>(j) * n + i];
-        e += m_wout[i] * (cp.y[i] - pred0);
-      }
+      for (std::size_t i = 0; i < n; ++i)
+        e += m_ws.w_acor[i] * (cp.y[i] - cp.iter[i]);
       *eta = e * ops.err_scale;
     }
+
+    w_in.assign(nz_in, T(0.0));
+    { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
+      multistep_corrector_adjoint(ops, n, cp.iter.data(), cp.k_iter, cp.s_iter,
+                                  t_new, solver, adj, wp, m_ws);
+      ops.A.apply_transposed(m_ws.w_pred.data(), n, w_in.data()); }
+    (void)n_phi;
   }
 
 public:
@@ -744,7 +729,7 @@ private:
   std::vector<obs_ref<scalar_type>> m_obs;
   std::vector<int> m_ref_m;
   bool m_trace = false;
-  std::vector<scalar_type> m_wx, m_whist, m_wp, m_lam, m_eta, m_wout;
+  std::vector<scalar_type> m_wx, m_whist, m_wp, m_lam, m_eta;
   // per seed column of sweep_many()
   struct column {
     std::vector<scalar_type> wx, wp, w_carry;
@@ -758,7 +743,7 @@ private:
 // ---------------------------------------------------------------------------
 //  The adjoint of one explicit Runge-Kutta step, stages recomputed by one
 //  forward run: m_i = h b_i w + h sum_{j>i} a_ji u_j with u_j = J(X_j)' m_j,
-//  w_x = w + sum_i u_i. See "The step map and its adjoint" in
+//  w_x = w + sum_i u_i. See "Adjoint of the step map" in
 //  https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
 // ---------------------------------------------------------------------------
 template<class T = double>
@@ -768,7 +753,7 @@ struct onestep_workspace {
 };
 
 /// The backward recursion alone, on a stepper that has just run the step. A
-/// trajectory runs the step itself, because its interpolant reads the stages
+/// trajectory runs the step itself, because the trajectory interpolant reads the stages
 /// before the recursion consumes them.
 template<class Stepper, class AdjTerms, class T>
 void onestep_recurse(Stepper& st,
@@ -843,7 +828,7 @@ void apply_onestep_adjoint(Stepper& st, System& sys,
 // ---------------------------------------------------------------------------
 //  The adjoint of one Rosenbrock step. dg = W^-1 (dr + (dJ) g), so besides the
 //  transposed solves against the step's own W it needs lambda contracted with
-//  d(J g). See "The step map and its adjoint" in
+//  d(J g). See "Adjoint of the step map" in
 //  https://dmodverse.github.io/cppDE/articles/methods-reverse.html.
 // ---------------------------------------------------------------------------
 template<class T = double>
@@ -910,8 +895,8 @@ void apply_rosenbrock_adjoint(Stepper& st, System& sys,
 {
   constexpr int S = Stepper::n_stages_used;   // five stages, then the error
 
-  // The step once forward, to recover the stages and the factorisation. An
-  // accepted step rebuilds the Jacobian at its own start, so this is the same
+  // The step once forward, to recover the stages and the factorization. An
+  // accepted step rebuilds the Jacobian at the step start, so this is the same
   // matrix and the same stages the run produced.
   zero_armed(ws.xout, n);
   zero_armed(ws.xerr, n);
@@ -940,7 +925,7 @@ void apply_rosenbrock_adjoint(Stepper& st, System& sys,
 
   // The stage state X_i, rebuilt from the step start and the stage vectors.
   // The error stage reads the last stage's state plus that stage's own vector,
-  // so it takes the last stage's combination and not a row of its own.
+  // so it takes the last stage's combination and not a separate row.
   auto stage_state = [&](int i) {
     const int row = (i == S + 1) ? S : i;
     ws.xs.assign(x0, x0 + n);
@@ -1058,8 +1043,8 @@ void apply_rosenbrock_adjoint(Stepper& st, System& sys,
 }
 
 // Whether a one-step method's stages are linear solves it can hand out, rather
-// than explicit combinations its tableau already describes. That is what decides
-// how its adjoint moves through a step.
+// than explicit combinations the tableau already describes. That is what decides
+// how the adjoint moves through a step.
 template<class S, class = void> struct has_stage_vectors : std::false_type {};
 template<class S>
 struct has_stage_vectors<S, std::void_t<decltype(std::declval<const S&>().stage_g(1))>>
@@ -1091,6 +1076,10 @@ public:
   std::size_t refine_failures() const { return m_ref_fail; }
   /// Under trace_lambda: the substeps each step was swept in.
   const std::vector<int>& refine_m() const { return m_ref_m; }
+  /// Under refine: the first-order change of the seeded functional from the
+  /// computed trajectory to the one the last sweep differentiated, the sum of
+  /// the seeds and cotangents times the defects of the substepped maps.
+  double correction() const { return m_corr; }
 
   /// One seed column. `seeds` is [n_obs x n_states] row-major.
   template<class Store, class System, class AdjTerms, class Jumps = no_jumps>
@@ -1109,6 +1098,7 @@ public:
     m_eta.assign(m_trace ? n_steps : 0u, T(0.0));
     m_ref_m.assign(m_trace ? n_steps : 0u, 1);
     m_ref_fail = 0;
+    m_corr = 0.0;
     if (n_steps == 0) {
       sweep_without_steps(store, n, seeds, adj, jumps, m_wx, m_wp, m_jws);
       return;
@@ -1117,6 +1107,7 @@ public:
     std::size_t next_obs = store.n_obs();
     std::vector<T> w_out(n, T(0.0)), w_in(n, T(0.0)), x0, w_after, w_before;
     jump_handover<T> handover;
+    std::vector<double> xh_end;
 
     for (std::size_t k = n_steps; k-- > 0;) {
       const auto& cp = store.step(k);
@@ -1126,7 +1117,17 @@ public:
 
       T eta_k = T(0.0);
       if (m_refine_rtol > 0.0) {
-        refined_step(sys, adj, st, n, n_phi, x0, cp.t, cp.dt, w_out, w_in, eta_k, k);
+        // The end state the run computed; after an event the cotangent at the
+        // step end is zero and the state the jump started from is not this one.
+        const bool has_end = k + 1 < n_steps && store.event_before(k + 1) >= store.n_events();
+        xh_end.clear();
+        if (has_end) {
+          const T* xe = store.step(k + 1).start_state();
+          for (std::size_t i = 0; i < n; ++i)
+            xh_end.push_back(static_cast<double>(ad_traits::scalar_value(xe[i])));
+        }
+        refined_step(sys, adj, st, n, n_phi, x0, cp.t, cp.dt, w_out, w_in, eta_k, k,
+                     has_end ? xh_end.data() : nullptr);
       } else {
         w_in.assign(n, T(0.0));
         step_adjoint(sys, adj, st, n, n_phi, x0.data(), cp.t, cp.dt,
@@ -1175,9 +1176,9 @@ public:
 private:
   using obs_ref = adjoint::obs_ref<scalar_type>;
 
-  /// The adjoint of the step from `xs` at `t0` over `dt`, its seeds included:
+  /// The adjoint of the step from `xs` at `t0` over `dt`, seeds included:
   /// `w_end` is the cotangent at the step's end, `w_in` receives the one at
-  /// its start, `wp` the step's share of the gradient. `eta`, if given, gets
+  /// the step start, `wp` the step's share of the gradient. `eta`, if given, gets
   /// the cotangent at the end against the step's embedded error.
   template<class System, class AdjTerms>
   void step_adjoint(System& sys, const AdjTerms& adj, Stepper& st, std::size_t n,
@@ -1189,9 +1190,9 @@ private:
     using T = scalar_type;
     constexpr bool rosen = has_stage_vectors<Stepper>::value;
     m_x0.assign(xs, xs + n);
-    // An explicit interpolant reads f at both ends of the step, so its stages
+    // An explicit interpolant reads f at both ends of the step, so the stages
     // must exist before an observation is seeded; a Rosenbrock interpolant is
-    // linear in its stage vectors and needs only the weights.
+    // linear in the stage vectors and needs only the weights.
     if constexpr (!rosen) {
       zero_armed(m_ws.xout, n);
       zero_armed(m_ws.xerr, n);
@@ -1250,16 +1251,17 @@ private:
     }
   }
 
-  /// The step's adjoint, checked per component of its share of the gradient:
+  /// The step's adjoint, checked per component of the step's share of the gradient:
   /// by the embedded estimate where the method has one, then by halving, the
-  /// step taken as m substeps of the same method from its own start, m
+  /// step taken as m substeps of the same method from the step start, m
   /// doubled until the share agrees with that of m / 2 after Richardson
   /// extrapolation at the method's order. The finest result is kept.
   template<class System, class AdjTerms>
   void refined_step(System& sys, const AdjTerms& adj, Stepper& st, std::size_t n,
                     std::size_t n_phi, const std::vector<scalar_type>& x0, double t0,
                     double dt, const std::vector<scalar_type>& w_end,
-                    std::vector<scalar_type>& w_in, scalar_type& eta, std::size_t k)
+                    std::vector<scalar_type>& w_in, scalar_type& eta, std::size_t k,
+                    const double* xh_end)
   {
     using T = scalar_type;
     using ad_traits::scalar_value;
@@ -1316,11 +1318,21 @@ private:
     // show the order: the first halving is taken at face value.
     const double R = std::pow(2.0, static_cast<double>(Stepper::stepper_order)) - 1.0;
     double d_prev = 0.0;
+    double corr = 0.0;
     int m = 1;
+    const double dir = dt > 0 ? 1.0 : -1.0;
+    // The seeds of substep j of m: those before the step's start into the
+    // first, those past the step end into the last, in the direction of integration.
+    auto in_substep = [&](const obs_ref& o, int j, int m_, double a, double b) {
+      return (j == 0 || dir * (o.t - a) > 0) && (j == m_ - 1 || dir * (o.t - b) <= 0);
+    };
     while (m < m_refine_max) {
       m *= 2;
       const double h = dt / m;
-      // The substeps forward, from the step's own start.
+      // The substeps forward, from the step's own start, and the value change
+      // they make: the cotangents times the defects at the step end and at the
+      // observations, read off each substep's dense output.
+      double c = 0.0;
       m_xs.resize(static_cast<std::size_t>(m + 1));
       m_xs[0] = x0;
       for (int j = 0; j < m; ++j) {
@@ -1328,19 +1340,28 @@ private:
         zero_armed(m_xe, n);
         st.do_step(sys, m_xs[static_cast<std::size_t>(j)], t0 + j * h,
                    m_xs[static_cast<std::size_t>(j + 1)], h, m_xe);
+        const double a = t0 + j * h, b = t0 + (j + 1) * h;
+        for (const obs_ref& o : m_obs) {
+          if (!o.xh || !in_substep(o, j, m, a, b)) continue;
+          dense_value(sys, st, m_xs[static_cast<std::size_t>(j)],
+                      m_xs[static_cast<std::size_t>(j + 1)], a, h, o.t, n);
+          for (std::size_t i = 0; i < n; ++i)
+            c += static_cast<double>(scalar_value(o.w[i]))
+               * (static_cast<double>(scalar_value(m_xd[i])) - o.xh[i]);
+        }
       }
-      // And back, each with the seeds that fall into it: those before the
-      // step's start into the first substep, those past its end into the last,
-      // in the direction of integration.
+      if (xh_end)
+        for (std::size_t i = 0; i < n; ++i)
+          c += static_cast<double>(scalar_value(w_end[i]))
+             * (static_cast<double>(scalar_value(m_xs[static_cast<std::size_t>(m)][i])) - xh_end[i]);
+      // And back, each with the seeds that fall into it.
       zero_armed(m_pf, n_phi);
       m_wa = w_end;
-      const double dir = dt > 0 ? 1.0 : -1.0;
       for (int j = m - 1; j >= 0; --j) {
         const double a = t0 + j * h, b = t0 + (j + 1) * h;
         m_sub.clear();
         for (const obs_ref& o : m_obs)
-          if ((j == 0 || dir * (o.t - a) > 0) && (j == m - 1 || dir * (o.t - b) <= 0))
-            m_sub.push_back(o);
+          if (in_substep(o, j, m, a, b)) m_sub.push_back(o);
         m_wb.assign(n, T(0.0));
         step_adjoint(sys, adj, st, n, n_phi, m_xs[static_cast<std::size_t>(j)].data(),
                      a, h, m_sub.data(), m_sub.size(), m_wa.data(), m_wb.data(),
@@ -1357,11 +1378,41 @@ private:
       d_prev = d;
       m_pc.swap(m_pf);
       w_in.swap(m_wa);
+      corr = c;
       if (est <= 1.0 || stalled) break;
     }
+    m_corr += corr;
     for (std::size_t i = 0; i < n_phi; ++i) m_wp[i] += m_pc[i];
     if (est > 1.0) ++m_ref_fail;
     if (m_trace && k < m_ref_m.size()) m_ref_m[k] = m;
+  }
+
+  /// The dense output of the substep from `xa` at `a` over `h` to `xb`, at t
+  /// clamped to the substep, into m_xd: the interpolant the adjoint seeds
+  /// through. Rosenbrock reads the stages of the substep just taken; an
+  /// explicit method uses f at both ends, so no stage of `st` is touched.
+  template<class System>
+  void dense_value(System& sys, Stepper& st, const std::vector<scalar_type>& xa,
+                   const std::vector<scalar_type>& xb, double a, double h, double t,
+                   std::size_t n)
+  {
+    const double lo = h > 0 ? a : a + h, hi = h > 0 ? a + h : a;
+    const double tc = t < lo ? lo : (t > hi ? hi : t);
+    zero_armed(m_xd, n);
+    if constexpr (has_stage_vectors<Stepper>::value) {
+      st.prepare_dense_output();
+      st.calc_state(tc, m_xd, xa, a, xb, a + h);
+    } else {
+      double cw[4];
+      Stepper::dense_weights((tc - a) / h, cw);
+      zero_armed(m_fa, n);
+      zero_armed(m_fb, n);
+      sys.first(xa, m_fa, a);
+      sys.first(xb, m_fb, a + h);
+      for (std::size_t i = 0; i < n; ++i)
+        m_xd[i] = cw[0] * xa[i] + cw[1] * xb[i] + (h * cw[2]) * m_fa[i]
+                + (h * cw[3]) * m_fb[i];
+    }
   }
 
   /// A cotangent `w` scaled by `c` on f(x, t), put onto x and theta.
@@ -1397,7 +1448,8 @@ private:
   // The step adjoint's buffers, and the halving check's.
   std::vector<obs_ref> m_obs, m_sub;
   std::vector<scalar_type> m_x0, m_wstart, m_wend, m_mu_seed, m_jv, m_xe,
-                           m_pc, m_pf, m_wa, m_wb, m_pe, m_we;
+                           m_pc, m_pf, m_wa, m_wb, m_pe, m_we, m_xd, m_fa, m_fb;
+  double m_corr = 0.0;
   std::vector<std::vector<scalar_type>> m_xs;
   double m_refine_rtol = 0.0;
   double m_refine_atol = 0.0, m_refine_gradtol = 0.0;

@@ -13,7 +13,7 @@
 // The root sits on the state whose right-hand side reads the clock, so
 // d(g_dot)/dt is not zero. A root on a state with an autonomous right-hand side
 // leaves that term at zero and the case goes untested. The fixed event's time
-// depends on a parameter and its reset scales that same state, for the same
+// depends on a parameter and the reset scales that same state, for the same
 // reason: the shift then has a tangent, and the right-hand side read at the
 // moving event time adds df/dt before and after a reset that changes it.
 //
@@ -304,7 +304,7 @@ static constexpr std::size_t NPOS = cppde::reverse::event_record<D>::npos;
 //  The value run, on the type forward over reverse runs it on: a dual seeded
 //  with the identity, so the store's event states hold dx/dtheta.
 //
-//  One-step methods only. A multistep carry is typed by the scalar it was
+//  One-step methods only. A Nordsieck carry is typed by the scalar it was
 //  recorded on, so a dual2nd replay cannot load a dual store's Nordsieck
 //  history; the gap this harness is aimed at is the same on all four methods.
 // ---------------------------------------------------------------------------
@@ -489,7 +489,7 @@ static void run_method(const char* name, double tol)
     auto jmp  = cppde::adjoint::make_jump_terms(sysd, eadj, evd.fixed, evd.root);
     out.assign(ND, D(0.0));
     SAD st;
-    // The sweep re-runs each step on this stepper, so its buffers need the
+    // The sweep re-runs each step on this stepper, so the stepper buffers need the
     // same tangent slab the forward one got.
     st.prepare_sensitivities(ND);
     cppde::adjoint::closed_onestep_trajectory<SAD> tr;

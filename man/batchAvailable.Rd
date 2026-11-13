@@ -19,7 +19,7 @@ OpenMP region.
 \description{
 \code{solveODEBatch()} degrades to a serial loop without saying so. This reports
 the conditions it depends on, so a caller can warn instead of silently
-losing its threads.
+running serially.
 }
 \examples{
 \donttest{

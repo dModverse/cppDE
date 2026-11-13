@@ -33,6 +33,7 @@
 #define CPPDE_MULTISTEPPER_HPP
 
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <array>
 #include <cmath>
@@ -294,7 +295,7 @@ constexpr int method_max_order(multistep_method m) {
 // ============================================================================
 
 // ============================================================================
-//  The carry across a step boundary, apart from the Nordsieck slots: the order,
+//  The Nordsieck carry across a step boundary, apart from the slots: the order,
 //  the step-size history and the counters that decide how the coefficients are
 //  built. Values only and free of the scalar type, so the backward walk reads
 //  it as the forward run left it.
@@ -405,6 +406,9 @@ public:
     m_l.fill(time_type(0));
     m_tq.fill(0.0);
     m_tau.fill(time_type(0));
+    // The iteration matrix is a decision of the solver, like the step size, so
+    // derivatives pass it without the derivative of W.
+    m_lu.set_frozen(true);
   }
 
   // The slabs embed pointers into their own storage_ inside the duals of the
@@ -631,7 +635,7 @@ public:
   //  1b. Error weights from the accepted solution, before the prediction
   //      overwrites zn[0]: ewt[k] = 1/(atol + rtol*|x_k|), fixed for the step.
   //      Interleaved in WRMS iteration order, one value weight per state
-  //      followed by its derivative weights; for double just n weights.
+  //      followed by the derivative weights of that state; for double just n weights.
   // ================================================================
     {
       using ndf_detail::scalar_value;
@@ -736,6 +740,12 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
       { auto _tp = m_prof.timer(prof_cat::jac_eval);
         m_lu.call_jacobian(jacobi_func, m_zn[0].m_v, t_new_s); }
       ++m_n_jevals;
+      if (m_hlog) {
+        m_x_jac.resize(n);
+        for (size_t i = 0; i < n; ++i)
+          m_x_jac[i] = ndf_detail::scalar_value(m_zn[0].m_v[i]);
+        m_t_jac = static_cast<double>(ndf_detail::scalar_value(t_new_s));
+      }
       m_nstlj = m_nst;
       m_lu.cache_jacobian(n);
       { auto _tp = m_prof.timer(prof_cat::lu_factor);
@@ -750,6 +760,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     }
     m_lu.set_jacobian_valid();
     m_lu.set_lu_valid();
+    m_inv_gamma_p = static_cast<double>(ndf_detail::scalar_value(inv_gamma_dt));
+    ++m_mat_gen;
     callSetup = false;
     jcur = need_new_jacobian;
     m_gammap = m_gamma;
@@ -761,6 +773,12 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // No else: with callSetup false the stale W factorized at gammap is reused.
   // The Newton residual uses the current gamma, so convergence holds as long as
   // gamrat stays within DGMAX, which is what triggers callSetup above.
+
+  // The scale the iteration applies to each solve, as ndf_newton_solve sets it.
+  m_iter_scale = 1.0;
+  if (std::abs(m_gamrat - 1.0) > 1e-14)
+    m_iter_scale = m_gamrat * (Method != multistep_method::adams
+                                 ? 2.0 / (1.0 + m_gamrat) : 1.0);
 
   // Newton iteration: pass ewt for CVODE-style pre-prediction weights
   auto result = ndf_newton_solve(
@@ -789,7 +807,8 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
         m_prof,
         m_ewt,
         m_sens_err_con,
-        /*scale_solution=*/Method != multistep_method::adams
+        /*scale_solution=*/Method != multistep_method::adams,
+        m_hlog ? &m_iter_log : nullptr
   );
 
   m_acnrm = result.acnrm;
@@ -843,7 +862,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   // ====================================================================
   //  set_step_snapshot: fires once per attempt, after the Nordsieck rescale and
-  //  before the prediction, which is where the carry a step reads is final.
+  //  before the prediction, which is where the Nordsieck carry a step reads is final.
   //
   //  The reverse checkpoint cannot be taken after the step: the history is
   //  mutated in place, and an attempt the controller throws away rescales it
@@ -861,8 +880,19 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // not being differentiated backwards, costs one null test per operation.
   void set_history_log(history_log* log) { m_hlog = log; }
 
+  // The corrector of the attempt that ran last, recorded while a history log is
+  // set: the iterates f was evaluated at, the scale of each solve, and the
+  // iteration matrix (1/gamma_p) I - J(x_jac, t_jac). A new matrix bumps
+  // matrix_generation().
+  const iterate_log<value_type>& iterates() const { return m_iter_log; }
+  double iter_scale() const { return m_iter_scale; }
+  std::uint32_t matrix_generation() const { return m_mat_gen; }
+  const std::vector<double>& jac_point() const { return m_x_jac; }
+  double jac_time() const { return m_t_jac; }
+  double inv_gamma_p() const { return m_inv_gamma_p; }
+
   // ====================================================================
-  //  The carry across a step boundary, for the reverse checkpoint.
+  //  The Nordsieck carry across a step boundary, for the reverse checkpoint.
   //
   //  Everything a step reads that an earlier step wrote, apart from the
   //  Nordsieck slots themselves: the order, the step-size history and the
@@ -919,7 +949,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   // ====================================================================
   //  replay_predict: everything a step does to the Nordsieck history before
-  //  its corrector, and the coefficients that follow from it. Returns rl1,
+  //  the corrector, and the coefficients that follow from it. Returns rl1,
   //  with m_h and m_gamma set.
   //
   //  A written step adjoint needs this transform without a system to evaluate:
@@ -975,7 +1005,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   // WRMS norm using pre-prediction ewt, with AD support.
   // Returns max(state_wrms, max_j sens_wrms[j]): every sensitivity
-  // vector is judged on its own per-vector WRMS, and the controller
+  // vector is judged on a separate per-vector WRMS, and the controller
   // sees the worst.  Matches CVODES `cvSensUpdateNorm` (CV_STAGGERED).
   // Without sens_err_con the state alone, as in the error test.
   double wrms_norm_ewt(const std::vector<value_type>& v) const
@@ -1318,7 +1348,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
     auto _tp = m_prof.timer(prof_cat::dense_snapshot);
     const size_t n = m_zn[0].m_v.size();
     // m_zn_dense is sized lazily per-order. If any slot was just resized,
-    // its new dual elements have size_=0 and the subsequent vector copy at
+    // the new dual elements have size_=0 and the subsequent vector copy at
     // m_v = m_zn[j].m_v would arena-allocate per element. Re-prime first.
     bool dense_resized = false;
     for (int j = 0; j <= m_q; ++j) {
@@ -1347,7 +1377,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
   // block must not be: that would clobber the binding pointers.
     if constexpr (detail::is_dual2nd<value_type>::value) {
       // dual2nd: memcpy hess sub-block (flat doubles). Outer block (with
-      // its inline gradient .val_ slots) was already copied per-element
+      // the inline gradient .val_ slots) was already copied per-element
       // by the value-layer loop above via dual<dual<,>,>::operator=.
       using S_inner = typename detail::tangent_slab<value_type>::inner_type;
       if (m_zn_block.primed() && m_zn_dense_block.primed() &&
@@ -1473,7 +1503,7 @@ for (int nls_attempt = 0; nls_attempt < 2; ++nls_attempt) {
 
   // acnrm_state: the WRMS over the value slots only, which is what the CVODES
   // public API exposes as acnrm. Equal to m_acnrm without sensitivities, and
-  // its non-sensitivity slice with them.
+  // to the non-sensitivity slice of m_acnrm with them.
     double acnrm_state_sq = 0.0;
     const size_t n_state = m_acor.m_v.size();
     for (size_t i = 0; i < n_state; ++i) {
@@ -1668,7 +1698,7 @@ private:
   //  ndfPredict / ndfRestore / ndfSet / ndfRescale
   //
   //  ndfPredict is the Nordsieck Pascal shift, Z := Z * P with P the unit-Pascal
-  //  lower triangle P[i,j] = C(i,j); ndfRestore is its inverse, with the signs
+  //  lower triangle P[i,j] = C(i,j); ndfRestore is the inverse, with the signs
   //  alternating. With a primed tangent block and a plain inner type the whole
   //  tangent matrix goes through one triangular product, while the value layer
   //  stays per-element because the .x() fields are not contiguous across slots.
@@ -1986,7 +2016,7 @@ public:
   //  Adams adjusts the Nordsieck history differently from BDF. On an increase
   //  the new high slot is zeroed, Adams having no saved derivative estimate to
   //  consume. On a decrease each zn[j] is corrected by a multiple of zn[q] taken
-  //  from q * int_0^x u*(u+xi_1)*...*(u+xi_{q-2}) du. The BDF routine in its
+  //  from q * int_0^x u*(u+xi_1)*...*(u+xi_{q-2}) du. The BDF routine in that
   //  place corrupts the history and the corrector fails on the next step.
   // ====================================================================
 
@@ -2108,6 +2138,12 @@ public:
   int m_n_fevals, m_n_jevals;
   step_snapshot m_snapshot;
   history_log*  m_hlog = nullptr;
+  iterate_log<value_type> m_iter_log;
+  double        m_iter_scale = 1.0;
+  std::uint32_t m_mat_gen = 0;
+  std::vector<double> m_x_jac;
+  double        m_t_jac = 0.0;
+  double        m_inv_gamma_p = 0.0;
 
   // Setup trigger diagnostics
   int m_n_setup_total = 0, m_n_setup_force = 0, m_n_setup_nojac = 0;

@@ -6,10 +6,11 @@
  solve for a single NDF/BDF step.  Takes the LU solver by reference --
  works with any lu_W<Value, is_sparse>.
 
- One code path for AD and non-AD types. For cppde::dual / dual2nd,
- lu.solve(tempv) runs the full IFT at every iteration, so value and tangents
- are corrected together, and with sens_err_con the convergence test includes
- the tangents. For double it is a plain forward/back substitution.
+ One code path for AD and non-AD types. For cppde::dual / dual2nd the
+ tangents iterate with the values against the frozen iteration matrix, so
+ they are the derivative of the iterations taken, and with sens_err_con the
+ convergence test includes them. For double it is a plain forward/back
+ substitution.
 
  Separated from the NDF stepper for testability.
 
@@ -49,6 +50,21 @@ using cppde::ad_traits::scalar_value;
 // ============================================================================
 //  Newton result
 // ============================================================================
+
+// The iterates f was evaluated at in one corrector solve, y_0 = the prediction
+// first. The reverse sweep transposes the iterations from them; buffers are
+// reused from step to step.
+template<class Value>
+struct iterate_log {
+  std::vector<std::vector<Value>> y;
+  int k = 0;
+  void clear() { k = 0; }
+  void push(const std::vector<Value>& v) {
+    if (y.size() <= static_cast<std::size_t>(k)) y.emplace_back();
+    y[static_cast<std::size_t>(k)] = v;
+    ++k;
+  }
+};
 
 struct newton_result {
   bool   converged;   // Did Newton converge?
@@ -144,7 +160,7 @@ double wrms_max_ewt(const std::vector<T>& v,
     return max_norm;
   };
 
-  // dual2nd keeps its tangents as nested duals; the element path below
+  // dual2nd keeps the tangents as nested duals; the element path below
   // handles it.
   if constexpr (detail::is_dynamic_dual<T>::value
                 && !detail::is_dual2nd<T>::value) {
@@ -188,8 +204,8 @@ double wrms_max_ewt(const std::vector<T>& v,
 // ============================================================================
 //  ndf_newton_solve
 //
-//  The Newton iteration for one NDF/BDF step, with the full IFT solve at
-//  every iteration for AD types.
+//  The Newton iteration for one NDF/BDF step. For AD types the tangents
+//  take the same iterations against the frozen iteration matrix.
 // ============================================================================
 
 template<class LU, class DerivFunc, class Value, class TimeType>
@@ -220,7 +236,8 @@ newton_result ndf_newton_solve(
     cppde::profiler& prof,
     const std::vector<double>& ewt = {},
     bool sens_err_con = true,
-    bool scale_solution = true)
+    bool scale_solution = true,
+    iterate_log<Value>* iterates = nullptr)
 {
   using newton_detail::wrms_norm;
   using newton_detail::wrms_max_ewt;
@@ -244,7 +261,7 @@ newton_result ndf_newton_solve(
     }
   }
 
-  // Initial f-eval at predicted point
+  if (iterates) { iterates->clear(); iterates->push(y); }
   { auto _t = prof.timer(prof_cat::f_eval);
     deriv_func(y, ftemp, t_new); }
   ++n_fevals;
@@ -271,9 +288,8 @@ newton_result ndf_newton_solve(
       }
     }
 
-    // Solve W * delta = tempv
-    // For AD types, lu.solve() performs full IFT at every iteration,
-    // giving correct value AND derivative corrections each time.
+    // Solve W * delta = tempv. The tangents of the residual pass through the
+    // frozen W as a second set of right-hand sides.
     { auto _t = prof.timer(prof_cat::lu_solve);
       lu.solve(tempv); }
 
@@ -291,7 +307,7 @@ newton_result ndf_newton_solve(
 
     // WRMS norm of correction: AD-aware, max over (state, sens[j]).
     // ewt is interleaved: [val_0, d0_0, d1_0, ..., val_1, d0_1, ...].
-    // Each sensitivity vector contributes its own per-vector WRMS;
+    // Each sensitivity vector contributes a separate per-vector WRMS;
     // the controller sees the worst: matching CVODES cvSensUpdateNorm.
     { auto _t = prof.timer(prof_cat::error_norm);
       if (use_ewt) {
@@ -341,7 +357,7 @@ newton_result ndf_newton_solve(
 
     delp = del;
 
-    // Re-evaluate f at updated y
+    if (iterates) iterates->push(y);
     { auto _t = prof.timer(prof_cat::f_eval);
       deriv_func(y, ftemp, t_new); }
     ++n_fevals;

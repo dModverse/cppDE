@@ -16,11 +16,11 @@
 #' `"equilibrate"` stops at steady state (see `roottol` in [solveODE()]); a
 #' character vector of expressions stops at the first zero crossing.
 #'
-#' A time event fires when its time lies between the first and the last
+#' A time event fires when the event time lies between the first and the last
 #' integration time, the first included and the last not; with
 #' `includeTimeZero` the integration times contain 0. An event at the first
-#' time is applied before the solve starts, and one inside the window adds its
-#' time to the output, with the state after the event in that row. An event
+#' time is applied before the solve starts, and one inside the window adds the
+#' event time to the output, with the state after the event in that row. An event
 #' before the first or at or after the last time is ignored and changes neither
 #' the output nor the span of the integration. A grid of a single time applies
 #' the events at that time.
@@ -66,7 +66,7 @@
 #'   is the preferred spelling.
 #' @param includeTimeZero Logical. Ensure that `0` is part of the
 #'   integration times. Default `TRUE`.
-#' @param useDenseOutput Logical. Use Hermite dense output for
+#' @param useDenseOutput Logical. Use the dense output of the method for
 #'   user-requested time points. Default `TRUE`. Applies to `method = "rb4"`
 #'   and `"tsit5"`, whose interpolant is of lower order than the method;
 #'   `FALSE` makes the solver land on each requested time exactly. `FALSE` is
@@ -77,8 +77,8 @@
 #'   forces dense. Sparse LU requires KLU at install time, see [installLibs()].
 #' @param method Integration method: `"bdf"` (default), `"adams"`,
 #'   `"rb4"`, or `"tsit5"`.
-#' @param useNDF Logical. Use Klopfenstein-Shampine NDF coefficients in
-#'   the BDF corrector. Default `TRUE`. Applies to `method = "bdf"`; ignored
+#' @param useNDF Logical. Use the NDF coefficients of Shampine and Reichelt
+#'   in the BDF corrector. Default `TRUE`. Applies to `method = "bdf"`; ignored
 #'   otherwise.
 #' @param derivMode Direction the derivatives are taken in.
 #'   * `"forward"` (default): forward sensitivities as built by `deriv`,
@@ -129,7 +129,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   if (is_reverse) {
     # First order backwards integrates in plain double: no forward tangents at
     # all. Forward over reverse integrates in a dual and sweeps in the same
-    # type, so the gradient comes out with its own derivatives.
+    # type, so the derivatives of the gradient come out with it.
     if (deriv2 && !second_reverse)
       stop("deriv2 = TRUE with derivMode = \"reverse\" is derivMode = ",
            "\"forward-reverse\"; ask for that instead.", call. = FALSE)
@@ -264,8 +264,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
 
   if (verbose) message("Generating ODE and Jacobian code...")
 
-  # The scalar the model body is written in, spelled out, plus its derivative
-  # layer count and arena flag, so the codegen never infers them from the name.
+  # The scalar the model body is written in, spelled out, plus the derivative
+  # layer count and arena flag of that scalar, so the codegen never infers them from the name.
   numType <- if (deriv2) "cppde::dual2nd<double>"
              else if (deriv) "cppde::dual<double>"
              else "double"
@@ -341,7 +341,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     event_code <- paste(event_lines, collapse = "\n")
 
     ## Fixed-event times as plain-double expressions over the flat [states, params]
-    ## vector, so the batch entry can size its output exactly. NULL means it cannot:
+    ## vector, so the batch entry can size the output exactly. NULL means it cannot:
     ## a root event, or a time built from a forcing.
     if (!is.null(events))
       event_time_exprs <- codegen$fixed_event_time_exprs(
@@ -831,7 +831,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
                  if (is_reverse) "  build_events(full_params, F, fixed_events, root_events);"
                  else event_code)
   }
-  # The modes of the state switches live as long as the solve and its sweep.
+  # The modes of the state switches live as long as the solve and the sweep after it.
   if (n_modes > 0L) {
     externC <- c(externC,
                  "",
@@ -1024,7 +1024,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
                  "                    \"the reverse store belongs to different times or \"",
                  "                    \"parameters; drop it and let this call integrate\");",
                  "  auto& _rev_store = _rev_st->store;",
-                 "  // A store this call uses up keeps only the history its sweep reads.",
+                 "  // A store this call uses up keeps only the history the sweep reads.",
                  "  if (!_rev_reuse && !args.keep_store)",
                  "    _rev_store.keep_history(args.adjoint_grid ? cppde::reverse::history_slots::all",
                  "                            : args.refine > 0 ? cppde::reverse::history_slots::start",
@@ -1197,7 +1197,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     # The transposed solve a corrector needs. An explicit method has none, and
     # a Rosenbrock stage transposes the stepper's own factorization.
     # The system as the forward run took it, sliding where a switch slides; the
-    # sweep and its solves read f and J from it.
+    # sweep and the linear solves of the sweep read f and J from it.
     solver_decl <- c(
       "  auto _cl_sys = cppde::detail::make_sliding_system(std::make_pair(sys, jac), root_events);",
       if (written_onestep) character(0) else
@@ -1242,6 +1242,9 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
       "  res.n_adj_rows = n_phi_rows;",
       "  res.n_adj_cols = n_seed;",
       "  res.adjoint.assign((size_t)n_phi_rows * n_seed, 0.0);",
+      if (!second_reverse)
+        "  if (args.refine > 0) res.correction.assign((size_t)n_seed, 0.0);"
+      else character(0),
       # Forward-reverse adds one block per sensitivity direction beside the gradient.
       if (second_reverse) c(
         "  res.n_adj_derivs = n_sens;",
@@ -1267,7 +1270,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         if (written_onestep) c(
           sprintf("    cppde::adjoint::closed_onestep_trajectory<%s> _cl;", rev_stepper_type),
           sprintf("    %s _cl_st;", rev_stepper_type),
-          # The sweep re-runs each step on this stepper, so its own buffers
+          # The sweep re-runs each step on this stepper, so the buffers of this stepper
           # need the tangent slab the forward one got.
           if (second_reverse)
             "    _cl_st.prepare_sensitivities(static_cast<unsigned>(n_sens));"
@@ -1357,8 +1360,16 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
         if (written_onestep) "                _cl_sys, _adj, _cl_st, _cl_jmp);"
         else                 "                _adj, _rev_solver, _cl_jmp);",
         if (second_reverse) character(0)
-        else if (written_onestep) "      if (args.refine > 0) res.refine_failures += (int)_cl.refine_failures();"
-        else "      if (args.refine > 0) res.refine_failures += (int)_flow.refine_failures();",
+        else if (written_onestep) c(
+          "      if (args.refine > 0) {",
+          "        res.refine_failures += (int)_cl.refine_failures();",
+          "        res.correction[c] = _cl.correction();",
+          "      }")
+        else c(
+          "      if (args.refine > 0) {",
+          "        res.refine_failures += (int)_flow.refine_failures();",
+          "        res.correction[c] = _flow.correction();",
+          "      }"),
         if (second_reverse) c(
           "      for (int i = 0; i < n_phi_rows; ++i) {",
           sprintf("        %s _a = (i < %d) ? %s : _cl.wp()[i];", rev_num_type,
@@ -1419,8 +1430,8 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   # --- extern "C" entry points: single condition, and the OpenMP batch ---
   dflag  <- if (deriv)  "true" else "false"
   d2flag <- if (deriv2) "true" else "false"
-  ## Whether `times` alone fixes the output grid, so the batch can size its
-  ## results up front. An event time off the grid but inside its window adds a
+  ## Whether `times` alone fixes the output grid, so the batch can size the
+  ## results up front. An event time off the grid but inside the integration window adds a
   ## row, which the prediction counts from the event times evaluated per
   ## condition; a root event or a rootfunc is dynamic and never qualifies.
   has_root_events <- !is.null(events) && "root" %in% names(events) &&
@@ -1429,7 +1440,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   if (!exists("event_time_exprs", inherits = FALSE)) event_time_exprs <- NULL
   event_time_exprs <- if (is.null(event_time_exprs)) NULL else
     as.character(unlist(event_time_exprs))
-  ## A model with fixed events needs its event times before the solve; without
+  ## A model with fixed events needs the event times before the solve; without
   ## them the predicted row count is wrong for every off-grid event and
   ## pre_acquire declines, which costs the staging copy.
   if (fixed_grid && !is.null(events) && is.null(event_time_exprs))
@@ -1514,7 +1525,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     message("Overwriting existing file: ", normalizePath(filename, winslash = "/", mustWork = FALSE))
   }
 
-  # A reverse model wraps its event code in build_events(), typed on the reverse
+  # A reverse model wraps the event code in build_events(), typed on the reverse
   # scalar, which solve_impl calls in place of the inline event code.
   event_builder <- function(V, code) {
     if (!nzchar(code)) return(character(0))
@@ -1572,7 +1583,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     "",
     sprintf("  void operator()(const cppde::vector_t<%s>& x, const %s& t) {",
             rev_num_type, rev_num_type),
-    "    store.observe(odeint_utils::scalar_value(t), x.size());",
+    "    store.observe(odeint_utils::scalar_value(t), x);",
     "    times.push_back(t);",
     "    for (size_t i = 0; i < x.size(); ++i) y.push_back(x[i]);",
     "  }",
@@ -1658,7 +1669,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   }
 
   # Record OpenMP on the model, not just inside compile(): a consumer that
-  # builds the shared object itself (dMod) drives its flags from these
+  # builds the shared object itself (dMod) takes the compiler flags from these
   # attributes, and without them the batch entry compiles to a serial loop.
   if (isTRUE(cvodeConfig$openmp_available)) {
     compile_args <- c(compile_args, cvodeConfig$openmp_cxxflags)

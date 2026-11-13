@@ -1,5 +1,5 @@
 /*
- What one integration step leaves behind, and the matrix its adjoint solves
+ What one integration step leaves behind, and the matrix the step adjoint solves
  against.
 
  A step is the map (x, t, h, theta) -> (x_out, xerr), where x, t and h are what
@@ -9,7 +9,7 @@
  The controller is not differentiated: the size is read off the checkpoint and
  the grid is a constant (Bock's internal numerical differentiation, see
  "Internal numerical differentiation" in
- https://dmodverse.github.io/cppDE/articles/methods-reverse.html).
+ https://dmodverse.github.io/cppDE/articles/methods-reverse-checks.html).
 
  Acceptance, order, iteration and rebuild counts are piecewise constant and stay
  control decisions; what is smooth within one control path is differentiated.
@@ -41,7 +41,7 @@ namespace reverse {
 // ============================================================================
 //  step_checkpoint<Stepper, T>
 //
-//  Declared, never defined: every stepper family supplies its own. The contract:
+//  Declared, never defined: every stepper family supplies a specialization. The contract:
 //
 //    std::size_t n() const     states in the step-start state
 //    double t, dt              the two the controller chose
@@ -51,19 +51,19 @@ namespace reverse {
 //        Reads the live forward stepper. Values only, whatever it integrated in.
 //
 //    apply_tail(St&, RSys&) const
-//        Whatever the controller does to the carry between this step's
+//        Whatever the controller does to the state passed between this step's
 //        acceptance and the next one's, replayed from the record the forward run
 //        left rather than decided again. The system comes with it because one of
 //        those operations, the order-1 restart, reseeds the history from the
-//        right-hand side. A one-step method has no tail: its carry is the state.
+//        right-hand side. A one-step method has no tail: it passes on the state.
 //
-//  The multistepper's carry is the Nordsieck array and not the state alone,
+//  The multistepper passes on the Nordsieck carry and not the state alone,
 //  which is what makes the two families differ here at all.
 // ============================================================================
 
 template<class Stepper, class T> struct step_checkpoint;
 
-// Whether the carry has to be read before the step rather than after it, which
+// Whether the state passed on has to be read before the step rather than after it, which
 // is the multistepper, whose history the step mutates in place.
 template<class S, class = void> struct has_step_snapshot : std::false_type {};
 template<class S>
@@ -89,8 +89,8 @@ struct onestep_checkpoint {
 
   std::size_t n() const { return x.size(); }
 
-  // The state the step starts from, which for a one-step method is the whole
-  // carry. Flat so both families answer the same question the same way.
+  // The state the step starts from, which for a one-step method is all a step
+  // passes on. Flat so both families answer the same question the same way.
   const T* start_state() const { return x.data(); }
 
   template<class Value>
@@ -111,7 +111,7 @@ struct step_checkpoint<cppde::tsit5<Value>, T>
   : onestep_checkpoint<cppde::tsit5<Value>, T> {};
 
 // ----------------------------------------------------------------------------
-//  rosenbrock4: a one-step method too, so the same carry. Its stages are linear
+//  rosenbrock4: a one-step method too, so the same checkpoint. The stages are linear
 //  solves rather than explicit combinations, and the replay recovers each stage
 //  value from the same factorization it sweeps with, so none of them is stored.
 // ----------------------------------------------------------------------------
@@ -120,18 +120,18 @@ template<class Value, class JacobianPattern, class T>
 struct step_checkpoint<cppde::rosenbrock4<Value, JacobianPattern>, T>
   : onestep_checkpoint<cppde::rosenbrock4<Value, JacobianPattern>, T>
 {
-  // Its interpolant is built from the stages rather than read off them, so the
+  // The rb4 interpolant is built from the stages rather than read off them, so the
   // snapshot has to be taken before anything is interpolated. tsit5 needs no
   // such call, and must not get one: it would arm the FSAL recycle, and the next
-  // replayed step starts from its own checkpoint rather than from this one.
+  // replayed step starts from the checkpoint of that step rather than from this one.
 };
 
 // ----------------------------------------------------------------------------
-//  multistepper: the carry is the Nordsieck history, not the state alone.
+//  multistepper: the Nordsieck carry passes from step to step, not the state alone.
 //
 //  What the forward run has to leave behind is that history, the scalars that
-//  pin its meaning, and the state the corrector converged to, which the replay
-//  puts back rather than iterating for. The tail is the controller's: the rank-1
+//  pin the meaning of the history, the state the corrector ended on and the
+//  iterations it took to get there. The tail is the controller's: the rank-1
 //  Nordsieck update, the order it chose and the rescale it applied, all replayed
 //  from the decisions rather than recomputed, since those are control decisions.
 // ----------------------------------------------------------------------------
@@ -154,14 +154,22 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern>, T> {
   double         eta    = 1.0;  // and the rescale it applied
 
   // What the controller did to the history between this step's acceptance and
-  // the next one's: its own tail, and every attempt the next step threw away.
+  // the next one's: the tail of this step, and every attempt the next step threw away.
   // A thrown-away attempt is not free, it rescales the history the accepted one
   // is then entered with, so without this record the reverse chain hands the
-  // next step a carry at the wrong scale: right value, wrong gradient.
+  // next step a Nordsieck carry at the wrong scale: right value, wrong gradient.
   // Not recorded means no run filled it and the two fields above describe the
   // tail on their own, which is how the step-level tests build a checkpoint.
   history_log ops;
   bool        ops_recorded = false;
+
+  // The corrector iterations the accepted attempt took: the k_iter iterates f
+  // was evaluated at (slot-major, the prediction first), the scale of each
+  // solve, and the index of the iteration matrix in the store.
+  std::vector<T> iter;
+  int            k_iter = 0;
+  double         s_iter = 1.0;
+  std::size_t    mat    = 0;
 
   std::size_t n() const { return n_states; }
 
@@ -227,155 +235,52 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern>, T> {
 // ============================================================================
 //  equation_solver
 //
-//  The matrix an implicit method's equations are linearised against, factorised
-//  once per reverse step and used in both directions: forward to recover a value
-//  a stage solved for, transposed to pass a cotangent back through it.
-//
-//  Fresh rather than the forward run's own, which belongs to its iteration and is
-//  stale by design; MSBP and MSBJ are exactly that staleness. res_scale is what
-//  the residual's derivative in its solution is as a multiple of W: the step size
-//  for a corrector written in Nordsieck form, one for a Rosenbrock stage.
+//  The iteration matrix of a multistep corrector, (1/gamma_p) I - J(x, t), as
+//  the forward run factorized it: rebuilt from the point, time and gamma_p the
+//  run recorded, on values alone, and factorized once for every step that
+//  iterated against it. The sweep solves with the transpose.
 // ============================================================================
 
 template<class JacFunc, class T = double, bool Sparse = false>
 class equation_solver {
-  // A transposed solve in double may go through the factorisation of a step
-  // the sweep has already passed and be refined against this step's matrix;
-  // any other use factorises this step's matrix.
-  static constexpr bool refinable = std::is_same<T, double>::value;
-
 public:
-  explicit equation_solver(JacFunc& jac) : m_jac(&jac) {}
+  explicit equation_solver(JacFunc& jac) : m_jac(&jac) { m_lu.set_frozen(true); }
 
-  void prepare(const std::vector<T>& x, T t, T inv_gamma_dt, T res_scale = T(1)) {
-    m_lu.resize(x);
-    m_n = x.size();
+  // The matrix under `key`; a no-op when that key is the one held.
+  void prepare_frozen(const std::vector<double>& x, double t, double inv_gamma_p,
+                      std::size_t key) {
+    if (m_held && key == m_key) return;
+    const std::size_t n = x.size();
+    m_x.assign(x.begin(), x.end());
+    m_lu.resize(m_x);
     { auto _tp = m_prof.timer(cppde::prof_cat::jac_eval);
-      m_lu.call_jacobian(*m_jac, const_cast<std::vector<T>&>(x), t); }
-    m_c = inv_gamma_dt;
-    m_scale = res_scale;
-    m_pending = true;
-    if constexpr (!refinable) factorise();
-  }
-
-  void forward(std::vector<T>& b) {
-    if (m_pending) factorise();
-    auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
-    m_lu.solve(b);
-  }
-
-  void transposed(std::vector<T>& b) {
-    bool done = false;
-    if constexpr (refinable) {
-      if (m_pending && m_held) done = refine(b);
-    }
-    if (!done) {
-      if (m_pending) factorise();
-      auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
-      m_lu.solve_transposed(b);
-    }
-    if (m_scale != T(1)) for (T& v : b) v /= m_scale;
-  }
-
-  // Per-category timings to stderr: the per-step Jacobian and factorisation
-  // against the transposed solves, which is what a step's linear algebra is.
-  // Compiled away without CPPDE_PROFILE.
-  void report_profile() const {
-    m_prof.report("cppDE reverse linear algebra");
-#ifdef CPPDE_PROFILE
-    std::fprintf(stderr, "  refinement: ratio %.2f, budget %d, %d tried, %d accepted, %d passes\n",
-                 m_ratio_seen, m_budget, m_n_try, m_n_ok, m_n_pass);
-#endif
-  }
-
-private:
-  void factorise() {
+      m_lu.call_jacobian(*m_jac, m_x, T(t)); }
     { auto _tp = m_prof.timer(cppde::prof_cat::w_build);
-      m_lu.build_W(m_n, m_c); }
+      m_lu.build_W(n, T(inv_gamma_p)); }
     { auto _tp = m_prof.timer(cppde::prof_cat::lu_factor);
       m_lu.factorize_built_W(); }
-    m_pending = false;
     m_held = true;
+    m_key = key;
   }
 
-  // W_k^T x = b by refinement on the held factorisation of a swept step's W_h,
-  // x <- x + W_h^{-T} (b - W_k^T x), until the correction is at rounding level.
-  // False, b untouched, when it contracts too slowly to beat a factorisation.
-  bool refine(std::vector<T>& b) {
-    const int budget = iteration_budget();
-    m_budget = budget;
-    if (budget < min_budget) return false;
-    // After a refinement that did not pay, the next few steps factorise
-    // directly, twice as many after each further miss.
-    if (m_skip > 0) { --m_skip; return false; }
-    ++m_n_try;
+  // Drops the held matrix, so the next prepare_frozen() builds the matrix anew.
+  void forget() { m_held = false; }
+
+  void transposed(std::vector<T>& b) {
     auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
-    const std::size_t n = b.size();
-    m_b = b;
-    m_x = b;
-    m_lu.solve_transposed(m_x);
-    double prev = 0.0;
-    for (int it = 0; it < budget; ++it) {
-      m_lu.negJ_transposed_apply(m_x, m_r);
-      double xmax = 0.0;
-      for (std::size_t i = 0; i < n; ++i) {
-        m_r[i] = m_b[i] - (m_c * m_x[i] + m_r[i]);
-        xmax = std::max(xmax, std::abs(m_x[i]));
-      }
-      m_lu.solve_transposed(m_r);
-      ++m_n_pass;
-      double dmax = 0.0;
-      for (std::size_t i = 0; i < n; ++i) {
-        m_x[i] += m_r[i];
-        dmax = std::max(dmax, std::abs(m_r[i]));
-      }
-      if (dmax <= 4.0 * eps * xmax ||
-          (it > 0 && dmax <= stall_tol * xmax && dmax > stall_rate * prev)) {
-        b.swap(m_x);
-        ++m_n_ok;
-        m_backoff = 0;
-        return true;
-      }
-      if (it > 0 && dmax > rate_max * prev) break;
-      prev = dmax;
-    }
-    m_backoff = std::min(2 * m_backoff + 1, max_backoff);
-    m_skip = m_backoff;
-    return false;
+    m_lu.solve_transposed(b);
   }
 
-  // As many passes as one factorisation costs in flops, a pass being a pair of
-  // triangular solves and a product with J. Fixed by the factors, so a sweep
-  // is reproducible.
-  int iteration_budget() {
-    m_ratio_seen = m_lu.refactor_solve_ratio();
-    const double k = m_ratio_seen / pass_cost - 1.0;
-    return static_cast<int>(std::min(static_cast<double>(max_iter), std::floor(k)));
-  }
+  // Per-category timings to stderr. Compiled away without CPPDE_PROFILE.
+  void report_profile() const { m_prof.report("cppDE reverse linear algebra"); }
 
-  static constexpr double eps = std::numeric_limits<double>::epsilon();
-  static constexpr double rate_max = 0.5;
-  // A correction this small that no longer halves has reached its floor.
-  static constexpr double stall_tol = 1e-12;
-  static constexpr double stall_rate = 0.5;
-  // One pass, the solve plus the product with J, in units of one solve.
-  static constexpr double pass_cost = 1.5;
-  static constexpr int max_iter = 12;
-  static constexpr int max_backoff = 31;
-  static constexpr int min_budget = 3;
-
-  JacFunc*             m_jac;
+private:
+  JacFunc*               m_jac;
   cppde::lu_W<T, Sparse> m_lu;
-  T                    m_scale = T(1);
-  T                    m_c = T(0);
-  bool                 m_pending = false;
-  bool                 m_held = false;
-  std::size_t          m_n = 0;
-  std::vector<double>  m_b, m_x, m_r;
-  int                  m_budget = 0, m_n_try = 0, m_n_ok = 0, m_n_pass = 0;
-  int                  m_skip = 0, m_backoff = 0;
-  double               m_ratio_seen = 0.0;
-  cppde::profiler      m_prof;
+  std::vector<T>         m_x;
+  bool                   m_held = false;
+  std::size_t            m_key = 0;
+  cppde::profiler        m_prof;
 };
 
 }  // namespace reverse

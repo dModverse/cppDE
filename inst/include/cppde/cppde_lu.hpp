@@ -114,8 +114,8 @@ public:
   }
 
   // The two halves apart, for a caller that times them apart. The dense path
-  // swaps its matrix into the solver and has nothing left to hand over, so its
-  // factorisation happens in the first half and the second is empty.
+  // swaps the matrix into the solver and has nothing left to hand over, so the
+  // factorization happens in the first half and the second is empty.
   void build_W(size_t n, value_type inv_gamma_dt)
   {
     if constexpr (is_sparse) assemble_W_sparse(n, inv_gamma_dt);
@@ -269,6 +269,19 @@ public:
     }
   }
 
+  // A frozen W is factorized on the values: solves pass the tangents of the
+  // right-hand side and drop those of W. The multistep corrector freezes the
+  // iteration matrix; a Rosenbrock stage keeps the tangents of W.
+  void set_frozen(bool f)
+  {
+    if constexpr (ad_lu::is_ad<value_type>::value) {
+      if constexpr (is_sparse) m_sparse_lu.set_frozen(f);
+      else                     m_dense_lu.set_frozen(f);
+    } else {
+      (void)f;
+    }
+  }
+
   void invalidate()
   {
     m_has_valid_jac = false;
@@ -321,7 +334,7 @@ private:
   //  Dense factorize_W
   //
   //  m_W_temp holds -J. Add the diagonal, then swap into the LU solver, after
-  //  which m_W_temp holds stale data and is rebuilt before its next use. The
+  //  which m_W_temp holds stale data and is rebuilt before the next use. The
   //  BDF path caches the clean -J before calling this.
   // ====================================================================
 

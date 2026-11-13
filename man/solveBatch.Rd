@@ -24,7 +24,9 @@ solveBatch(
 \item{parms}{List of named numeric vectors.}
 
 \item{tangent, hessian, cotangent, curvature}{Lists of arrays, each as the
-argument of the same name in \code{\link[=solveODE]{solveODE()}} and of the prepared shape.}
+argument of the same name in \code{\link[=solveODE]{solveODE()}} and of the prepared shape. A
+\code{cotangent} may have another number of seed columns than the prepared one;
+rows and state columns stay.}
 
 \item{adjoint}{List of \code{\link[=adjointControl]{adjointControl()}} objects.}
 

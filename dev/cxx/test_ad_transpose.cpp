@@ -11,7 +11,7 @@
 // check rather than a restatement.
 //
 // Dense and sparse are both covered: the peeling is the same, but the sparse
-// transpose is an index swap inside a compressed column walk, which is its own
+// transpose is an index swap inside a compressed column walk, which is a separate
 // way to go wrong. The sparse half is skipped when KLU is absent.
 //
 // Build and run:  dev/cxx/run.sh --ad-transpose

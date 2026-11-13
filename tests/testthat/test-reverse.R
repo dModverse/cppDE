@@ -2,12 +2,11 @@
 # Events, forcings and sparse Jacobians are in test-reverse-events.R, the CVODES
 # adjoint in test-reverse-cvode.R.
 #
-# The oracle is the forward mode. It is not sharp here and cannot be: the two
-# solves adapt independently, the forward one under sensitivities and the
-# reverse one in plain double, so they integrate two discretisations that differ
-# by O(tol). What the tests below assert is that the gap falls with the
-# tolerance the way the value gap does. Where the adjoint itself is checked on
-# one shared step sequence, at rounding level, is dev/cxx/test_reverse_*.cpp.
+# The oracle is the forward mode. Under the default sensErrCon = TRUE the
+# forward solve adapts on the tangents as well and integrates another grid, so
+# those comparisons hold to O(tol). With sensErrCon = FALSE both runs take the
+# same steps and corrector iterations, and the sweep returns the forward
+# derivative to rounding for every method.
 
 skip_on_cran()
 
@@ -28,8 +27,19 @@ per_method <- function(rhs, prefix, ms = methods, ...)
 
 # The forward oracle on bdf, and per method the reverse, forward-forward and
 # forward-reverse models, linked into one shared object.
+# Robertson's stiff kinetics, on adams forward and reverse.
+rob <- c(a = "-k1 * a + k3 * b * c", b = "k1 * a - k3 * b * c - k2 * b^2",
+         c = "k2 * b^2")
+rob_pars  <- c(a = 1, b = 0, c = 0, k1 = 0.04, k2 = 3e7, k3 = 1e4)
+rob_times <- c(0, 10^seq(-3, 2, by = 0.5))
 models <- list(
   fwd = cppODE(eqns, modelname = "rev_m_f", deriv = TRUE, compile = FALSE),
+  fwd_adams = cppODE(eqns, method = "adams", modelname = "rev_m_fa", deriv = TRUE,
+                     compile = FALSE),
+  rob_fwd = cppODE(rob, method = "adams", modelname = "rev_rob_f", deriv = TRUE,
+                   compile = FALSE),
+  rob_rev = cppODE(rob, method = "adams", modelname = "rev_rob_r",
+                   derivMode = "reverse", compile = FALSE),
   rev = per_method(eqns, "rev_m_r_", derivMode = "reverse"),
   ff  = per_method(eqns, "rev2_ff_", derivMode = "forward-forward"),
   fr  = per_method(eqns, "rev2_fr_", derivMode = "forward-reverse"))
@@ -67,6 +77,52 @@ test_that("a reverse model answers what the forward sensitivities answer", {
 
   ref <- contract(fwd$tangent, W)
   expect_equal(unname(rev$cotangent[rownames(ref), ]), unname(ref), tolerance = 1e-6)
+})
+
+# Forward with sensErrCon = FALSE and reverse on the same grid.
+same_grid <- list(abstol = 1e-6, reltol = 1e-4, sensErrCon = FALSE)
+fwd_for <- function(m) if (m == "bdf") models$fwd else models$fwd_adams
+
+test_that("bdf and adams reverse equal forward to rounding", {
+  for (m in c("bdf", "adams")) {
+    fwd <- do.call(solveODE, c(list(fwd_for(m), times, pars), same_grid))
+    W   <- seed_for(fwd, n_seed = 2L)
+    rev <- do.call(solveODE, c(list(models$rev[[m]], times, pars, cotangent = W),
+                               same_grid))
+    expect_identical(rev$variable, fwd$variable, info = m)
+    ref <- contract(fwd$tangent, W)
+    expect_equal(unname(rev$cotangent[rownames(ref), ]), unname(ref),
+                 tolerance = 1e-12, info = m)
+  }
+})
+
+test_that("bdf and adams reverse equal forward to rounding through the batch entry", {
+  p2 <- pars; p2["k1"] <- 1.3
+  conds <- list(one = list(parms = pars), two = list(parms = p2))
+  for (m in c("bdf", "adams")) {
+    fwd <- do.call(solveODEBatch, c(list(fwd_for(m), conds, times = times), same_grid))
+    W   <- lapply(fwd, seed_for)
+    rev <- do.call(solveODEBatch,
+                   c(list(models$rev[[m]],
+                          mapply(function(cc, w) c(cc, list(cotangent = w)),
+                                 conds, W, SIMPLIFY = FALSE),
+                          times = times), same_grid))
+    for (k in seq_along(conds)) {
+      ref <- contract(fwd[[k]]$tangent, W[[k]])[, 1]
+      expect_equal(unname(rev[[k]]$cotangent[names(ref), 1]), unname(ref),
+                   tolerance = 1e-12, info = m)
+    }
+  }
+})
+
+test_that("the adams reverse gradient of a stiff model equals the forward one", {
+  o   <- list(abstol = 1e-9, reltol = 1e-7, sensErrCon = FALSE)
+  fwd <- do.call(solveODE, c(list(models$rob_fwd, rob_times, rob_pars), o))
+  W   <- seed_for(fwd)
+  rev <- do.call(solveODE, c(list(models$rob_rev, rob_times, rob_pars, cotangent = W), o))
+  ref <- contract(fwd$tangent, W)[, 1]
+  expect_true(all(is.finite(rev$cotangent)))
+  expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref), tolerance = 1e-10)
 })
 
 test_that("the gap to the forward mode falls with the tolerance", {
@@ -174,8 +230,8 @@ test_that("$adjoint reports the grid the sweep ran on", {
 test_that("the refinement indicator is alive on every method", {
   # eta = lambda' e_k is what a lambda-weighted step-size controller would read.
   # It reached the R seam as roundoff on bdf and adams until 2026-09-09: a
-  # corrector method's step end is the value its equation solved for, and the
-  # sweep leaves that adjoint at zero on its way past. Anything at 1e-15 here
+  # corrector method's step end is the value the corrector equation solved for, and the
+  # sweep leaves that adjoint at zero on the way past. Anything at 1e-15 here
   # means wout() or error_scale() has come undone again.
   W <- seed_for(solveODE(models$fwd, times, pars))
   for (m in methods) {
@@ -207,7 +263,7 @@ test_that("malformed adjoint controls are an error, not a silent no-op", {
                "backward pass")
 })
 
-test_that("a reverse solve can hand its checkpoints to the next one", {
+test_that("a reverse solve can hand the checkpoints to the next one", {
   # A gradient needs two solves at the same theta: one for the values the
   # cotangent is built from, one for the sweep. Without this the states are
   # integrated twice. What has to hold is that the pair answers exactly what one
@@ -236,7 +292,7 @@ test_that("a reverse solve can hand its checkpoints to the next one", {
   expect_identical(again$cotangent, plain$cotangent)
 })
 
-test_that("a released store frees its checkpoints, and a solve given it integrates again", {
+test_that("a released store frees the checkpoints, and a solve given it integrates again", {
   mr <- models$rev$bdf
   one <- do.call(solveODE, c(list(mr, times, pars, keepStore = TRUE), tol))
   W <- seed_for(one)
@@ -332,7 +388,7 @@ test_that("every method answers the same Hessian backwards", {
   }
 })
 
-test_that("forward-reverse names its answer and refuses the older spelling", {
+test_that("forward-reverse names the answer and refuses the older spelling", {
   mr <- models$fr$bdf
   ff <- do.call(solveODE, c(list(mr, times, pars,
                                  cotangent = array(1, c(length(times), 2L, 1L))), tol))
@@ -382,7 +438,7 @@ test_that("a prepared batch sweeps the stores it is handed", {
   expect_error(solveBatch(h, parms = list(pars, p2),
                           store = list(fw[[2]]$store, fw[[1]]$store)))
 
-  # Without a store the sweep integrates, on the grid of its own forward pass.
+  # Without a store the sweep integrates, on the grid of a fresh forward pass.
   free <- solveBatch(h, store = list(NULL, NULL))
   expect_equal(free[[1]]$cotangent, ref[[1]]$cotangent, tolerance = 1e-10)
 })

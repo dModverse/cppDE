@@ -12,7 +12,7 @@
 // test_reverse_trajectory_methods.cpp, with sparse_lu_tag in place of
 // dense_lu_tag, so the two harnesses answer the same question twice and their
 // numbers are comparable. tsit5 is absent because an explicit method
-// factorises nothing, rb4 because its replay cannot take a sparse Jacobian.
+// factorizes nothing, rb4 because the rb4 replay cannot take a sparse Jacobian.
 //
 // Covered: bdf and adams, each on an adaptive run with observations
 // interpolated inside the steps. rb4 cannot be: see the note in main().
@@ -50,7 +50,7 @@ static void close(double a, double b, const std::string& what, double tol) {
 
 // ---------------------------------------------------------------------------
 //  A small nonlinear, non-autonomous model, positivity-preserving so the run
-//  stays on one smooth branch, with minus its Jacobian beside it, which is what
+//  stays on one smooth branch, with minus the Jacobian beside it, which is what
 //  an iteration matrix is built from.
 // ---------------------------------------------------------------------------
 
@@ -87,7 +87,7 @@ struct jacobian {
                   std::vector<V>& dfdt) const {
     if (!W.pattern_built) {
       W.n = static_cast<int>(NX);
-      // Every column stores its diagonal, structural zero or not: W is
+      // Every column stores the diagonal entry, structural zero or not: W is
       // 1/(gamma*h) I - J and has nowhere to put the identity otherwise.
       W.Ap = {0, 2, 5, 8};
       W.Ai = {0, 1,  0, 1, 2,  0, 1, 2};
@@ -123,7 +123,7 @@ static const double HINI = 0.02;
 
 static const std::vector<double> TIMES = {0.1, 0.37, 0.8, 0.85, 1.4, 2.0};
 
-// The reference dual; a case seeds the n_carry directions of its method plus the
+// The reference dual; a case seeds the n_carry directions of the method plus the
 // parameters.
 using D = dual<double>;
 
@@ -212,7 +212,7 @@ template<class S> struct is_adams<S, std::void_t<decltype(S::method)>>
 
 // ---------------------------------------------------------------------------
 //  The forward value run: the adaptive driver with the checkpoint collector
-//  hooked into it, so the store holds the step sequence and its decisions.
+//  hooked into it, so the store holds the step sequence and the step decisions.
 // ---------------------------------------------------------------------------
 
 template<class S>
@@ -244,9 +244,55 @@ static void forward_value(store_of<S>& store, std::vector<double>& x_obs)
 
 // ---------------------------------------------------------------------------
 //  Forward reference: the recorded sequence replayed under dual, seeded with the
-//  identity over the trajectory start's carry and the parameters. Only the
-//  decisions come from the checkpoints; the carry itself evolves under dual.
+//  identity over the state passed into the first step and the parameters. Only
+//  the decisions come from the checkpoints; that state evolves under dual.
 // ---------------------------------------------------------------------------
+
+// A multistep method's reference is the dual run through the same driver with
+// the tangents kept out of the error and corrector tests: it takes the value
+// run's steps and corrector iterations, so S is the derivative of what the
+// value run computed. Seeded on the initial state and the parameters.
+template<class S>
+static void forward_dual(std::size_t n_carry, unsigned nd,
+                         std::vector<double>& S_obs, std::vector<double>& x_ref)
+{
+  using rstep = typename S::template rebind_value<D>;
+  std::vector<double> scale(nd, 1.0);
+  std::vector<D> p(NP), x(NX);
+  for (std::size_t j = 0; j < NP; ++j) {
+    scale[n_carry + j] = std::max(std::fabs(P[j]), 1e-2);
+    p[j] = D(P[j]);
+    p[j].diff(static_cast<unsigned>(n_carry + j), nd);
+    p[j].d(static_cast<unsigned>(n_carry + j)) = scale[n_carry + j];
+  }
+  for (std::size_t i = 0; i < NX; ++i) {
+    scale[i] = std::max(std::fabs(X0[i]), 1e-2);
+    x[i] = D(X0[i]);
+    x[i].diff(static_cast<unsigned>(i), nd);
+    x[i].d(static_cast<unsigned>(i)) = scale[i];
+  }
+  auto sys = make_system<D>(p);
+
+  typename pipeline<rstep>::controller ctl(ATOL, RTOL);
+  ctl.stepper().set_sens_err_con(false);
+  ctl.prepare_sensitivities(nd);
+  typename pipeline<rstep>::dense dense(std::move(ctl));
+  std::vector<cppde::detail::FixedEvent<std::vector<D>, D>> fixed;
+  std::vector<cppde::detail::RootEvent<std::vector<D>, D>>  root;
+  cppde::StepChecker checker(1000000, 1000000);
+
+  S_obs.clear();
+  x_ref.clear();
+  auto obs = [&](const std::vector<D>& xs, const D&) {
+    for (std::size_t i = 0; i < NX; ++i) {
+      x_ref.push_back(xs[i].x());
+      for (unsigned d = 0; d < nd; ++d) S_obs.push_back(xs[i].d(d) / scale[d]);
+    }
+  };
+  cppde::integrate_times_dense(dense, sys, x, TIMES.begin(), TIMES.end(), D(HINI),
+                               obs, fixed, root, checker, 1e-8, 1,
+                               cppde::detail::no_dt_estimator{}, nullptr);
+}
 
 template<class S>
 static void forward_sens(const store_of<S>& store, std::size_t n_carry,
@@ -255,6 +301,11 @@ static void forward_sens(const store_of<S>& store, std::size_t n_carry,
 {
   using rstep = typename S::template rebind_value<D>;
   constexpr bool multistep = cppde::reverse::has_step_snapshot<S>::value;
+  if constexpr (multistep) {
+    (void)store;
+    forward_dual<S>(n_carry, nd, S_obs, x_ref);
+    return;
+  } else {
 
   // Each direction is seeded at the magnitude of what it perturbs. The
   // corrector's error norm takes the maximum over every sensitivity direction,
@@ -274,14 +325,6 @@ static void forward_sens(const store_of<S>& store, std::size_t n_carry,
   auto sys = make_system<D>(p);
 
   rstep st;
-  if constexpr (multistep) {
-    st.set_tolerances(ATOL, RTOL);
-    // The corrector's own stopping rule takes the maximum over every
-    // sensitivity direction, so under the identity seed it stops early and at
-    // high order not at all. Both modes are defined to differentiate the exactly
-    // solved equation, so the reference is given the room to solve it.
-    st.set_max_corrector_iters(200);
-  }
   st.prepare_sensitivities(nd);
 
   const auto& cp0 = store.step(0);
@@ -351,6 +394,7 @@ static void forward_sens(const store_of<S>& store, std::size_t n_carry,
     if constexpr (!multistep) x = xout;
   }
   check(next_obs == store.n_obs(), "every observation reached by the reference");
+  }
 }
 
 // Replays the recorded sequence in double, for a finite-difference probe of the
@@ -398,7 +442,7 @@ static void replay_values(const store_of<S>& store, std::vector<double>& x_obs,
       ++o;
     }
     if constexpr (multistep) {
-      // The carry this tail produced has to be the carry the run recorded for
+      // The Nordsieck carry this tail produced has to be the one the run recorded for
       // the next step, or the checkpoints do not describe the run. It holds
       // across thrown-away attempts too: what they did to the history is part
       // of the tail record.
@@ -436,7 +480,7 @@ static void run_method(const char* name, double tol)
   std::printf("%-8s steps %3zu  observations %zu  carry %zu\n",
               name, store.n_steps(), store.n_obs(), n_carry);
   if constexpr (cppde::reverse::has_step_snapshot<S>::value) {
-    // The carry a step hands on has to be the carry the next one reads, or the
+    // The Nordsieck carry a step hands on has to be the one the next one reads, or the
     // cotangents are seeded onto the wrong slots and nothing says so.
     std::size_t bad = 0;
     for (std::size_t k = 0; k + 1 < store.n_steps(); ++k)
@@ -450,7 +494,7 @@ static void run_method(const char* name, double tol)
     // A third source, independent of both modes: finite differences on the same
     // prescribed sequence. Loose by nature, and only ever a sanity check, since
     // the oracle is the forward mode.
-    // Unperturbed first: the carry this replay hands on has to be the carry the
+    // Unperturbed first: the Nordsieck carry this replay hands on has to be the one the
     // run recorded, or the checkpoints do not describe the run.
     std::vector<double> plain;
     replay_values<S>(store, plain, true, name);
@@ -521,15 +565,15 @@ int main() {
   using cppde::multistep_method;
   // The two floors are the oracle's, not the adjoint's. An explicit method's
   // reference reproduces the recorded trajectory exactly, so it stands at 1e-10.
-  // An implicit one's re-solves the corrector, and its stopping rule takes the
+  // An implicit one's re-solves the corrector, and the stopping rule takes the
   // maximum over every sensitivity direction, so it stops elsewhere than the
   // value run did and the trajectory drifts by the residual it stopped on.
   // Where the adjoint itself is checked sharply is the step, in
   // test_reverse_step_multistep.cpp, which runs both methods at 1e-9 over every
   // order, order change, rescale and dense-output seed.
-  run_method<cppde::multistepper<multistep_method::bdf, double, cppde::sparse_lu_tag>>("bdf", 1e-6);
-  run_method<cppde::multistepper<multistep_method::adams, double, cppde::sparse_lu_tag>>("adams", 1e-6);
-  // rb4 is absent, and not by choice: rosenbrock4::replay_step builds its own
+  run_method<cppde::multistepper<multistep_method::bdf, double, cppde::sparse_lu_tag>>("bdf", 1e-11);
+  run_method<cppde::multistepper<multistep_method::adams, double, cppde::sparse_lu_tag>>("adams", 1e-11);
+  // rb4 is absent, and not by choice: rosenbrock4::replay_step builds a private
   // dense Jacobian and forms the residual over every n squared entry
   // (cppde_rosenbrock4.hpp:430-446), so a sparse model does not compile
   // backwards. cppODE() refuses the combination until the closed-form rb4

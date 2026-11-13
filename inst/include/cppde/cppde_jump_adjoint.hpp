@@ -23,7 +23,7 @@ namespace cppde {
 namespace adjoint {
 
 // ---------------------------------------------------------------------------
-//  n zeros with their tangent storage bound, so a callee that opens its own
+//  n zeros with their tangent storage bound, so a callee that opens a separate
 //  dual_arena::scope writes into them in place. Sized to exactly what the
 //  callee writes: a later growth copy-constructs the new elements unarmed.
 // ---------------------------------------------------------------------------
@@ -325,7 +325,7 @@ void apply_crossing_adjoint(const std::vector<T>& x_before, double t_before,
   adj.dfdp_t_vec_axpy(x_before, ws.wy, t_before, d, w_theta);
 }
 
-/// The fixed events at one time, each its own sandwich, applied in order. The
+/// The fixed events at one time, each a separate sandwich, applied in order. The
 /// last of them applies the root resets a jump switched on.
 template<class System, class FixedEvents, class RootEvents, class EvAdj,
          class AdjTerms, class T>
@@ -493,9 +493,10 @@ void apply_fixed_jump_adjoint(const std::vector<T>& x_before,
   for (std::size_t i = 0; i < n; ++i) w_in[i] = w[i];
 }
 
-/// One seed inside a step: the time and the row of seeds.
+/// One seed inside a step: the time, the row of seeds, and the value the run
+/// had there, nullptr where the store holds none.
 template<class T>
-struct obs_ref { double t; const T* w; };
+struct obs_ref { double t; const T* w; const double* xh = nullptr; };
 
 /// The most substeps a checked step is swept in, the most pieces for the
 /// extrapolated flow.
@@ -509,6 +510,7 @@ constexpr int stall_substeps = 32;
 template<class T>
 struct jump_handover {
   std::vector<T> w;
+  std::vector<double> xh;
   double t = 0.0;
   bool armed = false;
 
@@ -518,6 +520,9 @@ struct jump_handover {
   void take(const Event& e, const std::vector<T>& w_before, std::vector<T>& w_x) {
     if (e.after_step > 0) {
       w = w_before; t = e.t_before; armed = true;
+      xh.resize(e.x_before.size());
+      for (std::size_t i = 0; i < xh.size(); ++i)
+        xh[i] = static_cast<double>(cppde::ad_traits::scalar_value(e.x_before[i]));
     } else {
       for (std::size_t i = 0; i < w_x.size(); ++i) w_x[i] += w_before[i];
     }
@@ -535,10 +540,13 @@ bool step_seeds(const Store& store, std::size_t k, const T* seeds, std::size_t n
   while (obs_lo > 0 && store.obs(obs_lo - 1).step == k + 1) --obs_lo;
   const bool observed = obs_lo < next_obs || h.armed;
   out.clear();
-  if (h.armed) { out.push_back({h.t, h.w.data()}); h.armed = false; }
+  if (h.armed) {
+    out.push_back({h.t, h.w.data(), h.xh.empty() ? nullptr : h.xh.data()});
+    h.armed = false;
+  }
   for (std::size_t o = obs_lo; o < next_obs; ++o) {
     if (store.obs(o).event < store.n_events()) continue;
-    out.push_back({store.obs(o).t, seeds + o * n});
+    out.push_back({store.obs(o).t, seeds + o * n, store.obs_state(o)});
   }
   next_obs = obs_lo;
   return observed;

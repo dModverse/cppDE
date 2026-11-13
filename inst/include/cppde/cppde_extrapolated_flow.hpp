@@ -1,27 +1,32 @@
 /**
  * @file cppde_extrapolated_flow.hpp
- * @brief The flow between two grid points and its adjoint, by extrapolated
+ * @brief The flow between two grid points and the adjoint, by extrapolated
  *        linearly implicit Euler.
  *
  * The checked sweep of a multistep model takes the flow over each interval of
- * the forward grid from the state stored at its start. Here that flow is the
+ * the forward grid from the state stored at the interval start. Here that flow is the
  * extrapolation of linearly implicit Euler chains,
  *
  *   (I/h_j - J) D_k = f(x_k, t_k),   x_{k+1} = x_k + D_k,   h_j = H / n_j,
  *
  * on one Jacobian J at the interval's start for every chain and every
  * substep, as SEULEX takes it [Hairer, Wanner II, IV.9]. A chain is a
- * W-method: it is consistent for any J, so its error has an expansion in h_j
+ * W-method: it is consistent for any J, so the error has an expansion in h_j
  * and the Aitken-Neville tableau over n_j = 1, 2, 3, ... raises the order by
  * one per column. A chain costs one factorization, n_j right-hand sides and
  * n_j solves; the factorizations of all chains share the one Jacobian.
  *
  * The extrapolated state is a fixed linear combination of the chains' end
- * states, so its adjoint is the same combination of the chains' adjoints, and
+ * states, so the adjoint is the same combination of the chains' adjoints, and
  * the tableau is built on those directly: the cotangent of the start state
  * and the interval's share of the gradient. Two neighboring entries of the
  * tableau give the error estimate the local test of CVODES' backward problem
  * reads. An interval the last column does not pass is halved.
+ *
+ * The tableau also extrapolates the chains' end states, so the accepted column
+ * gives the map the adjoint differentiates. Its defects against the computed
+ * trajectory, weighted by the cotangents, are the first-order change of the
+ * seeded functional, correction().
  *
  * Copyright (C) 2026 Simon Beyer
  */
@@ -55,20 +60,27 @@ public:
     m_rtol = rtol; m_atol = atol; m_gradtol = gradtol; m_max_pieces = max_pieces;
   }
 
-  void begin_flow(std::size_t n_phi) { m_wp.assign(n_phi, 0.0); m_ref_fail = 0; }
+  void begin_flow(std::size_t n_phi) {
+    m_wp.assign(n_phi, 0.0); m_ref_fail = 0; m_corr = 0.0;
+  }
   const std::vector<T>& wp() const { return m_wp; }
+  /// The value correction since begin_flow(): the cotangents times the defects
+  /// of the accepted maps against the computed trajectory.
+  double correction() const { return m_corr; }
   /// The pieces since begin_flow() that met neither test at the finest halving.
   std::size_t refine_failures() const { return m_ref_fail; }
 
   /// The interval [t0, t0 + dt] from `x0`, `dt` of either sign: `w_end` the
-  /// cotangent on its end state, `obs` the seeds observed inside it or at
+  /// cotangent on the end state, `obs` the seeds observed inside it or at
   /// either end; `w_in` receives the cotangent on `x0`, wp() the share of the
-  /// gradient. Returns the substeps taken in the accepted chains.
+  /// gradient. `xh_end`, the end state the run computed, may be nullptr when
+  /// `w_end` is zero. Returns the substeps taken in the accepted chains.
   template<class System, class AdjTerms>
   int flow_interval(System& sys, const AdjTerms& adj, std::size_t n,
                     std::size_t n_phi, const std::vector<T>& x0, double t0, double dt,
                     const std::vector<obs_ref<T>>& obs,
-                    const std::vector<T>& w_end, std::vector<T>& w_in)
+                    const std::vector<T>& w_end, std::vector<T>& w_in,
+                    const double* xh_end = nullptr)
   {
     m_n = n; m_nphi = n_phi;
     const double t1 = t0 + dt;
@@ -107,12 +119,39 @@ public:
     m_starts[0] = x0;
     for (std::size_t p = 1; p < K; ++p)
       forward(sys, m_starts[p - 1], m_cut[p - 1], m_cut[p], m_starts[p], 0);
+    // The cut an observation lands on.
+    auto cut_of = [&](double t) -> std::size_t {
+      const double s = along(t);
+      if (s <= eps) return 0;
+      if (s >= len - eps) return K;
+      return static_cast<std::size_t>(
+        std::lower_bound(m_cut.begin(), m_cut.end(), s - eps,
+                         [&](double c, double v) { return along(c) < v; }) - m_cut.begin());
+    };
+    // The state at the interval end the pieces are compared with: the run's
+    // own, or, without it, the value observed there.
+    const double* s_end = xh_end;
+    for (const auto& o : obs)
+      if (!s_end && o.xh && cut_of(o.t) == K) s_end = o.xh;
+    auto state_at = [&](std::size_t q) -> const T* {
+      return q == K ? s_end : m_starts[q].data();
+    };
+    // An observation the run read at cut q, against the value the pieces put there.
+    for (const auto& o : obs) {
+      const T* sq = state_at(cut_of(o.t));
+      if (!o.xh || !sq) continue;
+      for (std::size_t i = 0; i < n; ++i) m_corr += o.w[i] * (sq[i] - o.xh[i]);
+    }
     std::vector<T> lam = w_end;
     add_seeds(K, lam);
     int sub = 0;
+    std::vector<T> xe;
     for (std::size_t p = K; p-- > 0;) {
       std::vector<T> lam_in;
-      sub += backward(sys, adj, m_starts[p], m_cut[p], m_cut[p + 1], lam, lam_in, 0);
+      sub += backward(sys, adj, m_starts[p], m_cut[p], m_cut[p + 1], lam, lam_in, 0, xe);
+      // The piece's defect against the state the next piece starts from.
+      if (const T* s1 = state_at(p + 1))
+        for (std::size_t i = 0; i < n; ++i) m_corr += lam[i] * (xe[i] - s1[i]);
       lam.swap(lam_in);
       add_seeds(p, lam);
     }
@@ -137,7 +176,7 @@ private:
     m_fresh = false;
   }
 
-  // One chain of nj steps from (x, t) on the current factorisation, its
+  // One chain of nj steps from (x, t) on the current factorization, with the
   // states and increments kept for the adjoint.
   template<class System>
   void chain(System& sys, const std::vector<T>& x, double t, double h, int nj) {
@@ -153,7 +192,7 @@ private:
     }
   }
 
-  // The chain's adjoint from `lam_end` on its end state: into `a`, the cotangent
+  // The chain's adjoint from `lam_end` on the chain end state: into `a`, the cotangent
   // on the start state, then the share of the gradient. The Jacobian's own
   // dependence on state and theta is one pullback of sum_k mu_k' (dJ) D_k.
   template<class AdjTerms>
@@ -191,7 +230,7 @@ private:
     for (std::size_t i = 0; i < n; ++i) a[i] = m_lam[i] + m_wJ[i];
   }
 
-  // Aitken-Neville: row j of the tableau from its first entry `a` and row
+  // Aitken-Neville: row j of the tableau from the first entry `a` and row
   // j - 1, entry k of order k + 1.
   void extrapolate(int j, std::vector<T>& a) {
     if (m_tab.size() < static_cast<std::size_t>(max_columns)) m_tab.resize(max_columns);
@@ -242,14 +281,16 @@ private:
   }
 
   // The adjoint of the flow over [a, b] from `x`: the cotangent `lam_out` on
-  // the end state to `lam_in` on `x`, the share added to wp(). Returns the
-  // substeps of the chains it accepted.
+  // the end state to `lam_in` on `x`, the share added to wp(), and in `xe` the
+  // end state of the accepted map, the defects of inner halvings added to the
+  // correction. Returns the substeps of the chains it accepted.
   template<class System, class AdjTerms>
   int backward(System& sys, const AdjTerms& adj, const std::vector<T>& x, double a,
-               double b, const std::vector<T>& lam_out, std::vector<T>& lam_in, int depth)
+               double b, const std::vector<T>& lam_out, std::vector<T>& lam_in, int depth,
+               std::vector<T>& xe)
   {
     const double H = b - a;
-    if (!(std::abs(H) > 0.0)) { lam_in = lam_out; return 0; }
+    if (!(std::abs(H) > 0.0)) { lam_in = lam_out; xe = x; return 0; }
     linearize(sys, x, a);
     const bool can_split = depth < max_depth && (2 << depth) <= m_max_pieces;
     int used = 0, j = 0;
@@ -261,11 +302,13 @@ private:
       factorize(h);
       chain(sys, x, a, h, nj);
       chain_adjoint(adj, x, a, h, nj, lam_out, m_a);
+      // The chain's end state after the adjoint, extrapolated with it.
+      m_a.insert(m_a.end(), m_X[nj].begin(), m_X[nj].end());
       used += nj;
       extrapolate(j, m_a);
       if (j < 1) continue;
       // The difference estimates the error of T[j][j-1]; T[j][j] is returned,
-      // its error is the rate of the last two differences applied one column on.
+      // the error of T[j][j] is the rate of the last two differences applied one column on.
       const double e = adjoint_error(m_tab[j][j], m_tab[j][j - 1]);
       const double est = (j >= 2 && e_prev > 0.0) ? e * std::min(1.0, e / e_prev) : e;
       if (est <= 1.0) { ok = true; break; }
@@ -275,16 +318,20 @@ private:
       // Halved: the right half first, from the midpoint the state's own test
       // reaches, then the left half on the cotangent it hands down.
       const double mid = a + 0.5 * H;
-      std::vector<T> xm, lam_mid;
+      std::vector<T> xm, lam_mid, xe_left;
       forward(sys, x, a, mid, xm, depth + 1);
-      int s = backward(sys, adj, xm, mid, b, lam_out, lam_mid, depth + 1);
-      s += backward(sys, adj, x, a, mid, lam_mid, lam_in, depth + 1);
+      int s = backward(sys, adj, xm, mid, b, lam_out, lam_mid, depth + 1, xe);
+      s += backward(sys, adj, x, a, mid, lam_mid, lam_in, depth + 1, xe_left);
+      // The right half was linearized at xm, the left half ends elsewhere.
+      for (std::size_t i = 0; i < m_n; ++i) m_corr += lam_mid[i] * (xe_left[i] - xm[i]);
       return s;
     }
     if (!ok) { ++m_ref_fail; j = std::min(j, max_columns - 1); }
     const auto& acc = m_tab[j][j];
     lam_in.assign(acc.begin(), acc.begin() + static_cast<std::ptrdiff_t>(m_n));
     for (std::size_t i = m_n; i < m_nphi; ++i) m_wp[i] += acc[m_n + i];
+    const auto e0 = acc.begin() + static_cast<std::ptrdiff_t>(m_n + m_nphi);
+    xe.assign(e0, e0 + static_cast<std::ptrdiff_t>(m_n));
     return used;
   }
 
@@ -323,6 +370,7 @@ private:
   double m_rtol = 0.0, m_atol = 0.0, m_gradtol = 0.0;
   int m_max_pieces = default_max_sub;
   std::size_t m_n = 0, m_nphi = 0, m_ref_fail = 0;
+  double m_corr = 0.0;
   std::vector<T> m_wp, m_lam, m_mu, m_jv, m_wJ, m_M, m_a;
   std::vector<double> m_cut;
   std::vector<std::vector<T>> m_X, m_D, m_starts;

@@ -60,7 +60,7 @@ is the preferred spelling.}
 \item{includeTimeZero}{Logical. Ensure that \code{0} is part of the
 integration times. Default \code{TRUE}.}
 
-\item{useDenseOutput}{Logical. Use Hermite dense output for
+\item{useDenseOutput}{Logical. Use the dense output of the method for
 user-requested time points. Default \code{TRUE}. Applies to \code{method = "rb4"}
 and \code{"tsit5"}, whose interpolant is of lower order than the method;
 \code{FALSE} makes the solver land on each requested time exactly. \code{FALSE} is
@@ -74,8 +74,8 @@ forces dense. Sparse LU requires KLU at install time, see \code{\link[=installLi
 \item{method}{Integration method: \code{"bdf"} (default), \code{"adams"},
 \code{"rb4"}, or \code{"tsit5"}.}
 
-\item{useNDF}{Logical. Use Klopfenstein-Shampine NDF coefficients in
-the BDF corrector. Default \code{TRUE}. Applies to \code{method = "bdf"}; ignored
+\item{useNDF}{Logical. Use the NDF coefficients of Shampine and Reichelt
+in the BDF corrector. Default \code{TRUE}. Applies to \code{method = "bdf"}; ignored
 otherwise.}
 
 \item{derivMode}{Direction the derivatives are taken in.
@@ -123,11 +123,11 @@ variable), \code{value} (expression to apply), \code{method} (\code{"replace"},
 \code{"equilibrate"} stops at steady state (see \code{roottol} in \code{\link[=solveODE]{solveODE()}}); a
 character vector of expressions stops at the first zero crossing.
 
-A time event fires when its time lies between the first and the last
+A time event fires when the event time lies between the first and the last
 integration time, the first included and the last not; with
 \code{includeTimeZero} the integration times contain 0. An event at the first
-time is applied before the solve starts, and one inside the window adds its
-time to the output, with the state after the event in that row. An event
+time is applied before the solve starts, and one inside the window adds the
+event time to the output, with the state after the event in that row. An event
 before the first or at or after the last time is ignored and changes neither
 the output nor the span of the integration. A grid of a single time applies
 the events at that time.

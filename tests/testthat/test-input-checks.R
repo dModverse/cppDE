@@ -35,7 +35,7 @@ test_that("solveODE() checks the times, parameters and forcings it is given", {
   expect_error(solveODE(fwd, tt, p, forcings = u), "Model not loaded. Run compile\\(\\) first.")
 })
 
-test_that("solveODE() checks its solver options", {
+test_that("solveODE() checks the solver options", {
   chk <- function(...) solveODE(fwd, tt, p, forcings = u, ...)
   expect_error(chk(abstol = 0), "'abstol' must be positive")
   expect_error(chk(reltol = -1), "'reltol' must be positive")
@@ -151,7 +151,8 @@ test_that("solveBatch() checks what replaces the prepared inputs", {
   expect_error(solveBatch(hf, tangent = list(diag(3))), "tangent shape changed")
 
   hr <- prepareBatch(rev, list(list(parms = p, cotangent = W)), times = tt)
-  expect_error(solveBatch(hr, cotangent = list(matrix(1, 3, 1))), "cotangent shape changed")
+  expect_error(solveBatch(hr, cotangent = list(matrix(1, 3, 1))),
+               "cotangent rows or state columns changed")
   expect_error(solveBatch(hr, store = list("s")), "condition 1: 'store' must be the")
   expect_error(solveBatch(hr, curvature = list(array(0, c(2, 1, 1, 2)))),
                "prepared without a 'curvature'")

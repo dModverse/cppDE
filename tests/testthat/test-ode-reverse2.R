@@ -2,8 +2,8 @@
 # in test-ode-reverse2-events.R.
 #
 # The grid claims are exact and not tolerance tests. With sensErrCon = FALSE a
-# forward-reverse solve takes its step sequence from value arithmetic alone, so
-# its grid does not depend on how many tangents it follows or what they contain.
+# forward-reverse solve takes the step sequence from value arithmetic alone, so
+# the grid does not depend on how many tangents it follows or what they contain.
 # That makes a Hessian assembled from blocks of directions one matrix rather
 # than several.
 
@@ -46,7 +46,9 @@ m_r  <- per_method(eqns, "g2_r_",  "reverse")
 m_fr <- per_method(eqns, "g2_fr_", "forward-reverse")
 m_ff <- cppODE(eqns, modelname = "g2_ff", derivMode = "forward-forward",
                compile = FALSE)
-do.call(compile, c(flat(list(m_r, m_fr, m_ff)),
+m_ff_adams <- cppODE(eqns, method = "adams", modelname = "g2_ff_adams",
+                     derivMode = "forward-forward", compile = FALSE)
+do.call(compile, c(flat(list(m_r, m_fr, m_ff, m_ff_adams)),
                    output = "test_ode_reverse2", cores = test_cores()))
 
 test_that("a forward-reverse solve lands on the reverse run's grid at any width", {
@@ -169,6 +171,24 @@ hess_forward <- function(res, W) {
         Vectorize(function(a, b) sum(as.vector(W) * res$hessian[, , a, b])))
 }
 
+test_that("bdf and adams forward-reverse equal forward-forward to rounding", {
+  # Without the tangents in the error test both take the same steps and corrector
+  # iterations, so gradient and Hessian are the same derivatives of one solution.
+  lo <- list(abstol = 1e-6, reltol = 1e-4, sensErrCon = FALSE)
+  oracles <- list(bdf = m_ff, adams = m_ff_adams)
+  for (meth in c("bdf", "adams")) {
+    ff <- do.call(solveODE, c(list(oracles[[meth]], times, pars), lo))
+    W  <- seed_for(nrow(ff$variable))
+    fr <- do.call(solveODE, c(list(m_fr[[meth]], times, pars, cotangent = W), lo))
+    expect_identical(fr$time, ff$time, info = meth)
+    ref <- contract(ff$tangent, W)[, 1]
+    expect_equal(unname(fr$cotangent[names(ref), 1]), unname(ref),
+                 tolerance = 1e-12, info = meth)
+    expect_equal(unname(fr$curvature[, , 1]), hess_forward(ff, W),
+                 tolerance = 1e-10, info = meth)
+  }
+})
+
 test_that("every direction runs on the heap and blocks ride one grid", {
   # Tangent storage is heap-allocated at the width ncol(tangent) gives. What
   # has to hold is that a Hessian assembled from blocks of directions, each a
@@ -207,7 +227,7 @@ test_that("with sensErrCon the tangents of a forward-reverse solve enter the err
   expect_lt(max(abs(unname(on$curvature[, , 1]) - ref)), max(abs(unname(off$curvature[, , 1]) - ref)))
 })
 
-test_that("a cotangent that moves with theta has its own curvature", {
+test_that("a cotangent that moves with theta contributes a curvature term", {
   # A cotangent handed down from above the ODE depends on theta too, and
   # `curvature` is where that enters. Without it the Hessian loses the cross
   # term sum_r (dw_r/dtheta_b)(dx_r/dtheta_a), which is not small.
@@ -258,7 +278,7 @@ test_that("several seed columns each get their own second order", {
   }
 })
 
-test_that("a non-identity tangent reads the Hessian along its own directions", {
+test_that("a non-identity tangent reads the Hessian along the tangent directions", {
   # curvature[, k] is the gradient's derivative along direction k, so with mixed
   # directions it is the full Hessian times S, not S' H S.
   set.seed(11)

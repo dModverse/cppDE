@@ -101,13 +101,20 @@ INC="-I $REPO/inst/include -I $RINC"
 # so any that get instantiated resolve.
 # libRlapack is absent where R takes LAPACK from the BLAS it links, as a
 # FlexiBLAS build does; there the symbols come out of libRblas.
-LIBS="-L $RLIB -lR -lRblas"
-for f in "$RLIB"/libRlapack.* "$RLIB"/Rlapack.*; do
-  if [ -e "$f" ]; then LIBS="$LIBS -lRlapack"; break; fi
-done
+# An R linked against an external BLAS has no libRblas; there the libraries R
+# CMD config names stand in for it.
+LIBS="-L $RLIB -lR"
+if ls "$RLIB"/libRblas.* "$RLIB"/Rblas.* >/dev/null 2>&1; then
+  LIBS="$LIBS -lRblas"
+  for f in "$RLIB"/libRlapack.* "$RLIB"/Rlapack.*; do
+    if [ -e "$f" ]; then LIBS="$LIBS -lRlapack"; break; fi
+  done
+else
+  LIBS="$LIBS $(R CMD config LAPACK_LIBS) $(R CMD config BLAS_LIBS)"
+fi
 
 # -O2 matches how generated models are built.
-$CXX $STD -O2 -DNDEBUG -Wall -Wextra $INC ${KLU:-} -o "$OUT" "$SRC" $LIBS
+$CXX $STD -O2 -DNDEBUG -Wall -Wextra $INC -o "$OUT" "$SRC" ${KLU:-} $LIBS
 
 # Windows resolves the DLLs off PATH, which needs the POSIX spelling of RLIB.
 case $(uname -s) in
@@ -137,7 +144,7 @@ esac
 # -O1, not -O0: CPPDE_ET_INLINE is always_inline, which gcc can refuse to
 # honor at -O0. Skipped where the sanitizer runtimes are not installed.
 if $CXX $STD -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
-        $INC ${KLU:-} -o "$OUT.asan" "$SRC" $LIBS 2>/dev/null; then
+        $INC -o "$OUT.asan" "$SRC" ${KLU:-} $LIBS 2>/dev/null; then
   ASAN_OPTIONS=detect_stack_use_after_scope=1 "$OUT.asan" > /dev/null
   echo "asan/ubsan clean"
 else

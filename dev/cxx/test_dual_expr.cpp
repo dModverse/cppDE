@@ -95,7 +95,7 @@ static void arithmetic_suite(const char* label, unsigned N) {
   r = -a;           emit((std::string(label) + " -a").c_str(), r, N);
   r = +a;           emit((std::string(label) + " +a").c_str(), r, N);
 
-  // Every math function, at arguments inside its domain (UBSan would flag
+  // Every math function, at arguments inside the domain (UBSan would flag
   // otherwise: log/sqrt need x>0, asin/acos/atanh need |x|<1, acosh needs x>1).
   D u(0.5), v(2.0);
   seed(u, 0, N); seed(v, 1 % N, N);
@@ -222,7 +222,7 @@ static void aliasing_suite(const char* label, unsigned N) {
 // =============================================================================
 // Lifetime stress: materialize a deep tree, then clobber the stack and re-read
 // a value captured beforehand. Under -fsanitize=address with
-// detect_stack_use_after_scope=1 a node that outlived its operands becomes a
+// detect_stack_use_after_scope=1 a node that outlived the operands becomes a
 // hard failure instead of a plausible-looking wrong number.
 // =============================================================================
 

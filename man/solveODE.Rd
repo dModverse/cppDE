@@ -56,7 +56,7 @@ call, a subset of \code{attr(model, "dimNames")$sens}. Unlike \code{fixed} of
 \code{attr(model, "forcings")}: a \code{data.frame} with columns \code{time} and \code{value},
 or a two-column matrix. \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} take the forcing names,
 this argument the data. A forcing is the monotone cubic Hermite
-interpolant (PCHIP) of its points and constant beyond the first and the
+interpolant (PCHIP) of the data points and constant beyond the first and the
 last point, see \code{\link[=forcingValues]{forcingValues()}}. Default \code{NULL}.}
 
 \item{abstol}{Absolute error tolerance. Default \code{1e-6}.}
@@ -116,9 +116,11 @@ may be reused any number of times. Default \code{NULL}.}
 
 \item{sensErrCon}{Logical. Include the sensitivities, under
 \code{derivMode = "forward-reverse"} the tangents, in the error test and the
-first step. Default \code{TRUE}; \code{FALSE} is cheaper and less accurate, and
-under \code{"forward-reverse"} gives a step grid that does not depend on the
-directions of the tangent. Needs a model with sensitivities, has no effect
+first step. Default \code{TRUE}; \code{FALSE} is cheaper and less accurate, gives
+the steps and corrector iterations of a value run, so the sensitivities
+are the derivative of the computed solution and equal those of the reverse
+mode to rounding, and under \code{"forward-reverse"} gives a step grid that does
+not depend on the directions of the tangent. Needs a model with sensitivities, has no effect
 under \code{derivMode = "reverse"}, and a \code{\link[=cvode]{cvode()}} model takes \code{TRUE} only.}
 
 \item{adjoint}{Optional \code{\link[=adjointControl]{adjointControl()}} object for a model compiled with
@@ -147,7 +149,7 @@ cotangent of the inputs, \verb{[n_x + n_p, n_seed]}, rows as in a full
 \code{tangent}.
 \item \code{curvature}: under \code{"forward-reverse"}, \verb{[n_x + n_p, n_s, n_seed]}, the
 derivative of each \code{cotangent} entry along the tangent. Under the identity
-tangent its columns are the Hessian of the seeded functional. The order of
+tangent the columns are the Hessian of the seeded functional. The order of
 the last two dimensions is that of a Hessian, not that of the argument
 \code{curvature}.
 \item \code{diagnostics}: solver statistics, printed by \code{\link[=diagnostics]{diagnostics()}}:
@@ -163,7 +165,7 @@ of the step), \code{h} (signed step size), \code{q} (order), \code{dsm} (error t
 value, the step passes below 1), \code{acnrm} and \code{acnrm_state} (weighted RMS
 norm of the local error over all components and over the states alone),
 \code{tq2} (error constant), \code{gamma} and \code{gamrat} (step size times the leading
-coefficient, and its ratio to the value at the last factorisation),
+coefficient, and the ratio of that product to the value at the last factorization),
 \code{newton_conv} (1 when the corrector converged), \code{mode} (\code{"BDF"}, \code{"NDF"},
 \code{"ADAMS"}, \code{"ONESTEP"}, or \code{"CVODE"} and \code{"CVODE_event"} on a \code{\link[=cvode]{cvode()}}
 model), \code{nfe}, \code{njev} and \code{nsetups} (cumulative counters) and
@@ -191,7 +193,7 @@ cotangent columns.
 
 \subsection{Derivative arguments and results}{
 
-A derivative argument and its result have the same name. \code{tangent} and
+A derivative argument and the corresponding result have the same name. \code{tangent} and
 \code{hessian} are the first and second derivative in \eqn{\theta} of the
 inputs going in, and of the states coming out. \code{cotangent} is the gradient
 of a functional with respect to the outputs going in, and with respect to
@@ -206,7 +208,7 @@ outputs going in and on the inputs coming out.
 derivative \eqn{\Phi''(\theta)} of a reparametrization
 \eqn{p = \Phi(\theta)} of the initial states and parameters; the results are
 then derivatives in \eqn{\theta}. \code{tangent} takes one of three shapes, told
-apart by its row count and row names. \code{hessian} has the rows of \code{tangent} and
+apart by the row count and row names. \code{hessian} has the rows of \code{tangent} and
 two dimensions of length \code{n_s}.
 \itemize{
 \item State-only, \verb{[n_x, n_s]}, rows unnamed or named by the states. The

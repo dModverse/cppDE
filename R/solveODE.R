@@ -95,7 +95,7 @@
   ## integrates, fills the store and sweeps nothing.
   if (is.null(cotangent) && is_reverse && !isTRUE(keepStore))
     stop("a model compiled with derivMode = \"reverse\" needs a 'cotangent', or ",
-         "keepStore = TRUE to run it for its values alone")
+         "keepStore = TRUE to run it for the values alone")
   if (!is.null(cotangent)) {
     if (!is.numeric(cotangent)) stop("'cotangent' must be numeric")
     d <- dim(cotangent)
@@ -174,7 +174,7 @@
   }
 
   ## --- Output sens column names (per call) ---
-  ## Full Phi' uses its own colnames, or theta1..thetaM when it has none;
+  ## Full Phi' uses the colnames of Phi', or theta1..thetaM when it has none;
   ## state-only and NULL use active_sens, the model-parameter basis.
   sens_col_names <- if (tangent_is_full) {
     cn <- colnames(tangent)
@@ -380,7 +380,7 @@
   hmax <- attr(times, "hmax")
   times <- as.double(times)
 
-  ## Native backend only: CVODES keeps its checkpoints.
+  ## Native backend only: CVODES keeps the checkpoints internally.
   if (isTRUE(keepStore) || !is.null(store)) {
     what <- if (isTRUE(keepStore)) "keepStore" else "store"
     if (!is_reverse)
@@ -388,7 +388,7 @@
            call. = FALSE)
     if (is_cvode)
       stop("'", what, "' is not available on the CVODE backend: CVODES holds ",
-           "its checkpoints itself. Use cppODE() for a pair of solves that ",
+           "the checkpoints itself. Use cppODE() for a pair of solves that ",
            "share one integration.", call. = FALSE)
     ## A checkpoint's tangents point into the arena of the solve that took it,
     ## which is reset on return, so forward-reverse cannot reuse a store.
@@ -506,6 +506,12 @@
   if (!is.null(result$curvature) && is.null(dimnames(result$curvature)))
     dimnames(result$curvature) <- list(theta = prep$theta_names, sens = out_sens,
                                        seed = prep$seed_names)
+  ## Under refine, the value correction per seed column.
+  if (!is.null(result$correction)) names(result$correction) <- prep$seed_names
+  if (!is.null(prep$args$refine) && !is.null(result$cotangent) &&
+      is.null(result$correction) && identical(result$diagnostics$return_code, 0L))
+    stop("the model was compiled against headers before cppDE 0.13.12, which ",
+         "return no value correction under refine; compile it again", call. = FALSE)
   ## The sweep's own grid, as $adjoint.
   result <- .adjointResult(result, prep)
 
@@ -562,7 +568,7 @@
 #'
 #' ## Derivative arguments and results
 #'
-#' A derivative argument and its result have the same name. `tangent` and
+#' A derivative argument and the corresponding result have the same name. `tangent` and
 #' `hessian` are the first and second derivative in \eqn{\theta} of the
 #' inputs going in, and of the states coming out. `cotangent` is the gradient
 #' of a functional with respect to the outputs going in, and with respect to
@@ -576,7 +582,7 @@
 #' derivative \eqn{\Phi''(\theta)} of a reparametrization
 #' \eqn{p = \Phi(\theta)} of the initial states and parameters; the results are
 #' then derivatives in \eqn{\theta}. `tangent` takes one of three shapes, told
-#' apart by its row count and row names. `hessian` has the rows of `tangent` and
+#' apart by the row count and row names. `hessian` has the rows of `tangent` and
 #' two dimensions of length `n_s`.
 #'
 #' - State-only, `[n_x, n_s]`, rows unnamed or named by the states. The
@@ -612,7 +618,7 @@
 #'   `attr(model, "forcings")`: a `data.frame` with columns `time` and `value`,
 #'   or a two-column matrix. [cppODE()] and [cvode()] take the forcing names,
 #'   this argument the data. A forcing is the monotone cubic Hermite
-#'   interpolant (PCHIP) of its points and constant beyond the first and the
+#'   interpolant (PCHIP) of the data points and constant beyond the first and the
 #'   last point, see [forcingValues()]. Default `NULL`.
 #' @param abstol Absolute error tolerance. Default `1e-6`.
 #' @param reltol Relative error tolerance. Default `1e-6`.
@@ -658,9 +664,11 @@
 #'   may be reused any number of times. Default `NULL`.
 #' @param sensErrCon Logical. Include the sensitivities, under
 #'   `derivMode = "forward-reverse"` the tangents, in the error test and the
-#'   first step. Default `TRUE`; `FALSE` is cheaper and less accurate, and
-#'   under `"forward-reverse"` gives a step grid that does not depend on the
-#'   directions of the tangent. Needs a model with sensitivities, has no effect
+#'   first step. Default `TRUE`; `FALSE` is cheaper and less accurate, gives
+#'   the steps and corrector iterations of a value run, so the sensitivities
+#'   are the derivative of the computed solution and equal those of the reverse
+#'   mode to rounding, and under `"forward-reverse"` gives a step grid that does
+#'   not depend on the directions of the tangent. Needs a model with sensitivities, has no effect
 #'   under `derivMode = "reverse"`, and a [cvode()] model takes `TRUE` only.
 #' @param adjoint Optional [adjointControl()] object for a model compiled with
 #'   `derivMode = "reverse"`. Default `NULL`, the same as `adjointControl()`.
@@ -684,7 +692,7 @@
 #'   `tangent`.
 #' - `curvature`: under `"forward-reverse"`, `[n_x + n_p, n_s, n_seed]`, the
 #'   derivative of each `cotangent` entry along the tangent. Under the identity
-#'   tangent its columns are the Hessian of the seeded functional. The order of
+#'   tangent the columns are the Hessian of the seeded functional. The order of
 #'   the last two dimensions is that of a Hessian, not that of the argument
 #'   `curvature`.
 #' - `diagnostics`: solver statistics, printed by [diagnostics()]:
@@ -700,7 +708,7 @@
 #'   value, the step passes below 1), `acnrm` and `acnrm_state` (weighted RMS
 #'   norm of the local error over all components and over the states alone),
 #'   `tq2` (error constant), `gamma` and `gamrat` (step size times the leading
-#'   coefficient, and its ratio to the value at the last factorisation),
+#'   coefficient, and the ratio of that product to the value at the last factorization),
 #'   `newton_conv` (1 when the corrector converged), `mode` (`"BDF"`, `"NDF"`,
 #'   `"ADAMS"`, `"ONESTEP"`, or `"CVODE"` and `"CVODE_event"` on a [cvode()]
 #'   model), `nfe`, `njev` and `nsetups` (cumulative counters) and
@@ -768,7 +776,7 @@ solveODE <- function(model, times, parms,
 #' @param times,parms Batch-wide `times` and `parms` as in [solveODE()], for
 #'   the conditions that do not give their own. Default `NULL`.
 #' @param traceFile Optional. Either one path per condition, or a single path
-#'   used as a template, in which case the condition's name (or its index) is
+#'   used as a template, in which case the condition's name (or index) is
 #'   inserted before the extension. Needs a model built with `stepTrace = TRUE`.
 #'   Default `NULL`.
 #' @param cores Number of threads, at most the processors; one for a single
@@ -860,8 +868,8 @@ solveODEBatch <- function(model, conditions,
 
 
 # Resolve `traceFile` to one path per condition. A single path is a template:
-# the condition's name (or index) goes in front of the extension, so a batch
-# never has its conditions overwrite one another's trace.
+# the condition's name (or index) goes in front of the extension, so the
+# conditions of a batch never overwrite one another's trace.
 .batchTraceFiles <- function(traceFile, k, nms) {
   if (is.null(traceFile)) return(vector("list", k))
   if (!is.character(traceFile) || !all(nzchar(traceFile)))
@@ -921,7 +929,7 @@ solveODEBatch <- function(model, conditions,
 #' @description
 #' `solveODEBatch()` degrades to a serial loop without saying so. This reports
 #' the conditions it depends on, so a caller can warn instead of silently
-#' losing its threads.
+#' running serially.
 #'
 #' @param model A model handle from [cppODE()] or [cvode()].
 #' @return List with `symbol` (the batch entry resolved), `openmp` (cppDE was
@@ -999,7 +1007,9 @@ prepareBatch <- function(model, conditions,
 #' @param handle A `"cppDEbatch"` object from [prepareBatch()].
 #' @param parms List of named numeric vectors.
 #' @param tangent,hessian,cotangent,curvature Lists of arrays, each as the
-#'   argument of the same name in [solveODE()] and of the prepared shape.
+#'   argument of the same name in [solveODE()] and of the prepared shape. A
+#'   `cotangent` may have another number of seed columns than the prepared one;
+#'   rows and state columns stay.
 #' @param adjoint List of [adjointControl()] objects.
 #' @param store List of checkpoint stores, each the `$store` of an earlier
 #'   reverse solve. Here a `NULL` element integrates that condition afresh.
@@ -1073,8 +1083,11 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
     }
     if (!is.null(hessian) && !is.null(hessian[[k]]))
       preps[[k]]$args$hessian <- .asDouble(hessian[[k]])
-    preps[[k]]$args$cotangent <- .replaceSameShape(
-      preps[[k]]$args$cotangent, if (!is.null(cotangent)) cotangent[[k]], "cotangent", k)
+    if (!is.null(cotangent) && !is.null(cotangent[[k]])) {
+      ck <- .replaceCotangent(preps[[k]]$args$cotangent, cotangent[[k]], k)
+      preps[[k]]$args$cotangent <- ck
+      preps[[k]]$seed_names <- if (length(dim(ck)) == 3L) dimnames(ck)[[3]]
+    }
     preps[[k]]$args$curvature <- .replaceSameShape(
       preps[[k]]$args$curvature, if (!is.null(curvature)) curvature[[k]], "curvature", k)
     # A new control replaces every entry the prepared one wrote.
@@ -1095,7 +1108,7 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
 }
 
 
-# `x` with storage mode double, its attributes kept.
+# `x` with storage mode double, attributes kept.
 .asDouble <- function(x) {
   storage.mode(x) <- "double"
   x
@@ -1114,8 +1127,23 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
   .asDouble(new)
 }
 
+# A new cotangent for a prepared condition: the prepared rows and state columns,
+# any number of seed columns. The prepared attributes stay where the shape does.
+.replaceCotangent <- function(old, new, k) {
+  if (is.null(old))
+    stop("condition ", k, ": the handle was prepared without a 'cotangent'; ",
+         "call prepareBatch() again.", call. = FALSE)
+  d <- dim(new)
+  if (!is.numeric(new) || length(d) < 2L || length(d) > 3L ||
+      !identical(as.integer(d[1:2]), as.integer(dim(old)[1:2])))
+    stop("condition ", k, ": cotangent rows or state columns changed; call ",
+         "prepareBatch() again.", call. = FALSE)
+  if (identical(dim(new), dim(old))) attributes(new) <- attributes(old)
+  .asDouble(new)
+}
+
 # Thread count for a batch of K conditions: the cores asked for even when K is smaller, so that
-# OpenMP keeps its team (batch_threads() in cppde_r_batch.hpp), one for a single condition. Not read
+# OpenMP keeps the thread team (batch_threads() in cppde_r_batch.hpp), one for a single condition. Not read
 # from OMP_NUM_THREADS, which nothing keeps in step with the BLAS thread count cppDE pins.
 .batchCores <- function(cores, K) {
   if (!is.null(cores)) {
@@ -1140,7 +1168,7 @@ solveBatch <- function(handle, parms = NULL, tangent = NULL, hessian = NULL,
 #' @param result A list returned by [solveODE()], containing a
 #'   `diagnostics` element.
 #'
-#' @return The `diagnostics` list, invisibly; its fields are listed under
+#' @return The `diagnostics` list, invisibly; the fields are listed under
 #'   Value in [solveODE()]. Without diagnostics, a message and `NULL`.
 #'
 #' @example inst/examples/diagnostics.R

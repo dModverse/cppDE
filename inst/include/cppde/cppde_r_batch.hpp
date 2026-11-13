@@ -1,5 +1,5 @@
 /*
- R marshalling for the generated solve entry points.
+ R marshaling for the generated solve entry points.
 
  The ONLY R-API-touching header under cppde/.  Never include it from
  cppde.hpp: the numerical core stays free of R so it can run off-thread.
@@ -66,7 +66,7 @@ struct solve_args {
   const double* cotangent = nullptr;
   int n_seed_rows = 0, n_seed_states = 0, n_seed_cols = 0;
   // The cotangent's own tangents, [n_out, n_states, n_seed, n_sens]: forward
-  // over reverse takes the cotangent as a dual, and this fills its derivative
+  // over reverse takes the cotangent as a dual, and this fills the derivative
   // slots.
   const double* curvature = nullptr;
   int n_seed_tan = 0;
@@ -75,10 +75,10 @@ struct solve_args {
   // Check each step of the sweep, to this multiple of reltol; 0 is off.
   double refine = 0.0;
   // The absolute tolerance on the gradient: the CVODES backward problem holds
-  // its quadrature to it, the checked sweep each step's share; 0 keeps it out.
+  // the quadrature to it, the checked sweep each step's share; 0 keeps it out.
   double gradtol = 0.0;
   // A gradient needs two solves at one theta: values, then the sweep. The first
-  // hands its checkpoints out, the second takes them back and integrates
+  // hands the checkpoints out, the second takes them back and integrates
   // nothing. Opaque here: only the model knows the store's type.
   void* store      = nullptr;
   bool  keep_store = false;
@@ -109,7 +109,7 @@ struct solve_result {
   std::vector<double> adjoint;
   int n_adj_rows = 0, n_adj_cols = 0;
   // Forward over reverse: the same sweep run over a dual, so every entry of
-  // `adjoint` has its directional derivatives. [n_adj_rows, n_sens,
+  // `adjoint` has directional derivatives. [n_adj_rows, n_sens,
   // n_adj_cols], and under the identity seeding that is the Hessian.
   std::vector<double> adjoint2;
   int n_adj_derivs = 0;
@@ -121,6 +121,9 @@ struct solve_result {
   std::vector<double> step_t, step_h, eta, lambda;
   std::vector<int> step_m;   // the substeps the sweep took each step in
   int refine_failures = 0;   // checked steps that missed the test, all columns
+  // Under refine: per seed column, the first-order change of the seeded
+  // functional from the computed trajectory to the one the sweep differentiated.
+  std::vector<double> correction;
   int n_adj_steps = 0, n_adj_states = 0;
   // Set only under args.keep_store. `wrap_store` is emitted by the model, the
   // only place the store's type is known; phase C calls it on the main thread.
@@ -172,7 +175,7 @@ struct solve_result {
   //  libgomp's thread pool does not survive fork(): a child reusing it with more
   //  than one thread deadlocks. dMod forks in mstrust, so the child is marked at
   //  fork time and runs serially. The flag is per DSO, so every generated model
-  //  installs its own handler at DSO load. The BLAS half of the same hazard is
+  //  installs the handler at DSO load. The BLAS half of the same hazard is
   //  handled once for the process, see cppde_blas_threads.hpp.
   // ---------------------------------------------------------------------------
 namespace detail {
@@ -565,8 +568,9 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
   const bool adj2  = adj && r.n_adj_derivs > 0;
   const bool grid  = adj && r.n_adj_steps > 0;
   const bool keep  = (r.store_out != nullptr && r.wrap_store != nullptr);
+  const bool corr  = adj && !r.correction.empty();
   const int n_el   = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + (adj ? 1 : 0)
-                       + (adj2 ? 1 : 0)
+                       + (adj2 ? 1 : 0) + (corr ? 1 : 0)
                        + (grid ? 1 : 0) + (keep ? 1 : 0) + 1;
 
   SEXP ans   = PROTECT(Rf_allocVector(VECSXP, n_el));
@@ -578,6 +582,7 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
   if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("hessian"));
   if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("cotangent"));
   if (adj2)   SET_STRING_ELT(names, slot++, Rf_mkChar("curvature"));
+  if (corr)   SET_STRING_ELT(names, slot++, Rf_mkChar("correction"));
   if (grid)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjointGrid"));
   if (keep)   SET_STRING_ELT(names, slot++, Rf_mkChar("store"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
@@ -628,6 +633,12 @@ inline SEXP build_result_sexp(const solve_result& r, int n_variables,
     std::memcpy(REAL(a), r.adjoint2.data(), sizeof(double) * r.adjoint2.size());
     SET_VECTOR_ELT(ans, slot++, a);
     UNPROTECT(2);
+  }
+  if (corr) {
+    SEXP cv = PROTECT(Rf_allocVector(REALSXP, static_cast<R_xlen_t>(r.correction.size())));
+    std::memcpy(REAL(cv), r.correction.data(), sizeof(double) * r.correction.size());
+    SET_VECTOR_ELT(ans, slot++, cv);
+    UNPROTECT(1);
   }
   if (grid) {
     SEXP g = PROTECT(build_adjoint_grid(r));
@@ -688,7 +699,7 @@ inline void set_dimnames(SEXP x, SEXP var_nm, SEXP sens_nm, int n_sens_dims) {
   UNPROTECT(1);
 }
 
-// Splits list(variables, sens_names) into its two parts; both R_NilValue when
+// Splits list(variables, sens_names) into the two parts; both R_NilValue when
 // the caller passed nothing.
 inline void split_dimnames(SEXP dn, SEXP* var_nm, SEXP* sens_nm) {
   *var_nm = R_NilValue; *sens_nm = R_NilValue;
@@ -770,8 +781,9 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
   const bool adj2 = adj && r.n_adj_derivs > 0;
   const bool grid = adj && r.n_adj_steps > 0;
   const bool keep = (r.store_out != nullptr && r.wrap_store != nullptr);
+  const bool corr = adj && !r.correction.empty();
   const int n_el = 3 + (deriv ? 1 : 0) + (deriv2 ? 1 : 0) + (adj ? 1 : 0)
-                     + (adj2 ? 1 : 0)
+                     + (adj2 ? 1 : 0) + (corr ? 1 : 0)
                      + (grid ? 1 : 0) + (keep ? 1 : 0) + 1;
   SEXP ans   = PROTECT(Rf_allocVector(VECSXP, n_el));
   SEXP names = PROTECT(Rf_allocVector(STRSXP, n_el));
@@ -782,6 +794,7 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
   if (deriv2) SET_STRING_ELT(names, slot++, Rf_mkChar("hessian"));
   if (adj)    SET_STRING_ELT(names, slot++, Rf_mkChar("cotangent"));
   if (adj2)   SET_STRING_ELT(names, slot++, Rf_mkChar("curvature"));
+  if (corr)   SET_STRING_ELT(names, slot++, Rf_mkChar("correction"));
   if (grid)   SET_STRING_ELT(names, slot++, Rf_mkChar("adjointGrid"));
   if (keep)   SET_STRING_ELT(names, slot++, Rf_mkChar("store"));
   SET_STRING_ELT(names, slot++, Rf_mkChar("diagnostics"));
@@ -807,6 +820,11 @@ inline SEXP solve_one(const solve_args& a, int n_variables, bool deriv, bool der
     SEXP a = PROTECT(Rf_allocArray(REALSXP, d)); ++extra;
     std::memcpy(REAL(a), r.adjoint2.data(), sizeof(double) * r.adjoint2.size());
     SET_VECTOR_ELT(ans, slot++, a);
+  }
+  if (corr) {
+    SEXP cv = PROTECT(Rf_allocVector(REALSXP, static_cast<R_xlen_t>(r.correction.size()))); ++extra;
+    std::memcpy(REAL(cv), r.correction.data(), sizeof(double) * r.correction.size());
+    SET_VECTOR_ELT(ans, slot++, cv);
   }
   if (grid) {
     SEXP g = PROTECT(build_adjoint_grid(r)); ++extra;
@@ -851,7 +869,7 @@ inline bool pre_acquire(void* vctx, solve_result& r) {
 
 // Number of output points `times` will produce after the generated code's
 // zero-injection, sort and unique. A fixed event that fires and whose time is
-// not already a requested time adds a row of its own, so those times count
+// not already a requested time adds a separate row, so those times count
 // too; the caller passes them when it can evaluate them up front (no root
 // event, no forcing). One outside the grid's window does not fire, see
 // cppde_event_window.hpp.

@@ -14,8 +14,8 @@
 // recorded step sequence rather than adapting again.
 //
 // Covered: a fixed-time reset whose value depends on a parameter, a
-// root-triggered reset whose value does, on all four methods, so every carry
-// shape is exercised; observations before, between and after the jumps,
+// root-triggered reset whose value does, on all four methods, so every kind of
+// state passed between steps is exercised; observations before, between and after the jumps,
 // including the post-jump observation the engine emits, which is a value and
 // not an interpolation; a seed one observation at a time and over all at once.
 //
@@ -119,7 +119,7 @@ using D = dual<double>;
 //
 //  Both read a parameter, so both put a cotangent on wp: the fixed reset scales
 //  x0 by a function of p3, the root reset adds a multiple of p1 to x2 when x0
-//  falls through G_LEVEL. The root has its partials, without which the
+//  falls through G_LEVEL. The root has partials, without which the
 //  engine applies the reset with no transport and the crossing time drops out
 //  of the derivative entirely.
 // ---------------------------------------------------------------------------
@@ -270,7 +270,7 @@ struct event_adjoint_terms {
   void root_dh_dt_axpy(int, const std::vector<double>&, const double&,
                        const double&, double*) const {}
 
-  // g = x0 - level, so g_dot = f0 and grad g_dot is its row.
+  // g = x0 - level, so g_dot = f0 and grad g_dot is row 0 of J.
   void root_gdot_dx(int, const std::vector<double>& x, const double&,
                     std::vector<double>& out) const {
     out.assign(NX, 0.0);
@@ -342,12 +342,61 @@ static void forward_value(store_of<S>& store, std::vector<double>& x_obs)
 //  from the store, every value from the arithmetic.
 // ---------------------------------------------------------------------------
 
+// A multistep method's reference is the dual run through the same driver with
+// the tangents kept out of the error and corrector tests: it takes the value
+// run's steps and corrector iterations, so S is the derivative of what the
+// value run computed.
+template<class S>
+static void forward_dual(std::vector<double>& S_obs, std::vector<double>& x_ref)
+{
+  using rstep = typename S::template rebind_value<D>;
+  std::vector<double> scale(ND, 1.0);
+  std::vector<D> p(NP), x(NX);
+  for (std::size_t j = 0; j < NP; ++j) {
+    scale[NX + j] = std::max(std::fabs(P[j]), 1e-2);
+    p[j] = D(P[j]);
+    p[j].diff(static_cast<unsigned>(NX + j), ND);
+    p[j].d(static_cast<unsigned>(NX + j)) = scale[NX + j];
+  }
+  for (std::size_t i = 0; i < NX; ++i) {
+    scale[i] = std::max(std::fabs(X0[i]), 1e-2);
+    x[i] = D(X0[i]);
+    x[i].diff(static_cast<unsigned>(i), ND);
+    x[i].d(static_cast<unsigned>(i)) = scale[i];
+  }
+  auto sys = make_system<D>(p);
+  auto ev  = make_events<D>(p);
+
+  typename pipeline<rstep>::controller ctl(ATOL, RTOL);
+  ctl.stepper().set_sens_err_con(false);
+  ctl.prepare_sensitivities(ND);
+  typename pipeline<rstep>::dense dense(std::move(ctl));
+  cppde::StepChecker checker(1000000, 1000000);
+
+  S_obs.clear();
+  x_ref.clear();
+  auto obs = [&](const std::vector<D>& xs, const D&) {
+    for (std::size_t i = 0; i < NX; ++i) {
+      x_ref.push_back(xs[i].x());
+      for (unsigned d = 0; d < ND; ++d) S_obs.push_back(xs[i].d(d) / scale[d]);
+    }
+  };
+  cppde::integrate_times_dense(dense, sys, x, TIMES.begin(), TIMES.end(), D(HINI),
+                               obs, ev.fixed, ev.root, checker, 1e-10, 1,
+                               cppde::detail::no_dt_estimator{}, nullptr);
+}
+
 template<class S>
 static void forward_sens(const store_of<S>& store, std::vector<double>& S_obs,
                          std::vector<double>& x_ref)
 {
   using rstep = typename S::template rebind_value<D>;
   constexpr bool multistep = cppde::reverse::has_step_snapshot<S>::value;
+  if constexpr (multistep) {
+    (void)store;
+    forward_dual<S>(S_obs, x_ref);
+    return;
+  } else {
 
   std::vector<double> scale(ND, 1.0);
   std::vector<D> p(NP);
@@ -361,10 +410,6 @@ static void forward_sens(const store_of<S>& store, std::vector<double>& S_obs,
   auto ev  = make_events<D>(p);
 
   rstep st;
-  if constexpr (multistep) {
-    st.set_tolerances(ATOL, RTOL);
-    st.set_max_corrector_iters(200);
-  }
   st.prepare_sensitivities(ND);
 
   const auto& cp0 = store.step(0);
@@ -476,6 +521,7 @@ static void forward_sens(const store_of<S>& store, std::vector<double>& S_obs,
     }
   }
   check(next_obs == store.n_obs(), "every observation reached by the reference");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -557,12 +603,12 @@ static void run_method(const char* name, double tol)
 
 int main() {
   using cppde::multistep_method;
-  // All four, because a jump is the one place where the three carry shapes
-  // differ: the multistep methods throw their Nordsieck history away and build
-  // a new one, the one-step methods hand on the state alone, and rb4 solves its
+  // All four, because a jump is the one place where the three kinds of state
+  // passed between steps differ: the multistep methods throw their Nordsieck history away and build
+  // a new one, the one-step methods hand on the state alone, and rb4 solves the
   // stages against a matrix the restart invalidates.
-  run_method<cppde::multistepper<multistep_method::bdf, double, cppde::dense_lu_tag>>("bdf", 1e-6);
-  run_method<cppde::multistepper<multistep_method::adams, double, cppde::dense_lu_tag>>("adams", 1e-6);
+  run_method<cppde::multistepper<multistep_method::bdf, double, cppde::dense_lu_tag>>("bdf", 1e-11);
+  run_method<cppde::multistepper<multistep_method::adams, double, cppde::dense_lu_tag>>("adams", 1e-11);
   run_method<cppde::rosenbrock4<double>>("rb4", 1e-9);
   run_method<cppde::tsit5<double>>("tsit5", 1e-9);
 

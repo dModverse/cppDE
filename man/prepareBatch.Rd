@@ -59,7 +59,7 @@ call, a subset of \code{attr(model, "dimNames")$sens}. Unlike \code{fixed} of
 \code{attr(model, "forcings")}: a \code{data.frame} with columns \code{time} and \code{value},
 or a two-column matrix. \code{\link[=cppODE]{cppODE()}} and \code{\link[=cvode]{cvode()}} take the forcing names,
 this argument the data. A forcing is the monotone cubic Hermite
-interpolant (PCHIP) of its points and constant beyond the first and the
+interpolant (PCHIP) of the data points and constant beyond the first and the
 last point, see \code{\link[=forcingValues]{forcingValues()}}. Default \code{NULL}.}
 
 \item{abstol}{Absolute error tolerance. Default \code{1e-6}.}
@@ -109,9 +109,11 @@ may be reused any number of times. Default \code{NULL}.}
 
 \item{sensErrCon}{Logical. Include the sensitivities, under
 \code{derivMode = "forward-reverse"} the tangents, in the error test and the
-first step. Default \code{TRUE}; \code{FALSE} is cheaper and less accurate, and
-under \code{"forward-reverse"} gives a step grid that does not depend on the
-directions of the tangent. Needs a model with sensitivities, has no effect
+first step. Default \code{TRUE}; \code{FALSE} is cheaper and less accurate, gives
+the steps and corrector iterations of a value run, so the sensitivities
+are the derivative of the computed solution and equal those of the reverse
+mode to rounding, and under \code{"forward-reverse"} gives a step grid that does
+not depend on the directions of the tangent. Needs a model with sensitivities, has no effect
 under \code{derivMode = "reverse"}, and a \code{\link[=cvode]{cvode()}} model takes \code{TRUE} only.}
 
 \item{adjoint}{Optional \code{\link[=adjointControl]{adjointControl()}} object for a model compiled with

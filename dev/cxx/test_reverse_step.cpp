@@ -13,7 +13,7 @@
 // Covered: w' S against S' w for the unit seeds and for a mixed one; the frozen
 // path against the same run's x and theta block, with zero time cotangents; the
 // replayed step end against the forward run's; chained steps, where h is shared
-// and its cotangent sums over them while t chains through t = t0 + s*h.
+// and the cotangent of h sums over them while t chains through t = t0 + s*h.
 //
 // The step end agrees to rounding, not bit for bit: a vector of double takes the
 // BLAS overload of vec_axpy for every stage and that kernel fuses the multiply
@@ -153,7 +153,7 @@ static void forward_steps(unsigned n_steps,
 
   cppde::tsit5<D> st;
   // The controller does this; driving do_step directly must too, or the FSAL
-  // branch copies k7's value into k1 and leaves its tangents stale.
+  // branch copies k7's value into k1 and leaves the k1 tangents stale.
   st.prepare_sensitivities(ND);
   for (unsigned s = 0; s < n_steps; ++s) {
     const D t = t0 + static_cast<double>(s) * h;
@@ -171,7 +171,7 @@ static void forward_steps(unsigned n_steps,
 }
 
 // ---------------------------------------------------------------------------
-//  Reverse: the adjoint of each step from its checkpoint, newest first, handing
+//  Reverse: the adjoint of each step from the step checkpoint, newest first, handing
 //  the step-start cotangent to the previous step and summing the shared ones.
 // ---------------------------------------------------------------------------
 
@@ -257,7 +257,7 @@ static void compare(const char* name, unsigned n_steps, const double* w)
   }
 
   // The step end must survive recomputation under a different scalar type and,
-  // beyond one step, without the FSAL carry. A few ulp over a handful of steps:
+  // beyond one step, without the FSAL reuse of k1. A few ulp over a handful of steps:
   // only the double run reaches the BLAS axpy, which fuses where a tape cannot.
   for (std::size_t i = 0; i < NX; ++i) {
     close(fwd_end[i], cp_end[i],

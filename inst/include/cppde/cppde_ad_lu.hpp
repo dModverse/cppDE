@@ -143,6 +143,13 @@ class dense_lu_solver<AD_T, std::enable_if_t<is_ad<AD_T>::value>>
 
 public:
 
+  // A frozen matrix is factorized on the values alone: a solve passes the
+  // tangents of the right-hand side through it and never the tangents of W.
+  void set_frozen(bool f) {
+    m_frozen = f;
+    if constexpr (is_ad<Inner>::value) m_inner.set_frozen(f);
+  }
+
   void factorize(const dense_matrix<F>& W)
   {
     const int n = W.rows();
@@ -172,7 +179,7 @@ public:
 
     // Determine n_derivs from the actual dependence: the error-weight vector is
     // sized from the seeded directions and indexed per active direction.
-      const unsigned nd = max_deriv_size(W);
+      const unsigned nd = m_frozen ? 0u : max_deriv_size(W);
       m_n_derivs_cached = nd;
 
       if (nd > 0) {
@@ -197,7 +204,9 @@ public:
       //  Inner = dual<...> (nested AD): store full AD matrix for the
       //  generic element-wise IFT path.
       // ============================================================
-      if (m_W_stored.rows() != n) {
+      if (m_frozen) {
+        m_W_stored = dense_matrix<F>();
+      } else if (m_W_stored.rows() != n) {
         m_W_stored = W;
       } else {
         std::copy(W.data.begin(), W.data.end(), m_W_stored.data.begin());
@@ -431,6 +440,7 @@ private:
   // different argument to the same one.
   void ift_matvec_transposed(int n, unsigned n_derivs) const
   {
+    if (m_frozen) return;
     if constexpr (!is_ad<Inner>::value) {
       const unsigned nd_W = m_n_derivs_cached;
       if (nd_W == 0) return;
@@ -464,6 +474,7 @@ private:
 
   void ift_matvec(int n, unsigned n_derivs) const
   {
+    if (m_frozen) return;
     if constexpr (!is_ad<Inner>::value) {
     // =============================================================
     //  Matvec path: m_dW_block is (n * n_derivs_cached) x n, column-major. A
@@ -512,6 +523,7 @@ private:
     // the batch columns with the single-RHS pass inside.
   void ift_matvec_batch(int n, unsigned n_derivs, int nrhs) const
   {
+    if (m_frozen) return;
     if constexpr (!is_ad<Inner>::value) {
       unsigned nd_W = m_n_derivs_cached;
       if (nd_W == 0) return;
@@ -557,6 +569,7 @@ private:
   }
 
   int m_n = 0;
+  bool m_frozen = false;
   dense_matrix<F>     m_W_stored;      // Full AD matrix (nested AD path only)
   dense_matrix<Inner> m_W_val;         // Persistent scalar extraction buffer
   dense_lu_solver<Inner> m_inner;

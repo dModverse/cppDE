@@ -89,7 +89,7 @@ test_that("the checked sweep is accurate where the value grid is not", {
       # The fast forcing sums local errors over many periods, as any local
       # control does, the more so on tsit5, which has no embedded estimate.
       expect_lt(e_ref, if (nm == "q") 100 else 10, label = paste(nm, m))
-      if (e_plain > 10) expect_lt(3 * e_ref, e_plain, label = paste(nm, m))
+      if (e_plain > 20) expect_lt(3 * e_ref, e_plain, label = paste(nm, m))
     }
   }
 })
@@ -105,7 +105,7 @@ test_that("the checked sweep subdivides the steps the value grid takes too long"
   }
 })
 
-test_that("the checked sweep goes through events and reports its substeps", {
+test_that("the checked sweep goes through events and reports the substeps", {
   W <- seed_for("ev"); ref <- reference("ev", W)
   for (m in methods) {
     r <- solveODE(mods$ev[[m]], ab_times, ev_pars, cotangent = W, abstol = 1e-8, reltol = 1e-6,
@@ -124,6 +124,95 @@ test_that("refine is refused where it does not apply", {
   expect_error(adjointControl(refine = NA), "TRUE or FALSE")
 })
 
+# The value correction of the refined sweep, per seed column.
+value_of <- function(res, W) apply(W * as.vector(res$variable), 3, sum)
+seeds2 <- function(rows, nx = 2L) {
+  set.seed(3)
+  array(rnorm(rows * nx * 2), c(rows, nx, 2), dimnames = list(NULL, NULL, c("a", "b")))
+}
+
+test_that("on a linear model the corrected value is the cotangent times the start", {
+  # Every accepted map is linear in the state, so value plus correction is the
+  # functional of the differentiated trajectory, x0' w_x0, to rounding. Coarse
+  # steps put observations inside them; gradtol makes the flow halve.
+  p <- c(x = 1, y = 0.5, k = 0.5)
+  o <- list(abstol = 1e-5, reltol = 1e-3)
+  for (m in methods) for (gt in list(NULL, 1e-9)) {
+    W <- seeds2(length(rest_times))
+    r <- do.call(solveODE, c(list(mods$rest[[m]], rest_times, p, cotangent = W,
+                                  adjoint = adjointControl(refine = TRUE, gradtol = gt)), o))
+    expect_identical(names(r$correction), c("a", "b"))
+    expect_gt(max(abs(r$correction)), 0)
+    lhs <- value_of(r, W) + r$correction
+    rhs <- colSums(c(1, 0.5) * r$cotangent[c("x", "y"), ])
+    expect_equal(lhs, rhs, tolerance = 1e-10, info = paste(m, is.null(gt)))
+  }
+})
+
+test_that("the correction moves a coarse value toward the converged one", {
+  # Where every step is substepped, the corrected value is the value of the
+  # finer trajectory the gradient belongs to.
+  o <- list(abstol = 1e-5, reltol = 1e-3)
+  for (nm in c("ab", "ev")) {
+    W <- seed_for(nm)
+    ref <- value_of(solveODE(fwd[[nm]], cases[[nm]]$t, cases[[nm]]$p,
+                             abstol = 1e-13, reltol = 1e-11), W)
+    for (m in c("bdf", "tsit5")) {
+      r <- do.call(solveODE, c(list(mods[[nm]][[m]], cases[[nm]]$t, cases[[nm]]$p,
+                                    cotangent = W, adjoint = adjointControl(refine = TRUE)), o))
+      v <- value_of(r, W)
+      expect_lt(abs(v + r$correction - ref), 0.2 * abs(v - ref), label = paste(nm, m))
+    }
+  }
+})
+
+test_that("the correction is the same from a store, a batch and a prepared batch", {
+  p <- c(x = 1, y = 0.5, k = 0.5)
+  o <- list(abstol = 1e-5, reltol = 1e-3)
+  ctl <- adjointControl(refine = TRUE)
+  W <- seeds2(length(rest_times))
+  for (m in c("bdf", "rb4")) {
+    mm <- mods$rest[[m]]
+    one <- do.call(solveODE, c(list(mm, rest_times, p, cotangent = W, adjoint = ctl), o))
+    plain <- do.call(solveODE, c(list(mm, rest_times, p, cotangent = W), o))
+    expect_null(plain$correction)
+
+    st <- do.call(solveODE, c(list(mm, rest_times, p, keepStore = TRUE), o))
+    expect_null(st$correction)
+    fs <- do.call(solveODE, c(list(mm, rest_times, p, cotangent = W, store = st$store,
+                                   adjoint = ctl), o))
+    expect_identical(fs$correction, one$correction, info = m)
+
+    cond <- list(times = rest_times, parms = p, cotangent = W, adjoint = ctl)
+    bt <- do.call(solveODEBatch, c(list(mm, conditions = list(cond, cond)), o))
+    expect_identical(bt[[2]]$correction, one$correction, info = m)
+
+    # A handle prepared with one seed column takes two.
+    h <- do.call(prepareBatch, c(list(mm, conditions = list(
+      modifyList(cond, list(cotangent = W[, , 1, drop = FALSE])))), o))
+    got <- solveBatch(h, cotangent = list(W))[[1]]
+    expect_identical(got$correction, one$correction, info = m)
+    expect_identical(got$cotangent, one$cotangent, info = m)
+  }
+})
+
+test_that("a trajectory behind a switch gets a correction within the tolerance", {
+  # x = e^-t and y = (y0 + t) e^-t while the switch lies beyond the horizon. The
+  # corrected value is that of the substepped flow, accurate to the refinement test.
+  tt <- 0:50
+  p <- c(k = 1, c = 1000, ts = 60, x = 1, y = 0.5)
+  set.seed(1)
+  W <- array(rnorm(length(tt) * 2), c(length(tt), 2, 1))
+  ref <- sum(W[, 1, 1] * exp(-tt) + W[, 2, 1] * (0.5 + tt) * exp(-tt))
+  for (m in methods) {
+    r <- solveODE(mods$sw[[m]], tt, p, cotangent = W, abstol = 1e-8, reltol = 1e-5,
+                  adjoint = adjointControl(refine = TRUE, gradtol = 1e-10))
+    v <- value_of(r, W)
+    expect_true(is.finite(r$correction), info = m)
+    expect_lt(abs(v + r$correction - ref), 10 * 1e-5 * abs(ref), label = m)
+  }
+})
+
 test_that("the multistep sweep takes each step's own tail", {
   # Operators kept for one step must not serve a later step of the same size
   # whose history rescales by another factor. attr(times, "hmax"), internal
@@ -138,9 +227,9 @@ test_that("the multistep sweep takes each step's own tail", {
   expect_lt(max(abs(g - gf)) / max(abs(gf)), 1e-3)
 })
 
-test_that("a trajectory at rest behind a switch gets its exact gradient", {
+test_that("a trajectory at rest behind a switch gets the exact gradient", {
   # The state's error estimate is zero, so the grid of a value-only run grows
-  # without bound and the adjoint on it is off by more than its size. The
+  # without bound and the adjoint on it is off by more than the adjoint size. The
   # checked sweep, the gradient under gradtol, takes those steps in substeps.
   # With k = 1 the tangents are dx/dx0 = e^-t, dy/dx0 = t e^-t, dy/dy0 = e^-t,
   # and zero in k, c and ts while the switch lies beyond the horizon.

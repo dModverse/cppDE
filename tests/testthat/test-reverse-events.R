@@ -1,8 +1,10 @@
 # The reverse mode on events, forcings, a run stopped at equilibrium, a wide
 # model and sparse Jacobians, each checked against one forward oracle on bdf.
 #
-# The oracle is not sharp: the forward solve adapts under sensitivities and the
-# reverse one in plain double, so the two discretisations differ by O(tol).
+# Under the default sensErrCon = TRUE the oracle is not sharp: the forward solve
+# adapts under sensitivities and the reverse one in plain double, so the two
+# discretizations differ by O(tol). With sensErrCon = FALSE they share the grid
+# and agree to rounding.
 
 skip_on_cran()
 
@@ -60,6 +62,8 @@ oracle <- function(rhs, nm, ...)
 models <- list(
   fwd      = oracle(eqns, "reve_f"),
   ev_fwd   = oracle(ev_eqns, "reve_ev_f", events = ev_def, forcings = "u"),
+  ev_fwd_adams = oracle(ev_eqns, "reve_ev_fa", events = ev_def, forcings = "u",
+                        method = "adams"),
   ev_rev   = per_method(ev_eqns, "reve_ev_r_", events = ev_def,
                         forcings = "u", derivMode = "reverse"),
   fc_fwd   = oracle(fc_eqns, "reve_fc_f", forcings = "u"),
@@ -70,6 +74,7 @@ models <- list(
   eq_rev   = per_method(eq_eqns, "reve_eq_r_", c("bdf", "rb4"),
                         rootfunc = "equilibrate", derivMode = "reverse"),
   wide_fwd = oracle(wide, "reve_wide_f"),
+  wide_fwd_adams = oracle(wide, "reve_wide_fa", method = "adams"),
   wide_rev = per_method(wide, "reve_wide_r_", c("bdf", "adams"),
                         derivMode = "reverse"))
 do.call(compile, c(flat(models),
@@ -123,6 +128,51 @@ test_that("the reverse mode handles events, roots and forcings", {
   }
 })
 
+# Forward with sensErrCon = FALSE and reverse on the same grid.
+same_grid <- list(abstol = 1e-6, reltol = 1e-4, sensErrCon = FALSE)
+
+test_that("bdf and adams reverse equal forward to rounding across events", {
+  p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1,
+          d_amt = 0.4, t_dose = 1.0)
+  fc <- list(u = data.frame(time = c(0, 2, 5), value = c(0.1, 0.25, 0.05)))
+  oracles <- list(bdf = models$ev_fwd, adams = models$ev_fwd_adams)
+  for (m in c("bdf", "adams")) {
+    fwd <- do.call(solveODE, c(list(oracles[[m]], times, p, forcings = fc), same_grid))
+    expect_gt(nrow(fwd$variable), length(times))
+    W   <- seed_for(fwd)
+    rev <- do.call(solveODE, c(list(models$ev_rev[[m]], times, p, forcings = fc,
+                                    cotangent = W), same_grid))
+    expect_identical(rev$variable, fwd$variable, info = m)
+    ref <- contract(fwd$tangent, W)[, 1]
+    expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref),
+                 tolerance = 1e-11, info = m)
+  }
+})
+
+test_that("bdf and adams reverse equal forward to rounding on a wide model", {
+  oracles <- list(bdf = models$wide_fwd, adams = models$wide_fwd_adams)
+  for (m in c("bdf", "adams")) {
+    fwd <- do.call(solveODE, c(list(oracles[[m]], times, wpars), same_grid))
+    W   <- seed_for(fwd)
+    rev <- do.call(solveODE, c(list(models$wide_rev[[m]], times, wpars,
+                                    cotangent = W), same_grid))
+    ref <- contract(fwd$tangent, W)[, 1]
+    expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref),
+                 tolerance = 1e-11, info = m)
+  }
+})
+
+test_that("sparse bdf reverse equals forward to rounding across an event", {
+  skip_if_not(isTRUE(cvodeConfig$klu_available), "KLU not available")
+  pe  <- c(pars, t_dose = 1.0, d_amt = 0.4)
+  fwd <- do.call(solveODE, c(list(sparse_models$ev_fwd, times, pe), same_grid))
+  W   <- seed_for(fwd)
+  rev <- do.call(solveODE, c(list(sparse_models$ev_rev$bdf, times, pe,
+                                  cotangent = W), same_grid))
+  ref <- contract(fwd$tangent, W)[, 1]
+  expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref), tolerance = 1e-11)
+})
+
 test_that("a sparse model jumps backwards too", {
   skip_if_not(isTRUE(cvodeConfig$klu_available), "KLU not available")
   pe <- c(pars, t_dose = 1.0, d_amt = 0.4)
@@ -138,7 +188,7 @@ test_that("a sparse model jumps backwards too", {
 })
 
 test_that("a written Rosenbrock adjoint handles a multiplicative forcing", {
-  # Four of the six stages add a multiple of df/dt, so its derivative in the
+  # Four of the six stages add a multiple of df/dt, so the derivative of df/dt in the
   # state and in the parameters is part of the adjoint. A forcing reaches df/dt
   # through a chain term the Jacobian emitter appends, and multiplicatively is
   # the way that term keeps a state in it.
@@ -160,7 +210,7 @@ test_that("an equilibrated run goes backwards", {
   # the run's own. A sensitivity run does not produce the same one: it adapts
   # on the tangents as well and reaches the root elsewhere, so there is no
   # forward gradient on this grid to compare against. What is asserted is that
-  # the backward pass answers on the grid its own forward pass produced, and
+  # the backward pass answers on the grid the matching forward pass produced, and
   # that this pass is the value run to the last bit.
   pe <- c(R = 1, A = 1, pA = 0, k_act = 0.1, k_deact = 0.7, k1 = 0.1, k2 = 0.05)
   tt <- seq(0, 1e3, length.out = 50)
@@ -193,7 +243,7 @@ test_that("rb4 goes backwards on a sparse Jacobian", {
   expect_equal(unname(rv$cotangent[names(ref), 1]), unname(ref), tolerance = 1e-5)
 })
 
-test_that("the reverse mode handles a model wider than its history is deep", {
+test_that("the reverse mode handles a model wider than the history is deep", {
   fwd <- do.call(solveODE, c(list(models$wide_fwd, times, wpars), tol))
   W   <- seed_for(fwd)
   ref <- contract(fwd$tangent, W)[, 1]

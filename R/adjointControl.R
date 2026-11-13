@@ -7,8 +7,9 @@
 #' [prepareBatch()] and [solveBatch()] as `adjoint`.
 #'
 #' @param refine Logical, default `FALSE`. Check each step of the sweep against
-#'   `reltol` and `abstol`, and with `gradtol` its share of the gradient as
-#'   well; a step that fails is swept again in substeps.
+#'   `reltol` and `abstol`, and with `gradtol` the contribution of the step to the
+#'   gradient as well; a step that fails is swept again in substeps. The solve
+#'   then also returns `$correction`, see [solveODE()].
 #' @param gradtol Positive number, the absolute tolerance on the gradient.
 #'   Default `NULL`: no test on the gradient. On a [cppODE()] model used only
 #'   with `refine = TRUE`; on a [cvode()] model the absolute tolerance of the

@@ -1,4 +1,4 @@
-// The sparse solve and its transpose against a dense reference.
+// The sparse solve and the transposed solve against a dense reference.
 //
 // The reverse mode uses one factorization in both directions: forward to
 // recover a value a stage solved for, transposed to pass a cotangent back

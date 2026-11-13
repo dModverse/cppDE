@@ -1,3 +1,17 @@
+# cppDE 0.13.12
+
+* The reverse mode of `bdf` and `adams` transposes the corrector iterations the forward run took,
+  against the iteration matrix it factorized: the gradient equals the forward sensitivities on the
+  same grid (`sensErrCon = FALSE`) to rounding. The adams reverse gradient of a stiff model no
+  longer diverges.
+* The forward sensitivities of `bdf` and `adams` pass the corrector against the iteration matrix
+  without the derivative of that matrix, at first and second order.
+* Under `adjointControl(refine = TRUE)` a reverse solve also returns `$correction`, per seed column
+  the first-order change of the seeded functional from the computed trajectory to the one the
+  refined sweep differentiated, so value plus correction and the gradient belong to one function.
+  A model compiled against earlier headers is refused under `refine` until it is compiled again.
+* `solveBatch()` takes a `cotangent` with another number of seed columns than the prepared one.
+
 # cppDE 0.13.11
 
 * The backward sweep of a second-order reverse solve with a multistep method sweeps all

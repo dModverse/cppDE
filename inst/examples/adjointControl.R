@@ -1,13 +1,15 @@
 \donttest{
 if (codegenAvailable()) {
-  ## A fast forcing the state does not see, but its derivative in q does.
+  ## A fast forcing that the state does not see, but the derivative of the state in q does.
   rev <- cppODE(c(x = "-k*x + sin(100*time)*q"), derivMode = "reverse",
                 modelname = "adjointControl_example")
   times <- seq(0, 2, 0.1)
   parms <- c(x = 1, k = 1, q = 0)
   W <- cbind(x = rep(1, length(times)))
-  ref <- solveODE(rev, times, parms, cotangent = W, abstol = 1e-12,
-                  reltol = 1e-12)$cotangent[, 1]
+  ## The reference is a refined sweep at tight tolerances: without refine, the
+  ## sweep stays on the grid the state sets, however tight the tolerances.
+  ref <- solveODE(rev, times, parms, cotangent = W, abstol = 1e-12, reltol = 1e-12,
+                  adjoint = adjointControl(refine = TRUE))$cotangent[, 1]
 
   ## The sweep on the grid of the value run, and checked against the
   ## tolerances, with the gradient held to gradtol as well.

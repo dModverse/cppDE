@@ -1,6 +1,6 @@
 # The CVODES adjoint (ASA) through the R seam.
 #
-# ASA is not an oracle. It solves the adjoint as its own ODE over checkpointed
+# ASA is not an oracle. It solves the adjoint as a separate ODE over checkpointed
 # forward states rather than differentiating the steps the forward run took, so
 # it is a third discretization. What it is good for is a second implementation
 # of the same mathematics, by a different group, against which a systematic
@@ -33,7 +33,7 @@ if (isTRUE(cvodeConfig$available)) {
   if (isTRUE(cvodeConfig$klu_available))
     asa_models$rob_s <- cvode(rob, modelname = "asa_ms_s", derivMode = "reverse",
                               sparse = TRUE, compile = FALSE)
-  # Events for ASA: each with its forward-sensitivity counterpart.
+  # Events for ASA: each with the forward-sensitivity counterpart.
   asa_events <- list(
     add  = data.frame(var = "A", time = 1, value = "d", method = "add"),
     tpar = data.frame(var = "A", time = "td", value = "d", method = "add"),
@@ -114,7 +114,7 @@ test_that("ASA goes through the batch entry too", {
                                    conds, W, SIMPLIFY = FALSE),
                         times = times), tol))
 
-  # The batch used to size its results before the solve, which left no slot for
+  # The batch used to size the results before the solve, which left no slot for
   # the cotangent and reported success without it.
   for (k in seq_along(conds)) {
     expect_false(is.null(bat[[k]]$cotangent))
@@ -122,10 +122,10 @@ test_that("ASA goes through the batch entry too", {
   }
 })
 
-test_that("ASA on KLU replays its checkpoints and matches the dense solve", {
+test_that("ASA on KLU replays the checkpoints and matches the dense solve", {
   skip_if_not(isTRUE(cvodeConfig$klu_available), "KLU not available")
-  # The replay from a checkpoint must take the run's steps; KLU's refactorisation
-  # depends on its history, so every setup factorises afresh.
+  # The replay from a checkpoint must take the run's steps; KLU's refactorization
+  # depends on the factorization history, so every setup factorizes afresh.
   src <- readLines(attr(asa_models$rob_s, "srcfile"))
   expect_true(any(grepl("LS->ops->setup = klu_setup_fresh", src, fixed = TRUE)))
   expect_true(any(grepl("SUNLinSol_KLUReInit", src, fixed = TRUE)))

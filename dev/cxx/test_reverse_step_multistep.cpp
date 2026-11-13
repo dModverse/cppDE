@@ -9,11 +9,10 @@
 // forward as the full matrix S and reverse as w' S for one w. Both differentiate
 // the same discrete step, so they agree to rounding.
 //
-// The corrector is where the two differ in construction and must not differ in
-// result. Forward iterates and peels the tangents by the implicit function
-// theorem at every iteration; reverse puts the solution back and records the
-// equation it solves, closing it by a transposed solve against the same matrix.
-// Neither differentiates the iterates.
+// The corrector is the k chord-Newton iterations the step took against the
+// iteration matrix, which both directions hold fixed: forward iterates the
+// tangents with the values, reverse transposes the recorded iterations, one
+// transposed solve and one product with J' per iteration.
 //
 // Covered, for both methods: the unit seeds on every Nordsieck slot and a mixed
 // one, at order 2 through 4 reached by a real controller warm-up, with the order
@@ -142,7 +141,7 @@ static const double T0   = 0.1;
 static const double ATOL = 1e-6;
 static const double RTOL = 1e-6;
 
-// The reference dual; a case seeds the Nordsieck slots its warm-up reaches,
+// The reference dual; a case seeds the Nordsieck slots the warm-up reaches,
 // plus the parameters.
 using D = dual<double>;
 
@@ -151,25 +150,27 @@ using stepper_d = cppde::multistepper<M, double, cppde::dense_lu_tag>;
 template<cppde::multistep_method M>
 using checkpoint = cppde::reverse::step_checkpoint<stepper_d<M>, double>;
 
-// Iterates the corrector to machine precision, value and tangents together, so
-// the comparison's floor is rounding and not the solver tolerance.
-template<cppde::multistep_method M, class V, class Sys, class St>
-static void polish_corrector(Sys& sys, St& st, double t, std::vector<V>& y)
+// The iteration matrix of the step, as the forward run recorded it.
+struct frozen_matrix {
+  std::vector<double> x;
+  double t = 0.0, inv_gamma_p = 0.0;
+};
+
+// The iterations a double step took and the matrix they ran against, as the
+// step collector records them.
+template<class St, class CP>
+static void record_corrector(const St& st, CP& cp, frozen_matrix& mat)
 {
-  if constexpr (M == cppde::multistep_method::adams) {
-    const std::size_t n = y.size();
-    const double gam = static_cast<double>(st.gamma());
-    const double h   = static_cast<double>(st.h());
-    const V t_new = V(t + h);
-    std::vector<V> f(n);
-    for (int it = 0; it < 60; ++it) {
-      sys.first(y, f, t_new);
-      for (std::size_t i = 0; i < n; ++i)
-        y[i] = st.zn(0)[i] + gam * f[i] - (gam / h) * st.zn(1)[i];
-    }
-  } else {
-    (void)sys; (void)st; (void)t; (void)y;
-  }
+  const auto& il = st.iterates();
+  cp.k_iter = il.k;
+  cp.s_iter = st.iter_scale();
+  cp.iter.clear();
+  for (int m = 0; m < il.k; ++m)
+    cp.iter.insert(cp.iter.end(), il.y[static_cast<std::size_t>(m)].begin(),
+                   il.y[static_cast<std::size_t>(m)].end());
+  mat.x = st.jac_point();
+  mat.t = st.jac_time();
+  mat.inv_gamma_p = st.inv_gamma_p();
 }
 
 // ---------------------------------------------------------------------------
@@ -231,6 +232,8 @@ static void forward_step(const checkpoint<M>& cp, int q_next, double eta,
 
   cppde::multistepper<M, D, cppde::dense_lu_tag> st;
   st.set_tolerances(ATOL, RTOL);
+  // The corrector test on the values alone, so the iterations are the value run's.
+  st.set_sens_err_con(false);
   st.prepare_sensitivities(nd);
   st.load_carry(cp.carry, n);
   for (int j = 0; j <= cp.carry.q; ++j) {
@@ -248,8 +251,6 @@ static void forward_step(const checkpoint<M>& cp, int q_next, double eta,
 
   st.do_step(sys, x, cp.t, xout, cp.dt, xerr);
   check(st.newton_converged(), "the forward reference corrector converged");
-  polish_corrector<M>(sys, st, cp.t, xout);
-  st.replay_outputs(xout, xout, xerr);
   st.complete_step();
   st.set_tn_current(cp.t + cp.dt);
   st.prepare_dense_output();
@@ -259,7 +260,7 @@ static void forward_step(const checkpoint<M>& cp, int q_next, double eta,
 
   if (t_interp > 0.0) {
     // The dense output of this step, which is what an observation inside it
-    // reaches. Seeded like a carry slot so the same comparison covers it.
+    // reaches. Seeded like a Nordsieck slot so the same comparison covers it.
     std::vector<D> xi(n);
     st.eval_dense_into(D(t_interp), xi);
     S.assign(n * nd, 0.0);
@@ -286,7 +287,7 @@ static void forward_step(const checkpoint<M>& cp, int q_next, double eta,
 }
 
 // ---------------------------------------------------------------------------
-//  Reverse: the same step written, seeded on the carry out.
+//  Reverse: the same step written, seeded on the Nordsieck carry out.
 // ---------------------------------------------------------------------------
 
 
@@ -299,7 +300,8 @@ static void forward_step(const checkpoint<M>& cp, int q_next, double eta,
 // ---------------------------------------------------------------------------
 
 template<cppde::multistep_method M>
-static void closed_step(const checkpoint<M>& cp, const std::vector<double>& w,
+static void closed_step(const checkpoint<M>& cp, const frozen_matrix& mat,
+                        const std::vector<double>& w,
                         std::vector<double>& wz, std::vector<double>& wp)
 {
   const std::size_t n = cp.n_states;
@@ -326,7 +328,7 @@ static void closed_step(const checkpoint<M>& cp, const std::vector<double>& w,
   auto jac_d = jacobian<double>{pv};
   cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
   const double t_new = cp.t + ops.h;
-  solver.prepare(cp.y, t_new, 1.0 / ops.gamma, ops.gamma);
+  solver.prepare_frozen(mat.x, mat.t, mat.inv_gamma_p, 0);
 
   adjoint_terms adj{pv};
   std::vector<double> w_out(static_cast<std::size_t>(ops.q_out + 1) * n, 0.0);
@@ -335,8 +337,7 @@ static void closed_step(const checkpoint<M>& cp, const std::vector<double>& w,
   wz.assign(static_cast<std::size_t>(cp.carry.q + 1) * n, 0.0);
   std::vector<double> wphi(NX + NP, 0.0);
   cppde::adjoint::apply_multistep_adjoint<stepper_d<M>>(
-      ops, n, NX + NP, cp.y, t_new, w_out.data(), solver, adj,
-      wz.data(), wphi.data(), ws);
+      ops, cp, n, t_new, w_out.data(), solver, adj, wz.data(), wphi.data(), ws);
 
   wp.assign(NP, 0.0);
   for (std::size_t j = 0; j < NP; ++j) wp[j] = wphi[NX + j];
@@ -345,8 +346,9 @@ static void closed_step(const checkpoint<M>& cp, const std::vector<double>& w,
 // ---------------------------------------------------------------------------
 
 template<cppde::multistep_method M>
-static void compare(const char* name, const checkpoint<M>& cp_in, int q_next,
-                    double eta, const std::vector<double>& w)
+static void compare(const char* name, const checkpoint<M>& cp_in,
+                    const frozen_matrix& mat, int q_next, double eta,
+                    const std::vector<double>& w)
 {
   checkpoint<M> cp = cp_in;
   cp.q_next  = q_next;
@@ -360,7 +362,7 @@ static void compare(const char* name, const checkpoint<M>& cp_in, int q_next,
   forward_step<M>(cp, q_next, eta, nd, S, fwd_carry, 0.0);
 
   std::vector<double> wz, wp;
-  closed_step<M>(cp, w, wz, wp);
+  closed_step<M>(cp, mat, w, wz, wp);
 
   std::printf("%-30s q %d -> %d  eta %.3g  |", name, cp.carry.q, q_next, eta);
   for (std::size_t i = 0; i < wz.size(); ++i) std::printf(" %.17g", wz[i]);
@@ -390,8 +392,9 @@ static void run_method(const char* method)
 
     const std::size_t n  = cp.n_states;
     const std::size_t nz = static_cast<std::size_t>(cp.carry.q + 1) * n;
+    frozen_matrix mat;
 
-    // The state the corrector converged to at this step, from the forward run.
+    // The state the corrector ended on at this step, from the forward run.
     {
       std::vector<double> p(P, P + NP);
       auto sys = make_system<double>(p);
@@ -402,11 +405,13 @@ static void run_method(const char* method)
         for (std::size_t i = 0; i < n; ++i)
           st.zn_mut(j)[i] = cp.zn[static_cast<std::size_t>(j) * n + i];
       std::vector<double> xin(cp.zn.begin(), cp.zn.begin() + n), xo(n), xe(n);
+      cppde::history_log hl;
+      st.set_history_log(&hl);
       st.do_step(sys, xin, cp.t, xo, cp.dt, xe);
       check(st.newton_converged(),
             std::string(method) + " the captured step converged");
-      polish_corrector<M>(sys, st, cp.t, xo);
       cp.y.assign(xo.begin(), xo.end());
+      record_corrector(st, cp, mat);
     }
 
     std::vector<double> wmix(static_cast<std::size_t>(cp.carry.q + 2) * n);
@@ -416,22 +421,22 @@ static void run_method(const char* method)
     const std::string tag = std::string(method) + " warm" + std::to_string(warm);
     check(nz >= 2 * n, tag + " reached order two or higher");
 
-    // Every Nordsieck slot on its own, so no column of the carry Jacobian hides.
+    // One Nordsieck slot at a time, so no column of the Jacobian of the Nordsieck carry hides.
     for (std::size_t r = 0; r < nz && r < 4 * n; ++r) {
       std::vector<double> e(nz + n, 0.0);
       e[r] = 1.0;
-      compare<M>((tag + " e" + std::to_string(r)).c_str(), cp, cp.carry.q, 1.0, e);
+      compare<M>((tag + " e" + std::to_string(r)).c_str(), cp, mat, cp.carry.q, 1.0, e);
     }
 
     // An observation inside a step reaches it through the dense output, whose
     // adjoint belongs to the trajectory rather than to one step. It is checked
     // where it lives, in test_reverse_trajectory_methods.cpp.
 
-    compare<M>((tag + " mixed").c_str(),   cp, cp.carry.q,     1.0,  wmix);
-    compare<M>((tag + " rescale").c_str(), cp, cp.carry.q,     0.83, wmix);
-    compare<M>((tag + " order up").c_str(), cp, cp.carry.q + 1, 1.0, wmix);
+    compare<M>((tag + " mixed").c_str(),   cp, mat, cp.carry.q,     1.0,  wmix);
+    compare<M>((tag + " rescale").c_str(), cp, mat, cp.carry.q,     0.83, wmix);
+    compare<M>((tag + " order up").c_str(), cp, mat, cp.carry.q + 1, 1.0, wmix);
     if (cp.carry.q > 1)
-      compare<M>((tag + " order down").c_str(), cp, cp.carry.q - 1, 1.0, wmix);
+      compare<M>((tag + " order down").c_str(), cp, mat, cp.carry.q - 1, 1.0, wmix);
   }
 }
 
