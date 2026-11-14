@@ -1,5 +1,13 @@
 # Changelog
 
+## cppDE 0.13.14
+
+- The tests that call
+  [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md) skip
+  without SUNDIALS also where KLU is installed, and the states of a
+  forward and a reverse solve on one grid are compared to rounding, not
+  bit for bit.
+
 ## cppDE 0.13.13
 
 - [`compile()`](https://dmodverse.github.io/cppDE/reference/compile.md)

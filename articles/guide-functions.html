@@ -27,7 +27,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">cppDE</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.13.13</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.13.14</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -223,9 +223,9 @@ s)\)</span>:</p>
 <span><span class="va">obsOut</span> <span class="op">&lt;-</span> <span class="va">g</span><span class="op">$</span><span class="fu">evaluate</span><span class="op">(</span>A <span class="op">=</span> <span class="va">out</span><span class="op">$</span><span class="va">variable</span><span class="op">[</span>, <span class="st">"A"</span><span class="op">]</span>, B <span class="op">=</span> <span class="va">out</span><span class="op">$</span><span class="va">variable</span><span class="op">[</span>, <span class="st">"B"</span><span class="op">]</span>, s <span class="op">=</span> <span class="fl">2</span>,</span>
 <span>                     tangentX <span class="op">=</span> <span class="va">tangX</span>, tangentP <span class="op">=</span> <span class="va">tangP</span><span class="op">)</span></span>
 <span><span class="va">obsOut</span><span class="op">$</span><span class="va">tangent</span><span class="op">[</span><span class="fl">101</span>, , <span class="op">]</span></span>
-<span><span class="co">#&gt;              A          B         k1        k2         s</span></span>
-<span><span class="co">#&gt; y 4.421330e-01 0.27067062 -0.4817043 -3.082325 0.2210665</span></span>
-<span><span class="co">#&gt; z 1.255531e-16 0.01866078  0.2715690 -0.212504 0.0000000</span></span></code></pre></div>
+<span><span class="co">#&gt;          A          B         k1        k2         s</span></span>
+<span><span class="co">#&gt; y 0.442133 0.27067062 -0.4817043 -3.082325 0.2210665</span></span>
+<span><span class="co">#&gt; z 0.000000 0.01866078  0.2715690 -0.212504 0.0000000</span></span></code></pre></div>
 <div class="sourceCode" id="cb7"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">traj</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>time <span class="op">=</span> <span class="va">out</span><span class="op">$</span><span class="va">time</span>, variable <span class="op">=</span> <span class="va">obsOut</span><span class="op">$</span><span class="va">y</span>, tangent <span class="op">=</span> <span class="va">obsOut</span><span class="op">$</span><span class="va">tangent</span><span class="op">)</span></span>
 <span><span class="fu"><a href="https://ggplot2.tidyverse.org/reference/ggplot.html" class="external-link">ggplot</a></span><span class="op">(</span><span class="fu">longFormat</span><span class="op">(</span><span class="va">traj</span>, <span class="st">"y"</span><span class="op">)</span>, <span class="fu"><a href="https://ggplot2.tidyverse.org/reference/aes.html" class="external-link">aes</a></span><span class="op">(</span><span class="va">time</span>, <span class="va">value</span><span class="op">)</span><span class="op">)</span> <span class="op">+</span></span>

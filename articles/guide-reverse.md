@@ -229,7 +229,7 @@ residual term:
 S  <- outF$tangent[, "B", ]
 H2 <- 2 * crossprod(S) + 2 * apply(res * outF$hessian[, "B", , ], c(2, 3), sum)
 max(abs(H - H2))
-#> [1] 2.273737e-13
+#> [1] 1.98952e-13
 ```
 
 The first call computes residual and tangent, any cotangent serves

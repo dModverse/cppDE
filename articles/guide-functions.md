@@ -125,9 +125,9 @@ tangP  <- matrix(c(0, 0, 0, 0, 1), 1, dimnames = list("s", theta))
 obsOut <- g$evaluate(A = out$variable[, "A"], B = out$variable[, "B"], s = 2,
                      tangentX = tangX, tangentP = tangP)
 obsOut$tangent[101, , ]
-#>              A          B         k1        k2         s
-#> y 4.421330e-01 0.27067062 -0.4817043 -3.082325 0.2210665
-#> z 1.255531e-16 0.01866078  0.2715690 -0.212504 0.0000000
+#>          A          B         k1        k2         s
+#> y 0.442133 0.27067062 -0.4817043 -3.082325 0.2210665
+#> z 0.000000 0.01866078  0.2715690 -0.212504 0.0000000
 ```
 
 ``` r

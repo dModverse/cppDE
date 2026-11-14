@@ -120,7 +120,7 @@ outN <- solveODE(chain, times, parms, abstol = 1e-10, reltol = 1e-10)
 c(states = max(abs(outC$variable - outN$variable)),
   sensitivities = max(abs(outC$tangent - outN$tangent)))
 #>        states sensitivities 
-#>  1.321288e-10  8.817443e-10
+#>  1.321286e-10  8.817671e-10
 sapply(list(cvode = outC, cppODE = outN),
        function(o) unlist(o$diagnostics[c("accepted", "rejected", "fevals", "jevals")]))
 #>          cvode cppODE

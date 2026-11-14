@@ -27,7 +27,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">cppDE</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.13.13</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.13.14</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -256,7 +256,7 @@ sensitivities to the tolerance, with different step sequences.</p>
 <span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>states <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">outC</span><span class="op">$</span><span class="va">variable</span> <span class="op">-</span> <span class="va">outN</span><span class="op">$</span><span class="va">variable</span><span class="op">)</span><span class="op">)</span>,</span>
 <span>  sensitivities <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">outC</span><span class="op">$</span><span class="va">tangent</span> <span class="op">-</span> <span class="va">outN</span><span class="op">$</span><span class="va">tangent</span><span class="op">)</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="co">#&gt;        states sensitivities </span></span>
-<span><span class="co">#&gt;  1.321288e-10  8.817443e-10</span></span>
+<span><span class="co">#&gt;  1.321286e-10  8.817671e-10</span></span>
 <span><span class="fu"><a href="https://rdrr.io/r/base/lapply.html" class="external-link">sapply</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/list.html" class="external-link">list</a></span><span class="op">(</span>cvode <span class="op">=</span> <span class="va">outC</span>, cppODE <span class="op">=</span> <span class="va">outN</span><span class="op">)</span>,</span>
 <span>       <span class="kw">function</span><span class="op">(</span><span class="va">o</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/unlist.html" class="external-link">unlist</a></span><span class="op">(</span><span class="va">o</span><span class="op">$</span><span class="va">diagnostics</span><span class="op">[</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span><span class="st">"accepted"</span>, <span class="st">"rejected"</span>, <span class="st">"fevals"</span>, <span class="st">"jevals"</span><span class="op">)</span><span class="op">]</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="co">#&gt;          cvode cppODE</span></span>
