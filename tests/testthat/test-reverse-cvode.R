@@ -123,6 +123,7 @@ test_that("ASA goes through the batch entry too", {
 })
 
 test_that("ASA on KLU replays the checkpoints and matches the dense solve", {
+  skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
   skip_if_not(isTRUE(cvodeConfig$klu_available), "KLU not available")
   # The replay from a checkpoint must take the run's steps; KLU's refactorization
   # depends on the factorization history, so every setup factorizes afresh.

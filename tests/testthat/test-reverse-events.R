@@ -142,7 +142,9 @@ test_that("bdf and adams reverse equal forward to rounding across events", {
     W   <- seed_for(fwd)
     rev <- do.call(solveODE, c(list(models$ev_rev[[m]], times, p, forcings = fc,
                                     cotangent = W), same_grid))
-    expect_identical(rev$variable, fwd$variable, info = m)
+    # Same steps, values to rounding: compilers that fuse multiply-adds fuse
+    # them differently over the AD type than over double.
+    expect_equal(rev$variable, fwd$variable, tolerance = 1e-12, info = m)
     ref <- contract(fwd$tangent, W)[, 1]
     expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref),
                  tolerance = 1e-11, info = m)

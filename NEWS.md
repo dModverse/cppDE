@@ -1,3 +1,8 @@
+# cppDE 0.13.14
+
+* The tests that call `cvode()` skip without SUNDIALS also where KLU is installed, and the states
+  of a forward and a reverse solve on one grid are compared to rounding, not bit for bit.
+
 # cppDE 0.13.13
 
 * `compile()` applies the `compileArgs` of a model to the source of that model only, also when

@@ -6,6 +6,7 @@
 <!-- badges: start -->
 
 [![R-CMD-check](https://github.com/dModverse/cppDE/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/dModverse/cppDE/actions/workflows/R-CMD-check.yaml)
+[![docs](https://img.shields.io/badge/docs-dmodverse.github.io%2FcppDE-blue)](https://dmodverse.github.io/cppDE/)
 <!-- badges: end -->
 
 **C++ code generation for ODEs with sensitivity propagation.**

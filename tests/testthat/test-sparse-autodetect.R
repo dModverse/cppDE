@@ -17,9 +17,11 @@ lu_of <- function(mod) if (isTRUE(attr(mod, "sparse"))) "sparse" else "dense"
 expect_lu <- function(rhs, expected, label, ...) {
   a <- cppODE(rhs, deriv = FALSE, compile = FALSE, verbose = FALSE,
               outdir = tempdir(), modelname = paste0("autodet_cpp_", label), ...)
+  expect_identical(lu_of(a), expected, info = paste("cppDE:", label))
+  # KLU does not imply SUNDIALS: without it only the native backend is checked.
+  if (!isTRUE(cppDE:::cvodeConfig$available)) return(invisible())
   b <- cvode(rhs, deriv = FALSE, compile = FALSE, verbose = FALSE,
              outdir = tempdir(), modelname = paste0("autodet_cv_", label), ...)
-  expect_identical(lu_of(a), expected, info = paste("cppDE:", label))
   expect_identical(lu_of(b), expected, info = paste("CVODE:", label))
 }
 
