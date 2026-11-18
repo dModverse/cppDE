@@ -3,8 +3,8 @@
 Generates and compiles C++ code that evaluates a system of algebraic
 expressions \\y = g(x, p)\\ on one or more rows of input, with optional
 first- and second-order derivatives. There is no time integration; the
-principal use cases are observation maps for likelihood-based inference
-and reparametrizations for
+principal use cases are observation functions and reparameterizations of
+the inputs of
 [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md).
 `derivMode` selects which derivative products are built. Every returned
 function runs compiled code: an object built with `compile = FALSE` is
@@ -217,5 +217,9 @@ if (codegenAvailable()) {
   g$func(x1 = 1, x2 = 2, s = 0.5)
   g$jac(x1 = 1, x2 = 2, s = 0.5)[1, , ]
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#>    x1  x2 s
+#> y 0.5 0.5 3
+#> z 1.0 0.0 0
 # }
 ```

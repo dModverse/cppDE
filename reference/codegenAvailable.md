@@ -35,7 +35,7 @@ anything, `FALSE` otherwise.
 
 ``` r
 codegenAvailable()
-#> [1] FALSE
+#> [1] TRUE
 codegenAvailable("cvode")
-#> [1] FALSE
+#> [1] TRUE
 ```

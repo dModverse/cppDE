@@ -20,9 +20,9 @@ also SUNDIALS.
 
 library(cppDE)
 codegenAvailable()
-#> [1] FALSE
+#> [1] TRUE
 codegenAvailable("cvode")
-#> [1] FALSE
+#> [1] TRUE
 ```
 
 ## Optional system libraries
@@ -83,11 +83,11 @@ is `FALSE`.
 
 writeLines(readLines(system.file("cvodeConfig.dcf", package = "cppDE")))
 #> available: TRUE
-#> cflags: -I/usr/lib/x86_64-linux-gnu/openmpi/include -I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi 
-#> libs: -lsundials_cvodes -lsundials_nvecserial -lsundials_sunmatrixdense -lsundials_sunlinsoldense -L/usr/lib/x86_64-linux-gnu/openmpi/lib -lmpi_cxx -lmpi 
+#> cflags: -I/usr/lib/x86_64-linux-gnu/openmpi/include -I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi
+#> libs: -lsundials_cvodes -lsundials_nvecserial -lsundials_sunmatrixdense -lsundials_sunlinsoldense -lsundials_core -L/usr/lib/x86_64-linux-gnu/openmpi/lib -lmpi
 #> klu_available: TRUE
-#> klu_cflags: -I/usr/include/suitesparse 
-#> klu_libs: -lsundials_sunmatrixsparse -lsundials_sunlinsolklu -lklu 
+#> klu_cflags: -I/usr/include/suitesparse
+#> klu_libs: -lsundials_sunmatrixsparse -lsundials_sunlinsolklu -lklu
 #> cvode_lapack_available: FALSE
 #> cvode_lapack_libs: 
 #> openmp_available: TRUE

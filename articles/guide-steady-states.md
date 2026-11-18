@@ -59,15 +59,15 @@ steady state with sensitivities.
 outQ <- solveODE(steady, c(0, 1e4), parms, abstol = 1e-10, reltol = 1e-10, roottol = 1e-10)
 n <- length(outQ$time)
 outQ$time[n]
-#> [1] 125.0592
+#> [1] 125.0591
 outQ$variable[n, ]
 #> A B 
 #> 2 5
 outQ$tangent[n, , ]
 #>         sens
-#> variable            A            B k0            k1  k2
-#>        A 8.527778e-23 0.000000e+00  2 -4.000000e+00   0
-#>        B 2.477495e-11 1.486497e-11  5  1.321339e-10 -25
+#> variable            A            B k0           k1  k2
+#>        A 8.527872e-23 0.000000e+00  2 -4.00000e+00   0
+#>        B 2.477571e-11 1.486542e-11  5  1.32137e-10 -25
 ```
 
 \\\partial A/\partial k_0 = 1/k_1 = 2\\ and \\\partial B/\partial k_2 =
@@ -120,8 +120,8 @@ drop(C %*% ss$x)
 #> Etot Stot 
 #>    1   10
 do.call(enz$func, c(as.list(ss$x), as.list(pe)))
-#>                 E            S            ES             P
-#> [1,] 1.110223e-16 1.332268e-14 -1.110223e-16 -1.326717e-14
+#>                  E            S           ES             P
+#> [1,] -3.379727e-16 1.287859e-14 3.379727e-16 -1.329308e-14
 ```
 
 Variables outside `solve` keep the values of `x`. With the substrate

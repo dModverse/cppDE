@@ -129,5 +129,7 @@ if (codegenAvailable()) {
   cbind(time = times, out$cppODE)
   if (!is.null(out$cvode)) max(abs(out$cppODE - out$cvode))
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#> [1] 1.65511e-05
 # }
 ```

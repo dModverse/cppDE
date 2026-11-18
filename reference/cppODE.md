@@ -135,14 +135,17 @@ cppODE(
   - `"reverse"`: no forward sensitivities; the model takes a `cotangent`
     in
     [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md)
-    and returns `$cotangent`, one row per state and parameter.
+    and returns `$cotangent`, one row per state and parameter. Under
+    `"bdf"` the sweep solves the corrector equation of every step to
+    `reltol` and `abstol`, under `"adams"` it transposes the corrector
+    iterations the value run took.
 
   - `"forward-forward"`: the same as `deriv2 = TRUE`, returning
     `$hessian`.
 
   - `"forward-reverse"`: returns `$tangent`, `$cotangent` and
     `$curvature`, the derivatives of `$cotangent` along each tangent
-    direction.
+    direction, with the corrector treated as under `"reverse"`.
 
 - profile:
 
@@ -165,17 +168,18 @@ The compiled model name (character) with the attributes required by
 [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md):
 `equations`, `srcfile`, `variables`, `parameters`, `forcings`, `events`,
 `rootfunc`, `fixed` (the compile-time set), `deriv`, `deriv2`,
-`derivMode`, `sparse`, `method`, `useNDF`, `dimNames` (with element
-`sens` only when `deriv` is `TRUE`), `compileArgs`, and `linkArgs` when
-OpenMP is available.
+`derivMode`, `sparse`, `method` (`"rosenbrock4"` for `"rb4"`), `useNDF`,
+`solveAbi`, `dimNames` (with element `sens` only when `deriv` is
+`TRUE`), `compileArgs`, and `linkArgs` when OpenMP is available.
 
 ## Details
 
 Events are specified as a `data.frame` with columns `var` (affected
 variable), `value` (expression to apply), `method` (`"replace"`,
 `"add"`, or `"multiply"`), and exactly one of `time` (event time) or
-`root` (root expression). `rootfunc` terminates integration:
-`"equilibrate"` stops at steady state (see `roottol` in
+`root` (root expression); any other column is an error. A root event
+fires on crossings in both directions. `rootfunc` terminates
+integration: `"equilibrate"` stops at steady state (see `roottol` in
 [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md));
 a character vector of expressions stops at the first zero crossing.
 
@@ -285,5 +289,11 @@ if (codegenAvailable()) {
   onB <- cbind(A = 0, B = rep(1, length(times)))
   solveODE(rev, times, parms, cotangent = onB)$cotangent
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#>          [,1]
+#> A    7.873989
+#> B    9.221522
+#> k1   2.280325
+#> k2 -24.301792
 # }
 ```

@@ -60,7 +60,7 @@ outR$cotangent
 #>          [,1]
 #> A   0.2143297
 #> B   0.1353352
-#> k1 -0.1734723
+#> k1 -0.1734738
 #> k2 -1.5411580
 
 outF <- solveODE(fwd, times, parms)
@@ -69,7 +69,7 @@ outF$tangent[101, "B", ]                # ∂B(10)/∂θ from forward mode
 #>  0.2143280  0.1353353 -0.1734757 -1.5411625
 outR$cotangent[, 1] - solveODE(fwd, times, parms, sensErrCon = FALSE)$tangent[101, "B", ]
 #>             A             B            k1            k2 
-#> -2.775558e-17  1.110223e-16  1.665335e-16  8.881784e-16
+#> -1.387779e-16 -8.326673e-17 -1.471359e-06  1.946064e-08
 ```
 
 A third dimension holds several seeds, swept back together on one
@@ -85,7 +85,7 @@ solveODE(rev, times, parms, cotangent = W)$cotangent
 #>             A10        B10
 #> A   0.006737421  0.2143297
 #> B   0.000000000  0.1353352
-#> k1 -0.067380395 -0.1734723
+#> k1 -0.067379481 -0.1734738
 #> k2  0.000000000 -1.5411580
 ```
 
@@ -111,8 +111,8 @@ cbind(reverse = grad[, 1], forward = 2 * colSums(res * outF$tangent[, "B", ]))
 #>       reverse   forward
 #> A   25.009083  25.00933
 #> B   23.696642  23.69663
-#> k1   7.042661   7.04377
-#> k2 -74.693071 -74.69188
+#> k1   7.042708   7.04377
+#> k2 -74.692436 -74.69188
 ```
 
 A store may be reused for any number of cotangents and is freed at the
@@ -156,7 +156,7 @@ chk <- solveODE(fast, tf, pf, cotangent = Wf,
 c(exact = exact, valueGrid = val$cotangent[["q", 1]], tight = tgt$cotangent[["q", 1]],
   refined = chk$cotangent[["q", 1]])
 #>      exact  valueGrid      tight    refined 
-#> 0.08342800 1.77299898 0.14264118 0.08366032
+#> 0.08342800 1.77299897 0.14272371 0.08366032
 c(steps = length(chk$adjoint$h), substeps = sum(chk$adjoint$substeps))
 #>    steps substeps 
 #>       35     2104
@@ -217,8 +217,8 @@ H
 #> theta          A          B        k1         k2
 #>    A    33.35838   34.25193  19.61416 -166.85157
 #>    B    34.25193   50.10908  21.84923 -170.19220
-#>    k1   19.61416   21.84923 -24.36330  -45.21293
-#>    k2 -166.85157 -170.19220 -45.21293  678.74552
+#>    k1   19.61415   21.84922 -24.36335  -45.21294
+#>    k2 -166.85170 -170.19226 -45.21335  678.74568
 ```
 
 The same Hessian from the forward-forward model, Gauss-Newton term plus
@@ -229,7 +229,7 @@ residual term:
 S  <- outF$tangent[, "B", ]
 H2 <- 2 * crossprod(S) + 2 * apply(res * outF$hessian[, "B", , ], c(2, 3), sum)
 max(abs(H - H2))
-#> [1] 1.98952e-13
+#> [1] 0.0004218381
 ```
 
 The first call computes residual and tangent, any cotangent serves
@@ -245,10 +245,10 @@ cv[, "B", 1, 1] <- 2 * first$tangent[, "B", ] %*% v
 Hv <- solveODE(fr, times, parms, tangent = v, cotangent = wL, curvature = cv)$curvature[, , 1]
 cbind(Hv, H %*% v)
 #>            Hv          v
-#> A   186.46567  186.46574
+#> A   186.46568  186.46574
 #> B   192.04143  192.04143
-#> k1   20.84937   20.84963
-#> k2 -723.95861 -723.95845
+#> k1   20.84939   20.84959
+#> k2 -723.95912 -723.95903
 ```
 
 `sensErrCon = TRUE` (default) includes the tangents in the error test of

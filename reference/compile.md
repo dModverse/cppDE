@@ -8,6 +8,9 @@ shared libraries (`.so` or `.dll`) using `R CMD SHLIB`. The compile-time
 flags stored in an object's `"compileArgs"` attribute apply to the
 source of that object only, also when `output` links several sources
 into one library; flags passed through `args` apply to every source.
+Every object is compiled anew, with the makefiles of `R CMD SHLIB`, so a
+user Makevars (`R_MAKEVARS_USER` or `~/.R/Makevars`) reaches the compile
+of each object as well as the link.
 
 ## Usage
 
@@ -32,8 +35,8 @@ compile(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
 
 - args:
 
-  Optional additional compiler or linker arguments appended after the
-  flags from `"compileArgs"`. Default `NULL`.
+  Optional additional compiler arguments, appended after the flags from
+  `"compileArgs"`. Default `NULL`.
 
 - cores:
 
@@ -84,5 +87,8 @@ if (codegenAvailable()) {
   solveODE(f, times = 0:3, parms = c(x = 1, k = 1))$variable
   g$func(x = 3)
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#>      y
+#> [1,] 6
 # }
 ```

@@ -24,7 +24,7 @@ evaluateMany(funs, sets, cores = 1L, deriv2 = FALSE)
 
 - cores:
 
-  Number of threads over the sets.
+  Number of threads over the sets. Default `1`.
 
 - deriv2:
 
@@ -58,5 +58,7 @@ if (codegenAvailable()) {
   out[[2]]$y
   out[[2]]$tangent[, , "b"]
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#> [1]  0.0000000 -0.6065307 -0.7357589
 # }
 ```

@@ -133,5 +133,8 @@ if (codegenAvailable()) {
   enz$func(E = ss$x[["E"]], S = ss$x[["S"]], ES = ss$x[["ES"]], P = ss$x[["P"]],
            kon = 1, koff = 0.5, kcat = 0.3, kback = 0.1)
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#>                  E            S           ES             P
+#> [1,] -3.379727e-16 1.287859e-14 3.379727e-16 -1.329308e-14
 # }
 ```

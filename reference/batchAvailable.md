@@ -1,9 +1,9 @@
 # Will a Batch Run in Parallel?
 
+Reports whether
 [`solveODEBatch()`](https://dmodverse.github.io/cppDE/reference/solveODEBatch.md)
-degrades to a serial loop without saying so. This reports the conditions
-it depends on, so a caller can warn instead of silently running
-serially.
+solves the conditions of a model in parallel. Without a batch entry
+point or OpenMP it runs a serial loop and gives no warning.
 
 ## Usage
 
@@ -39,5 +39,18 @@ if (codegenAvailable()) {
   f <- cppODE(c(x = "-k*x"), deriv = FALSE)
   batchAvailable(f)
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#> $symbol
+#> [1] TRUE
+#> 
+#> $openmp
+#> [1] TRUE
+#> 
+#> $modelOpenmp
+#> [1] TRUE
+#> 
+#> $parallel
+#> [1] TRUE
+#> 
 # }
 ```

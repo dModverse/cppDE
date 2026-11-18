@@ -208,7 +208,7 @@ sweep <- solveBatch(hr, cotangent = cotangent, store = lapply(fwd, `[[`, "store"
 
 Reduce(`+`, lapply(sweep, function(r) r$cotangent[c("k1", "k2"), 1]))
 #>         k1         k2 
-#>   1.058904 -50.677950
+#>   1.058895 -50.677995
 attr(objective(k0), "gradient")
 #>         k1         k2 
 #>   1.058877 -50.678081

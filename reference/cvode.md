@@ -145,9 +145,8 @@ switch is located by CVODES' root finding.
 
 Needs SUNDIALS (\>= 6.0) at install time, see
 [`installLibs()`](https://dmodverse.github.io/cppDE/reference/installLibs.md);
-otherwise `cvode()` errors at the first call with platform-specific
-install hints. KLU, required when `sparse = TRUE`, is detected the same
-way.
+otherwise `cvode()` stops with platform-specific install instructions.
+KLU, required when `sparse = TRUE`, is detected the same way.
 
 ## References
 
@@ -189,5 +188,11 @@ if (codegenAvailable("cvode")) {
   onB <- cbind(A = 0, B = rep(1, length(times)))
   solveODE(adj, times, parms, cotangent = onB)$cotangent
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -I/usr/lib/x86_64-linux-gnu/openmpi/include -I/usr/lib/x86_64-linux-gnu/openmpi/include/openmpi -fopenmp]
+#>          [,1]
+#> A    3.957127
+#> B    4.905396
+#> k1   1.036174
+#> k2 -12.529511
 # }
 ```

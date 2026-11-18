@@ -29,9 +29,9 @@ the deadlock is then still reachable; the fallback is
 `OMP_NUM_THREADS=1` in the environment that starts R. `guard` is `FALSE`
 on Windows, which has no `fork()`.
 
-Attaching the package prints this in one line. Set
-`options(cppDE.quiet = TRUE)` beforehand to suppress the line, or attach
-with
+Attaching the package prints one line when BLAS runs more than one
+thread or no entry point resolved. Set `options(cppDE.quiet = TRUE)`
+beforehand to suppress the line, or attach with
 [`suppressPackageStartupMessages()`](https://rdrr.io/r/base/message.html).
 
 ## See also

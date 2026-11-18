@@ -98,5 +98,9 @@ if (codegenAvailable()) {
   solveBatch(hr, cotangent = list(W, 2 * W),
              store = lapply(fw, `[[`, "store"))$b$cotangent
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#>         [,1]
+#> x   9.482463
+#> k -41.915020
 # }
 ```

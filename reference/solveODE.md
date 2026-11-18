@@ -170,13 +170,13 @@ solveODE(
 
   Logical. Include the sensitivities, under
   `derivMode = "forward-reverse"` the tangents, in the error test and
-  the first step. Default `TRUE`; `FALSE` is cheaper and less accurate,
-  gives the steps and corrector iterations of a value run, so the
-  sensitivities are the derivative of the computed solution and equal
-  those of the reverse mode to rounding, and under `"forward-reverse"`
-  gives a step grid that does not depend on the directions of the
-  tangent. Needs a model with sensitivities, has no effect under
-  `derivMode = "reverse"`, and a
+  the first step. Default `TRUE`. `FALSE` takes the steps and corrector
+  iterations of a value run, up to rounding: cheaper and less accurate,
+  the sensitivities are the derivative of the computed solution, as the
+  reverse mode of `"adams"` returns; that of `"bdf"` solves the
+  corrector equations instead. Under `"forward-reverse"` the step grid
+  does not depend on the directions of the tangent. Needs a model with
+  sensitivities, has no effect under `derivMode = "reverse"`; a
   [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
   model takes `TRUE` only.
 
@@ -291,7 +291,7 @@ out.
 ### Shapes of `tangent` and `hessian`
 
 `tangent` is the Jacobian \\\Phi'(\theta)\\ and `hessian` the second
-derivative \\\Phi''(\theta)\\ of a reparametrization \\p =
+derivative \\\Phi''(\theta)\\ of a reparameterization \\p =
 \Phi(\theta)\\ of the initial states and parameters; the results are
 then derivatives in \\\theta\\. `tangent` takes one of three shapes,
 told apart by the row count and row names. `hessian` has the rows of
@@ -371,5 +371,11 @@ if (codegenAvailable()) {
   solveODE(rev, times, parms, cotangent = onB, store = first$store)$cotangent
   solveODE(rev, times, parms, cotangent = onA, store = first$store)$cotangent
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#>         [,1]
+#> A   2.531128
+#> B   0.000000
+#> k1 -3.787318
+#> k2  0.000000
 # }
 ```

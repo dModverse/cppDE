@@ -40,5 +40,11 @@ if (codegenAvailable()) {
   releaseStore(first$store)
   solveODE(rev, 0:10, parms, cotangent = onB, store = first$store)$cotangent
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#>          [,1]
+#> A    3.957110
+#> B    4.905394
+#> k1   1.036050
+#> k2 -12.529726
 # }
 ```

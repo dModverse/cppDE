@@ -1,5 +1,42 @@
 # Changelog
 
+## cppDE 0.13.15
+
+- The reverse and forward-reverse modes of `bdf` solve the corrector
+  equation of every step in the backward sweep, to a tenth of the local
+  error test of the backward problem against `reltol` and `abstol`,
+  tested on the values: against the iteration matrix of the forward run
+  and, where that cannot reach the test within ten iterations, against
+  the iteration matrix at the accepted state. The gradient is the
+  derivative of the method with the corrector equations solved, and so
+  is the Hessian of forward-reverse. The forward sensitivities with
+  `sensErrCon = FALSE` take the corrector iterations of the value run
+  and differ from it by what those iterations leave unconverged. Under
+  `adams` the sweep transposes the iterations taken: the exactly solved
+  Adams-Moulton step can be unstable on a stiff model at the step sizes
+  of the value run.
+- A forward solve with `sensErrCon = FALSE` takes the steps of a value
+  run up to rounding; on a long stiff run the two step sequences can
+  part.
+- Under `adjointControl(refine = TRUE)` a `bdf` or `adams` sweep reuses
+  the factorizations of the extrapolated flow over intervals of equal
+  length and sweeps all seed columns at once.
+- A root event at the last output time ends the solve on the state the
+  event leaves.
+- The event table of
+  [`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md)
+  and [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
+  has the columns `var`, `value`, `method` and `time` or `root`; any
+  other column is an error that names it. The columns `terminal` and
+  `direction` are removed: a root event fires on crossings in both
+  directions and the solve continues, and `rootfunc` ends a solve.
+- [`compile()`](https://dmodverse.github.io/cppDE/reference/compile.md)
+  builds the objects of an `output` with the makefiles of `R CMD SHLIB`,
+  so a user Makevars (`R_MAKEVARS_USER` or `~/.R/Makevars`) reaches the
+  compile of every object as well as the link, and compiles every object
+  anew. A source that fails to compile is an error that names it and
+  shows the compiler output, also under `cores > 1`.
+
 ## cppDE 0.13.14
 
 - The tests that call
@@ -13,8 +50,8 @@
 - [`compile()`](https://dmodverse.github.io/cppDE/reference/compile.md)
   applies the `compileArgs` of a model to the source of that model only,
   also when `output` links several models into one library; the step
-  trace of one model, or the KLU settings of a sparse one, no longer
-  reach the others.
+  trace of one model and the KLU settings of a sparse one reach no other
+  model.
 - [`solveBatch()`](https://dmodverse.github.io/cppDE/reference/solveBatch.md)
   keeps the prepared parameters of a condition whose element of `parms`
   is `NULL`.
@@ -27,8 +64,8 @@
 - The reverse mode of `bdf` and `adams` transposes the corrector
   iterations the forward run took, against the iteration matrix it
   factorized: the gradient equals the forward sensitivities on the same
-  grid (`sensErrCon = FALSE`) to rounding. The adams reverse gradient of
-  a stiff model no longer diverges.
+  grid (`sensErrCon = FALSE`) to rounding, under `adams` on stiff models
+  as well.
 - The forward sensitivities of `bdf` and `adams` pass the corrector
   against the iteration matrix without the derivative of that matrix, at
   first and second order.
@@ -184,7 +221,7 @@
 
 - [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md)
   with `deriv2 = TRUE` and a `tangent` but no `hessian` takes the second
-  derivative of the inputs as zero; it crashed R before.
+  derivative of the inputs as zero.
 
 ## cppDE 0.13.3
 
@@ -228,21 +265,22 @@
   `<-` without a space and an unknown function are errors that name the
   construct.
 
-- A state switch whose branches both push the solution onto its surface
-  slides along it (Filippov) instead of stopping with an error, and
-  several switches slide at once. Values and first- and second-order
-  sensitivities on the native backend, first-order sensitivities on
+- A state switch whose branches both push the solution onto the
+  switching surface slides along it (Filippov) instead of stopping with
+  an error, and several switches slide at once. Values and first- and
+  second-order sensitivities on the native backend, first-order
+  sensitivities on
   [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md),
   reverse gradients on both, and the forward-reverse curvature.
 
 - Switches that cross at the same time take one saltation each. A root
-  crossed at a small rate takes its saltation: the crossing counts as
+  crossed at a small rate takes the saltation: the crossing counts as
   tangential only where the rate is negligible against the terms it is
   summed from, not below a fixed 1e-15.
 
-- A switch whose root is zero at `t0`, at a fixed event or after its own
-  crossing takes the side the solution leaves to, on both backends, and
-  the sensitivities take its jump once.
+- A switch whose root is zero at `t0`, at a fixed event or after a
+  crossing of that root takes the side the solution leaves to, on both
+  backends, and the sensitivities take the jump once.
 
 - [`abs()`](https://rdrr.io/r/base/MathFun.html),
   [`min()`](https://rdrr.io/r/base/Extremes.html) and
@@ -277,9 +315,9 @@
   `piecewise(1, time > ts && time <= t2, 0)`, is located as a root like
   a switch on a state, on both backends.
   [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
-  stepped over such a pulse where the right-hand side was zero before
-  it, and the sensitivities of the native backend missed the jump where
-  a parameter moves the switching time.
+  resolves such a pulse also where the right-hand side is zero before
+  it, and the sensitivities of the native backend take the jump where a
+  parameter moves the switching time.
 - `!` after an operator, as in `k*!(x > 1)`, parses. It negates as in R,
   up to the next `&&`, `||`, comma or closing bracket.
 - [`?expressions`](https://dmodverse.github.io/cppDE/reference/expressions.md)
@@ -298,7 +336,7 @@
   [`prepareBatch()`](https://dmodverse.github.io/cppDE/reference/prepareBatch.md)
   and
   [`solveBatch()`](https://dmodverse.github.io/cppDE/reference/solveBatch.md),
-  controls what a reverse solve does beyond its gradient. With
+  controls what a reverse solve does beyond the gradient. With
   `refine = TRUE` the sweep is checked step by step against the local
   error test of the CVODES backward problem: the cotangent of the states
   to `reltol` and `abstol`, and with `gradtol` each step’s share of the
@@ -323,9 +361,9 @@
   weights have no replacement.
 - Breaking: the value pass of a reverse solve takes the grid of a value
   run, as the forward run of CVODES’ adjoint analysis does. `sensErrCon`
-  no longer integrates a control tangent there and has no effect on a
-  reverse model. Where that grid misses the gradient, as on a trajectory
-  at rest or under a forcing the state does not see, use
+  integrates no control tangent there and has no effect on a reverse
+  model. Where that grid misses the gradient, as on a trajectory at rest
+  or under a forcing the state does not see, use
   `adjointControl(refine = TRUE)`.
 - Breaking: the limit of consecutive rejected steps is the argument
   `maxattempts` of
@@ -333,7 +371,7 @@
   [`solveODEBatch()`](https://dmodverse.github.io/cppDE/reference/solveODEBatch.md),
   [`prepareBatch()`](https://dmodverse.github.io/cppDE/reference/prepareBatch.md)
   and of the per-condition lists.
-- `install_libs()` is now
+- `install_libs()` is renamed
   [`installLibs()`](https://dmodverse.github.io/cppDE/reference/installLibs.md);
   the old name remains as a deprecated alias.
 - [`ptc()`](https://dmodverse.github.io/cppDE/reference/ptc.md) takes
@@ -346,8 +384,8 @@
   [`cppFUN()`](https://dmodverse.github.io/cppDE/reference/cppFUN.md)
   returns.
   [`?solveODE`](https://dmodverse.github.io/cppDE/reference/solveODE.md)
-  no longer calls a `cotangent` required when `keepStore = TRUE` lets a
-  reverse solve run without one.
+  marks `cotangent` as optional where `keepStore = TRUE` lets a reverse
+  solve run without one.
 - [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
   reverse models take events and `rootfunc`: the forward run is split at
   the jumps, one CVODES memory per stretch, and the backward sweep takes
@@ -355,31 +393,27 @@
   that move with the parameters or the state. They also take
   `adjointControl(gradtol =)`, which puts the gradient quadrature into
   the backward problem’s error test.
-- [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
-  reverse models with a sparse Jacobian no longer crash in the backward
-  pass: every KLU setup factorizes afresh, so the replay from a
-  checkpoint takes the steps the run stored.
-- `adams` solves its corrector by Newton’s method, as CVODES does with a
-  linear solver attached, in place of the PECE fixed point. It no longer
-  stalls on stiff components; the step trace loses `pece_iters` and
-  `pece_diverged`.
+- In [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
+  reverse models with a sparse Jacobian every KLU setup factorizes
+  afresh, so the replay from a checkpoint in the backward pass takes the
+  steps the run stored.
+- `adams` solves the corrector by Newton’s method, as CVODES does with a
+  linear solver attached, in place of the PECE fixed point; the step
+  trace loses `pece_iters` and `pece_diverged`.
 - The Newton step on an iteration matrix factorized at an earlier gamma
   takes the factor gamma / gammap, and the BDF scaling 2 / (1 + gamrat)
-  only under BDF. Under `adams` a stale matrix had locked the order at
-  five and collapsed the step.
-- The reverse sweep of `bdf` and `adams` no longer reuses a step’s
-  operators for a later step of the same size whose history rescales by
-  a different factor. Where step sizes alternate, as at switching times,
-  the gradient was wrong by up to orders of magnitude.
-- `rb4` keeps its fourth order on a right-hand side that reads the time
-  or a forcing: the coefficient of df/dt in the fourth stage, taken over
-  from Boost.Odeint, had the wrong sign and reduced the method to first
-  order there.
-- Faster reverse sweeps: the transposed solve refines against a held
+  only under BDF.
+- The reverse sweep of `bdf` and `adams` reuses the operators of a step
+  only for a later step of the same size whose history rescales by the
+  same factor.
+- `rb4` has fourth order also on a right-hand side that reads the time
+  or a forcing: the coefficient of df/dt in the fourth stage has the
+  sign of the method.
+- Reverse sweeps: the transposed solve refines against a held
   factorization where that is cheaper than factorizing each step,
   generated kernels keep their temporaries on the stack, the pullbacks
   of the right-hand side and of the Jacobian take one pass each, and KLU
-  skips its check of the matrices the generated code assembles.
+  skips the check of the matrices the generated code assembles.
 - [`solveBatch()`](https://dmodverse.github.io/cppDE/reference/solveBatch.md)
   gains `store`, the checkpoint stores of a prepared reverse batch.
 - `compile(output =)` builds the objects of the combined library `cores`
@@ -393,8 +427,8 @@
   checked steps that met the test at no number of substeps; `eta` is
   `NA` where `bdf` and `adams` sweep the flow.
 - The colored Jacobian, which `CPPDE_JAC = "colour"` forces and large
-  sparse models choose, compiles: the reverse Jacobian-vector product no
-  longer seeds the parameters.
+  sparse models choose, compiles: the reverse Jacobian-vector product
+  seeds no parameters.
 - The checked sweep keeps the seeds before a step’s start, and the
   extrapolated flow takes intervals in either direction of time.
 - [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
@@ -406,25 +440,21 @@
   an amount switch where that amount crosses zero, on both backends. The
   solve holds each switch as a mode, locates the root and sets the mode
   there, so forward tangents of first and second order, the reverse
-  gradient and its curvature, and
+  gradient and the curvature, and
   [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)’s
   forward and adjoint sensitivities take the jump of f. A switch adds no
   output row and is not limited by `maxroot`. A solution that slides
   along a switching surface stops with an error.
 - [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
   reverse models with root events interpolate the forward state by
-  Hermite: the polynomial interpolation read a wrong state at the start
-  of every stretch after a root, and the gradient was wrong from there
-  on.
-- Root events that cross zero within one step fire each at its own time,
-  the earliest first, rather than all at the first of them.
-- A terminal `rootfunc` ends the output with one row at its root. The
-  native backend wrote the root time twice, the first copy 1e-15 before
-  it.
+  Hermite, also at the start of every stretch after a root.
+- Root events that cross zero within one step fire one by one at their
+  crossing times, the earliest first.
+- A terminal `rootfunc` ends the output with one row at the root.
 - `./configure` finds a SUNDIALS built with MPI, as Debian ships it: it
-  adds the MPI link flags, without which the probe failed and
-  [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md) was
-  disabled.
+  adds the MPI link flags, so the probe links and
+  [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md) is
+  enabled.
 - `erf()`, `erfc()` and [`atan2()`](https://rdrr.io/r/base/Trig.html)
   take forward derivatives of first and second order, so
   [`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md)
@@ -432,7 +462,7 @@
   [`cppFUN()`](https://dmodverse.github.io/cppDE/reference/cppFUN.md)
   accept them as
   [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md) and
-  the reverse modes did.
+  the reverse modes do.
 
 ## cppDE 0.11.4
 
@@ -443,9 +473,9 @@
 
 ## cppDE 0.11.3
 
-- A forcing holds the value of its first and last point outside them,
-  where it was 0 before, and a single point gives a constant. Both apply
-  to [`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md)
+- A forcing holds the value of the first and last point outside them,
+  and a single point gives a constant. Both apply to
+  [`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md)
   and [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
   models.
 - New
@@ -455,19 +485,13 @@
 ## cppDE 0.11.2
 
 - [`ptc()`](https://dmodverse.github.io/cppDE/reference/ptc.md) builds
-  with clang and libc++ (macOS): `R_NO_REMAP` before the R headers,
-  whose [`length()`](https://rdrr.io/r/base/length.html) macro broke
-  `<vector>`.
+  with clang and libc++ (macOS): `R_NO_REMAP` before the R headers.
 
 ## cppDE 0.11.1
 
 - [`ptc()`](https://dmodverse.github.io/cppDE/reference/ptc.md): the
-  absolute floor of a row’s residual scale is `atol` times its largest
-  partial derivative, not its diagonal. A row whose own rate is tiny but
-  whose partner’s is not was scaled up to twelve orders of magnitude too
-  tight, the step matrix became numerically singular and
-  [`ptc()`](https://dmodverse.github.io/cppDE/reference/ptc.md) only
-  shrank `dt`.
+  absolute floor of the residual scale of a row is `atol` times the
+  largest partial derivative in that row, not the diagonal entry.
 
 ## cppDE 0.11.0
 
@@ -479,120 +503,86 @@
   error control follow the flow to a stable steady state and become
   Newton steps near it; `flow = FALSE` solves plain equations.
 - `rootfunc = "equilibrate"` stops once every
-  `|dx/dt| <= roottol |x| + abstol`, in both backends. The absolute
-  `|dx/dt| < roottol` stopped small states too early and large ones too
-  late.
+  `|dx/dt| <= roottol |x| + abstol`, in both backends, in place of the
+  absolute `|dx/dt| < roottol`.
 
 ## cppDE 0.10.5
 
-- **Bug fix.** `derivMode = "reverse"` and `"forward-reverse"` return
-  the gradient the forward mode returns where the trajectory is at rest.
-  Their forward run took its steps from the state’s error alone. On a
-  trajectory that stays exactly zero, such as a state that starts at 0
-  and is not driven within the grid, that error is zero, the step grew
-  without bound, and the adjoint on that grid was off by more than its
-  size: +0.80 against -0.43 for a derivative with respect to a zero
-  initial state on `0:50`. Where a state is small against
-  `abstol / reltol` the grid was too coarse for the same reason, which
-  left the gradients of the PEtab benchmark models up to 1e-5 off at a
-  tolerance of 1e-8. The forward run now integrates a control tangent,
-  `z' = J(x) z` along a fixed direction of the initial state, on the
-  same steps as the state, and its error joins the state’s in the error
-  test as a sensitivity’s does under `sensErrCon`. On those models the
-  reverse solve now takes about as many steps as the forward mode and
-  gets its accuracy, at 1.4 to 6 times the time it took before.
-  `sensErrCon = FALSE`, now accepted by both reverse modes, keeps the
-  grid of a value-only run. Reverse models with `method = "tsit5"`
-  generate their Jacobian for it.
+- `derivMode = "reverse"` and `"forward-reverse"` return the gradient
+  the forward mode returns also where the trajectory is at rest or small
+  against `abstol / reltol`. The forward run integrates a control
+  tangent, `z' = J(x) z` along a fixed direction of the initial state,
+  on the same steps as the state, and the error of that tangent joins
+  the error of the state in the error test, as the error of a
+  sensitivity does under `sensErrCon`. `sensErrCon = FALSE`, accepted by
+  both reverse modes, keeps the grid of a value-only run. Reverse models
+  with `method = "tsit5"` generate their Jacobian for it.
 - With `sensErrCon = FALSE` the order-decrease candidate of `"bdf"` and
-  `"adams"` reads the state alone, as the error test does. It read the
-  sensitivities, so the grid could depend on them.
+  `"adams"` reads the state alone, as the error test does.
 
 ## cppDE 0.10.4
 
-- **Bug fix.** A pulse such as
-  `piecewise(1, time > ts && time <= t2, 0)` on a state at rest is no
-  longer stepped over. Before `ts` the right-hand side and with it the
-  error estimate are zero, so the step size grew until one step went
-  across the whole pulse: without sensitivities under `"bdf"` and
-  `"adams"` for the pulse from 60 to 90 on `0:180`, and for a short
-  pulse late in the grid under every method, with sensitivities too.
-  `"rb4"` with `useDenseOutput = FALSE` stopped at such a jump with
-  “Maximum number of steps exceeded”.
+- A pulse such as `piecewise(1, time > ts && time <= t2, 0)` on a state
+  at rest is not stepped over, under every method, with and without
+  sensitivities.
   [`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md)
-  now solves every comparison, `Heaviside()` and
+  solves every comparison, `Heaviside()` and
   [`sign()`](https://rdrr.io/r/base/sign.html) of the right-hand side on
-  time and parameters alone that is affine in time for its switching
+  time and parameters alone that is affine in time for the switching
   time. The solve stops a few doubles in front of each switching time
   inside the grid, follows `f` over them to the jump and restarts past
-  it, as at a jump in time since 0.10.3. The switching times add no
-  output rows, and the reverse mode transposes the crossing.
+  it, as at a jump in time. The switching times add no output rows, and
+  the reverse mode transposes the crossing.
 - After an event, `"rb4"` and `"tsit5"` with dense output also restart
-  their step-size controller, and `"tsit5"` evaluates its first stage
-  anew rather than reusing the last stage from before the event.
+  their step-size controller, and `"tsit5"` evaluates the first stage
+  anew.
 
 ## cppDE 0.10.3
 
-- **Bug fix.** A `"bdf"` or `"adams"` solve crosses a jump of the
-  right-hand side in time, such as the step input
-  `piecewise(0, time - ts < 0, 1)`. From rest under a tight `abstol`, no
-  step containing the jump passed the error test above the resolution of
-  `t`, and a solve without sensitivities stopped in front of it with
-  “Too many failed steps in dense output stepper”. A step that did cross
-  it left the history with the right-hand side from before the jump, and
-  the solve stopped just behind it. When the step size fails at that
-  floor, the solve now locates the jump of `f(t, x)` in `t` within the
-  failed step, follows `f` over the few doubles up to it and restarts on
-  the far side as after an event. With no jump ahead, it restarts where
-  it stands, once per point of time. The reverse mode transposes both. A
-  stall that persists stops at once with “Step size fell below the
-  resolution of t”.
+- A `"bdf"` or `"adams"` solve crosses a jump of the right-hand side in
+  time, such as the step input `piecewise(0, time - ts < 0, 1)`, also
+  from rest under a tight `abstol`. When the step size fails at the
+  resolution of `t`, the solve locates the jump of `f(t, x)` in `t`
+  within the failed step, follows `f` over the few doubles up to it and
+  restarts on the far side as after an event. With no jump ahead, it
+  restarts where it stands, once per point of time. The reverse mode
+  transposes both. A stall that persists stops at once with “Step size
+  fell below the resolution of t”.
 
 ## cppDE 0.10.2
 
-- **Bug fix.** A `"bdf"` or `"adams"` solve with sensitivities that
-  starts late under a tight tolerance takes its first step again. A
-  sensitivity starting at zero with a rate far above `abstol` crosses
-  the bounds of the first-step estimate; the port of CVODES’ `cvHin`
-  then took the upper bound instead of their geometric mean, and at
-  `t0 = 280` with `abstol = 1e-12` that step lay below a tick of `t`.
-  `t + h` rounded back to `t`, and the solve stopped with “Too many
-  failed steps in dense output stepper”. The estimate now takes the
-  geometric mean, as `cvHin` does, and the first step of every method is
-  at least four ticks of `max(|t0|, |t_final|, 1)`.
-- **Bug fix.** A fixed-time event fires only from the first time of the
-  integration grid up to, but not including, the last one, and
-  `includeTimeZero` adds 0 to that grid. An event before the grid used
-  to move the start of the integration back to its own time, and one
-  after it added a row beyond the last requested time. An event at the
-  last time is no longer applied, which also ends the failure it caused
-  under `"bdf"` and `"adams"`. Two consecutive solves over `[t0, t1]`
-  and `[t1, t2]` now reproduce one solve over `[t0, t2]`, which multiple
-  shooting relies on. A grid of a single time applies the events at that
-  time, as the start of a longer grid does. The rule holds for event
-  times that depend on parameters, in the batch, in the reverse mode and
-  in [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md).
-- **Bug fix.** The reverse mode counted the cotangent of the first
-  output row twice when a fixed event sat at the first time, so the
-  derivatives with respect to the initial state were wrong.
-- **Bug fix.** A reverse solve over a single time no longer crashes R.
-  It integrates nothing, so the cotangent of the initial state is the
-  seed and the parameters receive only what an event at that time
-  contributes. The sweep read the state count off the first checkpoint,
-  which such a run never writes.
+- A `"bdf"` or `"adams"` solve with sensitivities that starts late under
+  a tight tolerance takes a first step. The first-step estimate takes
+  the geometric mean of the bounds where a sensitivity crosses them, as
+  CVODES’ `cvHin` does, and the first step of every method is at least
+  four ticks of `max(|t0|, |t_final|, 1)`.
+- A fixed-time event fires only from the first time of the integration
+  grid up to, but not including, the last one, and `includeTimeZero`
+  adds 0 to that grid. An event before the grid or at the last time is
+  not applied, and none adds a row beyond the last requested time. Two
+  consecutive solves over `[t0, t1]` and `[t1, t2]` reproduce one solve
+  over `[t0, t2]`, which multiple shooting relies on. A grid of a single
+  time applies the events at that time, as the start of a longer grid
+  does. The rule holds for event times that depend on parameters, in the
+  batch, in the reverse mode and in
+  [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md).
+- The reverse mode counts the cotangent of the first output row once
+  when a fixed event sits at the first time.
+- A reverse solve over a single time integrates nothing: the cotangent
+  of the initial state is the seed and the parameters receive only what
+  an event at that time contributes.
 - [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
   reports the state after an event at the first time in the first row,
-  as the native backend does, and no longer applies an event that lies
-  before the first time.
+  as the native backend does, and applies no event that lies before the
+  first time.
 
 ## cppDE 0.10.1
 
 - [`cppFUN()`](https://dmodverse.github.io/cppDE/reference/cppFUN.md)
-  builds `"forward"` only by default. `"forward-reverse"` is a mode of
-  its own; `"reverse"` no longer builds it.
+  builds `"forward"` only by default. `"forward-reverse"` is a separate
+  mode; `"reverse"` does not build it.
 - The forward-reverse `vjp` is generated as derivative code instead of
-  running `vjp` over a dual. It compiles in a fraction of the time and
-  memory and runs about twice as fast.
+  running `vjp` over a dual.
 - Products of four or more factors are differentiated through shared
   prefix and suffix products, and chained adjoints and tangents stay one
   factor. Reverse and forward-reverse code grows linearly, not
@@ -603,7 +593,7 @@
 - **Reverse mode.** `cppODE(..., derivMode = "reverse")` computes the
   gradient of a seeded functional by a discrete adjoint, at a cost that
   does not grow with the number of parameters. `"forward-reverse"` adds
-  its curvature, the Hessian applied to the tangent, and
+  the curvature, the Hessian applied to the tangent, and
   `"forward-forward"` the full Hessian. All four methods, events, roots,
   forcings, the sparse solver and the batch entries are covered.
   `cvode(..., derivMode = "reverse")` wraps the CVODES adjoint behind
@@ -616,16 +606,15 @@
   [`cppFUN()`](https://dmodverse.github.io/cppDE/reference/cppFUN.md)
   takes `tangentX`, `tangentP`, `hessianX` and `hessianP`, `evaluate()`
   returns `y`, `tangent` and `hessian`, and `vjp()` covers both orders.
-  `funCpp()` is now
+  `funCpp()` is renamed
   [`cppFUN()`](https://dmodverse.github.io/cppDE/reference/cppFUN.md);
   no old name is kept as an alias.
 - **Code generation on an expression graph.** The code generator builds
   a hash-consed expression graph of the model and differentiates it by
   automatic differentiation; SymPy is left for unusual syntax.
   Generation grows linearly with the model, long linear sums become
-  tables and regular structure becomes loops, so models with thousands
-  of states generate and compile in about a minute.
-  `derivMode = "symbolic"` and `derivSymb()` are gone, and a
+  tables and regular structure becomes loops. `derivMode = "symbolic"`
+  and `derivSymb()` are gone, and a
   [`cppFUN()`](https://dmodverse.github.io/cppDE/reference/cppFUN.md)
   object runs compiled code only.
 - `solveODE(..., sensErrCon = FALSE)` lets forward sensitivities ride
@@ -633,10 +622,10 @@
   without a compile-time limit (`nStack` is gone).
 - **Bug fixes.** Second derivatives through fixed and root events,
   including resets and roots that read the clock, agree with forward
-  over forward to 1e-10. The upper half of `$hessian` no longer drifts
-  on long stiff runs. Unnamed models no longer repeat their names under
+  over forward to 1e-10. The upper half of `$hessian` does not drift on
+  long stiff runs. Unnamed models get distinct names also under
   [`set.seed()`](https://rdrr.io/r/base/Random.html). The CVODES adjoint
-  converges on models with many parameters and returns its result
+  converges on models with many parameters and returns the result
   through the batch. A forcing that multiplies a state compiles,
   [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
   reads a `terminal` column given as text, and the `rb4` initial step
@@ -650,22 +639,21 @@
 
 ## cppDE 0.9.5
 
-- **Bug fix.** OpenMP is detected on Windows. `configure.win` read
-  `SHLIB_OPENMP_CXXFLAGS` from `R_HOME/etc/Makeconf`, which on Windows
-  lives under the architecture subdirectory, so every install ran
-  serially and built models without `-fopenmp`.
+- OpenMP is detected on Windows: `configure.win` reads
+  `SHLIB_OPENMP_CXXFLAGS` from the `Makeconf` under the architecture
+  subdirectory, and models build with `-fopenmp`.
 
 ## cppDE 0.9.4
 
-- A threaded BLAS no longer deadlocks a forked worker. BLAS is pinned to
+- A threaded BLAS does not deadlock a forked worker. BLAS is pinned to
   one thread for the width of every `fork()` and restored in the parent.
 - [`forkGuard()`](https://dmodverse.github.io/cppDE/reference/forkGuard.md)
-  reports which BLAS cppDE steers, its thread count and whether the
+  reports which BLAS cppDE steers, the BLAS thread count and whether the
   handler is installed. The guard is installed when the DLL loads.
 - The BLAS thread-count probe covers FlexiBLAS and BLIS alongside MKL
   and OpenBLAS.
-- The Windows branch of that probe searched the process image, which
-  exports none of these, so the two-runtime guard did nothing there.
+- The Windows branch of that probe finds the BLAS, so the two-runtime
+  guard applies there too.
 - The package has a `src/`, holding the fork guard’s entry point.
 
 ## cppDE 0.9.3
@@ -675,13 +663,12 @@
 - `&&`, `||` and `!` are accepted in equations, grouped by Python’s
   parser.
 - An expression that does not parse names itself and gives a reason.
-- A model symbol can no longer collide with an identifier the generator
-  emits. A parameter named `std` used to rewrite `std::pow` into
-  `p[18]::pow`.
+- A model symbol cannot collide with an identifier the generator emits,
+  such as `std`.
 - A symbol named after a C++ keyword compiles, `default` and `int`
   included.
-- A symbol named after a Python keyword is rejected and named, rather
-  than silently renamed. SymPy parses through Python’s parser.
+- A symbol named after a Python keyword is rejected and named. SymPy
+  parses through Python’s parser.
 - The `double` locals of a root event’s `G_tt` lambda are named by
   position.
 - `cppde::value_of(x)` is the value accessor across arithmetic types,
@@ -689,18 +676,16 @@
 
 ## cppDE 0.9.2
 
-- A root event whose crossing falls exactly on an evaluated time now
-  fires. Detection and bisection both tested the sign product strictly.
-- A root event no longer fires again on the crossing it just handled.
-- A fixed event that makes a root condition true now fires it, with the
+- A root event whose crossing falls exactly on an evaluated time fires.
+- A root event fires once per crossing.
+- A fixed event that makes a root condition true fires it, with the
   resets riding on the jump’s surface. Terminal conditions are excluded.
 - The step size is re-estimated after every event, not only for the
   multistep methods.
-- `funCpp()` substitutes all symbols in one pass. A parameter named
-  after a generated array rewrote the slots already emitted.
+- `funCpp()` substitutes all symbols in one pass.
 - [`compile()`](https://dmodverse.github.io/cppDE/reference/compile.md)
-  no longer repeats the OpenMP and KLU flags that the constructors
-  already recorded on the model.
+  passes the OpenMP and KLU flags that the constructors recorded on the
+  model once.
 - `inst/examples/example_saltation.R` checks the sensitivity transport
   against a SymPy solution to first and second order, over five models.
 - Generated entry points are dispatched by name and shared object rather
@@ -709,12 +694,12 @@
 - Scoping the lookup to one shared object also stops two models sharing
   an entry point name from reaching into each other.
 - [`clearNativeSymbols()`](https://dmodverse.github.io/cppDE/reference/clearNativeSymbols.md)
-  drops the remembered name pairings. It is no longer needed after
-  loading or unloading.
+  drops the remembered name pairings. It is not needed after loading or
+  unloading.
 
 ## cppDE 0.9.1
 
-- Test suite over solvers, sensitivities, events, reparametrisation and
+- Test suite over solvers, sensitivities, events, reparameterization and
   the batch path.
 
 ## cppDE 0.9.0
@@ -732,7 +717,8 @@
 ## cppDE 0.8.4
 
 - `./configure` detects SUNDIALS, SuiteSparse/KLU and OpenMP by linking
-  a test binary; a missing library disables only its own feature.
+  a test binary; a missing library disables only the feature that needs
+  it.
 - `install_libs()` builds SUNDIALS and SuiteSparse into a per-user
   cache.
 

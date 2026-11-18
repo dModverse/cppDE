@@ -181,13 +181,13 @@ solveODEBatch(
 
   Logical. Include the sensitivities, under
   `derivMode = "forward-reverse"` the tangents, in the error test and
-  the first step. Default `TRUE`; `FALSE` is cheaper and less accurate,
-  gives the steps and corrector iterations of a value run, so the
-  sensitivities are the derivative of the computed solution and equal
-  those of the reverse mode to rounding, and under `"forward-reverse"`
-  gives a step grid that does not depend on the directions of the
-  tangent. Needs a model with sensitivities, has no effect under
-  `derivMode = "reverse"`, and a
+  the first step. Default `TRUE`. `FALSE` takes the steps and corrector
+  iterations of a value run, up to rounding: cheaper and less accurate,
+  the sensitivities are the derivative of the computed solution, as the
+  reverse mode of `"adams"` returns; that of `"bdf"` solves the
+  corrector equations instead. Under `"forward-reverse"` the step grid
+  does not depend on the directions of the tangent. Needs a model with
+  sensitivities, has no effect under `derivMode = "reverse"`; a
   [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md)
   model takes `TRUE` only.
 
@@ -254,5 +254,13 @@ if (codegenAvailable()) {
   res <- solveODEBatch(f, conditions, times = 0:5)
   sapply(res, function(r) r$variable[, "x"])
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#>           slow        fast
+#> [1,] 1.0000000 1.000000000
+#> [2,] 0.9048319 0.367875096
+#> [3,] 0.8187232 0.135329689
+#> [4,] 0.7408129 0.049785983
+#> [5,] 0.6703154 0.018315541
+#> [6,] 0.6065275 0.006738326
 # }
 ```

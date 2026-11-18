@@ -236,9 +236,9 @@ count(parms)
 #> setups    16    14  44     0
 count(stiff)
 #>          bdf adams rb4 tsit5
-#> accepted 147   457  69  2876
-#> fevals   186   649 414 17264
-#> setups    28    94  69     0
+#> accepted 147   458  69  2876
+#> fevals   186   648 414 17264
+#> setups    28    93  69     0
 ```
 
 Further arguments of

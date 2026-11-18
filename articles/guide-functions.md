@@ -125,9 +125,9 @@ tangP  <- matrix(c(0, 0, 0, 0, 1), 1, dimnames = list("s", theta))
 obsOut <- g$evaluate(A = out$variable[, "A"], B = out$variable[, "B"], s = 2,
                      tangentX = tangX, tangentP = tangP)
 obsOut$tangent[101, , ]
-#>          A          B         k1        k2         s
-#> y 0.442133 0.27067062 -0.4817043 -3.082325 0.2210665
-#> z 0.000000 0.01866078  0.2715690 -0.212504 0.0000000
+#>               A          B         k1        k2         s
+#> y  4.421330e-01 0.27067062 -0.4817043 -3.082325 0.2210665
+#> z -2.883861e-17 0.01866078  0.2715690 -0.212504 0.0000000
 ```
 
 ``` r
@@ -186,7 +186,7 @@ v <- g$vjp(vars = x, params = c(s = 2), cotangent = cbind(y = rep(1, nrow(x)), z
 c(solveODE(chainR, times, parms, cotangent = v$cotangentX[, , 1])$cotangent[, 1],
   v$cotangentP[, 1])
 #>          A          B         k1         k2          s 
-#>  118.84394   87.60472  -52.92106 -236.89329   59.42208
+#>  118.84394   87.60472  -52.92147 -236.89158   59.42208
 colSums(obsOut$tangent[, "y", ])
 #>          A          B         k1         k2          s 
 #>  118.84416   87.60469  -52.92081 -236.89013   59.42208

@@ -92,5 +92,10 @@ if (codegenAvailable()) {
   print(rbind(value_grid = val$cotangent[, 1] - ref, checked = chk$cotangent[, 1] - ref))
   sum(chk$adjoint$substeps)
 }
+#> using C++ compiler: g++ [-O2 -DNDEBUG -w -fPIC -fopenmp]
+#>                        x             k            q
+#> value_grid -1.013982e-04 -2.865275e-04 1.6895804300
+#> checked     1.543113e-07  4.946479e-05 0.0002417714
+#> [1] 2104
 # }
 ```
