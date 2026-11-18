@@ -145,22 +145,6 @@ public:
     }
   }
 
-  // W again for a larger inv_gamma_dt on the Jacobian factorized last: the
-  // diagonal only grows, so a sparse refactorization keeps the tested pivots.
-  void refactorize_W_larger_diagonal(size_t n, value_type inv_gamma_dt)
-  {
-    if constexpr (is_sparse && std::is_same<value_type, double>::value) {
-      m_dfdt.m_v = m_dfdt_cache.m_v;
-      const value_type delta = inv_gamma_dt - m_last_inv_gamma_dt;
-      for (size_t i = 0; i < n; ++i)
-        m_W_work.Ax[m_diag_offsets[i]] += delta;
-      m_last_inv_gamma_dt = inv_gamma_dt;
-      m_sparse_lu.factorize(m_W_work, false);
-    } else {
-      refactorize_W_from_cache(n, inv_gamma_dt);
-    }
-  }
-
   void refactorize_W_from_cache(size_t n, value_type inv_gamma_dt)
   {
     if constexpr (is_sparse) {

@@ -169,8 +169,7 @@ def generate_event_code(events_df, states_list, params_list, n_states, rhs_dict,
     state switches of `rhs_dict` follow those of the table.
 
     Args:
-        events_df: table with var, value, time or root, method, terminal,
-            direction.
+        events_df: table with var, value, time or root, method.
         rhs_dict: state name -> right-hand side string.
         num_type, ad_level, arena: the C++ scalar (see cppde_model.Scalar).
 

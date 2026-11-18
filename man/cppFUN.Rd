@@ -105,8 +105,8 @@ The list has attributes \code{equations}, \code{variables}, \code{parameters}, \
 Generates and compiles C++ code that evaluates a system of algebraic
 expressions \eqn{y = g(x, p)} on one or more rows of input, with
 optional first- and second-order derivatives. There is no time
-integration; the principal use cases are observation maps for
-likelihood-based inference and reparametrizations for \code{\link[=solveODE]{solveODE()}}.
+integration; the principal use cases are observation functions and
+reparameterizations of the inputs of \code{\link[=solveODE]{solveODE()}}.
 \code{derivMode} selects which derivative products are built. Every returned
 function runs compiled code: an object built with \code{compile = FALSE} is
 evaluable only after \code{\link[=compile]{compile()}}. See

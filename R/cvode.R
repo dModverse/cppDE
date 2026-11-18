@@ -14,7 +14,7 @@
 #' as in [cppODE()]; the switch is located by CVODES' root finding.
 #'
 #' Needs SUNDIALS (>= 6.0) at install time, see [installLibs()]; otherwise
-#' `cvode()` errors at the first call with platform-specific install hints.
+#' `cvode()` stops with platform-specific install instructions.
 #' KLU, required when `sparse = TRUE`, is detected the same way.
 #'
 #' @inheritParams cppODE
@@ -108,6 +108,7 @@ cvode <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings = 
   checkSymbolNames(rhs, forcings, fixed)
   checkConstantNames(names(rhs), forcings, fixed, events$var)
   if (!is.null(events)) {
+    checkEventColumns(events)
     for (col in c("var", "value", "time", "root"))
       if (col %in% names(events) && is.character(events[[col]]))
         checkSymbolNames(events[[col]])

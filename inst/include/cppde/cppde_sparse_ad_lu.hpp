@@ -44,9 +44,9 @@ public:
   sparse_lu_solver(sparse_lu_solver&& o) noexcept
     : m_solver(std::move(o.m_solver)) {}
 
-  void factorize(const csc_matrix<Scalar>& W, bool check_growth = true)
+  void factorize(const csc_matrix<Scalar>& W)
   {
-    m_solver.factorize(W.n, W.Ap.data(), W.Ai.data(), W.Ax.data(), check_growth);
+    m_solver.factorize(W.n, W.Ap.data(), W.Ai.data(), W.Ax.data());
   }
 
   void analyze_pattern(const csc_matrix<Scalar>& W)

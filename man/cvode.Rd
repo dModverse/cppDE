@@ -96,7 +96,7 @@ forcings, \code{rootfunc}, \code{fixed} and a switch on a state or the time beha
 as in \code{\link[=cppODE]{cppODE()}}; the switch is located by CVODES' root finding.
 
 Needs SUNDIALS (>= 6.0) at install time, see \code{\link[=installLibs]{installLibs()}}; otherwise
-\code{cvode()} errors at the first call with platform-specific install hints.
+\code{cvode()} stops with platform-specific install instructions.
 KLU, required when \code{sparse = TRUE}, is detected the same way.
 }
 \examples{

@@ -48,7 +48,14 @@ m_ff <- cppODE(eqns, modelname = "g2_ff", derivMode = "forward-forward",
                compile = FALSE)
 m_ff_adams <- cppODE(eqns, method = "adams", modelname = "g2_ff_adams",
                      derivMode = "forward-forward", compile = FALSE)
-do.call(compile, c(flat(list(m_r, m_fr, m_ff, m_ff_adams)),
+# Robertson's stiff kinetics on bdf.
+rob <- c(a = "-k1 * a + k3 * b * c", b = "k1 * a - k3 * b * c - k2 * b^2",
+         c = "k2 * b^2")
+rob_pars  <- c(a = 1, b = 0, c = 0, k1 = 0.04, k2 = 3e7, k3 = 1e4)
+rob_times <- c(0, 10^seq(-3, 2, by = 0.5))
+m_rob_ff <- cppODE(rob, modelname = "g2_rob_ff", derivMode = "forward-forward", compile = FALSE)
+m_rob_fr <- cppODE(rob, modelname = "g2_rob_fr", derivMode = "forward-reverse", compile = FALSE)
+do.call(compile, c(flat(list(m_r, m_fr, m_ff, m_ff_adams, m_rob_ff, m_rob_fr)),
                    output = "test_ode_reverse2", cores = test_cores()))
 
 test_that("a forward-reverse solve lands on the reverse run's grid at any width", {
@@ -171,22 +178,45 @@ hess_forward <- function(res, W) {
         Vectorize(function(a, b) sum(as.vector(W) * res$hessian[, , a, b])))
 }
 
-test_that("bdf and adams forward-reverse equal forward-forward to rounding", {
+test_that("adams forward-reverse equals forward-forward to rounding", {
   # Without the tangents in the error test both take the same steps and corrector
   # iterations, so gradient and Hessian are the same derivatives of one solution.
   lo <- list(abstol = 1e-6, reltol = 1e-4, sensErrCon = FALSE)
-  oracles <- list(bdf = m_ff, adams = m_ff_adams)
-  for (meth in c("bdf", "adams")) {
-    ff <- do.call(solveODE, c(list(oracles[[meth]], times, pars), lo))
-    W  <- seed_for(nrow(ff$variable))
-    fr <- do.call(solveODE, c(list(m_fr[[meth]], times, pars, cotangent = W), lo))
-    expect_identical(fr$time, ff$time, info = meth)
-    ref <- contract(ff$tangent, W)[, 1]
-    expect_equal(unname(fr$cotangent[names(ref), 1]), unname(ref),
-                 tolerance = 1e-12, info = meth)
-    expect_equal(unname(fr$curvature[, , 1]), hess_forward(ff, W),
-                 tolerance = 1e-10, info = meth)
-  }
+  ff <- do.call(solveODE, c(list(m_ff_adams, times, pars), lo))
+  W  <- seed_for(nrow(ff$variable))
+  fr <- do.call(solveODE, c(list(m_fr$adams, times, pars, cotangent = W), lo))
+  expect_identical(fr$time, ff$time)
+  ref <- contract(ff$tangent, W)[, 1]
+  expect_equal(unname(fr$cotangent[names(ref), 1]), unname(ref), tolerance = 1e-12)
+  expect_equal(unname(fr$curvature[, , 1]), hess_forward(ff, W), tolerance = 1e-10)
+})
+
+test_that("bdf forward-reverse equals forward-forward on one grid up to the forward corrector", {
+  # The bdf sweep solves the corrector, forward-forward iterates it; at a tight
+  # tolerance what the iterations leave is small.
+  ff <- do.call(solveODE, c(list(m_ff, times, pars), grid))
+  W  <- seed_for(nrow(ff$variable))
+  fr <- do.call(solveODE, c(list(m_fr$bdf, times, pars, cotangent = W), grid))
+  expect_identical(fr$time, ff$time)
+  ref <- contract(ff$tangent, W)[, 1]
+  expect_equal(unname(fr$cotangent[names(ref), 1]), unname(ref), tolerance = 1e-8)
+  expect_equal(unname(fr$curvature[, , 1]), hess_forward(ff, W), tolerance = 1e-8)
+})
+
+test_that("the bdf forward-reverse derivatives of a stiff model solve the corrector", {
+  # At a loose tolerance the iterations a step took leave the tangents far from
+  # converged; gradient and Hessian of the solved corrector come closer.
+  o   <- list(abstol = 1e-6, reltol = 1e-4, sensErrCon = FALSE)
+  ref <- solveODE(m_rob_ff, rob_times, rob_pars, abstol = 1e-13, reltol = 1e-12)
+  W   <- seed_for(nrow(ref$variable), n_x = 3L)
+  g   <- contract(ref$tangent, W)[, 1]
+  H   <- hess_forward(ref, W)
+  err <- function(x, y) max(abs(x - y)) / max(abs(y))
+  fr  <- do.call(solveODE, c(list(m_rob_fr, rob_times, rob_pars, cotangent = W), o))
+  taken <- do.call(solveODE, c(list(m_rob_ff, rob_times, rob_pars), o))
+  expect_lt(err(fr$cotangent[names(g), 1], g), 1e-2)
+  expect_lt(err(fr$cotangent[names(g), 1], g), err(contract(taken$tangent, W)[, 1], g) / 10)
+  expect_lt(err(unname(fr$curvature[, , 1]), H), err(hess_forward(taken, W), H) / 2)
 })
 
 test_that("every direction runs on the heap and blocks ride one grid", {

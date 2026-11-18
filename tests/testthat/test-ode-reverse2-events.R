@@ -188,21 +188,21 @@ test_that("a sparse Jacobian goes backwards at second order", {
   expect_second_order(ff, fr, W, "sparse")
 })
 
-test_that("bdf forward-reverse equals forward-forward to rounding across a jump", {
-  # On one grid, without the tangents in the error test, both are the derivatives
-  # of one computed solution, sparse or dense.
-  lo <- list(abstol = 1e-6, reltol = 1e-4, sensErrCon = FALSE)
+test_that("bdf forward-reverse equals forward-forward on one grid across a jump", {
+  # On one grid, without the tangents in the error test, the two differ by what the
+  # corrector iterations of forward-forward leave, small at a tight tolerance.
+  lo <- list(abstol = 1e-10, reltol = 1e-10, sensErrCon = FALSE)
   p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1, d_amt = 0.4)
   fc <- list(u = data.frame(time = c(0, 2, 5), value = c(0.1, 0.25, 0.05)))
   ff <- do.call(solveODE, c(list(pr_forcing$ff, times, p, forcings = fc), lo))
   W  <- seed_for(nrow(ff$variable))
   fr <- do.call(solveODE, c(list(pr_forcing$fr$bdf, times, p, forcings = fc,
                                  cotangent = W), lo))
-  expect_second_order(ff, fr, W, "jump", tol_g = 1e-11, tol_h = 1e-9)
+  expect_second_order(ff, fr, W, "jump", tol_g = 1e-8, tol_h = 1e-8)
 
   skip_if_not(isTRUE(cppDE:::cvodeConfig$klu_available), "KLU not available")
   ff <- do.call(solveODE, c(list(pr_sparse$ff, times, pars), lo))
   W  <- seed_for(nrow(ff$variable))
   fr <- do.call(solveODE, c(list(pr_sparse$fr$bdf, times, pars, cotangent = W), lo))
-  expect_second_order(ff, fr, W, "sparse", tol_g = 1e-11, tol_h = 1e-9)
+  expect_second_order(ff, fr, W, "sparse", tol_g = 1e-8, tol_h = 1e-8)
 })

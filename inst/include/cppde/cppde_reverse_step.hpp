@@ -238,13 +238,18 @@ struct step_checkpoint<cppde::multistepper<Method, Value, JacobianPattern>, T> {
 //  The iteration matrix of a multistep corrector, (1/gamma_p) I - J(x, t), as
 //  the forward run factorized it: rebuilt from the point, time and gamma_p the
 //  run recorded, on values alone, and factorized once for every step that
-//  iterated against it. The sweep solves with the transpose.
+//  iterated against it. The sweep solves with the transpose. A second matrix,
+//  built at a point and gamma the caller names, serves a corrector adjoint
+//  that the frozen one does not converge.
 // ============================================================================
 
 template<class JacFunc, class T = double, bool Sparse = false>
 class equation_solver {
 public:
-  explicit equation_solver(JacFunc& jac) : m_jac(&jac) { m_lu.set_frozen(true); }
+  explicit equation_solver(JacFunc& jac) : m_jac(&jac) {
+    m_lu.set_frozen(true);
+    m_fresh.set_frozen(true);
+  }
 
   // The matrix under `key`; a no-op when that key is the one held.
   void prepare_frozen(const std::vector<double>& x, double t, double inv_gamma_p,
@@ -263,12 +268,34 @@ public:
     m_key = key;
   }
 
-  // Drops the held matrix, so the next prepare_frozen() builds the matrix anew.
-  void forget() { m_held = false; }
+  // The second matrix under `key`, beside the frozen one, which it leaves alone.
+  void prepare_fresh(const std::vector<double>& x, double t, double inv_gamma,
+                     std::size_t key) {
+    if (m_fresh_held && key == m_fresh_key) return;
+    const std::size_t n = x.size();
+    m_fx.assign(x.begin(), x.end());
+    m_fresh.resize(m_fx);
+    { auto _tp = m_prof.timer(cppde::prof_cat::jac_eval);
+      m_fresh.call_jacobian(*m_jac, m_fx, T(t)); }
+    { auto _tp = m_prof.timer(cppde::prof_cat::w_build);
+      m_fresh.build_W(n, T(inv_gamma)); }
+    { auto _tp = m_prof.timer(cppde::prof_cat::lu_factor);
+      m_fresh.factorize_built_W(); }
+    m_fresh_held = true;
+    m_fresh_key = key;
+  }
+
+  // Drops both matrices, so the next prepare builds them anew.
+  void forget() { m_held = false; m_fresh_held = false; }
 
   void transposed(std::vector<T>& b) {
     auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
     m_lu.solve_transposed(b);
+  }
+
+  void fresh_transposed(std::vector<T>& b) {
+    auto _tp = m_prof.timer(cppde::prof_cat::rev_solve);
+    m_fresh.solve_transposed(b);
   }
 
   // Per-category timings to stderr. Compiled away without CPPDE_PROFILE.
@@ -276,10 +303,10 @@ public:
 
 private:
   JacFunc*               m_jac;
-  cppde::lu_W<T, Sparse> m_lu;
-  std::vector<T>         m_x;
-  bool                   m_held = false;
-  std::size_t            m_key = 0;
+  cppde::lu_W<T, Sparse> m_lu, m_fresh;
+  std::vector<T>         m_x, m_fx;
+  bool                   m_held = false, m_fresh_held = false;
+  std::size_t            m_key = 0, m_fresh_key = 0;
   cppde::profiler        m_prof;
 };
 

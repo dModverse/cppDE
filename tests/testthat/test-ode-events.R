@@ -54,14 +54,23 @@ walls <- lapply(setNames(nm = methods_all), function(m)
   cppODE(c(x = "v", v = "-w^2 * x"), events = evt_walls, deriv = FALSE, method = m,
          modelname = paste0("evt_walls_", m), compile = FALSE))
 
+# A counter state that a root event raises, for crossings in either direction.
+eqns_count <- c(x = "v", v = "-x", n = "0")
+evt_count <- data.frame(var = "n", time = NA, value = "1", method = "add",
+                        root = "x - 0.5", stringsAsFactors = FALSE)
+count_root <- cppODE(eqns_count, events = evt_count, deriv = FALSE,
+                     modelname = "evt_count_root", compile = FALSE)
+
 native <- c(list(dosing, ramp_root, ramp_fixed, ramp_sens, jump_switch, reset_root,
-                 reset_time), walls)
+                 reset_time, count_root), walls)
 do.call(compile, c(unname(native), list(output = "test_ode_events", cores = test_cores())))
 
 if (isTRUE(cvodeConfig$available)) {
   ramp_root_cv <- cvode(eqns_ramp, events = evt_ramp_r, modelname = "evt_ramp_root_cv",
                         deriv = FALSE, compile = FALSE)
-  compile(ramp_root_cv, output = "test_ode_events_cvode", cores = test_cores())
+  count_root_cv <- cvode(eqns_count, events = evt_count, modelname = "evt_count_root_cv",
+                         deriv = FALSE, compile = FALSE)
+  compile(ramp_root_cv, count_root_cv, output = "test_ode_events_cvode", cores = test_cores())
 }
 
 # -- Time and root events -----------------------------------------------------
@@ -119,6 +128,22 @@ test_that("both backends localize a root at the same time", {
   fired <- function(res) res$time[which(diff(res$variable[, "C"]) != 0) + 1L]
   expect_equal(fired(nat), 11.5, tolerance = 1e-6)
   expect_equal(fired(cvd), 11.5, tolerance = 1e-6)
+})
+
+test_that("a root event fires on upward and downward crossings and the solve goes on", {
+  tt   <- seq(0, 10, by = 0.5)
+  pars <- c(x = 0, v = 1, n = 0)
+  up_down <- c(1, 5, 13, 17) * pi / 6
+  models <- list(native = count_root)
+  if (isTRUE(cvodeConfig$available)) models$cvode <- count_root_cv
+  for (b in names(models)) {
+    res <- solveODE(models[[b]], tt, pars, maxroot = 10L,
+                    abstol = 1e-10, reltol = 1e-10, roottol = 1e-10)
+    fired <- res$time[which(diff(res$variable[, "n"]) != 0) + 1L]
+    expect_equal(fired, up_down, tolerance = 1e-6, label = paste(b, "firing times"))
+    expect_equal(max(res$time), 10, label = paste(b, "last time"))
+    expect_equal(unname(res$variable[nrow(res$variable), "n"]), 4, label = paste(b, "count"))
+  }
 })
 
 test_that("a root event on the grid feeds the firing time into the sensitivities", {

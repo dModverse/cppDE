@@ -1,6 +1,6 @@
 Package: cppDE
 Title: 'C++' Code Generation for ODEs with Sensitivity Propagation
-Version: 0.13.14
+Version: 0.13.15
 Authors@R: c(
     person("Simon", "Beyer", , "simon.beyer@fdm.uni-freiburg.de", role = c("aut", "cre")),
     person("Lawrence Livermore National Security", role = "cph",
@@ -56,6 +56,7 @@ Imports:
 Suggests:
     spelling,
     testthat,
+    withr,
     knitr,
     rmarkdown,
     ggplot2 (>= 3.5.0),

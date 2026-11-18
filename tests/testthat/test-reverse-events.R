@@ -3,8 +3,9 @@
 #
 # Under the default sensErrCon = TRUE the oracle is not sharp: the forward solve
 # adapts under sensitivities and the reverse one in plain double, so the two
-# discretizations differ by O(tol). With sensErrCon = FALSE they share the grid
-# and agree to rounding.
+# discretizations differ by O(tol). With sensErrCon = FALSE they share the grid;
+# adams then agrees to rounding, and bdf, whose sweep solves the corrector, up to
+# what the forward corrector iterations leave, small at a tight tolerance.
 
 skip_on_cran()
 
@@ -130,49 +131,52 @@ test_that("the reverse mode handles events, roots and forcings", {
 
 # Forward with sensErrCon = FALSE and reverse on the same grid.
 same_grid <- list(abstol = 1e-6, reltol = 1e-4, sensErrCon = FALSE)
+tight_grid <- list(abstol = 1e-10, reltol = 1e-10, sensErrCon = FALSE)
+grid_for <- function(m) if (m == "bdf") tight_grid else same_grid
+gap_tol <- function(m) if (m == "bdf") 1e-8 else 1e-11
 
-test_that("bdf and adams reverse equal forward to rounding across events", {
+test_that("bdf and adams reverse equal forward on the same grid across events", {
   p  <- c(A = 1.2, B = 0.4, k1 = 0.7, k2 = 0.35, k3 = 1.1,
           d_amt = 0.4, t_dose = 1.0)
   fc <- list(u = data.frame(time = c(0, 2, 5), value = c(0.1, 0.25, 0.05)))
   oracles <- list(bdf = models$ev_fwd, adams = models$ev_fwd_adams)
   for (m in c("bdf", "adams")) {
-    fwd <- do.call(solveODE, c(list(oracles[[m]], times, p, forcings = fc), same_grid))
+    fwd <- do.call(solveODE, c(list(oracles[[m]], times, p, forcings = fc), grid_for(m)))
     expect_gt(nrow(fwd$variable), length(times))
     W   <- seed_for(fwd)
     rev <- do.call(solveODE, c(list(models$ev_rev[[m]], times, p, forcings = fc,
-                                    cotangent = W), same_grid))
+                                    cotangent = W), grid_for(m)))
     # Same steps, values to rounding: compilers that fuse multiply-adds fuse
     # them differently over the AD type than over double.
     expect_equal(rev$variable, fwd$variable, tolerance = 1e-12, info = m)
     ref <- contract(fwd$tangent, W)[, 1]
     expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref),
-                 tolerance = 1e-11, info = m)
+                 tolerance = gap_tol(m), info = m)
   }
 })
 
-test_that("bdf and adams reverse equal forward to rounding on a wide model", {
+test_that("bdf and adams reverse equal forward on the same grid on a wide model", {
   oracles <- list(bdf = models$wide_fwd, adams = models$wide_fwd_adams)
   for (m in c("bdf", "adams")) {
-    fwd <- do.call(solveODE, c(list(oracles[[m]], times, wpars), same_grid))
+    fwd <- do.call(solveODE, c(list(oracles[[m]], times, wpars), grid_for(m)))
     W   <- seed_for(fwd)
     rev <- do.call(solveODE, c(list(models$wide_rev[[m]], times, wpars,
-                                    cotangent = W), same_grid))
+                                    cotangent = W), grid_for(m)))
     ref <- contract(fwd$tangent, W)[, 1]
     expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref),
-                 tolerance = 1e-11, info = m)
+                 tolerance = gap_tol(m), info = m)
   }
 })
 
-test_that("sparse bdf reverse equals forward to rounding across an event", {
+test_that("sparse bdf reverse equals forward on the same grid across an event", {
   skip_if_not(isTRUE(cvodeConfig$klu_available), "KLU not available")
   pe  <- c(pars, t_dose = 1.0, d_amt = 0.4)
-  fwd <- do.call(solveODE, c(list(sparse_models$ev_fwd, times, pe), same_grid))
+  fwd <- do.call(solveODE, c(list(sparse_models$ev_fwd, times, pe), tight_grid))
   W   <- seed_for(fwd)
   rev <- do.call(solveODE, c(list(sparse_models$ev_rev$bdf, times, pe,
-                                  cotangent = W), same_grid))
+                                  cotangent = W), tight_grid))
   ref <- contract(fwd$tangent, W)[, 1]
-  expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref), tolerance = 1e-11)
+  expect_equal(unname(rev$cotangent[names(ref), 1]), unname(ref), tolerance = 1e-8)
 })
 
 test_that("a sparse model jumps backwards too", {

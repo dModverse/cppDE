@@ -20,6 +20,7 @@
 #ifndef CPPDE_ADJOINT_STEP_HPP
 #define CPPDE_ADJOINT_STEP_HPP
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <limits>
@@ -281,7 +282,24 @@ void carry_into_pred(const multistep_operators<Stepper>& ops, std::size_t n,
 /// nothing.
 template<class T = double>
 struct multistep_workspace {
-  std::vector<T> w_pred, w_acor, x, rho, abar, g, mu;
+  std::vector<T> w_pred, w_acor, x, rho, abar, g, mu, rho_sum, g_sum;
+  std::vector<double> wt, x_val;
+};
+
+/// The stopping rule of the converged corrector adjoint below: rtol 0 leaves
+/// the iterations the forward run took.
+struct corrector_control {
+  double rtol = 0.0, atol = 0.0;
+  int max_iter = 10;   ///< iterations per matrix before the next one is tried
+  /// The share of the backward local error test the corrector may take, as
+  /// CVODES lets the Newton iteration take a tenth of the forward test.
+  double coef = 0.1;
+};
+
+/// Steps of the converged corrector adjoint, iterations, steps moved to the
+/// matrix at the accepted state, and steps that missed the test there.
+struct corrector_stats {
+  std::size_t steps = 0, iterations = 0, fresh = 0, unconverged = 0;
 };
 
 /// The corrector's adjoint. The forward iteration from a_0 = 0 is
@@ -319,6 +337,80 @@ void multistep_corrector_adjoint(const multistep_operators<Stepper>& ops,
   }
 }
 
+/// The corrector's adjoint with the corrector solved at the accepted state y:
+/// rho solves (I/gamma - J(y))' rho = w_acor, and J(y)' rho, -(rl1/gamma) rho
+/// and (df/dtheta)(y)' rho go to zp, zp1 and theta. rho sums the iteration above
+/// with J at y, against the frozen matrix and, where abar misses `ctl` within
+/// max_iter, against the matrix at y and gamma prepared under `key`.
+template<class Stepper, class Solver, class AdjTerms, class T>
+void multistep_corrector_adjoint_converged(const multistep_operators<Stepper>& ops,
+                                           std::size_t n, const T* y, double s_iter,
+                                           double t_new, Solver& solver,
+                                           const AdjTerms& adj, T* w_theta,
+                                           multistep_workspace<T>& ws,
+                                           const corrector_control& ctl,
+                                           std::size_t key, corrector_stats& stats)
+{
+  using ad_traits::scalar_value;
+  T* CPPDE_RESTRICT w_pred = ws.w_pred.data();
+  const double inv_gamma = 1.0 / ops.gamma;
+  const double c_zn1 = ops.rl1 * inv_gamma;
+  ws.abar = ws.w_acor;
+  ws.x.assign(y, y + n);
+  ws.wt.resize(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const double w = ctl.rtol * std::abs(static_cast<double>(scalar_value(w_pred[i]))) + ctl.atol;
+    ws.wt[i] = w > 0.0 ? 1.0 / w : 0.0;
+  }
+  zero_armed(ws.rho_sum, n);
+  zero_armed(ws.g_sum, n);
+  auto norm = [&]() {
+    double sq = 0.0;
+    for (std::size_t i = 0; i < n; ++i) {
+      const double r = static_cast<double>(scalar_value(ws.abar[i])) * ws.wt[i];
+      sq += r * r;
+    }
+    return n > 0 ? std::sqrt(sq / static_cast<double>(n)) : 0.0;
+  };
+  ++stats.steps;
+  bool fresh = false;
+  double s = s_iter, a = norm(), a_prev = 0.0;
+  int it = 0;
+  while (a > ctl.coef) {
+    // A rate that cannot reach the test within the budget, or no budget left,
+    // moves to the matrix at y; there the budget ends the iteration.
+    const bool slow = it >= 2 && a * std::pow(std::min(a / a_prev, 1.0),
+                                              ctl.max_iter - it) > ctl.coef;
+    if (it >= ctl.max_iter || slow) {
+      if (fresh) { ++stats.unconverged; break; }
+      ws.x_val.resize(n);
+      for (std::size_t i = 0; i < n; ++i)
+        ws.x_val[i] = static_cast<double>(scalar_value(y[i]));
+      solver.prepare_fresh(ws.x_val, t_new, inv_gamma, key);
+      fresh = true; s = 1.0; it = 0;
+      ++stats.fresh;
+    }
+    ws.rho = ws.abar;
+    if (fresh) solver.fresh_transposed(ws.rho); else solver.transposed(ws.rho);
+    if (s != 1.0) for (T& v : ws.rho) v *= s;
+    zero_armed(ws.g, n);
+    adj.jac_t_vec(ws.x, ws.rho, T(t_new), ws.g);
+    for (std::size_t i = 0; i < n; ++i) {
+      ws.abar[i] += ws.g[i] - inv_gamma * ws.rho[i];
+      ws.rho_sum[i] += ws.rho[i];
+      ws.g_sum[i] += ws.g[i];
+    }
+    a_prev = a;
+    a = norm();
+    ++it;
+    ++stats.iterations;
+  }
+  for (std::size_t i = 0; i < n; ++i) w_pred[i] += ws.g_sum[i];
+  if (ops.q_in >= 1)
+    for (std::size_t i = 0; i < n; ++i) w_pred[n + i] -= c_zn1 * ws.rho_sum[i];
+  if (w_theta) adj.dfdp_t_vec_axpy(ws.x, ws.rho_sum, T(t_new), T(1.0), w_theta);
+}
+
 /// One step adjoint from the cotangent on the Nordsieck carry the step hands on, for a
 /// caller holding the operators, the checkpoint and the prepared matrix.
 template<class Stepper, class CP, class Solver, class AdjTerms, class T>
@@ -352,6 +444,15 @@ public:
 
   /// Whether the sweep also keeps lambda and the refinement indicator per step.
   void trace_lambda(bool on) { m_trace = on; }
+
+  /// Solve the corrector of every step to convergence, to a tenth of the
+  /// backward local error test against rtol |lambda| + atol; rtol 0, the
+  /// default, transposes the iterations the forward run took.
+  void set_corrector(double rtol, double atol) {
+    m_corr.rtol = rtol; m_corr.atol = atol;
+  }
+  /// What the converged corrector adjoint did since the trajectory was made.
+  const corrector_stats& corrector() const { return m_corr_stats; }
 
   /// One seed column. `seeds` is [n_obs x n_states] row-major.
   template<class Store, class AdjTerms, class Solver, class Jumps = no_jumps>
@@ -533,57 +634,85 @@ public:
                   System& sys, const AdjTerms& adj, Flow& flow,
                   const Jumps& jumps = Jumps())
   {
+    sweep_flow_many(store, n_phi, {seeds}, sys, adj, flow, jumps);
+    m_wx = m_cols[0].wx;
+    m_wp = m_cols[0].wp;
+  }
+
+  /// sweep_flow() for every seed column at once, the chains and factorizations
+  /// of each interval shared; afterwards wx0(c) and wp(c) hold the cotangents
+  /// of column c. Under trace_lambda lambda() is that of column 0.
+  template<class Store, class System, class AdjTerms, class Flow, class Jumps = no_jumps>
+  void sweep_flow_many(const Store& store, std::size_t n_phi,
+                       const std::vector<const scalar_type*>& seeds,
+                       System& sys, const AdjTerms& adj, Flow& flow,
+                       const Jumps& jumps = Jumps())
+  {
     using T = scalar_type;
     const std::size_t n = store.n_states();
     const std::size_t n_steps = store.n_steps();
-    zero_armed(m_wp, n_phi);
-    m_wx.assign(n, T(0.0));
+    const std::size_t S = seeds.size();
+    m_cols.resize(S);
+    for (column& c : m_cols) {
+      zero_armed(c.wp, n_phi);
+      c.wx.assign(n, T(0.0));
+      c.w_state.assign(n, T(0.0));
+      c.handover = jump_handover<T>();
+      c.next_obs = store.n_obs();
+    }
     m_whist.clear();
     m_lam.assign(m_trace ? n_steps * n : 0u, T(0.0));
     // The flow has no error estimate of the multistep scheme to weigh.
     m_eta.assign(m_trace ? n_steps : 0u, T(std::numeric_limits<double>::quiet_NaN()));
     m_ref_m.assign(m_trace ? n_steps : 0u, 1);
-    flow.begin_flow(n_phi);
+    flow.begin_flow(n_phi, S);
     if (n_steps == 0) {
-      sweep_without_steps(store, n, seeds, adj, jumps, m_wx, m_wp, m_jws);
+      for (std::size_t s = 0; s < S; ++s)
+        sweep_without_steps(store, n, seeds[s], adj, jumps, m_cols[s].wx, m_cols[s].wp, m_jws);
       return;
     }
-    std::size_t next_obs = store.n_obs();
-    std::vector<T> w_out(n, T(0.0)), w_in(n, T(0.0)), x0, w_after, w_before;
-    jump_handover<T> handover;
+    // Per column, the observations in the step and the cotangent on the state at the grid point reached.
+    std::vector<const std::vector<obs_ref<T>>*> obs(S);
+    std::vector<std::vector<T>*> w(S);
+    for (std::size_t s = 0; s < S; ++s) { obs[s] = &m_cols[s].obs; w[s] = &m_cols[s].w_state; }
+    std::vector<T> x0, w_after, w_before;
     for (std::size_t k = n_steps; k-- > 0;) {
       const auto& cp = store.step(k);
       store.use_step_modes(k);
-      step_seeds(store, k, seeds, n, next_obs, handover, m_obs);
+      for (std::size_t s = 0; s < S; ++s)
+        step_seeds(store, k, seeds[s], n, m_cols[s].next_obs, m_cols[s].handover, m_cols[s].obs);
       x0.assign(cp.start_state(), cp.start_state() + n);
       // The end state the run computed, where a step follows without an event.
       const double* xh_end =
           (k + 1 < n_steps && store.event_before(k + 1) >= store.n_events())
           ? store.step(k + 1).start_state() : nullptr;
-      const int mk = flow.flow_interval(sys, adj, n, n_phi, x0, cp.t, cp.dt,
-                                        m_obs, w_out, w_in, xh_end);
+      const int mk = flow.flow_interval(sys, adj, n, n_phi, x0, cp.t, cp.dt, obs, w, xh_end);
       if (m_trace) {
-        for (std::size_t i = 0; i < n; ++i) m_lam[k * n + i] = w_in[i];
+        for (std::size_t i = 0; i < n; ++i) m_lam[k * n + i] = m_cols[0].w_state[i];
         m_ref_m[k] = mk;
       }
-      w_out.swap(w_in);
 
       // The intervention this step was entered through, on the state alone.
       if constexpr (Jumps::active) {
         const std::size_t ei = store.event_before(k);
-        if (ei < store.n_events()) {
-          w_after = w_out;
-          event_adjoint(store, ei, seeds, n, adj, jumps, w_after, w_before,
-                        m_wp.data(), m_jws);
-          w_out.assign(n, T(0.0));
-          handover.take(store.event(ei), w_before, m_wx);
+        if (ei >= store.n_events()) continue;
+        for (std::size_t s = 0; s < S; ++s) {
+          column& c = m_cols[s];
+          w_after = c.w_state;
+          event_adjoint(store, ei, seeds[s], n, adj, jumps, w_after, w_before,
+                        c.wp.data(), m_jws);
+          c.w_state.assign(n, T(0.0));
+          c.handover.take(store.event(ei), w_before, c.wx);
         }
       }
     }
-    for (std::size_t i = 0; i < n; ++i) m_wx[i] += w_out[i];
-    seed_initial_state(store, next_obs, seeds, n, m_wx);
-    const auto& fp = flow.wp();
-    for (std::size_t i = 0; i < n_phi; ++i) m_wp[i] += fp[i];
+    for (std::size_t s = 0; s < S; ++s) {
+      column& c = m_cols[s];
+      for (std::size_t i = 0; i < n; ++i) c.wx[i] += c.w_state[i];
+      seed_initial_state(store, c.next_obs, seeds[s], n, c.wx);
+      const auto& fp = flow.wp(s);
+      for (std::size_t i = 0; i < n_phi; ++i) c.wp[i] += fp[i];
+    }
   }
 
   /// Under trace_lambda: the substeps each step's interval was swept in.
@@ -617,6 +746,7 @@ private:
   {
     const auto& cp = store.step(k);
     multistep_operators<Stepper>& ops = m_ops;
+    m_step = k;
     // An observed step needs a fresh interpolant, not one kept from another.
     if (observed) m_probe.valid = false;
     const double tail_key =
@@ -690,8 +820,13 @@ private:
 
     w_in.assign(nz_in, T(0.0));
     { auto _tp = m_prof.timer(cppde::prof_cat::rev_adjoint);
-      multistep_corrector_adjoint(ops, n, cp.iter.data(), cp.k_iter, cp.s_iter,
-                                  t_new, solver, adj, wp, m_ws);
+      if (m_corr.rtol > 0.0 && cp.k_iter > 0)
+        multistep_corrector_adjoint_converged(ops, n, cp.y.data(), cp.s_iter, t_new,
+                                              solver, adj, wp, m_ws, m_corr, m_step,
+                                              m_corr_stats);
+      else
+        multistep_corrector_adjoint(ops, n, cp.iter.data(), cp.k_iter, cp.s_iter,
+                                    t_new, solver, adj, wp, m_ws);
       ops.A.apply_transposed(m_ws.w_pred.data(), n, w_in.data()); }
     (void)n_phi;
   }
@@ -729,10 +864,14 @@ private:
   std::vector<obs_ref<scalar_type>> m_obs;
   std::vector<int> m_ref_m;
   bool m_trace = false;
+  corrector_control m_corr;
+  corrector_stats m_corr_stats;
+  std::size_t m_step = 0;
   std::vector<scalar_type> m_wx, m_whist, m_wp, m_lam, m_eta;
   // per seed column of sweep_many()
   struct column {
-    std::vector<scalar_type> wx, wp, w_carry;
+    // w_state: the cotangent on the state at the grid point, in sweep_flow_many()
+    std::vector<scalar_type> wx, wp, w_carry, w_state;
     jump_handover<scalar_type> handover;
     std::size_t next_obs = 0;
     std::vector<obs_ref<scalar_type>> obs;

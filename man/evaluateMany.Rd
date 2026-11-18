@@ -12,7 +12,7 @@ built with forward derivatives, one per set.}
 
 \item{sets}{List of argument sets, as \code{evaluateBatch} takes them.}
 
-\item{cores}{Number of threads over the sets.}
+\item{cores}{Number of threads over the sets. Default \code{1}.}
 
 \item{deriv2}{Logical. Second derivatives as well. Default \code{FALSE}.}
 }

@@ -1083,8 +1083,7 @@ def event_rows(events_df):
         if get("var", i) is None:
             continue
         rows.append({k: get(k, i) for k in
-                     ("var", "value", "time", "root", "method", "terminal",
-                      "direction")} | {"index": i})
+                     ("var", "value", "time", "root", "method")} | {"index": i})
     return rows
 
 
@@ -1318,27 +1317,16 @@ class EventCode:
                 out += ["    %s  // method" % method, "  });", ""]
             elif valid_value(r["root"]):
                 gnode = m.parse(str(r["root"]), label="event %d root" % i)
-                terminal = str(r["terminal"]).lower() == "true" if r["terminal"] else False
-                try:
-                    direction = int(r["direction"]) if r["direction"] is not None else 0
-                except (TypeError, ValueError):
-                    direction = 0
                 out += ["  // Root event %d: %s when %s = 0" % (i, var, _flat(r["root"])),
                         "  root_events.push_back(RootEvent<%s, %s>{" % (self.V, self.T)]
                 out += self.value_lambda(gnode, "func (root condition g)")
                 out += ["    %d,  // state_index" % vidx]
                 out += self.value_lambda(h, "value_func (h)")
                 out += ["    %s,  // method" % method,
-                        "    %s,     // terminal" % ("true" if terminal else "false"),
-                        "    %d,    // direction" % direction]
-                if terminal:
-                    out += ["    nullptr,       // dg_dx (not needed for terminal)",
-                            "    nullptr,       // dg_dt (not needed for terminal)",
-                            "    nullptr        // g_dot_dot (not needed for terminal)"]
-                else:
-                    out += self.dg_dx(gnode, i)
-                    out += self.dg_dt(gnode, i)
-                    out += self.g_dot_dot(gnode, i)
+                        "    false,  // terminal"]
+                out += self.dg_dx(gnode, i)
+                out += self.dg_dt(gnode, i)
+                out += self.g_dot_dot(gnode, i)
                 out += ["  });", ""]
             else:
                 raise ValueError("Event %d: must specify either 'time' or 'root'" % i)
@@ -1360,8 +1348,7 @@ class EventCode:
             out += ["    -1,  // state_index (none)",
                     "    nullptr,  // value_func",
                     "    EventMethod::Replace,  // method",
-                    "    false,  // terminal",
-                    "    0,  // direction"]
+                    "    false,  // terminal"]
             out += self.dg_dx(gnode, i)
             out += self.dg_dt(gnode, i)
             out += self.g_dot_dot(gnode, i, tail=",")
@@ -1535,7 +1522,6 @@ def rootfunc_code(model, rootfunc, scalar):
                   % (V, T, T),
                   "    EventMethod::Replace,  // method",
                   "    true,         // terminal = true",
-                  "    0,            // direction = 0 (any crossing)",
                   "    nullptr,      // dg_dx (not needed for terminal)",
                   "    nullptr,      // dg_dt (not needed for terminal)",
                   "    nullptr       // g_dot_dot (not needed for terminal)",

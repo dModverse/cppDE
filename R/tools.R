@@ -98,7 +98,9 @@ clearNativeSymbols <- function() {
 #' `R CMD SHLIB`. The compile-time flags stored in an object's
 #' `"compileArgs"` attribute apply to the source of that object only, also
 #' when `output` links several sources into one library; flags passed
-#' through `args` apply to every source.
+#' through `args` apply to every source. Every object is compiled anew, with
+#' the makefiles of `R CMD SHLIB`, so a user Makevars (`R_MAKEVARS_USER` or
+#' `~/.R/Makevars`) reaches the compile of each object as well as the link.
 #'
 #' @section Environment variables:
 #' `CPPDE_EXTRA_CXXFLAGS` is appended to the compiler flags of every
@@ -116,8 +118,8 @@ clearNativeSymbols <- function() {
 #'   [cppFUN()] that have a `"srcfile"` attribute.
 #' @param output Base name of one shared library for all objects, in the
 #'   directory of the first source. Default `NULL`: one library per object.
-#' @param args Optional additional compiler or linker arguments appended
-#'   after the flags from `"compileArgs"`. Default `NULL`.
+#' @param args Optional additional compiler arguments, appended after the
+#'   flags from `"compileArgs"`. Default `NULL`.
 #' @param cores Number of parallel compilation jobs: separate libraries, or
 #'   the objects of a combined `output`, are built side by side. Default `1`.
 #' @param verbose Logical; if `TRUE`, show compiler commands. Default `FALSE`.
@@ -235,7 +237,7 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   extra_ldflags <- Sys.getenv("CPPDE_EXTRA_LIBS")
   ## Empty groups leave runs of blanks behind, which reach the toolchain report.
   squeeze <- function(x) gsub("[[:space:]]+", " ", trimws(x))
-  ## The flags of one source: the common ones, its own compileArgs, `args`, the session extras.
+  ## The flags of one source: the common ones, the compileArgs of that source, `args`, the session extras.
   cxxflags_of <- function(f) {
     own <- paste(file_args[[f]], paste(args, collapse = " "))
     klu <- if (uses_sparse) paste("-DKLU", unlessPresent(klu_cflags, own)) else ""
@@ -285,17 +287,30 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   ## Keep the toolchain output, the only diagnostic when a build fails. Capture it
   ## with system2(): Windows runs the command without a shell, so an appended
   ## "2>&1" would reach R CMD SHLIB as an argument and clobber PKG_LIBS.
-  run <- function(args, cmd = Rbin) {
+  run <- function(args, what, cmd = Rbin) {
     if (verbose) {
       cat(paste(c(shQuote(cmd), args), collapse = " "), "\n")
-      if (system2(cmd, args) != 0) stop("Compilation failed", call. = FALSE)
+      if (system2(cmd, args) != 0) stop("Compilation of ", what, " failed", call. = FALSE)
       return(invisible(character()))
     }
     out <- suppressWarnings(system2(cmd, args, stdout = TRUE, stderr = TRUE))
     st  <- attr(out, "status")
     if (!is.null(st) && st != 0)
-      stop("Compilation failed:\n", paste(out, collapse = "\n"), call. = FALSE)
+      stop("Compilation of ", what, " failed:\n", paste(out, collapse = "\n"), call. = FALSE)
     invisible(out)
+  }
+
+  ## `FUN` over `X` in forks. A failed or killed job stops here, before a link
+  ## step could rebuild the object with other flags.
+  forked <- function(X, FUN) {
+    res <- parallel::mclapply(X, function(x) tryCatch(FUN(x), error = identity),
+                              mc.cores = cores, mc.preschedule = FALSE)
+    for (i in seq_along(X)) {
+      if (inherits(res[[i]], "error")) stop(conditionMessage(res[[i]]), call. = FALSE)
+      if (is.null(res[[i]]))
+        stop("The compile job of ", basename(X[[i]]), " returned no result", call. = FALSE)
+    }
+    res
   }
 
   ## R CMD SHLIB writes tmp.def and symbols.rds into the current directory, so
@@ -303,10 +318,10 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
   ## those files are cwd-relative, sources and output are absolute.
   shlib <- function(args, tag) {
     wd <- tempfile(paste0("cppDE_build_", gsub("[^A-Za-z0-9._-]", "_", tag), "_"))
-    if (!dir.create(wd, showWarnings = FALSE)) return(run(args))
+    if (!dir.create(wd, showWarnings = FALSE)) return(run(args, tag))
     old <- setwd(wd)
     on.exit({ setwd(old); unlink(wd, recursive = TRUE) }, add = TRUE)
-    run(args)
+    run(args, tag)
   }
 
   ## A zero exit status is not proof that the library was linked.
@@ -318,13 +333,16 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
            paste(unlist(logs[miss]), collapse = "\n"), call. = FALSE)
   }
 
+  ## make would take an object newer than the source as up to date, whatever flags built it.
+  unlink(paste0(roots_full, ".o"))
+
   if (is.null(output)) {
     build1 <- function(f) {
       Sys.setenv(PKG_CXXFLAGS = cxxflags_of(f))
-      shlib(c("CMD", "SHLIB", shQuote(f)), sub("\\.[^.]+$", "", basename(f)))
+      shlib(c("CMD", "SHLIB", shQuote(f)), basename(f))
     }
     logs <- if (.Platform$OS.type == "unix" && cores > 1)
-      parallel::mclapply(files, build1, mc.cores = cores)
+      forked(files, build1)
     else if (cores > 1 && length(files) > 1L)
       .shlibOnCluster(files, Rbin, cores, vapply(files, cxxflags_of, ""))
     else
@@ -338,15 +356,15 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
     out_so <- file.path(outdir, paste0(output, so))
     try(dyn.unload(out_so), silent = TRUE)
     if (file.exists(out_so)) unlink(out_so)
-    ## Every object is compiled with the flags of its own source, `cores` at a time;
+    ## Every object is compiled with the flags of the source it comes from, `cores` at a time;
     ## the link step then finds them up to date.
     compile1 <- function(f) {
       Sys.setenv(PKG_CXXFLAGS = cxxflags_of(f))
-      cc <- .compileCommand(f, Rbin)
-      run(cc$args, cc$cmd)
+      cc <- .compileCommand(f)
+      run(cc$args, basename(f), cc$cmd)
     }
     if (.Platform$OS.type == "unix" && cores > 1)
-      parallel::mclapply(files, compile1, mc.cores = cores)
+      forked(files, compile1)
     else if (cores > 1 && length(files) > 1L)
       .shlibOnCluster(files, Rbin, cores, vapply(files, cxxflags_of, ""), compileOnly = TRUE)
     else
@@ -363,14 +381,14 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
 }
 
 
-## The command that compiles `f` into the object next to it with the make rules
-## and PKG_* flags of R CMD SHLIB. Windows has no R CMD COMPILE, so make builds
-## the object there, run in the directory of the source.
-.compileCommand <- function(f, Rbin) {
-  if (.Platform$OS.type != "windows")
-    return(list(cmd = Rbin, args = c("CMD", "COMPILE", shQuote(f))))
-  mk <- c(file.path(R.home("etc"), .Platform$r_arch, "Makeconf"),
-          tools::makevars_site(), tools::makevars_user())
+## The make command that compiles `f` into the object next to it with the
+## makefiles of R CMD SHLIB (Makeconf, site and user Makevars), so the object
+## gets the PKG_* flags of the environment and the user settings as the link does.
+.compileCommand <- function(f) {
+  rarch <- if (nzchar(.Platform$r_arch)) paste0("/", .Platform$r_arch) else ""
+  mk <- normalizePath(c(file.path(paste0(R.home("etc"), rarch), "Makeconf"),
+                        tools::makevars_site(), tools::makevars_user()),
+                      winslash = "/", mustWork = FALSE)
   list(cmd = Sys.getenv("MAKE", "make"),
        args = c("-C", shQuote(dirname(f)), rbind("-f", shQuote(mk)),
                 shQuote(sub("\\.[^.]+$", ".o", basename(f)))))
@@ -383,7 +401,7 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
 ## package code and build in a directory of their own, where SHLIB writes tmp.def.
 .shlibOnCluster <- function(files, Rbin, cores, cxxflags, compileOnly = FALSE) {
   cmds <- lapply(files, function(f)
-    if (compileOnly) .compileCommand(f, Rbin)
+    if (compileOnly) .compileCommand(f)
     else list(cmd = Rbin, args = c("CMD", "SHLIB", shQuote(f))))
   build <- function(i, cmds, cxxflags) {
     wd <- tempfile("cppDE_build_")
@@ -403,7 +421,8 @@ compile <- function(..., output = NULL, args = NULL, cores = 1, verbose = FALSE)
                                 cxxflags = unname(cxxflags))
   bad <- vapply(logs, function(l) !is.null(attr(l, "status")) && attr(l, "status") != 0, NA)
   if (any(bad))
-    stop("Compilation failed:\n", paste(logs[[which(bad)[1L]]], collapse = "\n"), call. = FALSE)
+    stop("Compilation of ", basename(files[which(bad)[1L]]), " failed:\n",
+         paste(logs[[which(bad)[1L]]], collapse = "\n"), call. = FALSE)
   logs
 }
 

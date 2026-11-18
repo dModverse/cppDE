@@ -79,3 +79,13 @@ checkConstantNames <- function(...) {
   stop("'", hit[1], "' is a number in the equations and cannot name a state, parameter, ",
        "forcing or variable. Rename it in the model definition.", call. = FALSE)
 }
+
+# The columns an event table may have; any other column is an error.
+.eventColumns <- c("var", "value", "method", "time", "root")
+checkEventColumns <- function(events) {
+  bad <- setdiff(names(events), .eventColumns)
+  if (!length(bad)) return(invisible(NULL))
+  stop(sprintf("events: unknown column%s %s; an event table has the columns %s.",
+               if (length(bad) > 1L) "s" else "", paste0("'", bad, "'", collapse = ", "),
+               paste0("'", .eventColumns, "'", collapse = ", ")), call. = FALSE)
+}

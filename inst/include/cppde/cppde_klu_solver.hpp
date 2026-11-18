@@ -124,11 +124,7 @@ public:
   // ------------------------------------------------------------------
   //  Factorize: analyze (if needed) + factor/refactor
   // ------------------------------------------------------------------
-  // `check_growth` false skips the pivot growth test of a refactorization,
-  // for a caller that knows the matrix only grew on the diagonal since the
-  // last tested one.
-  void factorize(int n, const int* Ap, const int* Ai, const double* Ax,
-                 bool check_growth = true)
+  void factorize(int n, const int* Ap, const int* Ai, const double* Ax)
   {
     if (!m_pattern_analyzed)
       analyze_pattern(n, Ap, Ai);
@@ -163,7 +159,7 @@ public:
       // klu_refactor reuses the first pivot order and reports success even when
       // that order is unstable for the new values. The reverse mode uses each
       // solve directly, so the reciprocal pivot growth decides, as in SUNDIALS.
-      if (ok && check_growth) {
+      if (ok) {
         klu_rgrowth(const_cast<int*>(Ap), const_cast<int*>(Ai),
                     const_cast<double*>(Ax), m_symbolic, m_numeric, &m_common);
         // Written so a NaN falls through to the full factorization.

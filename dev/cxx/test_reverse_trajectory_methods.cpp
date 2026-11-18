@@ -16,7 +16,9 @@
 //
 // Covered: bdf, adams, rb4 and tsit5, each on an adaptive run with observations
 // interpolated inside the steps, seeded one state or Nordsieck slot at a time and with a
-// mixed seed over every observation at once. Then the checked sweep
+// mixed seed over every observation at once; for bdf and adams also the sweep
+// with the corrector solved (set_corrector), against the recorded sequence
+// replayed with the corrector solved far below the tolerance. Then the checked sweep
 // (set_refine, and the extrapolated flow for bdf) against finite differences
 // of the flow, and the extrapolated flow backwards in time.
 //
@@ -293,18 +295,23 @@ static void forward_dual(std::size_t n_carry, unsigned nd,
                                cppde::detail::no_dt_estimator{}, nullptr);
 }
 
+// With `converged` a multistep method's reference is the recorded sequence replayed
+// under dual with the corrector solved far below the run's tolerance, tangents
+// included: the derivative of the scheme with exact corrector solves.
 template<class S>
 static void forward_sens(const store_of<S>& store, std::size_t n_carry,
                          unsigned nd, std::vector<double>& S_obs,
-                         std::vector<double>& x_ref)
+                         std::vector<double>& x_ref, bool converged = false)
 {
   using rstep = typename S::template rebind_value<D>;
   constexpr bool multistep = cppde::reverse::has_step_snapshot<S>::value;
   if constexpr (multistep) {
-    (void)store;
-    forward_dual<S>(n_carry, nd, S_obs, x_ref);
-    return;
-  } else {
+    if (!converged) {
+      forward_dual<S>(n_carry, nd, S_obs, x_ref);
+      return;
+    }
+  }
+  {
 
   // Each direction is seeded at the magnitude of what it perturbs. The
   // corrector's error norm takes the maximum over every sensitivity direction,
@@ -325,6 +332,10 @@ static void forward_sens(const store_of<S>& store, std::size_t n_carry,
 
   rstep st;
   st.prepare_sensitivities(nd);
+  if constexpr (multistep) {
+    st.set_tolerances(1e-4 * ATOL, 1e-4 * RTOL);
+    st.set_max_corrector_iters(50);
+  }
 
   const auto& cp0 = store.step(0);
   std::vector<D> x(NX), xout(NX), xerr(NX), x_interp(NX);
@@ -461,7 +472,7 @@ static void replay_values(const store_of<S>& store, std::vector<double>& x_obs,
 }
 
 template<class S>
-static void run_method(const char* name, double tol)
+static void run_method(const char* name, double tol, double conv_tol = 0.0)
 {
   store_of<S> store;
   std::vector<double> x_run;
@@ -592,6 +603,36 @@ static void run_method(const char* name, double tol)
     all[k] = 0.3 * static_cast<double>(k % 5) - 0.7;
   compare("all", all);
 
+  // The corrector solved to convergence in the sweep, against the replay with the
+  // corrector solved far below the run's tolerance. The iterations the run took
+  // are the derivative of another map, printed beside it.
+  if constexpr (multistep_here) {
+    std::vector<double> S_conv, x_conv, taken;
+    forward_sens<S>(store, n_carry, nd, S_conv, x_conv, true);
+    cppde::reverse::equation_solver<jacobian<double>, double> solver(jac_d);
+    cppde::adjoint::closed_multistep_trajectory<S> tr;
+    adjoint_terms adj{pv};
+    tr.set_corrector(RTOL, ATOL);
+    tr.sweep(store, NX + NP, all.data(), adj, solver);
+    sweep_closed(all, taken, std::true_type{});
+    double e_conv = 0.0, e_taken = 0.0, scale = 0.0;
+    for (unsigned d = 0; d < nd; ++d) {
+      double wS = 0.0;
+      for (std::size_t o = 0; o < store.n_obs(); ++o)
+        for (std::size_t i = 0; i < NX; ++i)
+          wS += all[o * NX + i] * S_conv[(o * NX + i) * nd + d];
+      const double got = d < n_carry ? tr.wx0()[d] : tr.wp()[NX + d - n_carry];
+      e_conv = std::max(e_conv, std::fabs(got - wS));
+      e_taken = std::max(e_taken, std::fabs(taken[d] - wS));
+      scale = std::max(scale, std::fabs(wS));
+    }
+    const auto& cs = tr.corrector();
+    std::printf("  converged corrector: rel %.1e, iterations taken: rel %.1e, "
+                "%zu iterations over %zu steps, %zu on a fresh matrix\n",
+                e_conv / scale, e_taken / scale, cs.iterations, cs.steps, cs.fresh);
+    check(e_conv <= conv_tol * scale, std::string(name) + " the converged corrector");
+    check(cs.unconverged == 0, std::string(name) + " every corrector met the test");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -700,8 +741,8 @@ int main() {
   // Where the adjoint itself is checked sharply is the step, in
   // test_reverse_step_multistep.cpp, which runs both methods at 1e-9 over every
   // order, order change, rescale and dense-output seed.
-  run_method<cppde::multistepper<multistep_method::bdf, double, cppde::dense_lu_tag>>("bdf", 1e-11);
-  run_method<cppde::multistepper<multistep_method::adams, double, cppde::dense_lu_tag>>("adams", 1e-11);
+  run_method<cppde::multistepper<multistep_method::bdf, double, cppde::dense_lu_tag>>("bdf", 1e-11, 1e-8);
+  run_method<cppde::multistepper<multistep_method::adams, double, cppde::dense_lu_tag>>("adams", 1e-11, 1e-8);
   run_method<cppde::rosenbrock4<double>>("rb4", 1e-10);
   run_method<cppde::tsit5<double>>("tsit5", 1e-10);
 

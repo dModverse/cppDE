@@ -115,6 +115,16 @@ test_that("a time switch integrates and differentiates like the closed form", {
   expect_equal(unname(out$tangent[, "B", "A"]), 1 - A / p[["A"]], tolerance = 1e-6)
 })
 
+test_that("a switch at the last output time ends the solve on the state it switches at", {
+  f <- pw_mod$time_switch
+  times <- c(0, 1, 2)
+  p <- c(kf = 0.5, ks = 0.05, ts = 2, A = 1, B = 0)
+  out <- solveODE(f, times = times, parms = p, abstol = 1e-10, reltol = 1e-10)
+  A <- exp(-p[["kf"]] * times)
+  expect_equal(unname(out$variable[, "A"]), A, tolerance = 1e-6)
+  expect_equal(unname(out$tangent[, "B", "kf"]), times * A, tolerance = 1e-6)
+})
+
 test_that("a step in time is crossed on a dense output grid", {
   # x and y rest until ts. No step containing the switch passes the error
   # test, however few doubles it spans, and a step that crosses it leaves the

@@ -17,9 +17,9 @@ are not visible here: inside a forked child, and inside an enclosing
 OpenMP region.
 }
 \description{
-\code{solveODEBatch()} degrades to a serial loop without saying so. This reports
-the conditions it depends on, so a caller can warn instead of silently
-running serially.
+Reports whether \code{\link[=solveODEBatch]{solveODEBatch()}} solves the conditions of a model in
+parallel. Without a batch entry point or OpenMP it runs a serial loop and
+gives no warning.
 }
 \examples{
 \donttest{

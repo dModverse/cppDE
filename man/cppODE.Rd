@@ -84,9 +84,13 @@ otherwise.}
 returned as \verb{$tangent}.
 \item \code{"reverse"}: no forward sensitivities; the model takes a \code{cotangent} in
 \code{\link[=solveODE]{solveODE()}} and returns \verb{$cotangent}, one row per state and parameter.
+Under \code{"bdf"} the sweep solves the corrector equation of every step to
+\code{reltol} and \code{abstol}, under \code{"adams"} it transposes the corrector
+iterations the value run took.
 \item \code{"forward-forward"}: the same as \code{deriv2 = TRUE}, returning \verb{$hessian}.
 \item \code{"forward-reverse"}: returns \verb{$tangent}, \verb{$cotangent} and \verb{$curvature},
-the derivatives of \verb{$cotangent} along each tangent direction.
+the derivatives of \verb{$cotangent} along each tangent direction, with the
+corrector treated as under \code{"reverse"}.
 }}
 
 \item{profile}{Logical, default \code{FALSE}. Compile with timers that print a
@@ -101,9 +105,10 @@ diagnostics, returned as \verb{$trace} by \code{\link[=solveODE]{solveODE()}}.}
 The compiled model name (character) with the attributes
 required by \code{\link[=solveODE]{solveODE()}}: \code{equations}, \code{srcfile}, \code{variables},
 \code{parameters}, \code{forcings}, \code{events}, \code{rootfunc}, \code{fixed} (the
-compile-time set), \code{deriv}, \code{deriv2}, \code{derivMode}, \code{sparse}, \code{method},
-\code{useNDF}, \code{dimNames} (with element \code{sens} only when \code{deriv} is \code{TRUE}),
-\code{compileArgs}, and \code{linkArgs} when OpenMP is available.
+compile-time set), \code{deriv}, \code{deriv2}, \code{derivMode}, \code{sparse}, \code{method}
+(\code{"rosenbrock4"} for \code{"rb4"}), \code{useNDF}, \code{solveAbi}, \code{dimNames} (with
+element \code{sens} only when \code{deriv} is \code{TRUE}), \code{compileArgs}, and \code{linkArgs}
+when OpenMP is available.
 }
 \description{
 Generates C++ source code for an ODE system \eqn{\dot{x} = f(x, p)},
@@ -119,7 +124,8 @@ articles \href{https://dmodverse.github.io/cppDE/articles/methods-stepping.html}
 Events are specified as a \code{data.frame} with columns \code{var} (affected
 variable), \code{value} (expression to apply), \code{method} (\code{"replace"},
 \code{"add"}, or \code{"multiply"}), and exactly one of \code{time} (event time) or
-\code{root} (root expression). \code{rootfunc} terminates integration:
+\code{root} (root expression); any other column is an error. A root event fires
+on crossings in both directions. \code{rootfunc} terminates integration:
 \code{"equilibrate"} stops at steady state (see \code{roottol} in \code{\link[=solveODE]{solveODE()}}); a
 character vector of expressions stops at the first zero crossing.
 

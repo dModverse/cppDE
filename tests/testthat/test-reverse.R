@@ -5,8 +5,9 @@
 # The oracle is the forward mode. Under the default sensErrCon = TRUE the
 # forward solve adapts on the tangents as well and integrates another grid, so
 # those comparisons hold to O(tol). With sensErrCon = FALSE both runs take the
-# same steps and corrector iterations, and the sweep returns the forward
-# derivative to rounding for every method.
+# same steps. The tangents then take the corrector iterations of the value run,
+# as the adams sweep does, which returns the forward derivative to rounding; the
+# bdf sweep solves the corrector and differs by what those iterations leave.
 
 skip_on_cran()
 
@@ -40,6 +41,9 @@ models <- list(
                    compile = FALSE),
   rob_rev = cppODE(rob, method = "adams", modelname = "rev_rob_r",
                    derivMode = "reverse", compile = FALSE),
+  rob_fwd_bdf = cppODE(rob, modelname = "rev_rob_fb", deriv = TRUE, compile = FALSE),
+  rob_rev_bdf = cppODE(rob, modelname = "rev_rob_rb", derivMode = "reverse",
+                       compile = FALSE),
   rev = per_method(eqns, "rev_m_r_", derivMode = "reverse"),
   ff  = per_method(eqns, "rev2_ff_", derivMode = "forward-forward"),
   fr  = per_method(eqns, "rev2_fr_", derivMode = "forward-reverse"))
@@ -79,26 +83,33 @@ test_that("a reverse model answers what the forward sensitivities answer", {
   expect_equal(unname(rev$cotangent[rownames(ref), ]), unname(ref), tolerance = 1e-6)
 })
 
-# Forward with sensErrCon = FALSE and reverse on the same grid.
+# Forward with sensErrCon = FALSE and reverse on the same grid; at the tight
+# tolerance what the forward corrector iterations leave is small.
 same_grid <- list(abstol = 1e-6, reltol = 1e-4, sensErrCon = FALSE)
+tight_grid <- list(abstol = 1e-10, reltol = 1e-10, sensErrCon = FALSE)
 fwd_for <- function(m) if (m == "bdf") models$fwd else models$fwd_adams
 
-test_that("bdf and adams reverse equal forward to rounding", {
-  for (m in c("bdf", "adams")) {
-    fwd <- do.call(solveODE, c(list(fwd_for(m), times, pars), same_grid))
-    W   <- seed_for(fwd, n_seed = 2L)
-    rev <- do.call(solveODE, c(list(models$rev[[m]], times, pars, cotangent = W),
-                               same_grid))
-    # Same steps, values to rounding: compilers that fuse multiply-adds fuse
-    # them differently over the AD type than over double.
-    expect_equal(rev$variable, fwd$variable, tolerance = 1e-12, info = m)
-    ref <- contract(fwd$tangent, W)
-    expect_equal(unname(rev$cotangent[rownames(ref), ]), unname(ref),
-                 tolerance = 1e-12, info = m)
-  }
+# Same steps, values to rounding: compilers that fuse multiply-adds fuse them
+# differently over the AD type than over double.
+same_grid_gap <- function(m, o) {
+  fwd <- do.call(solveODE, c(list(fwd_for(m), times, pars), o))
+  W   <- seed_for(fwd, n_seed = 2L)
+  rev <- do.call(solveODE, c(list(models$rev[[m]], times, pars, cotangent = W), o))
+  expect_equal(rev$variable, fwd$variable, tolerance = 1e-12, info = m)
+  ref <- contract(fwd$tangent, W)
+  max(abs(rev$cotangent[rownames(ref), ] - ref)) / max(abs(ref))
+}
+
+test_that("adams reverse equals forward to rounding on the same grid", {
+  expect_lt(same_grid_gap("adams", same_grid), 1e-12)
+  expect_lt(same_grid_gap("adams", tight_grid), 1e-12)
 })
 
-test_that("bdf and adams reverse equal forward to rounding through the batch entry", {
+test_that("bdf reverse equals forward on the same grid up to the forward corrector", {
+  expect_lt(same_grid_gap("bdf", tight_grid), 1e-8)
+})
+
+test_that("the batch entry sweeps as the single solves do", {
   p2 <- pars; p2["k1"] <- 1.3
   conds <- list(one = list(parms = pars), two = list(parms = p2))
   for (m in c("bdf", "adams")) {
@@ -110,11 +121,26 @@ test_that("bdf and adams reverse equal forward to rounding through the batch ent
                                  conds, W, SIMPLIFY = FALSE),
                           times = times), same_grid))
     for (k in seq_along(conds)) {
-      ref <- contract(fwd[[k]]$tangent, W[[k]])[, 1]
-      expect_equal(unname(rev[[k]]$cotangent[names(ref), 1]), unname(ref),
-                   tolerance = 1e-12, info = m)
+      one <- do.call(solveODE, c(list(models$rev[[m]], times, conds[[k]]$parms,
+                                      cotangent = W[[k]]), same_grid))
+      expect_equal(rev[[k]]$cotangent, one$cotangent, tolerance = 1e-14, info = m)
     }
   }
+})
+
+test_that("the bdf reverse gradient of a stiff model solves the corrector", {
+  # At a loose tolerance the iterations a step took leave the tangent far from
+  # converged, and their derivative far from the gradient.
+  o   <- list(abstol = 1e-6, reltol = 1e-4)
+  ref <- solveODE(models$rob_fwd_bdf, rob_times, rob_pars, abstol = 1e-13, reltol = 1e-12)
+  W   <- seed_for(ref)
+  g   <- contract(ref$tangent, W)[, 1]
+  err <- function(x) max(abs(x[names(g)] - g)) / max(abs(g))
+  rev <- do.call(solveODE, c(list(models$rob_rev_bdf, rob_times, rob_pars, cotangent = W), o))
+  taken <- do.call(solveODE, c(list(models$rob_fwd_bdf, rob_times, rob_pars), o,
+                               list(sensErrCon = FALSE)))
+  expect_lt(err(rev$cotangent[, 1]), 1e-2)
+  expect_lt(err(rev$cotangent[, 1]), err(contract(taken$tangent, W)[, 1]) / 10)
 })
 
 test_that("the adams reverse gradient of a stiff model equals the forward one", {

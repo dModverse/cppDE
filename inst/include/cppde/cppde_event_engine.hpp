@@ -212,8 +212,7 @@ private:
      }
      if ((fired[i] < max_trigger || m_root[i].mode >= 0 || m_root[i].slide_exit >= 0) &&
          !std::isnan(last_val[i]) &&
-         root_crossed(last_val[i], curr_val[i]) &&
-         direction_matches(last_val[i], m_root[i].direction)) {
+         root_crossed(last_val[i], curr_val[i])) {
        triggered.push_back({i, last_val[i], curr_val[i]});
        if (m_root[i].mode >= 0) m_off_surface[i] = false;
      }
@@ -523,6 +522,13 @@ private:
    mark_on_surface(last_val, triggered);
  }
 
+ // Whether t is the last output time to within a tick of t.
+ bool at_final_time(const Time& t) const {
+   const double tf = m_t_final;
+   return m_dir * (tf - scalar_value(t)) <=
+          2.0 * std::numeric_limits<double>::epsilon() * std::max(std::abs(tf), 1.0);
+ }
+
  void eval_root_funcs(std::vector<double>& cv, const State& x, const Time& t) {
    for (size_t i = 0; i < m_root.size(); ++i)
      cv[i] = scalar_value(m_root[i].func(x, t));
@@ -576,8 +582,7 @@ private:
      for (size_t i = 0; i < m_root.size(); ++i)
        if (!m_root[i].terminal && m_root[i].mode < 0 && m_root[i].slide_exit < 0 &&
            count[i] < max_trigger &&
-           !std::isnan(before[i]) && root_crossed(before[i], after[i]) &&
-           direction_matches(before[i], m_root[i].direction)) { pick = i; break; }
+           !std::isnan(before[i]) && root_crossed(before[i], after[i])) { pick = i; break; }
      before = after;
      if (pick == m_root.size()) break;
      order.push_back(pick);
@@ -879,6 +884,15 @@ public:
          if (rows && std::abs(scalar_value(t_eval) - scalar_value(t_root)) >= 1e-14)
            obs(x_root, t_root);
          x = x_root;
+         // An event at the last output time leaves no room for a restarted step:
+         // the remaining outputs read the state the event ends on.
+         if (at_final_time(t_root)) {
+           for (; it != end; ++it) {
+             apply_fixed_events(x, *it, fired, max_trigger);
+             obs(x, *it);
+           }
+           return steps;
+         }
          reinit_after_event(x, t_root, dt, t_start, t_end, x_at_start,
                             last_val, last_state, last_time, triggered,
                             steps, checker, &x_before, scalar_value(t_root));

@@ -149,7 +149,6 @@ static event_set<V> make_events(const std::vector<V>& p) {
   r.value_func  = [b](const state&, const V&) { return V(0.05) * b; };
   r.method      = cppde::detail::EventMethod::Add;
   r.terminal    = false;
-  r.direction   = 0;
   r.dg_dx       = [](const state& x, const V&, state& g) {
     g.assign(x.size(), V(0)); g[2] = V(1);
   };

@@ -187,22 +187,11 @@ def generate_cvode_cpp(
                 time_events.append(item)
                 continue
             rn = model.parse(str(root_raw))
-            direction_raw = _get("direction", i)
-            try:
-                direction = int(direction_raw) if _valid(direction_raw) else 0
-            except (ValueError, TypeError):
-                direction = 0
-            if direction not in (-1, 0, 1):
-                raise ValueError(
-                    f"Event {i}: direction must be -1, 0, or 1, got {direction}")
-            terminal = str(_get("terminal", i)).lower() == "true"
             item.update({
                 "r": rn,
                 "dr_dx": [(j, lines(b, " " * 10)) for j, b in ev.cases_x(rn)],
                 "dr_dp": [(k, lines(b, " " * 10)) for k, b in ev.cases_p(rn)],
                 "dr_dt": lines(ev.partial_t(rn), " " * 6),
-                "direction": direction,
-                "terminal": terminal,
             })
             root_events.append(item)
 
@@ -221,7 +210,6 @@ def generate_cvode_cpp(
             "dr_dt": lines(ev.partial_t(rn), " " * 6),
             "rate_dx": [(j, lines(b, " " * 10)) for j, b in ev.cases_x(rate)],
             "rate_dp": [(q, lines(b, " " * 10)) for q, b in ev.cases_p(rate)],
-            "direction": 0, "terminal": False,
         })
 
     # root_fn: user roots, then event roots; an exhausted event root reads +1.
@@ -481,7 +469,7 @@ def _root_registration(
 
     # root_fn writes the user rootfunc into gout[0..n_user-1] and the event roots
     # after it. On CV_ROOT_RETURN a user root terminates, an event root applies the
-    # state change and saltation, then reinits and continues unless terminal.
+    # state change and saltation, then reinits and continues.
     n_event_roots   = len(root_events)
     # Two exit roots per switch end a slide (cppde_sliding.hpp).
     n_total_roots   = n_user_rootfunc + n_event_roots + 2 * n_modes
@@ -510,24 +498,15 @@ static int root_fn(sunrealtype t, N_Vector y, sunrealtype* gout, void* ud_vp) {{
   }}
 }}
 """
-        # Build direction array for CVodeSetRootDirection.  User roots
-        # get direction 0 (any crossing); event roots use their spec.
-        direction_entries = ["0"] * n_user_rootfunc + [
-            str(e["direction"]) for e in root_events
-        ] + ["0"] * (2 * n_modes)
-        direction_list = ", ".join(direction_entries)
-
         # A state switch whose new branch holds the state on the switching surface leaves
         # the root at zero, which is no reason for a warning.
         quiet = "    CVodeSetNoInactiveRootWarn(cvode_mem);\n" if n_modes else ""
 
         def rootfunc_init(fail):
             return (
-                f"  {{ int rd[{n_total_roots}] = {{ {direction_list} }};\n"
+                "  {\n"
                 f"    if (CVodeRootInit(cvode_mem, {n_total_roots}, root_fn) < 0) "
                 + fail("RC_LINIT_FAIL", "CVodeRootInit failed") + "\n"
-                "    if (CVodeSetRootDirection(cvode_mem, rd) < 0) "
-                + fail("RC_LINIT_FAIL", "CVodeSetRootDirection failed") + "\n"
                 + quiet + "  }\n"
             )
     else:
@@ -608,8 +587,6 @@ static std::vector<TimeEvent> build_time_events(const double* params,
         event_struct += """
 struct RootEvent {
   int  var_idx;
-  int  direction;
-  bool terminal;
   // Event map g(x, t, p) and the partials (for saltation)
   std::function<double(const double* x, double t)> g_fn;
   std::function<double(const double* x, double t, int i)> dg_dx_fn;
@@ -636,13 +613,10 @@ static std::vector<RootEvent> build_root_events(const double* params,
 """
         re_body = []
         for i, e in enumerate(root_events):
-            terminal = "true" if e["terminal"] else "false"
             if "mode" in e:
                 re_body.append(f"""  {{
     RootEvent e;
     e.var_idx   = -1;
-    e.direction = 0;
-    e.terminal  = false;
     e.mode      = {e['mode']};
     e.closed    = {'true' if e['closed'] else 'false'};
     e.r_fn    = [params, &F](const double* x, double t) -> double {{
@@ -663,8 +637,6 @@ static std::vector<RootEvent> build_root_events(const double* params,
             re_body.append(f"""  {{
     RootEvent e;
     e.var_idx   = {e['var_idx']};
-    e.direction = {e['direction']};
-    e.terminal  = {terminal};
     e.g_fn    = [params, &F](const double* x, double t) -> double {{
       (void)x; (void)t;
 {e['g']}
@@ -816,7 +788,7 @@ def _event_helpers(
                 "    bool jumped = false;\n"
                 "    for (size_t q = 0; q < trig.size(); ++q) {\n"
                 "      const auto& e = event_roots[trig[q]];\n"
-                "      if (e.mode < 0) { jumped = jumped || !e.terminal; continue; }\n"
+                "      if (e.mode < 0) { jumped = true; continue; }\n"
                 "      cppde::detail::set_switch_mode(e.mode, dir[q] > 0);\n"
                 "      cv_switch_t[trig[q]] = t;\n"
                 "      cv_maybe_slide(e.mode, x, t);\n"
@@ -972,13 +944,13 @@ def _event_helpers(
         # one pre-event snapshot and shares one dt/dp per sens slot, so the flow
         # correction (f_old - f_new) dt_dp lands at most once per state.
 
-        # dt_dp comes from the first non-terminal triggered event: simultaneous roots
+        # dt_dp comes from the first triggered event: simultaneous roots
         # cross at the same t by construction, so their dt agrees to first order.
         if deriv:
             phi_rows_r = n_states + n_params
             root_event_apply_lambda = f"""  auto apply_root_events_batch = [&](const std::vector<int>& triggered_idx,
                                      const std::vector<int>& trig_dir,
-                                     double t_e) -> bool {{
+                                     double t_e) {{
     (void)trig_dir;
     double* y_arr = N_VGetArrayPointer(y);
     std::vector<double> x_old(NEQ);
@@ -989,11 +961,9 @@ def _event_helpers(
     {{ const double* fb = N_VGetArrayPointer(f_buf);
       for (int i = 0; i < NEQ; ++i) f_old[i] = fb[i]; }}
 
-    bool any_terminal = false;
     std::vector<char> is_modified(NEQ, 0);
     for (int j : triggered_idx) {{
       const auto& ev = event_roots[j];
-      if (ev.terminal) {{ any_terminal = true; continue; }}
       if (ev.var_idx < 0) continue;
       y_arr[ev.var_idx] = ev.g_fn(x_old.data(), t_e);
       is_modified[ev.var_idx] = 1;
@@ -1004,12 +974,8 @@ def _event_helpers(
     {{ const double* fb = N_VGetArrayPointer(f_buf);
       for (int i = 0; i < NEQ; ++i) f_new[i] = fb[i]; }}
 
-    int ref_j = -1;
-    for (int j : triggered_idx) {{
-      if (!event_roots[j].terminal) {{ ref_j = j; break; }}
-    }}
-    if (ref_j < 0) return any_terminal;
-    const auto& ref = event_roots[ref_j];
+    if (triggered_idx.empty()) return;
+    const auto& ref = event_roots[triggered_idx.front()];
 
     double g_dot = ref.dr_dt_fn(x_old.data(), t_e);
     double g_terms = std::fabs(g_dot);
@@ -1049,7 +1015,7 @@ def _event_helpers(
 
       for (int j : triggered_idx) {{
         const auto& ev = event_roots[j];
-        if (ev.terminal || ev.var_idx < 0) continue;
+        if (ev.var_idx < 0) continue;
         int v = ev.var_idx;
 
         double sum_gx_S = 0.0, sum_gx_f = 0.0;
@@ -1071,13 +1037,12 @@ def _event_helpers(
       }}
     }}
 
-    return any_terminal;
   }};
 """
         elif reverse:
             root_event_apply_lambda = """  auto apply_root_events_batch = [&](const std::vector<int>& triggered_idx,
                                      const std::vector<int>& trig_dir,
-                                     double t_e) -> bool {
+                                     double t_e) {
     (void)trig_dir;
     double* y_arr = N_VGetArrayPointer(y);
     AsaJump J;
@@ -1087,10 +1052,8 @@ def _event_helpers(
     J.x_old.assign(y_arr, y_arr + NEQ);
     rhs_fn(t_e, y, f_buf, &ud);
     { const double* fb = N_VGetArrayPointer(f_buf); J.f_old.assign(fb, fb + NEQ); }
-    bool any_terminal = false;
     for (int j : triggered_idx) {
       const auto& ev = event_roots[j];
-      if (ev.terminal) { any_terminal = true; continue; }
       if (ev.var_idx < 0) continue;
       y_arr[ev.var_idx] = ev.g_fn(J.x_old.data(), t_e);
     }
@@ -1098,26 +1061,22 @@ def _event_helpers(
     rhs_fn(t_e, y, f_buf, &ud);
     { const double* fb = N_VGetArrayPointer(f_buf); J.f_new.assign(fb, fb + NEQ); }
     asa_jumps.push_back(std::move(J));
-    return any_terminal;
   };
 """
         else:
             root_event_apply_lambda = """  auto apply_root_events_batch = [&](const std::vector<int>& triggered_idx,
                                      const std::vector<int>& trig_dir,
-                                     double t_e) -> bool {
+                                     double t_e) {
     (void)trig_dir;
     double* y_arr = N_VGetArrayPointer(y);
     std::vector<double> x_old(NEQ);
     for (int i = 0; i < NEQ; ++i) x_old[i] = y_arr[i];
-    bool any_terminal = false;
     for (int j : triggered_idx) {
       const auto& ev = event_roots[j];
-      if (ev.terminal) { any_terminal = true; continue; }
       if (ev.var_idx < 0) continue;
       y_arr[ev.var_idx] = ev.g_fn(x_old.data(), t_e);
     }
 @SWITCH_AFTER@
-    return any_terminal;
   };
 """
         root_event_apply_lambda = root_event_apply_lambda.replace(
@@ -1218,9 +1177,9 @@ def _step_dispatch(
         reinit, **_):
     """do_cvode_step: one CVode call and the root dispatch on CV_ROOT_RETURN."""
 
-    # Returns 0 for the target reached, 1 for a user rootfunc stop, 2 for a terminal
-    # root event, -1 for an error, with return_code holding the raw CVODE flag.
-    # On 1 and 2 the caller pushes the final output row.
+    # Returns 0 for the target reached, 1 for a user rootfunc stop, -1 for an
+    # error, with return_code holding the raw CVODE flag. On 1 the caller pushes
+    # the final output row.
     def surface_mark(t):
         return f"      cv_surface_at = {t};\n" if n_modes else ""
 
@@ -1275,17 +1234,16 @@ def _step_dispatch(
 """ if n_modes else "")
                 exited = " || exited" if n_modes else ""
                 event_apply_sec = f"""      std::vector<int> triggered_idx, trig_dir;
-      bool rows = false;   // a switch writes no row, a terminal root only the closing one
+      bool rows = false;   // a switch writes no row
       for (int j = 0; j < {n_event_roots}; ++j) {{
         if (rinfo[{n_user_rootfunc} + j] != 0 &&
             (ud.root_fired[j] < ud.maxroot || event_roots[j].mode >= 0){again}) {{
           triggered_idx.push_back(j);
           trig_dir.push_back(rinfo[{n_user_rootfunc} + j]);
-          rows = rows || (event_roots[j].mode < 0 && !event_roots[j].terminal);
+          rows = rows || event_roots[j].mode < 0;
         }}
       }}
-{exits}      bool any_terminal = false;
-      if (!triggered_idx.empty(){exited}) {{
+{exits}      if (!triggered_idx.empty(){exited}) {{
         // The native backend emits the state just before the event and the
         // state just after it, both at the root time. Skip a row that the
         // requested-times loop is about to write anyway.
@@ -1300,7 +1258,7 @@ def _step_dispatch(
           for (size_t q = 0; q < triggered_idx.size(); ++q)
             apply_root_events_batch({{triggered_idx[q]}}, {{trig_dir[q]}}, (double)tret);
         }} else if (!triggered_idx.empty()) {{
-          any_terminal = apply_root_events_batch(triggered_idx, trig_dir, (double)tret);
+          apply_root_events_batch(triggered_idx, trig_dir, (double)tret);
         }}
         for (int j : triggered_idx) ud.root_fired[j]++;
 #ifdef CVODE_STEP_TRACE
@@ -1322,15 +1280,9 @@ def _step_dispatch(
         }}
 {event_sens_reinit}        if (hard_fail) return -1;
         cv_rebase();
-{surface_mark("tret")}        // A terminal event stops here and the caller writes the closing row.
-        if (rows && !any_terminal && std::abs(target - (double)tret) >= 1e-14) {{
+{surface_mark("tret")}        if (rows && std::abs(target - (double)tret) >= 1e-14) {{
           cv_push_row((double)tret);
         }}
-      }}
-      if (any_terminal) {{
-        solver_msg = "Terminated: terminal root event fired";
-        root_terminated = true;
-        return 2;
       }}
 """
             root_dispatch_block = f"""      std::vector<int> rinfo({n_total_roots});
@@ -1886,12 +1838,11 @@ struct AsaJump {
       }
 """)
         if has_root_events:
-            jump_parts.append("""      // The first non-terminal event defines the crossing time, as forward.
+            jump_parts.append("""      // The first event defines the crossing time, as forward.
       std::vector<int> writer(NEQ, -1);
       int ref = -1;
       for (int j : J.trig) {
         const auto& e = event_roots[j];
-        if (e.terminal) continue;
         if (e.var_idx >= 0) writer[e.var_idx] = j;
         if (ref < 0) ref = j;
       }

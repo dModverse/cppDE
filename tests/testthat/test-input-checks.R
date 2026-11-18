@@ -113,6 +113,20 @@ test_that("the CVODE backend refuses what it cannot do", {
   expect_error(solveODE(cf, tt, p), "Model not loaded")
 })
 
+test_that("an event table with a column outside var, value, method, time and root is an error", {
+  ev <- data.frame(var = "A", time = NA, value = "1", method = "add", root = "A - 0.5",
+                   terminal = TRUE, stringsAsFactors = FALSE)
+  msg <- "events: unknown column 'terminal'; an event table has the columns 'var', 'value'"
+  expect_error(cppODE(c(A = "-k * A"), events = ev, modelname = "chk_evcol", compile = FALSE),
+               msg, fixed = TRUE)
+  ev$direction <- 1
+  expect_error(cppODE(c(A = "-k * A"), events = ev, modelname = "chk_evcol", compile = FALSE),
+               "unknown columns 'terminal', 'direction'", fixed = TRUE)
+  skip_if_not(isTRUE(cvodeConfig$available), "CVODE backend not available")
+  expect_error(cvode(c(A = "-k * A"), events = ev, modelname = "chk_evcol_cv", compile = FALSE),
+               "unknown columns 'terminal', 'direction'", fixed = TRUE)
+})
+
 test_that("solveODEBatch() and prepareBatch() check the conditions", {
   cs <- list(a = list(parms = p), b = list(parms = p * 2))
   for (f in list(solveODEBatch, prepareBatch)) {

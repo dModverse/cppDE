@@ -12,7 +12,8 @@
 #' Events are specified as a `data.frame` with columns `var` (affected
 #' variable), `value` (expression to apply), `method` (`"replace"`,
 #' `"add"`, or `"multiply"`), and exactly one of `time` (event time) or
-#' `root` (root expression). `rootfunc` terminates integration:
+#' `root` (root expression); any other column is an error. A root event fires
+#' on crossings in both directions. `rootfunc` terminates integration:
 #' `"equilibrate"` stops at steady state (see `roottol` in [solveODE()]); a
 #' character vector of expressions stops at the first zero crossing.
 #'
@@ -79,9 +80,13 @@
 #'     returned as `$tangent`.
 #'   * `"reverse"`: no forward sensitivities; the model takes a `cotangent` in
 #'     [solveODE()] and returns `$cotangent`, one row per state and parameter.
+#'     Under `"bdf"` the sweep solves the corrector equation of every step to
+#'     `reltol` and `abstol`, under `"adams"` it transposes the corrector
+#'     iterations the value run took.
 #'   * `"forward-forward"`: the same as `deriv2 = TRUE`, returning `$hessian`.
 #'   * `"forward-reverse"`: returns `$tangent`, `$cotangent` and `$curvature`,
-#'     the derivatives of `$cotangent` along each tangent direction.
+#'     the derivatives of `$cotangent` along each tangent direction, with the
+#'     corrector treated as under `"reverse"`.
 #' @param profile Logical, default `FALSE`. Compile with timers that print a
 #'   summary per category to the standard error stream after each solve.
 #' @param stepTrace Logical, default `FALSE`. Compile to record per-step
@@ -91,9 +96,10 @@
 #' @return The compiled model name (character) with the attributes
 #'   required by [solveODE()]: `equations`, `srcfile`, `variables`,
 #'   `parameters`, `forcings`, `events`, `rootfunc`, `fixed` (the
-#'   compile-time set), `deriv`, `deriv2`, `derivMode`, `sparse`, `method`,
-#'   `useNDF`, `dimNames` (with element `sens` only when `deriv` is `TRUE`),
-#'   `compileArgs`, and `linkArgs` when OpenMP is available.
+#'   compile-time set), `deriv`, `deriv2`, `derivMode`, `sparse`, `method`
+#'   (`"rosenbrock4"` for `"rb4"`), `useNDF`, `solveAbi`, `dimNames` (with
+#'   element `sens` only when `deriv` is `TRUE`), `compileArgs`, and `linkArgs`
+#'   when OpenMP is available.
 #'
 #' @example inst/examples/cppODE.R
 #' @importFrom stats setNames
@@ -173,6 +179,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   checkSymbolNames(rhs, forcings, fixed)
   checkConstantNames(names(rhs), forcings, fixed, events$var)
   if (!is.null(events)) {
+    checkEventColumns(events)
     for (col in c("var", "value", "time", "root"))
       if (col %in% names(events) && is.character(events[[col]]))
         checkSymbolNames(events[[col]])
@@ -293,7 +300,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
     skip_jacobian = is_explicit(method) && !is_reverse,
     # The step adjoint needs two contractions of f, emitted in the model's scalar.
     emit_contractions = is_reverse,
-    # The Rosenbrock adjoint and the checked sweep need the derivative of the
+    # The Rosenbrock adjoint and the sliding adjoint need the derivative of the
     # Jacobian times a vector.
     emit_jvp = is_reverse
   )
@@ -1283,6 +1290,11 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
             sprintf("    cppde::adjoint::extrapolated_flow<%s::lu_type> _flow;", rb4_double)
           else character(0)),
         "    _cl.trace_lambda(args.adjoint_grid);",
+        # An exactly solved Adams-Moulton step can be unstable on a stiff model at
+        # the step sizes the value run chose, so adams transposes the iterations taken.
+        if (identical(method, "bdf"))
+          "    _cl.set_corrector(args.reltol, args.abstol);"
+        else character(0),
         if (second_reverse) character(0)
         else if (written_onestep) "    if (args.refine > 0) _cl.set_refine(args.refine * args.reltol, args.abstol, args.gradtol);"
         else "    if (args.refine > 0) _flow.set_refine(args.refine * args.reltol, args.abstol, args.gradtol);",
@@ -1330,6 +1342,32 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
           "      _cl.report_profile();",
           "      _rev_solver.report_profile();",
           "#endif",
+          "      return res.return_code;",
+          "    }")
+        else character(0),
+        # The refined sweep of a multistep method: every column in one sweep, the
+        # chains and factorizations of each interval built once for all of them.
+        if (!second_reverse && !written_onestep) c(
+          "    if (args.refine > 0 && !args.adjoint_grid) {",
+          sprintf("      std::vector<std::vector<%s>> _cols((size_t)n_seed);", rev_num_type),
+          sprintf("      std::vector<const %s*> _cptr((size_t)n_seed);", rev_num_type),
+          "      for (int c = 0; c < n_seed; ++c) {",
+          sprintf("        _cols[c].resize((size_t)n_out * %d);", n_variables),
+          "        for (int o = 0; o < n_out; ++o)",
+          sprintf("          for (int i = 0; i < %d; ++i)", n_variables),
+          sprintf("            _cols[c][(size_t)o * %d + i] =", n_variables),
+          sprintf("                args.cotangent[o + (size_t)n_out * (i + (size_t)%d * c)];", n_variables),
+          "        _cptr[c] = _cols[c].data();",
+          "      }",
+          "      _cl.sweep_flow_many(_rev_store, (size_t)n_phi_rows, _cptr, _cl_sys, _adj, _flow, _cl_jmp);",
+          "      res.refine_failures += (int)_flow.refine_failures();",
+          "      for (int c = 0; c < n_seed; ++c) {",
+          "        res.correction[c] = _flow.correction(c);",
+          sprintf("        for (int i = 0; i < %d; ++i)", n_variables),
+          "          res.adjoint[i + (size_t)n_phi_rows * c] = _cl.wx0(c)[i] + _cl.wp(c)[i];",
+          sprintf("        for (int j = %d; j < n_phi_rows; ++j)", n_variables),
+          "          res.adjoint[j + (size_t)n_phi_rows * c] = _cl.wp(c)[j];",
+          "      }",
           "      return res.return_code;",
           "    }")
         else character(0),
@@ -1628,7 +1666,7 @@ cppODE <- function(rhs, events = NULL, rootfunc = NULL, fixed = NULL, forcings =
   attr(modelname, "method")        <- method
   attr(modelname, "useNDF")        <- useNDF
   attr(modelname, "solveAbi")      <- .solveAbi
-  # Dimension names: under reparametrization the sens columns are theta slots.
+  # Dimension names: under reparameterization the sens columns are theta slots.
   # The sens dim defaults to model-parameter names; solveODE() overrides it per
   # call when the tangent has a full Phi' shape.
   if (deriv) {

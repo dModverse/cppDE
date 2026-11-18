@@ -126,12 +126,14 @@ may be reused any number of times. Default \code{NULL}.}
 
 \item{sensErrCon}{Logical. Include the sensitivities, under
 \code{derivMode = "forward-reverse"} the tangents, in the error test and the
-first step. Default \code{TRUE}; \code{FALSE} is cheaper and less accurate, gives
-the steps and corrector iterations of a value run, so the sensitivities
-are the derivative of the computed solution and equal those of the reverse
-mode to rounding, and under \code{"forward-reverse"} gives a step grid that does
-not depend on the directions of the tangent. Needs a model with sensitivities, has no effect
-under \code{derivMode = "reverse"}, and a \code{\link[=cvode]{cvode()}} model takes \code{TRUE} only.}
+first step. Default \code{TRUE}. \code{FALSE} takes the steps and corrector
+iterations of a value run, up to rounding: cheaper and less accurate, the
+sensitivities are the derivative of the computed solution, as the reverse
+mode of \code{"adams"} returns; that of \code{"bdf"} solves the corrector equations
+instead. Under \code{"forward-reverse"} the step grid does not depend on the
+directions of the tangent. Needs a model with sensitivities,
+has no effect under \code{derivMode = "reverse"}; a \code{\link[=cvode]{cvode()}} model takes
+\code{TRUE} only.}
 
 \item{adjoint}{Optional \code{\link[=adjointControl]{adjointControl()}} object for a model compiled with
 \code{derivMode = "reverse"}. Default \code{NULL}, the same as \code{adjointControl()}.}

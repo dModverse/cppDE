@@ -16,9 +16,9 @@
 #' environment that starts R. `guard` is `FALSE` on Windows, which has no
 #' `fork()`.
 #'
-#' Attaching the package prints this in one line. Set
-#' `options(cppDE.quiet = TRUE)` beforehand to suppress the line, or attach with
-#' [suppressPackageStartupMessages()].
+#' Attaching the package prints one line when BLAS runs more than one thread
+#' or no entry point resolved. Set `options(cppDE.quiet = TRUE)` beforehand to
+#' suppress the line, or attach with [suppressPackageStartupMessages()].
 #'
 #' @return List with `api` (the BLAS whose thread count cppDE steers, `NA` when
 #'   no entry point resolved), `threads` (the current thread count, `NA` without

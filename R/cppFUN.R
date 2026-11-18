@@ -4,8 +4,8 @@
 #' Generates and compiles C++ code that evaluates a system of algebraic
 #' expressions \eqn{y = g(x, p)} on one or more rows of input, with
 #' optional first- and second-order derivatives. There is no time
-#' integration; the principal use cases are observation maps for
-#' likelihood-based inference and reparametrizations for [solveODE()].
+#' integration; the principal use cases are observation functions and
+#' reparameterizations of the inputs of [solveODE()].
 #' `derivMode` selects which derivative products are built. Every returned
 #' function runs compiled code: an object built with `compile = FALSE` is
 #' evaluable only after [compile()]. See
@@ -769,7 +769,7 @@ cppFUN <- function(eqns, variables = getSymbols(eqns, omit = parameters), parame
 #' @param funs List of the `evaluateBatch` entries of [cppFUN()] objects
 #'   built with forward derivatives, one per set.
 #' @param sets List of argument sets, as `evaluateBatch` takes them.
-#' @param cores Number of threads over the sets.
+#' @param cores Number of threads over the sets. Default `1`.
 #' @param deriv2 Logical. Second derivatives as well. Default `FALSE`.
 #' @return A list with one element per set, as `evaluateBatch` returns them.
 #' @seealso [cppFUN()]

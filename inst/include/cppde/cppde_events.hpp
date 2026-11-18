@@ -65,7 +65,6 @@ struct RootEvent {
 
   EventMethod method;
   bool terminal = false;
-  int direction = 0;
 
   // Partials of g provided by the codegen: dg_dx writes the gradient with
   // respect to the state, dg_dt returns the explicit time derivative. Both
@@ -120,14 +119,6 @@ struct TriggeredEvent {
 inline bool root_crossed(double g_lo, double g_hi) {
   if (g_lo == 0.0) return false;
   return g_hi == 0.0 || g_lo * g_hi < 0.0;
-}
-
-// Called only for an interval root_crossed() accepted, so the sign of g before
-// the crossing determines the direction; g at the upper end may be zero.
-inline bool direction_matches(double last_val, int direction) {
-  if (direction == 0) return true;
-  if (direction < 0) return last_val > 0.0;
-  return last_val < 0.0;
 }
 
 // ============================================================================

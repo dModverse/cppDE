@@ -579,7 +579,7 @@
 #' ## Shapes of `tangent` and `hessian`
 #'
 #' `tangent` is the Jacobian \eqn{\Phi'(\theta)} and `hessian` the second
-#' derivative \eqn{\Phi''(\theta)} of a reparametrization
+#' derivative \eqn{\Phi''(\theta)} of a reparameterization
 #' \eqn{p = \Phi(\theta)} of the initial states and parameters; the results are
 #' then derivatives in \eqn{\theta}. `tangent` takes one of three shapes, told
 #' apart by the row count and row names. `hessian` has the rows of `tangent` and
@@ -664,12 +664,14 @@
 #'   may be reused any number of times. Default `NULL`.
 #' @param sensErrCon Logical. Include the sensitivities, under
 #'   `derivMode = "forward-reverse"` the tangents, in the error test and the
-#'   first step. Default `TRUE`; `FALSE` is cheaper and less accurate, gives
-#'   the steps and corrector iterations of a value run, so the sensitivities
-#'   are the derivative of the computed solution and equal those of the reverse
-#'   mode to rounding, and under `"forward-reverse"` gives a step grid that does
-#'   not depend on the directions of the tangent. Needs a model with sensitivities, has no effect
-#'   under `derivMode = "reverse"`, and a [cvode()] model takes `TRUE` only.
+#'   first step. Default `TRUE`. `FALSE` takes the steps and corrector
+#'   iterations of a value run, up to rounding: cheaper and less accurate, the
+#'   sensitivities are the derivative of the computed solution, as the reverse
+#'   mode of `"adams"` returns; that of `"bdf"` solves the corrector equations
+#'   instead. Under `"forward-reverse"` the step grid does not depend on the
+#'   directions of the tangent. Needs a model with sensitivities,
+#'   has no effect under `derivMode = "reverse"`; a [cvode()] model takes
+#'   `TRUE` only.
 #' @param adjoint Optional [adjointControl()] object for a model compiled with
 #'   `derivMode = "reverse"`. Default `NULL`, the same as `adjointControl()`.
 #' @param maxOrder Optional upper bound on the order of a multistep method,
@@ -941,9 +943,9 @@ solveODEBatch <- function(model, conditions,
 #' Will a Batch Run in Parallel?
 #'
 #' @description
-#' `solveODEBatch()` degrades to a serial loop without saying so. This reports
-#' the conditions it depends on, so a caller can warn instead of silently
-#' running serially.
+#' Reports whether [solveODEBatch()] solves the conditions of a model in
+#' parallel. Without a batch entry point or OpenMP it runs a serial loop and
+#' gives no warning.
 #'
 #' @param model A model handle from [cppODE()] or [cvode()].
 #' @return List with `symbol` (the batch entry resolved), `openmp` (cppDE was

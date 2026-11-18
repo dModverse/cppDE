@@ -27,9 +27,9 @@ deadlock is then still reachable; the fallback is \code{OMP_NUM_THREADS=1} in th
 environment that starts R. \code{guard} is \code{FALSE} on Windows, which has no
 \code{fork()}.
 
-Attaching the package prints this in one line. Set
-\code{options(cppDE.quiet = TRUE)} beforehand to suppress the line, or attach with
-\code{\link[=suppressPackageStartupMessages]{suppressPackageStartupMessages()}}.
+Attaching the package prints one line when BLAS runs more than one thread
+or no entry point resolved. Set \code{options(cppDE.quiet = TRUE)} beforehand to
+suppress the line, or attach with \code{\link[=suppressPackageStartupMessages]{suppressPackageStartupMessages()}}.
 }
 \examples{
 forkGuard()
