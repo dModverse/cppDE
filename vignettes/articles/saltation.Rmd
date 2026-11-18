@@ -610,7 +610,7 @@ plot_expr_2
 ## Nonlinear time-dependent root
 
 The derivative of the firing time in the state holds
-$\nabla \dot g = \nabla g_t + (\nabla^2 g)\, f + J^\mathsf{T} \nabla g$, here with no zero term.
+$\nabla \dot h_e = \nabla \partial_t h_e + (\nabla^2 h_e)\, f + J^\mathsf{T} \nabla h_e$, here with no zero term.
 The root is quadratic in $t$, so the crossing has a closed form.
 
 ```{r quad, eval = FALSE}

@@ -30,9 +30,9 @@ $$
   \qquad
   \tilde x \cdot \tilde y = xy + (xy' + x'y)\varepsilon,
 $$
-and for any smooth scalar function $g$,
+and for any smooth scalar function $\varphi$,
 $$
-  g(\tilde x) = g(x) + g'(x)\,x'\,\varepsilon.
+  \varphi(\tilde x) = \varphi(x) + \varphi'(x)\,x'\,\varepsilon.
 $$
 By composition, $f$ called with dual inputs returns $f$ with the
 directional derivative.
@@ -86,7 +86,7 @@ $\partial f/\partial x$.
 
 ## Seeding of the tangent
 
-For a reparametrization $(x_0, p) = \Phi(\theta)$,
+For a reparameterization $(x_0, p) = \Phi(\theta)$,
 $\theta \in \mathbb{R}^M$,
 $$
   S_\theta = \frac{\partial x}{\partial \theta}
@@ -138,7 +138,10 @@ tolerance. The BDF/NDF corrector uses the same
 maximum, so an unconverged sensitivity direction forces further
 iterations or a smaller step. With `sensErrCon = FALSE`, error test,
 order selection, corrector test and initial-step estimate use the state
-only, and steps and iteration counts are those of a value run.
+only, and steps and iteration counts are those of a value run up to
+rounding: the values over dual numbers and over double can differ in the
+last bits, and on a long stiff run the controller amplifies such a
+difference until a step decision parts the two sequences.
 
 ## Corrector iterations {#corrector}
 
@@ -148,7 +151,7 @@ tangent takes the iterations of the values, against the same $W$ and
 without the derivative of $W$, which like the step size is a solver
 decision. With `sensErrCon = FALSE` the sensitivities are the derivative
 of the computed solution on the grid of a value run, as the reverse mode
-returns
-([Reverse mode](methods-reverse.html#discrete-and-continuous-adjoints)).
+of `adams` returns; that of `bdf` solves the corrector equations instead
+([Reverse mode](methods-reverse.html#adjoint-of-the-step-map)).
 
 ## References

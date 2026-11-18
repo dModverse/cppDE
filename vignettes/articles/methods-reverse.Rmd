@@ -21,14 +21,15 @@ Used from R through `derivMode = "reverse"` of
 
 ## Gradient of one objective
 
-Parameter estimation needs the gradient of one number $L$, a likelihood or a residual sum of
-squares, in all $M$ parameters $\theta$. With [forward sensitivities](methods-forward.html), one
-tangent per parameter, it costs about $M$ solves; the reverse mode needs one forward solve and one
-backward sweep, whatever $M$ [@griewank2008evaluating; @naumann2012art]. With the solver steps
-$\theta \to x_1 \to \dots \to x_N$, the gradient is the product of the Jacobians,
+Parameter estimation needs the gradient of one number, the objective function $\mathcal{J}(\theta)$,
+a likelihood or a residual sum of squares, in all $M$ parameters $\theta$. With [forward
+sensitivities](methods-forward.html), one tangent per parameter, it costs about $M$ solves; the
+reverse mode needs one forward solve and one backward sweep, whatever $M$ [@griewank2008evaluating;
+@naumann2012art]. With the solver steps $\theta \to x_1 \to \dots \to x_N$, the gradient is the
+product of the Jacobians,
 $$
-  \frac{\mathrm{d}L}{\mathrm{d}\theta}
-  = \frac{\partial L}{\partial x_N}\,
+  \frac{\mathrm{d}\mathcal{J}}{\mathrm{d}\theta}
+  = \frac{\partial \mathcal{J}}{\partial x_N}\,
     \frac{\partial x_N}{\partial x_{N-1}} \cdots
     \frac{\partial x_2}{\partial x_1}\,
     \frac{\partial x_1}{\partial \theta} .
@@ -49,16 +50,16 @@ $$
   \qquad j = 1,\dots,M, \tag{1}
 $$
 with $\theta = (x_0, p)$, $M = n_x + n_p$, and $w_o \in \mathbb{R}^{n_x}$ the row of $w$ at $t_o$.
-For $w_{oi} = \partial L/\partial x_i(t_o)$ (for least squares, the weighted residual),
-$\bar\theta = \nabla_\theta L$. Several cotangents, as columns of a three-dimensional array, take
-one sweep each.
+For $w_{oi} = \partial \mathcal{J}/\partial x_i(t_o)$ (for least squares, the weighted residual),
+$\bar\theta = \nabla_\theta \mathcal{J}$. Several cotangents, as columns of a three-dimensional
+array, take one sweep each.
 
 ### Example: two Euler steps
 
-For $\dot x = -k x$, two explicit Euler steps of size $h$ and $L = x_2$, each step multiplies by
-$a = 1 - hk$:
+For $\dot x = -k x$, two explicit Euler steps of size $h$ and $\mathcal{J} = x_2$, each step
+multiplies by $a = 1 - hk$:
 $$
-  x_1 = a\,x_0, \qquad x_2 = a\,x_1, \qquad L = x_2 = a^2 x_0 .
+  x_1 = a\,x_0, \qquad x_2 = a\,x_1, \qquad \mathcal{J} = x_2 = a^2 x_0 .
 $$
 A step has the derivatives $\partial x_{n+1}/\partial k = -h\,x_n$ and
 $\partial x_{n+1}/\partial x_n = a$.
@@ -70,9 +71,9 @@ $$
 $$
 The derivative in $x_0$ needs a second tangent, started at $1$.
 
-*Reverse.* The adjoint $\lambda_n = \partial L/\partial x_n$ starts at $\lambda_2 = 1$. Each
-transposed step passes $a\lambda_{n+1}$ to the previous state and adds $-h\,x_n\lambda_{n+1}$ to
-the parameter cotangent $\bar k$:
+*Reverse.* The adjoint $\lambda_n = \partial \mathcal{J}/\partial x_n$ starts at $\lambda_2 = 1$.
+Each transposed step passes $a\lambda_{n+1}$ to the previous state and adds $-h\,x_n\lambda_{n+1}$
+to the parameter cotangent $\bar k$:
 $$
   \lambda_1 = a\,\lambda_2 = a, \qquad
   \bar k = -h\,x_1\lambda_2 = -h\,a\,x_0,
@@ -85,10 +86,10 @@ One backward pass returns both derivatives and reads $x_1$ and $x_0$, which the 
 stores. A further parameter adds a tangent in the forward mode and one entry of $\bar\theta$ in
 the reverse mode.
 
-$-2h(1-hk)\,x_0$ is the exact derivative of the computed $L_h = (1-hk)^2 x_0$, not of the exact
-solution $x(2h) = e^{-2hk}x_0$, whose derivative is $-2h\,e^{-2hk}x_0$. At $h = 0.5$, $k = 1$,
-$x_0 = 1$: $L_h = 0.25$ with derivative $-0.5$, exact value $0.368$ with derivative $-0.368$
-([Discrete and continuous adjoints](#discrete-and-continuous-adjoints)).
+$-2h(1-hk)\,x_0$ is the exact derivative of the computed $\mathcal{J}_h = (1-hk)^2 x_0$, not of the
+exact solution $x(2h) = e^{-2hk}x_0$, whose derivative is $-2h\,e^{-2hk}x_0$. At $h = 0.5$, $k = 1$,
+$x_0 = 1$: $\mathcal{J}_h = 0.25$ with derivative $-0.5$, exact value $0.368$ with derivative
+$-0.368$ ([Discrete and continuous adjoints](#discrete-and-continuous-adjoints)).
 
 ## Adjoint equation
 
@@ -133,7 +134,7 @@ $$
     \mathrm{d}t, \tag{5}
 $$
 the counterparts of $\lambda_0$ and $\bar k$, stacked in the row order of the `tangent` argument,
-states first. A reparametrization $(x_0, p) = \Phi(\theta)$ enters afterwards through the outer
+states first. A reparameterization $(x_0, p) = \Phi(\theta)$ enters afterwards through the outer
 factors of [(4)](#eq-adjoint-result), the chain rule of
 [Forward (2)](methods-forward.html#eq-sensitivity-theta) applied on the left. The cost is one
 backward solve of dimension $n_x$ and a quadrature of dimension $n_p$, whatever $M$;
@@ -179,23 +180,46 @@ the identity in the $[\text{slot} \times \text{component}]$ array, runs through 
 routines and returns every column in one pass, so the adjoint uses exactly the forward
 coefficients.
 
-The corrector is differentiated as the $k$ forward iterations [(7)](#eq-step-corr), with $W$, the
-step size, the order and $k$ held fixed. From the cotangent $\bar\Delta^{(k)}$, each backward
-iteration takes one transposed solve and one product with $J^{\mathsf T}$ at
+Under `bdf` the sweep differentiates the corrector equation $r = 0$ at the accepted state $y$: the
+cotangent $\mu$ of the residual solves
+$$
+  \bigl(I/\gamma - J(y)\bigr)^{\mathsf T} \mu = \bar\Delta ,
+$$
+and $J(y)^{\mathsf T}\mu$, $-(\ell/\gamma)\,\mu$ and $(\partial f/\partial\theta)(y)^{\mathsf T}\mu$
+pass to $z_0^{\text{pred}}$, $z_1^{\text{pred}}$ and $\theta$. $\mu$ is summed from the transpose of
+the iteration [(7)](#eq-step-corr) at $y$,
+$$
+  \mu_m = s\, W^{-\mathsf T} \bar\Delta^{(m)}, \qquad
+  \bar\Delta^{(m+1)} = \bar\Delta^{(m)} + J(y)^{\mathsf T}\mu_m - \mu_m/\gamma, \qquad
+  \bar\Delta^{(0)} = \bar\Delta ,
+$$
+one transposed solve and one product with $J^{\mathsf T}$ per iteration, until the WRMS norm of
+$\bar\Delta^{(m)}$ against $\mathtt{reltol}\,|\lambda| + \mathtt{abstol}$ is at most $0.1$, with
+$\lambda$ the cotangent the step hands down: the share of the local error test of the backward
+problem that CVODES gives the Newton iteration [@hindmarsh2005sundials]. Where the frozen $W$ cannot
+reach the test within ten iterations, the iteration continues against $W$ built at $y$ and the
+current $\gamma$. The $k$ iterations the forward run took leave the tangent of $\Delta$
+unconverged even where $\Delta$ has converged, and on a long stiff trajectory their derivative can
+be off by percents.
+
+Under `adams` the corrector is differentiated as the $k$ forward iterations [(7)](#eq-step-corr),
+with $W$, the step size, the order and $k$ held fixed. From $\bar\Delta^{(k)} = \bar\Delta$, each
+backward iteration takes one transposed solve and one product with $J^{\mathsf T}$ at
 $y^{(m)} = z_0^{\text{pred}} + \Delta^{(m)}$:
 $$
   \mu_m = s\, W^{-\mathsf T} \bar\Delta^{(m+1)}, \qquad
   \bar\Delta^{(m)} = \bar\Delta^{(m+1)} + J(y^{(m)})^{\mathsf T}\mu_m - \mu_m/\gamma,
 $$
-and $J(y^{(m)})^{\mathsf T}\mu_m$, $-(\ell/\gamma)\,\mu_m$ and
-$(\partial f/\partial\theta)(y^{(m)})^{\mathsf T}\mu_m$ pass to $z_0^{\text{pred}}$,
-$z_1^{\text{pred}}$ and $\theta$. The forward sensitivities take the same iterations on dual numbers
-([Forward sensitivities](methods-forward.html#corrector)), so both differentiate the same map.
-Closing the corrector by the implicit function theorem instead differentiates an equation the
-solver never solved exactly; on a stiff model under `adams` that equation can be unstable at the
-chosen step sizes while the iterations taken are not, and the gradient diverges. A Rosenbrock step
-transposes to a stage recursion of six solves against one factorization, an explicit step to the
-backward recursion over the tableau.
+with the three terms of each $\mu_m$ at $y^{(m)}$ passed on as above. The forward sensitivities with
+`sensErrCon = FALSE` take the same iterations on dual numbers
+([Forward sensitivities](methods-forward.html#corrector)), so both differentiate the same map. An
+exactly solved Adams-Moulton step can be unstable on a stiff model at the step sizes the value run
+chose while the iterations taken are not: at order 3 a parasitic root leaves the unit disk for
+$h\lambda < -6$, and on Robertson's kinetics at $h\lambda \approx -30$ the solved sweep grows by
+the modulus of that root, about $1.5$, per step.
+
+A Rosenbrock step transposes to a stage recursion of six solves against one factorization, an
+explicit step to the backward recursion over the tableau.
 
 The code generator emits $J^{\mathsf T}\lambda$ and $(\partial f/\partial p)^{\mathsf T}\lambda$
 beside the right-hand side. For a Rosenbrock method it also emits both applied to $J v$, a second
@@ -205,14 +229,16 @@ derivative, since the stages solve against a matrix built from the Jacobian.
 
 A checkpoint holds the step-start state, the Nordsieck carry, time, step size, the controller
 operations applied to the Nordsieck carry afterwards and, for a multistep method, the corrector
-iterates. Memory is linear in the number of steps and holds no derivatives. Each iteration matrix
-is recorded once, as the point, time and $\gamma_p$ of the factorization, and refactorized in the sweep
-once per run of steps that used it. Slot operators are cached by Nordsieck carry and step size, so
-the probe runs only where the controller changed the control state.
+iterates. Memory is linear in the number of steps and holds no derivatives. Each iteration matrix is
+recorded once, as the point, time and $\gamma_p$ of the factorization, and refactorized in the sweep
+once per run of steps that used it; a `bdf` step whose corrector adjoint does not meet the test
+against it within ten iterations adds one, built at the accepted state. Slot operators are cached by
+Nordsieck carry and step size, so the probe runs only where the controller changed the control
+state.
 
-An observation at an interpolated time goes through the continuous extension of the step containing it. After
-the tail the probe holds a valid interpolant, whose value at the observation time is the row
-$\partial x_{\text{interp}} / \partial (z^{\text{pred}}, \Delta)$.
+An observation at an interpolated time goes through the continuous extension of the step containing
+it. After the tail the probe holds a valid interpolant, whose value at the observation time is the
+row $\partial x_{\text{interp}} / \partial (z^{\text{pred}}, \Delta)$.
 
 ### Reuse of checkpoints
 
@@ -226,8 +252,8 @@ needs the values to form the cotangent.
   integration.
 - The checkpoints live until the garbage collector frees the store or `releaseStore()` frees them;
   a released store makes the solve integrate again.
-- `derivMode = "forward-reverse"` refuses both arguments, since checkpoints of that mode hold tangents that
-  do not outlive the recording solve.
+- `derivMode = "forward-reverse"` refuses both arguments, since checkpoints of that mode hold
+  tangents that do not outlive the recording solve.
 
 The reverse mode supports all four methods, time- and root-triggered events
 ([Events in reverse mode](methods-reverse-events.html)), forcings, the batch entry point and the
@@ -243,12 +269,16 @@ step-size control solves [(2)](#eq-adjoint-ode) and [(5)](#eq-adjoint-quadrature
 forward states interpolated between checkpoints [@cao2003adjoint]
 ([cvode() and the CVODES adjoint](methods-cvode.html#asa)).
 
-With $L$ the objective of the exact solution and $L_h$ the value the solver returns, the discrete
-adjoint is $\nabla_\theta L_h$ on the value-run grid, with corrector iterations and matrices as
-taken. For every method it equals the forward sensitivities on the same grid
-(`sensErrCon = FALSE`) up to rounding. The continuous adjoint approximates $\nabla_\theta L$ to the
-discretization error of both solves, $O(\mathrm{tol})$ away from $\nabla_\theta L_h$; in the Euler
-example it would approximate $-0.368$, not $-0.5$.
+With $\mathcal{J}$ the objective of the exact solution and $\mathcal{J}_h$ that of the computed one,
+the discrete adjoint is $\nabla_\theta \mathcal{J}_h$ on the value-run grid. Under `adams`, `rb4`
+and `tsit5`, $\mathcal{J}_h$ is the value the solver returns, with corrector iterations and matrices
+as taken, and the adjoint equals the forward sensitivities on the same grid (`sensErrCon = FALSE`)
+up to rounding. Under `bdf`, $\mathcal{J}_h$ is the value of the method with the corrector equations
+solved, which the returned value meets to the corrector test; the forward sensitivities on the same
+grid differ from the adjoint by what their corrector iterations leave. The continuous adjoint
+approximates $\nabla_\theta \mathcal{J}$ to the discretization error of both solves,
+$O(\mathrm{tol})$ away from $\nabla_\theta \mathcal{J}_h$; in the Euler example it would approximate
+$-0.368$, not $-0.5$.
 
 |                     | discrete adjoint | continuous adjoint |
 |:--------------------|:-----------------|:-------------------|
@@ -256,36 +286,35 @@ example it would approximate $-0.368$, not $-0.5$.
 | order               | discretize, then differentiate | differentiate, then discretize |
 | backward pass       | transposed steps, forward grid | second integrator for [(2)](#eq-adjoint-ode) |
 | forward states      | checkpoint per step | checkpoint every `asaCheckpoints` steps, interpolated |
-| implicit step       | $k$ transposed solves, forward iteration matrix | stiff linear ODE under error control |
+| implicit step       | `bdf`: corrector equation solved; `adams`: $k$ transposed iterations | stiff linear ODE under error control |
 | event               | transposed jump arithmetic | restart with transposed saltation |
-| result              | $\nabla_\theta L_h$, as forward on the same grid | $\nabla_\theta L$ to $O(\mathrm{tol})$ |
-| consistent with value | up to rounding | to $O(\mathrm{tol})$ |
+| result              | $\nabla_\theta \mathcal{J}_h$ on the forward grid | $\nabla_\theta \mathcal{J}$ to $O(\mathrm{tol})$ |
+| consistent with value | up to rounding, `bdf` to the corrector test | to $O(\mathrm{tol})$ |
 
-Table: The two adjoints. Both converge to $\nabla_\theta L$ as the
+Table: The two adjoints. Both converge to $\nabla_\theta \mathcal{J}$ as the
 tolerance is lowered.
 
 **Consistency with the value.** Line searches, trust-region ratios and gradient stopping tests
-assume the gradient is the derivative of the value. Near the optimum $\nabla_\theta L$ shrinks to
-the size of an $O(\mathrm{tol})$ error, and an inconsistent gradient points where the computed value
-does not decrease: the trust-region ratio degrades, the line search fails, and a gradient tolerance
-below the error is never reached. The discrete adjoint is the gradient of the value the optimizer
-sees.
+assume the gradient is the derivative of the value. Near the optimum $\nabla_\theta \mathcal{J}$
+shrinks to the size of an $O(\mathrm{tol})$ error, and an inconsistent gradient points where the
+computed value does not decrease: the trust-region ratio degrades, the line search fails, and a
+gradient tolerance below the error is never reached. The discrete adjoint is the gradient of the
+value the optimizer sees, under `bdf` of that value with the corrector equations solved.
 
 **Refined sweep.** `adjointControl(refine = TRUE)` holds the sweep to the tolerances and
 differentiates the flow, the solution map of the ODE, instead of the step map. Like the continuous
-adjoint, the result is closer to $\nabla_\theta L$ and differs from $\nabla_\theta L_h$ by the order
-of the discretization error. It pays off where the value grid is too coarse for the derivative, such
-as a trajectory at rest crossed in a few steps
-([Grid and refinement of the sweep](methods-reverse-checks.html#state-error)). A refined solve also
-returns `$correction`, per seed column the first-order change of the seeded functional from the
-computed to the differentiated trajectory; value plus correction and the refined gradient belong to
-one function
+adjoint, the result is closer to $\nabla_\theta \mathcal{J}$ and differs from $\nabla_\theta
+\mathcal{J}_h$ by the order of the discretization error. It pays off where the value grid is too
+coarse for the derivative, such as a trajectory at rest crossed in a few steps ([Grid and refinement
+of the sweep](methods-reverse-checks.html#state-error)). A refined solve also returns `$correction`,
+per seed column the first-order change of the seeded functional from the computed to the
+differentiated trajectory; value plus correction and the refined gradient belong to one function
 ([Value correction of the refined sweep](methods-reverse-checks.html#value-correction)).
 
 ## Example: Michaelis-Menten conversion
 
 $x$ converts into $y$ by Michaelis-Menten kinetics, $y$ degrades at first order and is observed at
-eleven time points, $L = \sum_o \bigl(y(t_o) - d_o\bigr)^2$. The cotangent $w_o$ holds
+eleven time points, $\mathcal{J} = \sum_o \bigl(y(t_o) - d_o\bigr)^2$. The cotangent $w_o$ holds
 $2\bigl(y(t_o) - d_o\bigr)$ in the column of $y$. The `cppODE()` models use `bdf` and `rb4`.
 
 ```{r models}
@@ -342,8 +371,8 @@ exact <- gradForward(1e-12, "rb4", sensErrCon = TRUE)
 exact
 ```
 
-A forward solve at `reltol = 1e-12` stands in for $\nabla_\theta L$. The tables give the largest
-difference over the five entries, relative to the largest entry.
+A forward solve at `reltol = 1e-12` stands in for $\nabla_\theta \mathcal{J}$. The tables give the
+largest difference over the five entries, relative to the largest entry.
 
 ```{r gaps}
 gap <- function(a, b) max(abs(a - b)) / max(abs(b))
@@ -367,9 +396,10 @@ knitr::kable(formatC(gapTable("rb4"), format = "e", digits = 1), align = "r",
              caption = "rb4")
 ```
 
-The discrete adjoint matches the forward sensitivities to rounding, both being
-$\nabla_\theta L_h$. The refined sweep differs from them by the order of the tolerance, being the
-derivative of the value plus `$correction`.
+Under `rb4` the discrete adjoint matches the forward sensitivities to rounding, both being
+$\nabla_\theta \mathcal{J}_h$. Under `bdf` the two differ by what the corrector iterations of the
+forward run leave, a gap that falls with the tolerance. The refined sweep differs from them by the
+order of the tolerance, being the derivative of the value plus `$correction`.
 
 ## Choice of derivative mode
 
@@ -381,8 +411,9 @@ derivative of the value plus `$correction`.
 | value grid does not resolve the derivative | `refine = TRUE` |
 | second derivatives | [Second derivatives](methods-forward-reverse.html) |
 
-The dMod2 article on trust-region optimization compares
-[Gauss-Newton with forward derivatives against SR1 with reverse derivatives](https://dmodverse.github.io/dMod2/articles/methods-trust.html#forward-and-reverse-derivatives-on-the-oppelt-fit)
+The dMod2 article on trust-region optimization compares [Gauss-Newton with forward derivatives
+against SR1 with reverse
+derivatives](https://dmodverse.github.io/dMod2/articles/methods-trust.html#forward-and-reverse-derivatives-on-the-oppelt-fit)
 on a real objective.
 
 ## References

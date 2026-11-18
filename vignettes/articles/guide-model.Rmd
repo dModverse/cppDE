@@ -69,7 +69,7 @@ and `pi` the number.
 
 [`compile()`](../reference/compile.html) builds the generated sources. With `output` they link into
 one shared object in the directory of the first source; `cores` runs the compiler jobs in parallel,
-`args` appends compiler or linker flags, `verbose = TRUE` shows the commands.
+`args` appends compiler flags, `verbose = TRUE` shows the commands.
 
 ```{r compile}
 compile(chain, adams, rb4, tsit5, traced, output = "guide1", cores = 2)

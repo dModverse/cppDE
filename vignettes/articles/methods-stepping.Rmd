@@ -185,7 +185,7 @@ $$
 $$
 Each stage [(6)](#eq-rosenbrock-stage) is one linear solve, no Newton
 iteration; an accepted step costs one $J$, one factorization of
-$W$, five right-hand-side evaluations and six back-substitutions. The
+$W$, six right-hand-side evaluations and six back-substitutions. The
 [order-$4$ coefficients](methods-coefficients.html#ros-coeffs) of Hairer
 and Wanner [@hairer2010solving, §IV.7], also used by the `rosenbrock4`
 stepper of Boost.Numeric.Odeint, form an L-stable pair with an embedded

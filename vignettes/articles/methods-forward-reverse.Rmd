@@ -5,7 +5,8 @@ csl: ieee.csl
 link-citations: true
 ---
 
-`cppODE()` computes Hessian-vector products of a scalar functional by
+`cppODE()` computes Hessian-vector products of a scalar functional
+$\mathcal{J}(\theta)$ of the solution, such as the objective function of a fit, by
 differentiating the reverse sweep in forward mode. Symbols are those of
 the [notation table](methods-overview.html#notation). R interface:
 `derivMode = "forward-reverse"` of [`cppODE()`](../reference/cppODE.html)
@@ -19,13 +20,13 @@ defines the gradient map
 []{#eq-gradient-map}
 $$
   \bar\theta : \mathbb{R}^{M} \to \mathbb{R}^{M},
-  \qquad \theta \mapsto \nabla_\theta L(\theta), \tag{1}
+  \qquad \theta \mapsto \nabla_\theta \mathcal{J}(\theta), \tag{1}
 $$
-with Jacobian $\nabla^2_\theta L$. The sweep evaluating
+with Jacobian $\nabla^2_\theta \mathcal{J}$. The sweep evaluating
 [(1)](#eq-gradient-map) is generic in the scalar type. On
 $\mathtt{dual}\langle\mathtt{double}\rangle$ with $N$ tangent slots,
 seeded with $V \in \mathbb{R}^{M \times N}$, it returns the exact
-$(\nabla_\theta L,\; \nabla^2_\theta L\,V)$ [@pearlmutter1994fast];
+$(\nabla_\theta \mathcal{J},\; \nabla^2_\theta \mathcal{J}\,V)$ [@pearlmutter1994fast];
 $V = I_M$ gives the Hessian. For an ODE this is the second-order adjoint
 [@wang1992second; @ozyurt2005cheap]. The result `curvature`, of shape
 $[n_x + n_p, N, n_{\text{seed}}]$, comes with the `cotangent` and
@@ -61,7 +62,7 @@ array $[n_{\mathrm{obs}}, n_x, n_{\mathrm{seed}}, N]$; without it the
 Hessian misses the dependence of the cotangent on $\theta$, the gradient
 not. Differentiating
 [Reverse (5)](methods-reverse.html#eq-adjoint-quadrature) along $v$ gives
-the state half $\mu(t_0)$ of $\nabla^2_\theta L\,v$ and the parameter
+the state half $\mu(t_0)$ of $\nabla^2_\theta \mathcal{J}\,v$ and the parameter
 half
 []{#eq-soa-quadrature}
 $$
@@ -106,11 +107,15 @@ gradient would cost $N$ gradient evaluations and lose half the digits.
 
 The matrix of a Rosenbrock stage has tangents, so the transposed solve
 applies the implicit function theorem with the transposed matrix
-(`cppde_ad_lu.hpp` dense, `cppde_sparse_ad_lu.hpp` sparse). The iteration
-matrix of a `bdf` or `adams` corrector has none: the sweep solves against
-it on values, with the tangents as further right-hand sides. A generated
-model body releases on return the tangent storage it allocated, so the
-sweep binds the tangent storage of every buffer before passing it to the
-model, as the stepper does for internal buffers.
+(`cppde_ad_lu.hpp` dense, `cppde_sparse_ad_lu.hpp` sparse). The
+iteration matrix of a `bdf` or `adams` corrector has none: the sweep
+solves against it on values, with the tangents as further right-hand
+sides. Under `bdf` the sweep solves the corrector equation ([Adjoint of
+the step map](methods-reverse.html#adjoint-of-the-step-map)) with a
+stopping test on the values, so every block of directions takes the same
+iterations. A generated model body releases on return the tangent
+storage it allocated, so the sweep binds the tangent storage of every
+buffer before passing it to the model, as the stepper does for internal
+buffers.
 
 ## References

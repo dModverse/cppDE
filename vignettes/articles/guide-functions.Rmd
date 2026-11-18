@@ -16,7 +16,7 @@ do.call(knitr::read_chunk, list("helpers.R"))
 
 [`cppFUN()`](../reference/cppFUN.html) compiles a system of algebraic equations $y = g(x, p)$,
 evaluated on the rows of a matrix of variables $x$ with parameters $p$ shared by all rows, with
-first and second derivatives. Typical uses are observation functions and reparametrizations of the
+first and second derivatives. Typical uses are observation functions and reparameterizations of the
 inputs of `solveODE()`. The equations follow the
 [expression language](../reference/expressions.html) of `cppODE()`; the generated code is
 described in [Derivative directions of cppFUN()](methods-cppfun.html).
@@ -37,7 +37,7 @@ differentiation at compile time. As with `cppODE()`, `compile = FALSE` (here the
 the source to `outdir` for a joint `compile()`.
 
 The guide uses an observable $y = s(A + B)$ of the decay chain and the fraction
-$z = B/(A + B)$, a reparametrization $k_i = \exp(\lambda_i)$, and an error model
+$z = B/(A + B)$, a reparameterization $k_i = \exp(\lambda_i)$, and an error model
 $\sigma = \sqrt{a^2 + b^2 B^2}$.
 
 ```{r models}
@@ -119,9 +119,9 @@ ggplot(longFormat(traj, "y"), aes(time, value)) +
 A tangent not given as an argument is taken from attribute `"deriv"` of the variables or
 parameters, a second derivative from attribute `"deriv2"`.
 
-## Reparametrization
+## Reparameterization
 
-A function of the parameters alone has no variables and one row. Its Jacobian, rows named by the
+A function of the parameters alone has no variables and one row. The Jacobian, rows named by the
 outputs, is a partial `tangent` of `solveODE()`: the sensitivities are then derivatives in the
 logarithms $\lambda_i$ of the rate constants.
 

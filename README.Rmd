@@ -7,19 +7,6 @@ output:
 
 <!-- README.md is generated from README.Rmd. Please edit that file -->
 
-```{r, include = FALSE}
-knitr::opts_chunk$set(
-  collapse = TRUE,
-  comment = "#>",
-  fig.path = "man/figures/README-",
-  fig.width = 9,
-  fig.height = 4,
-  out.width = "100%",
-  message = FALSE,
-  warning = FALSE
-)
-```
-
 # cppDE
 
 <!-- badges: start -->
@@ -27,109 +14,31 @@ knitr::opts_chunk$set(
 [![docs](https://img.shields.io/badge/docs-dmodverse.github.io%2FcppDE-blue)](https://dmodverse.github.io/cppDE/)
 <!-- badges: end -->
 
-**C++ code generation for ODEs with sensitivity propagation.**
-
-cppDE writes, compiles and runs a C++ solver for a system of ordinary
-differential equations, or C++ code for algebraic functions, given as
-equations in R. Derivatives with respect to the parameters are propagated
-forward on dual numbers or backward by a discrete adjoint, to first and second
-order.
-
-[dMod2](https://dmodverse.github.io/dMod2/) builds a modeling framework on
-cppDE.
-
-## Features
-
-- **Solvers**: variable-order BDF/NDF and Adams multistep in Nordsieck form,
-  adapted from [SUNDIALS/CVODE](https://computing.llnl.gov/projects/sundials);
-  Rosenbrock4 extended from
-  [Boost.Odeint](https://www.boost.org/doc/libs/release/libs/numeric/odeint/);
-  the Tsitouras 5(4) pair, an explicit Runge-Kutta method with dense output
-- **Sensitivities in both directions**: forward mode integrates one tangent per
-  parameter through the solve; reverse mode returns the gradient of a functional
-  in one backward sweep, at a cost independent of the parameter count
-- **Second order**: exact Hessians, forward over forward or forward over reverse
-- **Events and switches**: time- and root-triggered events, and `piecewise()`
-  or comparisons on states and time located as roots; a switch whose branches
-  both push onto the switching surface slides along it (Filippov). First- and
-  second-order sensitivities take every jump by the saltation correction
-- **Code generation on an expression graph**: Jacobians and derivative
-  contractions by automatic differentiation, emitted as straight-line C++, with
-  automatic sparsity detection and KLU factorization for large systems
-- **`cvode()`**: the same models on SUNDIALS CVODES, with forward
-  sensitivities and adjoint
-- **`cppFUN()`**: the same code generation for algebraic functions, with
-  Jacobian, Hessian and vector-Jacobian products
-- **Batched solving**: `solveODEBatch()` integrates many conditions in one
-  `.Call` over OpenMP threads, without the fork and serialization of
-  `parallel::mclapply()`
+cppDE generates, compiles and runs C++ solvers for systems of ordinary
+differential equations given as equations in R. The solvers return the
+derivatives of the solution in the initial values and parameters, by forward
+sensitivities or by a discrete adjoint, to first and second order, across time-
+and state-triggered events. Integrators are variable-order BDF and Adams
+methods, a Rosenbrock method of order 4 and an explicit Runge-Kutta pair, with
+dense or sparse linear algebra. `cvode()` solves the same models with SUNDIALS
+CVODES, `cppFUN()` generates algebraic functions with their derivatives, and
+batches of conditions are solved in parallel. cppDE is the ODE backend of
+dMod2.
 
 ## Installation
 
 ```r
-# install.packages("devtools")
-devtools::install_github("dModverse/cppDE")
+# install.packages("remotes")
+remotes::install_github("dModverse/cppDE")
 ```
 
-Model code is generated and compiled at run time, so a **C++17 compiler** and
-**Python with SymPy** are required. Windows users need
-[Rtools](https://cran.r-project.org/bin/windows/Rtools/). SUNDIALS (for
+Models are compiled at run time and need a C++17 compiler (Rtools on Windows)
+and Python with SymPy, which reticulate provides on first use. SUNDIALS (for
 `cvode()`), SuiteSparse/KLU (for sparse Jacobians) and OpenMP (for parallel
-batches) are optional; [Installation and optional
-libraries](https://dmodverse.github.io/cppDE/articles/installation.html) lists
-how to install them and how to diagnose a failing build or solve.
-
-## Example
-
-A two-state model, compiled once and solved with the sensitivities of every
-state in the initial values and parameters:
-
-```{r example}
-library(cppDE)
-
-model <- cppODE(c(A = "-k1*A", B = "k1*A - k2*B"))
-out <- solveODE(model, times = 0:10, parms = c(A = 1, B = 0, k1 = 0.5, k2 = 0.2))
-
-out$variable[11, ]       # states at t = 10
-out$tangent[11, , ]      # [state, parameter] at t = 10
-```
-
-`derivMode = "reverse"` builds the same model for gradients by the adjoint,
-`cvode()` for SUNDIALS CVODES; `?expressions` lists what an equation can contain.
-
-## Documentation
-
-The site, <https://dmodverse.github.io/cppDE/>, has the reference and these
-articles:
-
-- [Get started](https://dmodverse.github.io/cppDE/articles/cppDE.html)
-- [Guide](https://dmodverse.github.io/cppDE/articles/guide-model.html): every entry point, chapter by chapter
-- [Installation and optional libraries](https://dmodverse.github.io/cppDE/articles/installation.html)
-- [Methods](https://dmodverse.github.io/cppDE/articles/methods-overview.html):
-  what the generated code computes
-- Examples: [Sensitivities across events, checked
-  symbolically](https://dmodverse.github.io/cppDE/articles/saltation.html) and
-  [Fitting magnetization
-  dynamics](https://dmodverse.github.io/cppDE/articles/fitCoPt.html)
-- [Benchmarks](https://dmodverse.github.io/cppDE/articles/benchmarks.html)
-  against SUNDIALS CVODES
+batches) are optional and detected at install time.
 
 ## License
 
-cppDE is distributed under the MIT License (`LICENSE`, `LICENSE.md`). Portions
-of the C++ solver core in `inst/include/cppde/` are derived from third-party
-projects and remain under their upstream licenses: the Nordsieck multistep
-stepper from [SUNDIALS/CVODE(S)](https://computing.llnl.gov/projects/sundials)
-(BSD-3-Clause, Lawrence Livermore National Security and Southern Methodist
-University), the Rosenbrock4 stepper from
-[Boost.Numeric.Odeint](https://www.boost.org/doc/libs/release/libs/numeric/odeint/)
-(Boost Software License 1.0, Karsten Ahnert, Mario Mulansky and Christoph
-Koke). Both licenses are permissive and compatible with MIT. Using or
-redistributing cppDE requires preserving their notices in
-[`inst/COPYRIGHTS`](https://github.com/dModverse/cppDE/blob/master/inst/COPYRIGHTS),
-which lists the files concerned and reproduces the license texts, and the
-attribution blocks in the headers.
-
-The optional libraries linked at run time are not vendored: SUNDIALS
-(BSD-3-Clause) and SuiteSparse/KLU (LGPL-2.1+) are governed by their own
-licenses at the site where they are installed.
+MIT. Parts of the C++ solver core in `inst/include/cppde/` are derived from
+SUNDIALS/CVODE (BSD-3-Clause) and Boost.Odeint (Boost Software License 1.0);
+`inst/COPYRIGHTS` lists the files concerned and reproduces the license texts.

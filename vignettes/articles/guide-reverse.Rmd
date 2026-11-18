@@ -17,8 +17,9 @@ do.call(knitr::read_chunk, list("helpers.R"))
 Reverse mode returns the gradient of a functional of the trajectory in one backward sweep, at a
 cost independent of the number of parameters. cppDE differentiates the discretization itself
 ([discrete adjoint](methods-reverse.html)): forward and reverse derivatives agree to the
-integration tolerance, and to rounding with `sensErrCon = FALSE` in forward mode, which puts both
-on the step grid of the values.
+integration tolerance. `sensErrCon = FALSE` puts the forward mode on the step grid of the values as
+well; the two then agree to rounding under `adams` and up to the corrector iterations under `bdf`,
+whose sweep solves the corrector equations.
 
 ```{r library}
 library(cppDE)
@@ -81,7 +82,7 @@ solveODE(rev, times, parms, cotangent = W)$cotangent
 
 ## Gradient of an objective
 
-For $L = \sum_t (B(t) - y_t)^2$ the cotangent is $\partial L / \partial B(t) = 2\,(B(t) - y_t)$.
+For $\mathcal{J} = \sum_t (B(t) - y_t)^2$ the cotangent is $\partial \mathcal{J} / \partial B(t) = 2\,(B(t) - y_t)$.
 It depends on the solution, so the forward pass runs first: with `keepStore = TRUE` and no
 cotangent, `solveODE()` returns the values and keeps the checkpoints as `$store`. A solve given
 the `store` at the same `times` and `parms` integrates nothing and runs the backward sweep alone.
