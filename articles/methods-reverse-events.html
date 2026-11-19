@@ -119,7 +119,7 @@ arguments <code>events</code> and <code>derivMode = "reverse"</code> or
 <code>cotangent</code> of <a href="../reference/solveODE.html"><code>solveODE()</code></a>.
 Derivatives are in <span class="math inline">\(\theta = (x_0,
 p)\)</span>; event times <span class="math inline">\(t_e\)</span> and
-root functions <span class="math inline">\(g_e\)</span> depend on <span class="math inline">\(\theta\)</span> through <span class="math inline">\(p\)</span>.</p>
+root functions <span class="math inline">\(h_e\)</span> depend on <span class="math inline">\(\theta\)</span> through <span class="math inline">\(p\)</span>.</p>
 <div class="section level2">
 <h2 id="event-adjoint">Adjoint of an event<a class="anchor" aria-label="anchor" href="#event-adjoint"></a>
 </h2>
@@ -132,8 +132,8 @@ t^{*}\right)
               - f^{+}\, \delta t^{*}, \tag{1}
 \]</span> with <span class="math inline">\(R\)</span> the resets and
 <span class="math inline">\(R'\)</span> their Jacobian. For a root
-event <span class="math inline">\(g_e(x, t, p) = 0\)</span>, <span class="math inline">\(\delta t^{*} = -(\nabla_x g_e \cdot \mathrm{d}x +
-\partial g_e/\partial p \cdot \mathrm{d}p) / \dot g_e\)</span> by the
+event <span class="math inline">\(h_e(x, t, p) = 0\)</span>, <span class="math inline">\(\delta t^{*} = -(\nabla_x h_e \cdot \mathrm{d}x +
+\partial h_e/\partial p \cdot \mathrm{d}p) / \dot h_e\)</span> by the
 implicit function theorem; for a time-triggered event at <span class="math inline">\(t^{*} = t_e(p)\)</span>, <span class="math inline">\(\delta t^{*} = (\partial t_e/\partial p)\cdot
 \mathrm{d}p\)</span>.</p>
 <p>Contracted with the cotangent <span class="math inline">\(\lambda^{+}\)</span> after the jump, the <span class="math inline">\(\delta t^{*}\)</span> terms of the linear map <a href="#eq-saltation">(1)</a> collect into one scalar <span class="math inline">\(\eta\)</span>, <span id="eq-saltation-adjoint"></span> <span class="math display">\[
@@ -160,10 +160,10 @@ p)^{\mathsf T}\)</span>:</p>
 <tbody>
 <tr class="odd">
 <td align="left">root</td>
-<td align="left"><span class="math inline">\(-(\eta/\dot g_e)\nabla_x
-g_e\)</span></td>
-<td align="left"><span class="math inline">\(-(\eta/\dot g_e)\,\partial
-g_e/\partial p\)</span></td>
+<td align="left"><span class="math inline">\(-(\eta/\dot h_e)\nabla_x
+h_e\)</span></td>
+<td align="left"><span class="math inline">\(-(\eta/\dot h_e)\,\partial
+h_e/\partial p\)</span></td>
 </tr>
 <tr class="even">
 <td align="left">time-triggered</td>
@@ -178,7 +178,7 @@ reset by reset, in reverse order: a replacement removes the component
 cotangent, an addition keeps it, a multiplication by <span class="math inline">\(v\)</span> scales it by <span class="math inline">\(v\)</span>, plus the derivatives of a state- or
 parameter-dependent <span class="math inline">\(v\)</span>. The adjoint
 of a jump needs <span class="math inline">\(f\)</span> at both ends,
-<span class="math inline">\(\nabla_x g_e\)</span>, <span class="math inline">\(\dot g_e\)</span> and the derivatives of reset and
+<span class="math inline">\(\nabla_x h_e\)</span>, <span class="math inline">\(\dot h_e\)</span> and the derivatives of reset and
 event-time expressions; no Jacobian of <span class="math inline">\(f\)</span>, since every shift term has the
 residual as a factor.</p>
 <p>Multistep methods restart after a jump from <span class="math inline">\(z_0 = x\)</span>, <span class="math inline">\(z_1
@@ -247,12 +247,12 @@ contributes <span id="eq-quadrature-jump"></span> <span class="math display">\[
 <p>All three are scaled by the residual, zero in value with tangent
 <span class="math inline">\(\partial t^{*} / \partial \theta\)</span>,
 and leave the gradient unchanged. The root-event residual is <span id="eq-root-residual"></span> <span class="math display">\[
-  \delta t^{*} = -\,\frac{g_e - \mathrm{scalar}(g_e)}{\dot g_e},
+  \delta t^{*} = -\,\frac{h_e - \mathrm{scalar}(h_e)}{\dot h_e},
   \qquad
-  \dot g_e = \frac{\partial g_e}{\partial t} + \nabla_x g_e \cdot f ,
+  \dot h_e = \frac{\partial h_e}{\partial t} + \nabla_x h_e \cdot f ,
 \tag{9}
 \]</span> read at the checkpointed state, which holds <span class="math inline">\(\partial x / \partial \theta\)</span> at a fixed
-time since localization ignores tangents; <span class="math inline">\(\nabla_x g_e\)</span> contracts it to the firing
+time since localization ignores tangents; <span class="math inline">\(\nabla_x h_e\)</span> contracts it to the firing
 time.</p>
 </div>
 <div class="section level2">
@@ -283,11 +283,11 @@ t^{*})}\!\!\cdot \bar{\tilde f}_{1}
 t^{*})}\!\!\cdot \bar f_{2} . \tag{11}
 \]</span> Both cotangents have a factor <span class="math inline">\(\delta t^{*}\)</span>: <a href="#eq-shift-clock">(11)</a> is absent from the gradient, at full
 strength in the Hessian, zero for autonomous <span class="math inline">\(f\)</span>, and missing from a pruned form.</p>
-<p>The forward correction <span class="math inline">\(-\tfrac{1}{2}(\ddot g_e / \dot g_e)\,(\delta
+<p>The forward correction <span class="math inline">\(-\tfrac{1}{2}(\ddot h_e / \dot h_e)\,(\delta
 t^{*})^{2}\)</span> of the residual, <a href="methods-events.html#eq-dt-star-second">Events (6)</a>, has the
 chain factor <span class="math inline">\(1 + 2 c_{2}\, \delta
-t^{*}\)</span>, <span class="math inline">\(c_{2} = -\ddot g_e / (2\dot
-g_e)\)</span>, one in value with a second-order tangent; the transpose
+t^{*}\)</span>, <span class="math inline">\(c_{2} = -\ddot h_e / (2\dot
+h_e)\)</span>, one in value with a second-order tangent; the transpose
 applies it to <span class="math inline">\(\partial\, \delta t^{*} /
 \partial x\)</span>.</p>
 <p>The sweep binds the tangent storage of every buffer it passes to a
@@ -296,21 +296,21 @@ over reverse</a>). Jump-transpose reads of such a buffer are multiplied
 by <span class="math inline">\(\delta t^{*}\)</span>, so an unbound
 buffer leaves value and gradient correct and the Hessian wrong by a
 rank-one term.</p>
-<p><strong>Derivative of the residual.</strong> Since <span class="math inline">\(\dot g_e\)</span> depends on the state, <span id="eq-root-quotient"></span> <span class="math display">\[
+<p><strong>Derivative of the residual.</strong> Since <span class="math inline">\(\dot h_e\)</span> depends on the state, <span id="eq-root-quotient"></span> <span class="math display">\[
   \frac{\partial\, \delta t^{*}}{\partial x}
-    = -\frac{\nabla_x g_e}{\dot g_e}
-      - \frac{\delta t^{*}}{\dot g_e}\, \nabla_x \dot g_e ,
+    = -\frac{\nabla_x h_e}{\dot h_e}
+      - \frac{\delta t^{*}}{\dot h_e}\, \nabla_x \dot h_e ,
   \qquad
-  \nabla_x \dot g_e = \nabla_x \frac{\partial g_e}{\partial t}
-                + \left(\nabla_x^{2} g_e\right) f + J^{\mathsf
-T}\nabla_x g_e , \tag{12}
+  \nabla_x \dot h_e = \nabla_x \frac{\partial h_e}{\partial t}
+                + \left(\nabla_x^{2} h_e\right) f + J^{\mathsf
+T}\nabla_x h_e , \tag{12}
 \]</span> with the second term absent from the gradient and at full
-strength in the Hessian. The generator differentiates <span class="math inline">\(\dot g_e\)</span> as one expression, so all three
-terms of <span class="math inline">\(\nabla_x \dot g_e\)</span> are
-present, also those vanishing for a time-independent <span class="math inline">\(g_e\)</span> linear in the state; in <span class="math inline">\(\theta\)</span> it gives <span class="math inline">\(\partial^{2} g_e/\partial\theta\,\partial
+strength in the Hessian. The generator differentiates <span class="math inline">\(\dot h_e\)</span> as one expression, so all three
+terms of <span class="math inline">\(\nabla_x \dot h_e\)</span> are
+present, also those vanishing for a time-independent <span class="math inline">\(h_e\)</span> linear in the state; in <span class="math inline">\(\theta\)</span> it gives <span class="math inline">\(\partial^{2} h_e/\partial\theta\,\partial
 t\)</span>, <span class="math inline">\((\partial \nabla_x
-g_e/\partial\theta)\cdot f\)</span> and <span class="math inline">\((\partial f/\partial\theta)^{\mathsf T}\nabla_x
-g_e\)</span>. A forcing in <span class="math inline">\(g_e\)</span> is
+h_e/\partial\theta)\cdot f\)</span> and <span class="math inline">\((\partial f/\partial\theta)^{\mathsf T}\nabla_x
+h_e\)</span>. A forcing in <span class="math inline">\(h_e\)</span> is
 differentiated in <span class="math inline">\(t\)</span> through a rate
 leaf on the expression graph, printed as the derivative of the PCHIP
 interpolant.</p>

@@ -4,7 +4,7 @@ A Landau-Lifshitz-Gilbert model fitted to the pump-probe measurements of
 Zhang et al. [\[1\]](#ref-zhang2025ultrafast). Likelihood, noise model
 and optimizer are in
 [`fitCoPt/fitTools.R`](https://github.com/dModverse/cppDE/blob/master/vignettes/articles/fitCoPt/fitTools.R);
-multistart and profiles are read from `fitCoPt/*.rds`, computed if
+multi-start fits and profiles are read from `fitCoPt/*.rds`, computed if
 absent.
 
 |        |                                                              |
@@ -262,7 +262,7 @@ prior     <- c(log10Alpha = -1, log10G = log10(2), log10Ha = 3,
 residuals <- withPrior(likelihood, prior, priorSd)
 ```
 
-## Multistart optimization
+## Multi-start fit
 
 Gauss-Newton trust region with exact subproblem (More-Sorensen), 100
 random starts. Positive parameters are fitted in \\\log\_{10}\\, the

@@ -101,7 +101,7 @@
   <main id="main" class="col-md-9"><div class="section level1">
 <div class="page-header"><h1 id="cppde">cppDE<a class="anchor" aria-label="anchor" href="#cppde"></a>
 </h1></div>
-<p>cppDE writes, compiles and runs a C++ solver for a system of ordinary differential equations given as equations in R, with the derivatives of the solution in the parameters, forward or reverse, to first and second order.</p>
+<p>cppDE writes, compiles and runs a C++ solver for a system of ordinary differential equations given as equations in R, with the derivatives of the solution in the initial values and parameters, forward or reverse, to first and second order.</p>
 <div class="section level2">
 <h2 id="features">Features<a class="anchor" aria-label="anchor" href="#features"></a>
 </h2>
@@ -112,25 +112,6 @@
 <li>Jacobians and derivative contractions by automatic differentiation on an expression graph, emitted as straight-line C++</li>
 <li>The same models on SUNDIALS CVODES with <code><a href="reference/cvode.html">cvode()</a></code>, algebraic functions with <code><a href="reference/cppFUN.html">cppFUN()</a></code>, and batches of conditions solved in parallel</li>
 </ul>
-</div>
-<div class="section level2">
-<h2 id="example">Example<a class="anchor" aria-label="anchor" href="#example"></a>
-</h2>
-<p>A decay chain, compiled once and solved with the sensitivities of every state in the initial values and parameters:</p>
-<div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
-<code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://dmodverse.github.io/cppDE/">cppDE</a></span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">model</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/cppODE.html">cppODE</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>A <span class="op">=</span> <span class="st">"-k1*A"</span>, B <span class="op">=</span> <span class="st">"k1*A - k2*B"</span><span class="op">)</span><span class="op">)</span></span>
-<span><span class="va">out</span> <span class="op">&lt;-</span> <span class="fu"><a href="reference/solveODE.html">solveODE</a></span><span class="op">(</span><span class="va">model</span>, times <span class="op">=</span> <span class="fl">0</span><span class="op">:</span><span class="fl">10</span>, parms <span class="op">=</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>A <span class="op">=</span> <span class="fl">1</span>, B <span class="op">=</span> <span class="fl">0</span>, k1 <span class="op">=</span> <span class="fl">0.5</span>, k2 <span class="op">=</span> <span class="fl">0.2</span><span class="op">)</span><span class="op">)</span></span>
-<span></span>
-<span><span class="va">out</span><span class="op">$</span><span class="va">variable</span><span class="op">[</span><span class="fl">11</span>, <span class="op">]</span>       <span class="co"># states at t = 10</span></span>
-<span><span class="co">#&gt;           A           B </span></span>
-<span><span class="co">#&gt; 0.006738166 0.214328533</span></span>
-<span><span class="va">out</span><span class="op">$</span><span class="va">tangent</span><span class="op">[</span><span class="fl">11</span>, , <span class="op">]</span>      <span class="co"># [state, parameter] at t = 10</span></span>
-<span><span class="co">#&gt;         sens</span></span>
-<span><span class="co">#&gt; variable           A         B          k1        k2</span></span>
-<span><span class="co">#&gt;        A 0.006738166 0.0000000 -0.06737862  0.000000</span></span>
-<span><span class="co">#&gt;        B 0.214328533 0.1353353 -0.17347368 -1.541159</span></span></code></pre></div>
 </div>
 <div class="section level2">
 <h2 id="where-to-go-next">Where to go next<a class="anchor" aria-label="anchor" href="#where-to-go-next"></a>
@@ -149,7 +130,7 @@
 <li>
 <a href="articles/benchmarks.html">Benchmarks</a>: the native integrators against SUNDIALS CVODES</li>
 <li>
-<a href="https://dmodverse.github.io/dMod2/" class="external-link">dMod2</a> builds a modeling framework on cppDE: observation functions, parameter transformations, objectives, optimizers and profile likelihoods.</li>
+<a href="https://dmodverse.github.io/dMod2/" class="external-link">dMod2</a> builds a modeling framework on cppDE: observation functions, parameter transformations, objective functions, optimizers and profile likelihoods.</li>
 </ul>
 </div>
 </div>

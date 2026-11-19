@@ -114,7 +114,7 @@
 <p>A Landau-Lifshitz-Gilbert model fitted to the pump-probe measurements
 of Zhang et al. <span class="citation"><a href="#ref-zhang2025ultrafast">[1]</a></span>. Likelihood, noise model
 and optimizer are in <a href="https://github.com/dModverse/cppDE/blob/master/vignettes/articles/fitCoPt/fitTools.R" class="external-link"><code>fitCoPt/fitTools.R</code></a>;
-multistart and profiles are read from <code>fitCoPt/*.rds</code>,
+multi-start fits and profiles are read from <code>fitCoPt/*.rds</code>,
 computed if absent.</p>
 <table class="table">
 <colgroup>
@@ -383,7 +383,7 @@ remaining correlation.</p>
 <span><span class="va">residuals</span> <span class="op">&lt;-</span> <span class="fu">withPrior</span><span class="op">(</span><span class="va">likelihood</span>, <span class="va">prior</span>, <span class="va">priorSd</span><span class="op">)</span></span></code></pre></div>
 </div>
 <div class="section level2">
-<h2 id="multistart-optimization">Multistart optimization<a class="anchor" aria-label="anchor" href="#multistart-optimization"></a>
+<h2 id="multi-start-fit">Multi-start fit<a class="anchor" aria-label="anchor" href="#multi-start-fit"></a>
 </h2>
 <p>Gauss-Newton trust region with exact subproblem (More-Sorensen), 100
 random starts. Positive parameters are fitted in <span class="math inline">\(\log_{10}\)</span>, the fractions <span class="math inline">\(K\)</span> and <span class="math inline">\(\phi/90^\circ\)</span> as <span class="math inline">\(\log_{10}\bigl(x/(1-x)\bigr)\)</span>. Physics

@@ -17,7 +17,7 @@ arguments `method`, `derivMode`, `asaCheckpoints` of
 |  | [`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md) | [`cvode()`](https://dmodverse.github.io/cppDE/reference/cvode.md) |
 |:---|:---|:---|
 | `method` | `bdf`, `adams`, `rb4`, `tsit5` | `bdf`, `adams` |
-| `derivMode` | `forward`, `reverse`, `forward-reverse`; `deriv2 = TRUE` | `forward`, `reverse` |
+| `derivMode` | `forward`, `reverse`, `forward-forward`, `forward-reverse` | `forward`, `reverse` |
 | forward sensitivities | dual numbers | sensitivity equations, JVPs |
 | reverse mode | discrete adjoint of the computed steps | continuous adjoint (CVODES ASA) |
 | second order | forward over forward, forward over reverse | none |
@@ -92,12 +92,12 @@ f}{\partial p}\right)^{\\\mathsf T}\\\lambda, \tag{2} \\ the second the
 quadrature [Reverse
 (5)](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#eq-adjoint-quadrature)
 with \\q(T) = 0\\. Both run from \\T\\ to \\t_0\\, the minus signs
-cancelling against the reversed limits, so \\\lambda(t_0)\\ and
+canceling against the reversed limits, so \\\lambda(t_0)\\ and
 \\q(t_0)\\ are the state and parameter parts of the gradient. By default
 \\q\\ is outside the error test: gradient entries of very different
 scale would stall the backward step against `reltol` alone.
-`adjointControl(gradtol = g)` adds it with absolute tolerance \\g\\, so
-the step size controls the gradient error, as the [checked
+`adjointControl(gradtol = )` adds it with `gradtol` as absolute
+tolerance, so the step size controls the gradient error, as the [checked
 sweep](https://dmodverse.github.io/cppDE/articles/methods-reverse-checks.html#refine)
 of the native mode does for discrete steps. The backward problem is a
 BDF solve at the tolerances and step budget of the call, with the
@@ -136,8 +136,8 @@ adjoint of the later one, with the jump transpose in between: for \\x^+
 = R(x^-, p, t^{\*})\\, \\\lambda^- = (\partial_x R)^{\mathsf
 T}\lambda^+\\ and the gradient gains \\(\partial_p R)^{\mathsf
 T}\lambda^+\\, plus the terms of a firing time that moves with \\p\\ or,
-for a root \\g_e(x, t, p) = 0\\, with the state, \\\delta t^{\*} =
--(\nabla_x g_e\\\delta x + \partial_p g_e\\\delta p)/\dot g_e\\, as in
+for a root \\h_e(x, t, p) = 0\\, with the state, \\\delta t^{\*} =
+-(\nabla_x h_e\\\delta x + \partial_p h_e\\\delta p)/\dot h_e\\, as in
 [the adjoint of an
 event](https://dmodverse.github.io/cppDE/articles/methods-reverse-events.html#event-adjoint)
 of the native mode. Root finding is off on a stretch before the sweep,

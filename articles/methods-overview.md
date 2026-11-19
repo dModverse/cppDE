@@ -56,7 +56,7 @@ derivatives are `"forward"` (second order with `deriv2 = TRUE`),
     the SUNDIALS backend.
 10. [Derivative directions of
     cppFUN()](https://dmodverse.github.io/cppDE/articles/methods-cppfun.md):
-    observation maps and reparametrizations.
+    observation maps and reparameterizations.
 11. [Steady states by pseudo-transient
     continuation](https://dmodverse.github.io/cppDE/articles/methods-ptc.md):
     [`ptc()`](https://dmodverse.github.io/cppDE/reference/ptc.md) under
@@ -79,6 +79,7 @@ compares the integrators and the derivative modes.
 | \\p \in \mathbb{R}^{n_p}\\ | parameters of the right-hand side |
 | \\f(x, p, t)\\ | right-hand side, \\\dot x = f\\ |
 | \\J = \partial f/\partial x\\ | state Jacobian |
+| \\y = g(x, p)\\ | observables, the prediction compared with data; the algebraic function of [`cppFUN()`](https://dmodverse.github.io/cppDE/reference/cppFUN.md) |
 | \\\theta \in \mathbb{R}^{M}\\ | parameters of the derivatives, with \\x_0(\theta)\\, \\p(\theta)\\; \\\theta = (x_0, p)\\, \\M = n_x + n_p\\ under the identity tangent |
 | \\\partial(x_0, p)/\partial\theta\\ | tangent of the inputs, argument `tangent` of [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md) |
 | \\S = \partial x/\partial\theta \in \mathbb{R}^{n_x \times M}\\ | sensitivity matrix |
@@ -86,17 +87,18 @@ compares the integrators and the derivative modes.
 | \\w \in \mathbb{R}^{n\_{\mathrm{obs}} \times n_x}\\ | cotangent of the outputs, row \\w_o\\ at \\t_o\\ |
 | \\\lambda \in \mathbb{R}^{n_x}\\ | adjoint state |
 | \\\bar\theta\\, \\\bar x_0\\, \\\bar p\\ | cotangent of the inputs, the gradient of \\\sum_o w_o^{\mathsf T} x(t_o)\\ |
+| \\\mathcal{J}(\theta)\\ | objective function of a fit, a scalar functional of the outputs; \\\bar\theta = \nabla\_\theta \mathcal{J}\\ for \\w_o = \partial\mathcal{J}/\partial x(t_o)\\ |
 | \\t_n\\, \\x_n\\ | step points and computed states |
 | \\h_n = t\_{n+1} - t_n\\ | step size |
 | \\q\\, \\q\_{\max}\\ | order, maximum order |
 | \\e\_{n+1}\\ | local error estimate of the step from \\t_n\\ |
 | \\\lVert\cdot\rVert\_{\mathrm{WRMS}}\\ | weighted root-mean-square norm, [Stepping (8)](https://dmodverse.github.io/cppDE/articles/methods-stepping.html#eq-wrms) |
 | \\W\\ | iteration matrix of an implicit step, a shift of \\-J\\ |
-| \\g_e(x, t, \theta)\\ | root function of an event or switch |
+| \\h_e(x, t, \theta)\\ | root function of an event or switch |
 | \\t_e(\theta)\\ | firing time of a time-triggered event, an expression |
 | \\t^{\*}\\, \\t\_\*^{(0)}\\ | firing time; the value of \\t^{\*}\\ without derivatives, the grid time |
 | \\\delta t^{\*} = t^{\*} - t\_\*^{(0)}\\ | firing-time residual: zero in value, holds the derivatives of \\t^{\*}\\ |
-| \\\dot g_e = \partial g_e/\partial t + \nabla_x g_e \cdot f\\ | rate of the root function along the trajectory |
+| \\\dot h_e = \partial h_e/\partial t + \nabla_x h_e \cdot f\\ | rate of the root function along the trajectory |
 | \\R(x, t)\\ | reset map of an event |
 | \\x^{-}\\, \\x^{+}\\; \\f^{-}\\, \\f^{+}\\ | state and right-hand side before and after an event |
 

@@ -168,11 +168,11 @@ fixed in one call, without recompiling; <code>fixed</code> of
 <span><span class="co">#&gt; [1] "k1" "k2"</span></span></code></pre></div>
 </div>
 <div class="section level2">
-<h2 id="reparametrization-by-a-tangent">Reparametrization by a tangent<a class="anchor" aria-label="anchor" href="#reparametrization-by-a-tangent"></a>
+<h2 id="reparameterization-by-a-tangent">Reparameterization by a tangent<a class="anchor" aria-label="anchor" href="#reparameterization-by-a-tangent"></a>
 </h2>
 <p><code>tangent</code> of <a href="../reference/solveODE.html"><code>solveODE()</code></a> is the
 Jacobian <span class="math inline">\(\partial(x_0,
-p)/\partial\theta\)</span> of a reparametrization. The result is then
+p)/\partial\theta\)</span> of a reparameterization. The result is then
 <span class="math inline">\(\partial x/\partial\theta\)</span>, one
 column per direction, and the cost grows with the number of columns.
 Three shapes are told apart by the rows:</p>
@@ -192,7 +192,7 @@ Three shapes are told apart by the rows:</p>
 </tr>
 <tr class="even">
 <td align="left">all states and parameters, states first</td>
-<td align="left">full: the whole Jacobian of the reparametrization</td>
+<td align="left">full: the whole Jacobian of the reparameterization</td>
 </tr>
 <tr class="odd">
 <td align="left">the states only</td>
@@ -295,7 +295,7 @@ derivatives of every state.</p>
 <span><span class="co">#&gt;    k1 -0.1734757  0.000000  0.48269750  0.04777426</span></span>
 <span><span class="co">#&gt;    k2 -1.5411625 -1.353352  0.04777426 12.28148382</span></span></code></pre></div>
 <p><code>hessian</code> of <code><a href="../reference/solveODE.html">solveODE()</a></code> is the second
-derivative of the reparametrization, with the rows of
+derivative of the reparameterization, with the rows of
 <code>tangent</code> and two dimensions of directions; the default
 treats the inputs as affine in <span class="math inline">\(\theta\)</span>. On the log scale <span class="math inline">\(\partial^2 k_i/\partial\theta_i^2 =
 k_i\)</span>:</p>

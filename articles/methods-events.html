@@ -117,8 +117,8 @@
 <code>roottol</code> and <code>maxroot</code> of <a href="../reference/solveODE.html"><code>solveODE()</code></a>.</p>
 <p>A <em>time-triggered event</em> fires at <span class="math inline">\(t^{*} = t_e(\theta)\)</span>, a closed-form
 expression. A <em>root-triggered event</em> fires where a root function
-<span class="math inline">\(g_e(x, t, \theta)\)</span> crosses zero, at
-<span class="math inline">\(t^{*}(\theta)\)</span> defined by <span class="math inline">\(g_e(x(t^{*}), t^{*}, \theta) = 0\)</span>. Either
+<span class="math inline">\(h_e(x, t, \theta)\)</span> crosses zero, at
+<span class="math inline">\(t^{*}(\theta)\)</span> defined by <span class="math inline">\(h_e(x(t^{*}), t^{*}, \theta) = 0\)</span>. Either
 applies a reset <span class="math display">\[
   x^{+} = R(x^{-}, t),
 \]</span> such as a dose, a clip to non-negative values or a change of
@@ -212,28 +212,28 @@ side.</p>
 </h2>
 <p>A root event fires at <span class="math inline">\(t^{*}(\theta)\)</span> defined by <span id="eq-root-condition"></span> <span class="math display">\[
   G(t^{*}(\theta), \theta) :=
-    g_e\bigl(x(t^{*}(\theta), \theta), t^{*}(\theta), \theta\bigr) = 0,
+    h_e\bigl(x(t^{*}(\theta), \theta), t^{*}(\theta), \theta\bigr) = 0,
 \tag{3}
 \]</span> in three steps: localization on the scalar trajectory, <span class="math inline">\(\delta t^{*}\)</span> by the implicit function
 theorem, transport <a href="#eq-fixed-heun">(2)</a>.</p>
 <div class="section level3">
 <h3 id="localization-of-the-root">Localization of the root<a class="anchor" aria-label="anchor" href="#localization-of-the-root"></a>
 </h3>
-<p><span class="math inline">\(g_e\)</span> is evaluated at the end of
+<p><span class="math inline">\(h_e\)</span> is evaluated at the end of
 every accepted step and at every output time. A crossing on <span class="math inline">\([t_n, t_{n+1}]\)</span> is accepted on a sign
-change or on <span class="math inline">\(g_e(x_{n+1}, t_{n+1}) =
+change or on <span class="math inline">\(h_e(x_{n+1}, t_{n+1}) =
 0\)</span> exactly. A zero at the lower end belongs to the previous
 sample, so an event does not fire again on the surface it was just
-applied on, where <span class="math inline">\(g_e\)</span> is zero up to
+applied on, where <span class="math inline">\(h_e\)</span> is zero up to
 round-off.</p>
 <p>The crossing is refined on the dense output of the step, without
 right-hand-side evaluations, by false position with the interpolation
 factor clamped to <span class="math inline">\([0.1, 0.9]\)</span>. The
 clamp bounds the stagnation of the classical rule and keeps the speed on
-a nearly linear <span class="math inline">\(g_e\)</span>. It stops at a
+a nearly linear <span class="math inline">\(h_e\)</span>. It stops at a
 bracket narrower than the root tolerance, after fifty iterations, or at
-<span class="math inline">\(g_e = 0\)</span>. It returns as <span class="math inline">\(t_*^{(0)} := \mathrm{scalar}(t^{*})\)</span> the
-end of the final bracket with the pre-crossing sign of <span class="math inline">\(g_e\)</span>.</p>
+<span class="math inline">\(h_e = 0\)</span>. It returns as <span class="math inline">\(t_*^{(0)} := \mathrm{scalar}(t^{*})\)</span> the
+end of the final bracket with the pre-crossing sign of <span class="math inline">\(h_e\)</span>.</p>
 </div>
 <div class="section level3">
 <h3 id="dual-residual-of-the-event-time">Dual residual of the event time<a class="anchor" aria-label="anchor" href="#dual-residual-of-the-event-time"></a>
@@ -242,22 +242,22 @@ end of the final bracket with the pre-crossing sign of <span class="math inline"
 implicit function theorem applied to <a href="#eq-root-condition">(3)</a> gives <span id="eq-dt-star-first"></span> <span class="math display">\[
   \frac{\partial t^{*}}{\partial \theta}
     = -\frac{G_\theta}{G_t}
-    = -\frac{\nabla_x g_e \cdot S_\theta + \partial g_e/\partial \theta}
-            {\nabla_x g_e \cdot f + \partial g_e/\partial t}\bigg|_{*},
+    = -\frac{\nabla_x h_e \cdot S_\theta + \partial h_e/\partial \theta}
+            {\nabla_x h_e \cdot f + \partial h_e/\partial t}\bigg|_{*},
 \tag{4}
-\]</span> with the rate <span class="math inline">\(\dot g_e\)</span> at
-the crossing as denominator. A transversal crossing has <span class="math inline">\(\dot g_e \neq 0\)</span>; at a grazing one <span class="math inline">\(t^{*}\)</span> is not differentiable in <span class="math inline">\(\theta\)</span> and the fallback of simultaneous
+\]</span> with the rate <span class="math inline">\(\dot h_e\)</span> at
+the crossing as denominator. A transversal crossing has <span class="math inline">\(\dot h_e \neq 0\)</span>; at a grazing one <span class="math inline">\(t^{*}\)</span> is not differentiable in <span class="math inline">\(\theta\)</span> and the fallback of simultaneous
 events applies. In dual arithmetic <a href="#eq-dt-star-first">(4)</a>
 is the quotient <span id="eq-dt-star-quotient"></span> <span class="math display">\[
-  \delta t^{*} = -\frac{g_e(x^{-}, t_*^{(0)}, \theta)}
-                       {\dot g_e(x^{-}, t_*^{(0)}, \theta)}, \tag{5}
+  \delta t^{*} = -\frac{h_e(x^{-}, t_*^{(0)}, \theta)}
+                       {\dot h_e(x^{-}, t_*^{(0)}, \theta)}, \tag{5}
 \]</span> on the dual state and parameters at the scalar grid time. The
-generated partials <span class="math inline">\(\nabla_x g_e\)</span> and
-<span class="math inline">\(\partial g_e/\partial t\)</span> serve only
-<span class="math inline">\(\dot g_e\)</span>; the dual arithmetic forms
+generated partials <span class="math inline">\(\nabla_x h_e\)</span> and
+<span class="math inline">\(\partial h_e/\partial t\)</span> serve only
+<span class="math inline">\(\dot h_e\)</span>; the dual arithmetic forms
 the numerator. The scalar value of the numerator, of the order of the
 root tolerance, is set to zero before the division, so <span class="math inline">\(\delta t^{*}\)</span> has only derivatives.</p>
-<p>At second order the quotient lacks the <span class="math inline">\(G_{tt}\)</span> contribution, since <span class="math inline">\(g_e\)</span> is evaluated at <span class="math inline">\(t_*^{(0)}\)</span>, not at the dual time <span class="math inline">\(t^{*}\)</span>. Expanding <a href="#eq-root-condition">(3)</a> with <span class="math inline">\(\delta t^{*} = \delta t^{*}_{(1)} + \delta
+<p>At second order the quotient lacks the <span class="math inline">\(G_{tt}\)</span> contribution, since <span class="math inline">\(h_e\)</span> is evaluated at <span class="math inline">\(t_*^{(0)}\)</span>, not at the dual time <span class="math inline">\(t^{*}\)</span>. Expanding <a href="#eq-root-condition">(3)</a> with <span class="math inline">\(\delta t^{*} = \delta t^{*}_{(1)} + \delta
 t^{*}_{(2)} + \cdots\)</span> and <span class="math inline">\(G(t_*^{(0)}, \theta^{(0)}) = 0\)</span> gives
 <span class="math display">\[
   0 = G_t\,\delta t^{*}_{(2)}
@@ -270,7 +270,7 @@ update, which changes only second-order components, is <span id="eq-dt-star-seco
     - \tfrac{1}{2}\,\frac{G_{tt}}{G_t}\,(\delta t^{*})^{2}, \tag{6}
 \]</span> with <span class="math display">\[
   G_{tt} = \frac{\mathrm{d}^{2}}{\mathrm{d} t^{2}}
-            g_e\bigl(x(t), t, \theta\bigr)\bigg|_{*}
+            h_e\bigl(x(t), t, \theta\bigr)\bigg|_{*}
 \]</span> from generated code, including second time derivatives of
 forcings. Where a slide ends, <span class="math inline">\(f\)</span> is
 continuous and <span class="math inline">\(G_{tt}\)</span> enters scaled
@@ -285,10 +285,10 @@ tolerance form a cluster. One forward shift, every reset of the cluster
 (the resets are assumed to commute) and one backward shift cost four
 right-hand-side evaluations for any number of events. <span class="math inline">\(\delta t^{*}\)</span> comes from the first event
 of the cluster with non-zero <span class="math inline">\(\dot
-g_e\)</span> and is shared by the others, which sit at the same grid
+h_e\)</span> and is shared by the others, which sit at the same grid
 time with the same parameter dependence through <span class="math inline">\(x^{-}\)</span>.</p>
 <p>If every event of the cluster has <span class="math inline">\(\dot
-g_e = 0\)</span>, detected by the size of <span class="math inline">\(|\dot g_e|\)</span>, there is no <span class="math inline">\(\partial t^{*}/\partial \theta\)</span> and the
+h_e = 0\)</span>, detected by the size of <span class="math inline">\(|\dot h_e|\)</span>, there is no <span class="math inline">\(\partial t^{*}/\partial \theta\)</span> and the
 reset is a plain map, exact in the limit where both <span class="math inline">\(f^{\pm}\,(\partial t^{*}/\partial \theta)\)</span>
 vanish.</p>
 </div>
@@ -312,20 +312,20 @@ time.</p>
 <div class="section level2">
 <h2 id="switches-on-states-and-time">Switches on states and time<a class="anchor" aria-label="anchor" href="#switches-on-states-and-time"></a>
 </h2>
-<p><span class="math inline">\(f\)</span> switches where <span class="math inline">\(g_e(x, t, \theta)\)</span>, reading a state or the
-time, changes sign: in a comparison whose sides differ by <span class="math inline">\(g_e\)</span>, and in <span class="math inline">\(\mathrm{Heaviside}(g_e)\)</span> or <span class="math inline">\(\mathrm{sign}(g_e)\)</span>. Read literally, <span class="math inline">\(f\)</span> is discontinuous in <span class="math inline">\(x\)</span>: a step across the switch fails the
+<p><span class="math inline">\(f\)</span> switches where <span class="math inline">\(h_e(x, t, \theta)\)</span>, reading a state or the
+time, changes sign: in a comparison whose sides differ by <span class="math inline">\(h_e\)</span>, and in <span class="math inline">\(\mathrm{Heaviside}(h_e)\)</span> or <span class="math inline">\(\mathrm{sign}(h_e)\)</span>. Read literally, <span class="math inline">\(f\)</span> is discontinuous in <span class="math inline">\(x\)</span>: a step across the switch fails the
 error test until short enough, and sensitivities miss the dependence of
 the switching time on <span class="math inline">\(\theta\)</span>.</p>
-<p>The code generator keeps each condition as a <em>mode</em> <span class="math inline">\(m \in \{0, 1\}\)</span>, <span class="math inline">\(1\)</span> where <span class="math inline">\(g_e
-&gt; 0\)</span> (or <span class="math inline">\(g_e \ge 0\)</span> for a
+<p>The code generator keeps each condition as a <em>mode</em> <span class="math inline">\(m \in \{0, 1\}\)</span>, <span class="math inline">\(1\)</span> where <span class="math inline">\(h_e
+&gt; 0\)</span> (or <span class="math inline">\(h_e \ge 0\)</span> for a
 non-strict comparison); <span class="math inline">\(a &lt; b\)</span>
-becomes the mode of <span class="math inline">\(g_e = b - a\)</span>.
+becomes the mode of <span class="math inline">\(h_e = b - a\)</span>.
 All generated code reads the mode in place of the comparison, so between
 switches <span class="math inline">\(f(x, t; m)\)</span> is as smooth as
-the branches. <span class="math inline">\(\mathrm{Heaviside}(g_e)\)</span> and <span class="math inline">\(\mathrm{sign}(g_e)\)</span> take two modes, on
-<span class="math inline">\(g_e\)</span> and <span class="math inline">\(-g_e\)</span>, to keep the value at <span class="math inline">\(g_e = 0\)</span>. Equality and inequality stay as
+the branches. <span class="math inline">\(\mathrm{Heaviside}(h_e)\)</span> and <span class="math inline">\(\mathrm{sign}(h_e)\)</span> take two modes, on
+<span class="math inline">\(h_e\)</span> and <span class="math inline">\(-h_e\)</span>, to keep the value at <span class="math inline">\(h_e = 0\)</span>. Equality and inequality stay as
 written: they switch on a set of measure zero.</p>
-<p>A switch is a root event with condition <span class="math inline">\(g_e\)</span> and the identity as reset. The
+<p>A switch is a root event with condition <span class="math inline">\(h_e\)</span> and the identity as reset. The
 crossing step stays on the branch it started on. It is localized to a
 few doubles in <span class="math inline">\(t\)</span> rather than to the
 root tolerance, since the switching time enters the state through the
@@ -339,9 +339,9 @@ first order this is the <a href="#saltation">saltation matrix</a> with
     \frac{\partial t^{*}}{\partial \theta},
   \qquad
   \frac{\partial t^{*}}{\partial \theta}
-    = -\frac{\nabla_x g_e \cdot S_\theta^{-} + \partial g_e/\partial
+    = -\frac{\nabla_x h_e \cdot S_\theta^{-} + \partial h_e/\partial
 \theta}
-            {\nabla_x g_e \cdot f^{-} + \partial g_e/\partial t},
+            {\nabla_x h_e \cdot f^{-} + \partial h_e/\partial t},
 \]</span> and second order follows from the same dual arithmetic, with
 the <span class="math inline">\(G_{tt}\)</span> correction <a href="#eq-dt-star-second">(6)</a> along <span class="math inline">\(f^{-}\)</span>. At a kink the first-order jump
 vanishes, and the transport supplies the second-order term from the jump
@@ -349,23 +349,23 @@ of <span class="math inline">\(\partial f/\partial x\)</span>.</p>
 <p>The modes are read off the state at the start of the solve and after
 every reset, which can move the state across a switch; after a crossing
 the mode takes the side the root crossed to. A switch adds no output row
-and does not count towards <code>maxroot</code>. A state leaving a root
+and does not count toward <code>maxroot</code>. A state leaving a root
 zero at the start of a step, to the side the mode does not describe,
-shows no sign change; the departure counts as a crossing once <span class="math inline">\(|g_e|\)</span> exceeds root residual and
+shows no sign change; the departure counts as a crossing once <span class="math inline">\(|h_e|\)</span> exceeds root residual and
 rounding.</p>
 <div class="section level3">
 <h3 id="sliding">Sliding along a switching surface<a class="anchor" aria-label="anchor" href="#sliding"></a>
 </h3>
 <p>On the surface a switch takes the side both branches move to, by the
-sign of <span class="math inline">\(\dot g_e = \partial g_e/\partial t +
-\nabla_x g_e \cdot f\)</span> under each mode. For <span class="math inline">\(\dot g_{e,\mathrm{on}} &lt; 0 &lt; \dot
-g_{e,\mathrm{off}}\)</span> the solution slides <span class="citation"><a href="#ref-filippov1988differential">[1]</a></span>
+sign of <span class="math inline">\(\dot h_e = \partial h_e/\partial t +
+\nabla_x h_e \cdot f\)</span> under each mode. For <span class="math inline">\(\dot h_{e,\mathrm{on}} &lt; 0 &lt; \dot
+h_{e,\mathrm{off}}\)</span> the solution slides <span class="citation"><a href="#ref-filippov1988differential">[1]</a></span>
 on <span class="math display">\[
   f = a\, f_{\mathrm{on}} + (1 - a)\, f_{\mathrm{off}},
   \qquad
-  a = \frac{\dot g_{e,\mathrm{off}}}{\dot g_{e,\mathrm{off}} - \dot
-g_{e,\mathrm{on}}},
-\]</span> with <span class="math inline">\(\dot g_e = 0\)</span>. A
+  a = \frac{\dot h_{e,\mathrm{off}}}{\dot h_{e,\mathrm{off}} - \dot
+h_{e,\mathrm{on}}},
+\]</span> with <span class="math inline">\(\dot h_e = 0\)</span>. A
 slide ends where <span class="math inline">\(a\)</span> reaches <span class="math inline">\(0\)</span> or <span class="math inline">\(1\)</span>, another root, and the solution leaves
 to that side with continuous <span class="math inline">\(f\)</span>.
 Switches sliding at once take <span class="math inline">\(\sum_c
@@ -383,19 +383,19 @@ dependence on <span class="math inline">\(x\)</span> and <span class="math inlin
 sets them before the adjoint of the step, and transposes the switch as a
 root event (<a href="methods-reverse-events.html#event-adjoint">the
 adjoint of an event</a>), with <span class="math inline">\(f^{-}\)</span> and the derivatives of <span class="math inline">\(f^{-}\)</span> in the old mode and <span class="math inline">\(f^{+}\)</span> in the new one. While sliding, the
-weights depend on the state through the rates <span class="math inline">\(D_k(a) = \sum_c w_c(a)\, \dot g_{k,c}\)</span>
+weights depend on the state through the rates <span class="math inline">\(D_k(a) = \sum_c w_c(a)\, \dot h_{k,c}\)</span>
 held at zero, <span class="math inline">\(\nabla a = -D_a^{-1}
 D_x\)</span>, and the pullback of <span class="math inline">\(\lambda\)</span> is <span class="math display">\[
   J^{\mathsf T}\lambda = \sum_c w_c\, J_c^{\mathsf T}\lambda
-    - \sum_k u_k \sum_c w_c\, \nabla \dot g_{k,c},
+    - \sum_k u_k \sum_c w_c\, \nabla \dot h_{k,c},
   \qquad
   u = D_a^{-\mathsf T} b, \quad b_j = \frac{\partial f}{\partial
 a_j}\cdot\lambda,
-\]</span> with <span class="math inline">\(\dot g_{k,c}\)</span> the
+\]</span> with <span class="math inline">\(\dot h_{k,c}\)</span> the
 rate of switch <span class="math inline">\(k\)</span> at combination
-<span class="math inline">\(c\)</span> and <span class="math inline">\(\nabla \dot g_{k,c}\)</span> the generated
+<span class="math inline">\(c\)</span> and <span class="math inline">\(\nabla \dot h_{k,c}\)</span> the generated
 gradient of that rate, likewise in the parameters.</p>
-<p><code><a href="../reference/cvode.html">cvode()</a></code> hands <span class="math inline">\(g_e\)</span>
+<p><code><a href="../reference/cvode.html">cvode()</a></code> hands <span class="math inline">\(h_e\)</span>
 to CVODES root finding and at the returned root</p>
 <ul>
 <li>sets the mode,</li>

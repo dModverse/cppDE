@@ -148,7 +148,7 @@ of <a href="../reference/cvode.html"><code>cvode()</code></a>,
 <td align="left"><code>derivMode</code></td>
 <td align="left">
 <code>forward</code>, <code>reverse</code>,
-<code>forward-reverse</code>; <code>deriv2 = TRUE</code>
+<code>forward-forward</code>, <code>forward-reverse</code>
 </td>
 <td align="left">
 <code>forward</code>, <code>reverse</code>
@@ -244,14 +244,14 @@ T}\!\lambda,
   \dot q = -\left(\frac{\partial f}{\partial p}\right)^{\!\mathsf
 T}\!\lambda, \tag{2}
 \]</span> the second the quadrature <a href="methods-reverse.html#eq-adjoint-quadrature">Reverse (5)</a> with
-<span class="math inline">\(q(T) = 0\)</span>. Both run from <span class="math inline">\(T\)</span> to <span class="math inline">\(t_0\)</span>, the minus signs cancelling against
+<span class="math inline">\(q(T) = 0\)</span>. Both run from <span class="math inline">\(T\)</span> to <span class="math inline">\(t_0\)</span>, the minus signs canceling against
 the reversed limits, so <span class="math inline">\(\lambda(t_0)\)</span> and <span class="math inline">\(q(t_0)\)</span> are the state and parameter parts
 of the gradient. By default <span class="math inline">\(q\)</span> is
 outside the error test: gradient entries of very different scale would
 stall the backward step against <code>reltol</code> alone.
-<code>adjointControl(gradtol = g)</code> adds it with absolute tolerance
-<span class="math inline">\(g\)</span>, so the step size controls the
-gradient error, as the <a href="methods-reverse-checks.html#refine">checked sweep</a> of the
+<code>adjointControl(gradtol = )</code> adds it with
+<code>gradtol</code> as absolute tolerance, so the step size controls
+the gradient error, as the <a href="methods-reverse-checks.html#refine">checked sweep</a> of the
 native mode does for discrete steps. The backward problem is a BDF solve
 at the tolerances and step budget of the call, with the forward linear
 solver (KLU for a sparse model) and the analytic Jacobian <span class="math inline">\(-J^{\mathsf T}\)</span>, formed from <span class="math inline">\(J\)</span> in the forward pattern.</p>
@@ -281,8 +281,8 @@ memory, checkpoints, root functions and linear solver, starting from the
 post-jump state. The sweep runs them last to first, each from the
 adjoint of the later one, with the jump transpose in between: for <span class="math inline">\(x^+ = R(x^-, p, t^{*})\)</span>, <span class="math inline">\(\lambda^- = (\partial_x R)^{\mathsf
 T}\lambda^+\)</span> and the gradient gains <span class="math inline">\((\partial_p R)^{\mathsf T}\lambda^+\)</span>, plus
-the terms of a firing time that moves with <span class="math inline">\(p\)</span> or, for a root <span class="math inline">\(g_e(x, t, p) = 0\)</span>, with the state, <span class="math inline">\(\delta t^{*} = -(\nabla_x g_e\,\delta x +
-\partial_p g_e\,\delta p)/\dot g_e\)</span>, as in <a href="methods-reverse-events.html#event-adjoint">the adjoint of an
+the terms of a firing time that moves with <span class="math inline">\(p\)</span> or, for a root <span class="math inline">\(h_e(x, t, p) = 0\)</span>, with the state, <span class="math inline">\(\delta t^{*} = -(\nabla_x h_e\,\delta x +
+\partial_p h_e\,\delta p)/\dot h_e\)</span>, as in <a href="methods-reverse-events.html#event-adjoint">the adjoint of an
 event</a> of the native mode. Root finding is off on a stretch before
 the sweep, since a root found again while CVODES recomputes the forward
 solution between checkpoints would label the stored data with that root

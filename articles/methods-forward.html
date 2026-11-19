@@ -131,8 +131,8 @@ and sensitivities. As a first-order Taylor expansion in <span class="math inline
   \tilde x + \tilde y = (x+y) + (x'+y')\varepsilon,
   \qquad
   \tilde x \cdot \tilde y = xy + (xy' + x'y)\varepsilon,
-\]</span> and for any smooth scalar function <span class="math inline">\(g\)</span>, <span class="math display">\[
-  g(\tilde x) = g(x) + g'(x)\,x'\,\varepsilon.
+\]</span> and for any smooth scalar function <span class="math inline">\(\varphi\)</span>, <span class="math display">\[
+  \varphi(\tilde x) = \varphi(x) + \varphi'(x)\,x'\,\varepsilon.
 \]</span> By composition, <span class="math inline">\(f\)</span> called
 with dual inputs returns <span class="math inline">\(f\)</span> with the
 directional derivative.</p>
@@ -180,7 +180,7 @@ forming <span class="math inline">\(\partial f/\partial x\)</span>.</p>
 <div class="section level2">
 <h2 id="seeding-of-the-tangent">Seeding of the tangent<a class="anchor" aria-label="anchor" href="#seeding-of-the-tangent"></a>
 </h2>
-<p>For a reparametrization <span class="math inline">\((x_0, p) =
+<p>For a reparameterization <span class="math inline">\((x_0, p) =
 \Phi(\theta)\)</span>, <span class="math inline">\(\theta \in
 \mathbb{R}^M\)</span>, <span class="math display">\[
   S_\theta = \frac{\partial x}{\partial \theta}
@@ -227,7 +227,10 @@ maximum, so an unconverged sensitivity direction forces further
 iterations or a smaller step. With <code>sensErrCon = FALSE</code>,
 error test, order selection, corrector test and initial-step estimate
 use the state only, and steps and iteration counts are those of a value
-run.</p>
+run up to rounding: the values over dual numbers and over double can
+differ in the last bits, and on a long stiff run the controller
+amplifies such a difference until a step decision parts the two
+sequences.</p>
 </div>
 <div class="section level2">
 <h2 id="corrector">Corrector iterations<a class="anchor" aria-label="anchor" href="#corrector"></a>
@@ -238,7 +241,8 @@ same <span class="math inline">\(W\)</span> and without the derivative
 of <span class="math inline">\(W\)</span>, which like the step size is a
 solver decision. With <code>sensErrCon = FALSE</code> the sensitivities
 are the derivative of the computed solution on the grid of a value run,
-as the reverse mode returns (<a href="methods-reverse.html#discrete-and-continuous-adjoints">Reverse
+as the reverse mode of <code>adams</code> returns; that of
+<code>bdf</code> solves the corrector equations instead (<a href="methods-reverse.html#adjoint-of-the-step-map">Reverse
 mode</a>).</p>
 </div>
 <div class="section level2 unnumbered">

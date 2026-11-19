@@ -4,8 +4,8 @@
 
 ``` r
 
-# install.packages("devtools")
-devtools::install_github("dModverse/cppDE")
+# install.packages("remotes")
+remotes::install_github("dModverse/cppDE")
 ```
 
 Code generation at run time needs a C++17 compiler (on Windows

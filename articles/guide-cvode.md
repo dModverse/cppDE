@@ -48,7 +48,7 @@ afterwards
 ``` r
 
 installLibs("sundials")                       # SUNDIALS and SuiteSparse
-devtools::install_github("dModverse/cppDE")   # links the new libraries
+remotes::install_github("dModverse/cppDE")    # links the new libraries
 ```
 
 ## Model definition

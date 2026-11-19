@@ -9,7 +9,7 @@ arguments `events` and `derivMode = "reverse"` or `"forward-reverse"` of
 `cotangent` of
 [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md).
 Derivatives are in \\\theta = (x_0, p)\\; event times \\t_e\\ and root
-functions \\g_e\\ depend on \\\theta\\ through \\p\\.
+functions \\h_e\\ depend on \\\theta\\ through \\p\\.
 
 ## Adjoint of an event
 
@@ -20,9 +20,9 @@ each shift over the firing-time residual \\\delta t^{\*}\\, zero in
 value with nonzero derivatives. It reduces to the saltation relation \\
 \mathrm{d}x^{+} = R'\\\left(\mathrm{d}x^{-} + f^{-}\\ \delta
 t^{\*}\right) - f^{+}\\ \delta t^{\*}, \tag{1} \\ with \\R\\ the resets
-and \\R'\\ their Jacobian. For a root event \\g_e(x, t, p) = 0\\,
-\\\delta t^{\*} = -(\nabla_x g_e \cdot \mathrm{d}x + \partial
-g_e/\partial p \cdot \mathrm{d}p) / \dot g_e\\ by the implicit function
+and \\R'\\ their Jacobian. For a root event \\h_e(x, t, p) = 0\\,
+\\\delta t^{\*} = -(\nabla_x h_e \cdot \mathrm{d}x + \partial
+h_e/\partial p \cdot \mathrm{d}p) / \dot h_e\\ by the implicit function
 theorem; for a time-triggered event at \\t^{\*} = t_e(p)\\, \\\delta
 t^{\*} = (\partial t_e/\partial p)\cdot \mathrm{d}p\\.
 
@@ -36,14 +36,14 @@ x}\right)^{\\\mathsf T}, \tag{2} \\ and the parameter cotangent gains
 
 | event | state gains | parameters gain |
 |:---|:---|:---|
-| root | \\-(\eta/\dot g_e)\nabla_x g_e\\ | \\-(\eta/\dot g_e)\\\partial g_e/\partial p\\ |
+| root | \\-(\eta/\dot h_e)\nabla_x h_e\\ | \\-(\eta/\dot h_e)\\\partial h_e/\partial p\\ |
 | time-triggered | nothing | \\\eta\\\partial t_e/\partial p\\ |
 
 \\R'^{\mathsf T}\\ is applied reset by reset, in reverse order: a
 replacement removes the component cotangent, an addition keeps it, a
 multiplication by \\v\\ scales it by \\v\\, plus the derivatives of a
 state- or parameter-dependent \\v\\. The adjoint of a jump needs \\f\\
-at both ends, \\\nabla_x g_e\\, \\\dot g_e\\ and the derivatives of
+at both ends, \\\nabla_x h_e\\, \\\dot h_e\\ and the derivatives of
 reset and event-time expressions; no Jacobian of \\f\\, since every
 shift term has the residual as a factor.
 
@@ -96,11 +96,11 @@ contribute.
 
 All three are scaled by the residual, zero in value with tangent
 \\\partial t^{\*} / \partial \theta\\, and leave the gradient unchanged.
-The root-event residual is \\ \delta t^{\*} = -\\\frac{g_e -
-\mathrm{scalar}(g_e)}{\dot g_e}, \qquad \dot g_e = \frac{\partial
-g_e}{\partial t} + \nabla_x g_e \cdot f , \tag{9} \\ read at the
+The root-event residual is \\ \delta t^{\*} = -\\\frac{h_e -
+\mathrm{scalar}(h_e)}{\dot h_e}, \qquad \dot h_e = \frac{\partial
+h_e}{\partial t} + \nabla_x h_e \cdot f , \tag{9} \\ read at the
 checkpointed state, which holds \\\partial x / \partial \theta\\ at a
-fixed time since localization ignores tangents; \\\nabla_x g_e\\
+fixed time since localization ignores tangents; \\\nabla_x h_e\\
 contracts it to the firing time.
 
 ## Transpose of the root transport
@@ -128,11 +128,11 @@ factor \\\delta t^{\*}\\: [(11)](#eq-shift-clock) is absent from the
 gradient, at full strength in the Hessian, zero for autonomous \\f\\,
 and missing from a pruned form.
 
-The forward correction \\-\tfrac{1}{2}(\ddot g_e / \dot g_e)\\(\delta
+The forward correction \\-\tfrac{1}{2}(\ddot h_e / \dot h_e)\\(\delta
 t^{\*})^{2}\\ of the residual, [Events
 (6)](https://dmodverse.github.io/cppDE/articles/methods-events.html#eq-dt-star-second),
 has the chain factor \\1 + 2 c\_{2}\\ \delta t^{\*}\\, \\c\_{2} = -\ddot
-g_e / (2\dot g_e)\\, one in value with a second-order tangent; the
+h_e / (2\dot h_e)\\, one in value with a second-order tangent; the
 transpose applies it to \\\partial\\ \delta t^{\*} / \partial x\\.
 
 The sweep binds the tangent storage of every buffer it passes to a
@@ -142,18 +142,18 @@ Jump-transpose reads of such a buffer are multiplied by \\\delta
 t^{\*}\\, so an unbound buffer leaves value and gradient correct and the
 Hessian wrong by a rank-one term.
 
-**Derivative of the residual.** Since \\\dot g_e\\ depends on the state,
+**Derivative of the residual.** Since \\\dot h_e\\ depends on the state,
 \\ \frac{\partial\\ \delta t^{\*}}{\partial x} = -\frac{\nabla_x
-g_e}{\dot g_e} - \frac{\delta t^{\*}}{\dot g_e}\\ \nabla_x \dot g_e ,
-\qquad \nabla_x \dot g_e = \nabla_x \frac{\partial g_e}{\partial t} +
-\left(\nabla_x^{2} g_e\right) f + J^{\mathsf T}\nabla_x g_e , \tag{12}
+h_e}{\dot h_e} - \frac{\delta t^{\*}}{\dot h_e}\\ \nabla_x \dot h_e ,
+\qquad \nabla_x \dot h_e = \nabla_x \frac{\partial h_e}{\partial t} +
+\left(\nabla_x^{2} h_e\right) f + J^{\mathsf T}\nabla_x h_e , \tag{12}
 \\ with the second term absent from the gradient and at full strength in
-the Hessian. The generator differentiates \\\dot g_e\\ as one
-expression, so all three terms of \\\nabla_x \dot g_e\\ are present,
-also those vanishing for a time-independent \\g_e\\ linear in the state;
-in \\\theta\\ it gives \\\partial^{2} g_e/\partial\theta\\\partial t\\,
-\\(\partial \nabla_x g_e/\partial\theta)\cdot f\\ and \\(\partial
-f/\partial\theta)^{\mathsf T}\nabla_x g_e\\. A forcing in \\g_e\\ is
+the Hessian. The generator differentiates \\\dot h_e\\ as one
+expression, so all three terms of \\\nabla_x \dot h_e\\ are present,
+also those vanishing for a time-independent \\h_e\\ linear in the state;
+in \\\theta\\ it gives \\\partial^{2} h_e/\partial\theta\\\partial t\\,
+\\(\partial \nabla_x h_e/\partial\theta)\cdot f\\ and \\(\partial
+f/\partial\theta)^{\mathsf T}\nabla_x h_e\\. A forcing in \\h_e\\ is
 differentiated in \\t\\ through a rate leaf on the expression graph,
 printed as the derivative of the PCHIP interpolant.
 

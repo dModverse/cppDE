@@ -41,9 +41,13 @@ scheme that produced it.
   (4)](https://dmodverse.github.io/cppDE/articles/methods-forward.html#eq-wrms-sens),
   since their errors accumulate (as `CVodeSetSensErrCon`). The grid is
   finer and the values differ from a value run by \\O(\mathrm{tol})\\.
-- Reverse: the value pass takes the value-run grid, as the forward run
-  of the CVODES adjoint does, so the gradient is the derivative of the
-  trajectory a value run returns.
+- Reverse: the value pass is a value run, as the forward run of the
+  CVODES adjoint is, so the gradient is the derivative of the scheme on
+  the grid a value run takes, under `bdf` with the corrector equations
+  solved.
+- Forward with `sensErrCon = FALSE`: the decisions of a value run, taken
+  on dual numbers. Rounding can part the two step sequences on a long
+  stiff run.
 
 ## Unresolved linearized flow
 
@@ -122,31 +126,33 @@ implicit Euler, the scheme of SEULEX [\[7, Sec.
 IV.9\]](#ref-hairer2010solving). Chain \\j\\ takes \\n_j = j\\ steps of
 \\h_j = H/n_j\\, \\ \bigl(h_j^{-1} I - J_0\bigr)\\ D_k = f(x_k, t_k),
 \qquad x\_{k+1} = x_k + D_k, \tag{3} \\ with \\J_0\\ the Jacobian at the
-interval start. As a W-method, consistent for any matrix in place of the
-Jacobian, a chain has an error expansion in powers of \\h_j\\, and the
-Aitken-Neville tableau \\T\_{j,k} = T\_{j,k-1} + (T\_{j,k-1} -
+start of the interval or of a later interval of the same length, at most
+ten intervals back. As a W-method, consistent for any matrix in place of
+the Jacobian, a chain has an error expansion in powers of \\h_j\\, and
+the Aitken-Neville tableau \\T\_{j,k} = T\_{j,k-1} + (T\_{j,k-1} -
 T\_{j-1,k-1}) / (n_j/n\_{j-k} - 1)\\ raises the order by one per column.
-Chain \\j\\ costs one factorization of \\h_j^{-1} I - J_0\\ (a diagonal
-change of one Jacobian), \\n_j\\ right-hand sides and \\n_j\\ solves.
+Chain \\j\\ costs \\n_j\\ right-hand sides, \\n_j\\ solves and one
+factorization of \\h_j^{-1} I - J_0\\, which serves every interval of
+the same length on that \\J_0\\.
 
 \\T\_{j,j}\\ is a fixed linear combination of the chain end states, so
 the tableau is built on the chain adjoints (start-state cotangent and
 interval gradient share), each swept back on the factorization of that
 chain. A step of [(3)](#eq-lie-chain) passes \\\mu_k = (h_j^{-1} I -
 J_0)^{-\mathsf T} \lambda\_{k+1}\\ to \\x_k\\ through \\J(x_k)^{\mathsf
-T} \mu_k\\, to \\\theta\\ through \\(\partial
-f/\partial\theta)(x_k)^{\mathsf T} \mu_k\\, and through \\J_0\\ to the
-start of the interval: \\\sum_k \mu_k^{\mathsf T} (\partial J_0)\\ D_k\\
-is one bilinear form over the Jacobian pattern, \\B\_{rc} = \sum_k
-\mu\_{k,r} D\_{k,c}\\, pulled back by the generated code in one
-evaluation. \\e_j = T\_{j,j} - T\_{j,j-1}\\ estimates the error of
-\\T\_{j,j-1}\\; the returned \\T\_{j,j}\\ has the error estimate \\e_j
-\min(1, e_j/e\_{j-1})\\, the rate of the last two differences applied
-one column on, as CVODES estimates the error of the solution it returns.
-The first column passing [(2)](#eq-refine-test) is taken. An interval
-failing at the eighth column is halved, and an observation inside an
-interval cuts it; the new piece starts from the state reached forward
-under the state error test.
+T} \mu_k\\ and to \\\theta\\ through \\(\partial
+f/\partial\theta)(x_k)^{\mathsf T} \mu_k\\; \\J_0\\ is a constant of the
+map. Several seed columns share the chains and the factorizations, the
+tableau holds the adjoints of all of them, and an interval passes when
+every column passes. \\e_j = T\_{j,j} - T\_{j,j-1}\\ estimates the error
+of \\T\_{j,j-1}\\; the returned \\T\_{j,j}\\ has the error estimate
+\\e_j \min(1, e_j/e\_{j-1})\\, the rate of the last two differences
+applied one column on, as CVODES estimates the error of the solution it
+returns. The first column passing [(2)](#eq-refine-test) is taken. An
+interval failing at the eighth column on a \\J_0\\ from a later interval
+is swept again on the Jacobian at the interval start, and halved if it
+fails there too. An observation inside an interval cuts it; the new
+piece starts from the state reached forward under the state error test.
 
 **Limits.** A one-step step takes at most 1024 substeps, fewer where
 from \\m = 32\\ on a halving no longer shrinks the difference; a
@@ -158,10 +164,11 @@ leaves the estimate below the error.
 
 The refined sweep replaces each step or interval by the map whose
 adjoint passed the test, linearized at the stored states. With the
-observation seeds \\w_o\\ it differentiates \\J = \sum_o w_o^{\mathsf T}
-x(t_o)\\, whose first-order change equals that of a nonlinear \\L\\ with
-\\w_o = \partial L/\partial x(t_o)\\. A refined solve returns this
-change per seed column as `$correction`, \\ C = \sum_n
+observation seeds \\w_o\\ it differentiates the linear functional
+\\\sum_o w_o^{\mathsf T} x(t_o)\\, whose first-order change equals that
+of a nonlinear \\\mathcal{J}\\ with \\w_o = \partial
+\mathcal{J}/\partial x(t_o)\\. A refined solve returns this change per
+seed column as `$correction`, \\ C = \sum_n
 \Bigl\[\lambda\_{n+1}^{\mathsf T}\bigl(\tilde\Phi_n(x^h_n) -
 x^h\_{n+1}\bigr) + \sum\_{t_o \in (t_n, t\_{n+1}\]} w_o^{\mathsf
 T}\bigl(\tilde x(t_o) - y_o\bigr)\Bigr\], \tag{4} \\ with \\x^h_n\\ the

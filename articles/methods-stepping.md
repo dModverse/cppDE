@@ -154,7 +154,7 @@ The advanced solution and embedded estimate are \\ x\_{n+1} = x_n +
 \sum\_{i=1}^{s} m_i\\ k_i, \qquad \hat{x}\_{n+1} \\=\\ x_n +
 \sum\_{i=1}^{s} \hat{m}\_i\\ k_i. \\ Each stage
 [(6)](#eq-rosenbrock-stage) is one linear solve, no Newton iteration; an
-accepted step costs one \\J\\, one factorization of \\W\\, five
+accepted step costs one \\J\\, one factorization of \\W\\, six
 right-hand-side evaluations and six back-substitutions. The [order-\\4\\
 coefficients](https://dmodverse.github.io/cppDE/articles/methods-coefficients.html#ros-coeffs)
 of Hairer and Wanner [\[3, Sec. IV.7\]](#ref-hairer2010solving), also

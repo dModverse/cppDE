@@ -717,10 +717,10 @@ time and state, so no term of the transport vanishes.</p>
 <div class="section level2">
 <h2 id="nonlinear-time-dependent-root">Nonlinear time-dependent root<a class="anchor" aria-label="anchor" href="#nonlinear-time-dependent-root"></a>
 </h2>
-<p>The derivative of the firing time in the state holds <span class="math inline">\(\nabla \dot g = \nabla g_t + (\nabla^2 g)\, f +
-J^\mathsf{T} \nabla g\)</span>, here with no zero term. The root is
-quadratic in <span class="math inline">\(t\)</span>, so the crossing has
-a closed form.</p>
+<p>The derivative of the firing time in the state holds <span class="math inline">\(\nabla \dot h_e = \nabla \partial_t h_e +
+(\nabla^2 h_e)\, f + J^\mathsf{T} \nabla h_e\)</span>, here with no zero
+term. The root is quadratic in <span class="math inline">\(t\)</span>,
+so the crossing has a closed form.</p>
 <div class="sourceCode" id="cb30"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">events_quad</span> <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/data.frame.html" class="external-link">data.frame</a></span><span class="op">(</span>var <span class="op">=</span> <span class="st">"x"</span>, time <span class="op">=</span> <span class="cn">NA</span>, value <span class="op">=</span> <span class="st">"v * time"</span>,</span>
 <span>                          method <span class="op">=</span> <span class="st">"add"</span>, root <span class="op">=</span> <span class="st">"x*x - xc - b*time"</span>,</span>

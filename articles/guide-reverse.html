@@ -114,9 +114,11 @@
 <p>Reverse mode returns the gradient of a functional of the trajectory
 in one backward sweep, at a cost independent of the number of
 parameters. cppDE differentiates the discretization itself (<a href="methods-reverse.html">discrete adjoint</a>): forward and reverse
-derivatives agree to the integration tolerance, and to rounding with
-<code>sensErrCon = FALSE</code> in forward mode, which puts both on the
-step grid of the values.</p>
+derivatives agree to the integration tolerance.
+<code>sensErrCon = FALSE</code> puts the forward mode on the step grid
+of the values as well; the two then agree to rounding under
+<code>adams</code> and up to the corrector iterations under
+<code>bdf</code>, whose sweep solves the corrector equations.</p>
 <div class="sourceCode" id="cb1"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://dmodverse.github.io/cppDE/">cppDE</a></span><span class="op">)</span></span>
 <span><span class="kw"><a href="https://rdrr.io/r/base/library.html" class="external-link">library</a></span><span class="op">(</span><span class="va"><a href="https://ggplot2.tidyverse.org" class="external-link">ggplot2</a></span><span class="op">)</span></span></code></pre></div>
@@ -188,14 +190,15 @@ forward pass; <code>$cotangent</code> then has one column per seed.</p>
 <div class="section level2">
 <h2 id="gradient-of-an-objective">Gradient of an objective<a class="anchor" aria-label="anchor" href="#gradient-of-an-objective"></a>
 </h2>
-<p>For <span class="math inline">\(L = \sum_t (B(t) - y_t)^2\)</span>
-the cotangent is <span class="math inline">\(\partial L / \partial B(t)
-= 2\,(B(t) - y_t)\)</span>. It depends on the solution, so the forward
-pass runs first: with <code>keepStore = TRUE</code> and no cotangent,
-<code><a href="../reference/solveODE.html">solveODE()</a></code> returns the values and keeps the checkpoints as
-<code>$store</code>. A solve given the <code>store</code> at the same
-<code>times</code> and <code>parms</code> integrates nothing and runs
-the backward sweep alone.</p>
+<p>For <span class="math inline">\(\mathcal{J} = \sum_t (B(t) -
+y_t)^2\)</span> the cotangent is <span class="math inline">\(\partial
+\mathcal{J} / \partial B(t) = 2\,(B(t) - y_t)\)</span>. It depends on
+the solution, so the forward pass runs first: with
+<code>keepStore = TRUE</code> and no cotangent, <code><a href="../reference/solveODE.html">solveODE()</a></code>
+returns the values and keeps the checkpoints as <code>$store</code>. A
+solve given the <code>store</code> at the same <code>times</code> and
+<code>parms</code> integrates nothing and runs the backward sweep
+alone.</p>
 <div class="sourceCode" id="cb5"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">y</span>   <span class="op">&lt;-</span> <span class="fl">0.4</span> <span class="op">*</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="op">-</span><span class="fl">0.3</span> <span class="op">*</span> <span class="va">times</span><span class="op">)</span> <span class="op">*</span> <span class="op">(</span><span class="fl">1</span> <span class="op">-</span> <span class="fu"><a href="https://rdrr.io/r/base/Log.html" class="external-link">exp</a></span><span class="op">(</span><span class="op">-</span><span class="va">times</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="va">first</span> <span class="op">&lt;-</span> <span class="fu"><a href="../reference/solveODE.html">solveODE</a></span><span class="op">(</span><span class="va">rev</span>, <span class="va">times</span>, <span class="va">parms</span>, keepStore <span class="op">=</span> <span class="cn">TRUE</span><span class="op">)</span></span>

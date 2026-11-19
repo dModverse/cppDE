@@ -122,14 +122,15 @@ and <a href="../reference/releaseStore.html"><code>releaseStore()</code></a>.</p
 <div class="section level2">
 <h2 id="gradient-of-one-objective">Gradient of one objective<a class="anchor" aria-label="anchor" href="#gradient-of-one-objective"></a>
 </h2>
-<p>Parameter estimation needs the gradient of one number <span class="math inline">\(L\)</span>, a likelihood or a residual sum of
-squares, in all <span class="math inline">\(M\)</span> parameters <span class="math inline">\(\theta\)</span>. With <a href="methods-forward.html">forward sensitivities</a>, one tangent per
+<p>Parameter estimation needs the gradient of one number, the objective
+function <span class="math inline">\(\mathcal{J}(\theta)\)</span>, a
+likelihood or a residual sum of squares, in all <span class="math inline">\(M\)</span> parameters <span class="math inline">\(\theta\)</span>. With <a href="methods-forward.html">forward sensitivities</a>, one tangent per
 parameter, it costs about <span class="math inline">\(M\)</span> solves;
 the reverse mode needs one forward solve and one backward sweep,
 whatever <span class="math inline">\(M\)</span> <span class="citation"><a href="#ref-griewank2008evaluating">[1]</a>, <a href="#ref-naumann2012art">[2]</a></span>. With the solver steps <span class="math inline">\(\theta \to x_1 \to \dots \to x_N\)</span>, the
 gradient is the product of the Jacobians, <span class="math display">\[
-  \frac{\mathrm{d}L}{\mathrm{d}\theta}
-  = \frac{\partial L}{\partial x_N}\,
+  \frac{\mathrm{d}\mathcal{J}}{\mathrm{d}\theta}
+  = \frac{\partial \mathcal{J}}{\partial x_N}\,
     \frac{\partial x_N}{\partial x_{N-1}} \cdots
     \frac{\partial x_2}{\partial x_1}\,
     \frac{\partial x_1}{\partial \theta} .
@@ -145,16 +146,18 @@ n_x}\)</span> on the observed trajectory, one sweep returns <span id="eq-adjoint
       \frac{\partial x_i(t_o)}{\partial \theta_j},
   \qquad j = 1,\dots,M, \tag{1}
 \]</span> with <span class="math inline">\(\theta = (x_0, p)\)</span>,
-<span class="math inline">\(M = n_x + n_p\)</span>, and <span class="math inline">\(w_o \in \mathbb{R}^{n_x}\)</span> the row of <span class="math inline">\(w\)</span> at <span class="math inline">\(t_o\)</span>. For <span class="math inline">\(w_{oi} = \partial L/\partial x_i(t_o)\)</span>
-(for least squares, the weighted residual), <span class="math inline">\(\bar\theta = \nabla_\theta L\)</span>. Several
-cotangents, as columns of a three-dimensional array, take one sweep
-each.</p>
+<span class="math inline">\(M = n_x + n_p\)</span>, and <span class="math inline">\(w_o \in \mathbb{R}^{n_x}\)</span> the row of <span class="math inline">\(w\)</span> at <span class="math inline">\(t_o\)</span>. For <span class="math inline">\(w_{oi} = \partial \mathcal{J}/\partial
+x_i(t_o)\)</span> (for least squares, the weighted residual), <span class="math inline">\(\bar\theta = \nabla_\theta \mathcal{J}\)</span>.
+Several cotangents, as columns of a three-dimensional array, take one
+sweep each.</p>
 <div class="section level3">
 <h3 id="example-two-euler-steps">Example: two Euler steps<a class="anchor" aria-label="anchor" href="#example-two-euler-steps"></a>
 </h3>
 <p>For <span class="math inline">\(\dot x = -k x\)</span>, two explicit
-Euler steps of size <span class="math inline">\(h\)</span> and <span class="math inline">\(L = x_2\)</span>, each step multiplies by <span class="math inline">\(a = 1 - hk\)</span>: <span class="math display">\[
-  x_1 = a\,x_0, \qquad x_2 = a\,x_1, \qquad L = x_2 = a^2 x_0 .
+Euler steps of size <span class="math inline">\(h\)</span> and <span class="math inline">\(\mathcal{J} = x_2\)</span>, each step multiplies
+by <span class="math inline">\(a = 1 - hk\)</span>: <span class="math display">\[
+  x_1 = a\,x_0, \qquad x_2 = a\,x_1, \qquad \mathcal{J} = x_2 = a^2 x_0
+.
 \]</span> A step has the derivatives <span class="math inline">\(\partial x_{n+1}/\partial k = -h\,x_n\)</span> and
 <span class="math inline">\(\partial x_{n+1}/\partial x_n =
 a\)</span>.</p>
@@ -165,7 +168,7 @@ a\)</span>.</p>
 \]</span> The derivative in <span class="math inline">\(x_0\)</span>
 needs a second tangent, started at <span class="math inline">\(1\)</span>.</p>
 <p><em>Reverse.</em> The adjoint <span class="math inline">\(\lambda_n =
-\partial L/\partial x_n\)</span> starts at <span class="math inline">\(\lambda_2 = 1\)</span>. Each transposed step
+\partial \mathcal{J}/\partial x_n\)</span> starts at <span class="math inline">\(\lambda_2 = 1\)</span>. Each transposed step
 passes <span class="math inline">\(a\lambda_{n+1}\)</span> to the
 previous state and adds <span class="math inline">\(-h\,x_n\lambda_{n+1}\)</span> to the parameter
 cotangent <span class="math inline">\(\bar k\)</span>: <span class="math display">\[
@@ -178,10 +181,11 @@ cotangent <span class="math inline">\(\bar k\)</span>: <span class="math display
 further parameter adds a tangent in the forward mode and one entry of
 <span class="math inline">\(\bar\theta\)</span> in the reverse mode.</p>
 <p><span class="math inline">\(-2h(1-hk)\,x_0\)</span> is the exact
-derivative of the computed <span class="math inline">\(L_h = (1-hk)^2
-x_0\)</span>, not of the exact solution <span class="math inline">\(x(2h) = e^{-2hk}x_0\)</span>, whose derivative is
+derivative of the computed <span class="math inline">\(\mathcal{J}_h =
+(1-hk)^2 x_0\)</span>, not of the exact solution <span class="math inline">\(x(2h) = e^{-2hk}x_0\)</span>, whose derivative is
 <span class="math inline">\(-2h\,e^{-2hk}x_0\)</span>. At <span class="math inline">\(h = 0.5\)</span>, <span class="math inline">\(k =
-1\)</span>, <span class="math inline">\(x_0 = 1\)</span>: <span class="math inline">\(L_h = 0.25\)</span> with derivative <span class="math inline">\(-0.5\)</span>, exact value <span class="math inline">\(0.368\)</span> with derivative <span class="math inline">\(-0.368\)</span> (<a href="#discrete-and-continuous-adjoints">Discrete and continuous
+1\)</span>, <span class="math inline">\(x_0 = 1\)</span>: <span class="math inline">\(\mathcal{J}_h = 0.25\)</span> with derivative
+<span class="math inline">\(-0.5\)</span>, exact value <span class="math inline">\(0.368\)</span> with derivative <span class="math inline">\(-0.368\)</span> (<a href="#discrete-and-continuous-adjoints">Discrete and continuous
 adjoints</a>).</p>
 </div>
 </div>
@@ -225,7 +229,7 @@ outer factors are identities, and a reverse solve reports <span id="eq-adjoint-q
 T}\!\lambda(t)\,
     \mathrm{d}t, \tag{5}
 \]</span> the counterparts of <span class="math inline">\(\lambda_0\)</span> and <span class="math inline">\(\bar k\)</span>, stacked in the row order of the
-<code>tangent</code> argument, states first. A reparametrization <span class="math inline">\((x_0, p) = \Phi(\theta)\)</span> enters afterwards
+<code>tangent</code> argument, states first. A reparameterization <span class="math inline">\((x_0, p) = \Phi(\theta)\)</span> enters afterwards
 through the outer factors of <a href="#eq-adjoint-result">(4)</a>, the
 chain rule of <a href="methods-forward.html#eq-sensitivity-theta">Forward (2)</a> applied
 on the left. The cost is one backward solve of dimension <span class="math inline">\(n_x\)</span> and a quadrature of dimension <span class="math inline">\(n_p\)</span>, whatever <span class="math inline">\(M\)</span>; <span class="math inline">\(\partial
@@ -272,23 +276,48 @@ seeded with the identity in the <span class="math inline">\([\text{slot}
 \times \text{component}]\)</span> array, runs through the forward-step
 routines and returns every column in one pass, so the adjoint uses
 exactly the forward coefficients.</p>
-<p>The corrector is differentiated as the <span class="math inline">\(k\)</span> forward iterations <a href="#eq-step-corr">(7)</a>, with <span class="math inline">\(W\)</span>, the step size, the order and <span class="math inline">\(k\)</span> held fixed. From the cotangent <span class="math inline">\(\bar\Delta^{(k)}\)</span>, each backward iteration
-takes one transposed solve and one product with <span class="math inline">\(J^{\mathsf T}\)</span> at <span class="math inline">\(y^{(m)} = z_0^{\text{pred}} +
+<p>Under <code>bdf</code> the sweep differentiates the corrector
+equation <span class="math inline">\(r = 0\)</span> at the accepted
+state <span class="math inline">\(y\)</span>: the cotangent <span class="math inline">\(\mu\)</span> of the residual solves <span class="math display">\[
+  \bigl(I/\gamma - J(y)\bigr)^{\mathsf T} \mu = \bar\Delta ,
+\]</span> and <span class="math inline">\(J(y)^{\mathsf T}\mu\)</span>,
+<span class="math inline">\(-(\ell/\gamma)\,\mu\)</span> and <span class="math inline">\((\partial f/\partial\theta)(y)^{\mathsf
+T}\mu\)</span> pass to <span class="math inline">\(z_0^{\text{pred}}\)</span>, <span class="math inline">\(z_1^{\text{pred}}\)</span> and <span class="math inline">\(\theta\)</span>. <span class="math inline">\(\mu\)</span> is summed from the transpose of the
+iteration <a href="#eq-step-corr">(7)</a> at <span class="math inline">\(y\)</span>, <span class="math display">\[
+  \mu_m = s\, W^{-\mathsf T} \bar\Delta^{(m)}, \qquad
+  \bar\Delta^{(m+1)} = \bar\Delta^{(m)} + J(y)^{\mathsf T}\mu_m -
+\mu_m/\gamma, \qquad
+  \bar\Delta^{(0)} = \bar\Delta ,
+\]</span> one transposed solve and one product with <span class="math inline">\(J^{\mathsf T}\)</span> per iteration, until the
+WRMS norm of <span class="math inline">\(\bar\Delta^{(m)}\)</span>
+against <span class="math inline">\(\mathtt{reltol}\,|\lambda| +
+\mathtt{abstol}\)</span> is at most <span class="math inline">\(0.1\)</span>, with <span class="math inline">\(\lambda\)</span> the cotangent the step hands
+down: the share of the local error test of the backward problem that
+CVODES gives the Newton iteration <span class="citation"><a href="#ref-hindmarsh2005sundials">[3]</a></span>. Where the frozen <span class="math inline">\(W\)</span> cannot reach the test within ten
+iterations, the iteration continues against <span class="math inline">\(W\)</span> built at <span class="math inline">\(y\)</span> and the current <span class="math inline">\(\gamma\)</span>. The <span class="math inline">\(k\)</span> iterations the forward run took leave
+the tangent of <span class="math inline">\(\Delta\)</span> unconverged
+even where <span class="math inline">\(\Delta\)</span> has converged,
+and on a long stiff trajectory their derivative can be off by
+percents.</p>
+<p>Under <code>adams</code> the corrector is differentiated as the <span class="math inline">\(k\)</span> forward iterations <a href="#eq-step-corr">(7)</a>, with <span class="math inline">\(W\)</span>, the step size, the order and <span class="math inline">\(k\)</span> held fixed. From <span class="math inline">\(\bar\Delta^{(k)} = \bar\Delta\)</span>, each
+backward iteration takes one transposed solve and one product with <span class="math inline">\(J^{\mathsf T}\)</span> at <span class="math inline">\(y^{(m)} = z_0^{\text{pred}} +
 \Delta^{(m)}\)</span>: <span class="math display">\[
   \mu_m = s\, W^{-\mathsf T} \bar\Delta^{(m+1)}, \qquad
   \bar\Delta^{(m)} = \bar\Delta^{(m+1)} + J(y^{(m)})^{\mathsf T}\mu_m -
 \mu_m/\gamma,
-\]</span> and <span class="math inline">\(J(y^{(m)})^{\mathsf
-T}\mu_m\)</span>, <span class="math inline">\(-(\ell/\gamma)\,\mu_m\)</span> and <span class="math inline">\((\partial f/\partial\theta)(y^{(m)})^{\mathsf
-T}\mu_m\)</span> pass to <span class="math inline">\(z_0^{\text{pred}}\)</span>, <span class="math inline">\(z_1^{\text{pred}}\)</span> and <span class="math inline">\(\theta\)</span>. The forward sensitivities take
-the same iterations on dual numbers (<a href="methods-forward.html#corrector">Forward sensitivities</a>), so
-both differentiate the same map. Closing the corrector by the implicit
-function theorem instead differentiates an equation the solver never
-solved exactly; on a stiff model under <code>adams</code> that equation
-can be unstable at the chosen step sizes while the iterations taken are
-not, and the gradient diverges. A Rosenbrock step transposes to a stage
-recursion of six solves against one factorization, an explicit step to
-the backward recursion over the tableau.</p>
+\]</span> with the three terms of each <span class="math inline">\(\mu_m\)</span> at <span class="math inline">\(y^{(m)}\)</span> passed on as above. The forward
+sensitivities with <code>sensErrCon = FALSE</code> take the same
+iterations on dual numbers (<a href="methods-forward.html#corrector">Forward sensitivities</a>), so
+both differentiate the same map. An exactly solved Adams-Moulton step
+can be unstable on a stiff model at the step sizes the value run chose
+while the iterations taken are not: at order 3 a parasitic root leaves
+the unit disk for <span class="math inline">\(h\lambda &lt; -6\)</span>,
+and on Robertson’s kinetics at <span class="math inline">\(h\lambda
+\approx -30\)</span> the solved sweep grows by the modulus of that root,
+about <span class="math inline">\(1.5\)</span>, per step.</p>
+<p>A Rosenbrock step transposes to a stage recursion of six solves
+against one factorization, an explicit step to the backward recursion
+over the tableau.</p>
 <p>The code generator emits <span class="math inline">\(J^{\mathsf
 T}\lambda\)</span> and <span class="math inline">\((\partial f/\partial
 p)^{\mathsf T}\lambda\)</span> beside the right-hand side. For a
@@ -303,9 +332,11 @@ step size, the controller operations applied to the Nordsieck carry
 afterwards and, for a multistep method, the corrector iterates. Memory
 is linear in the number of steps and holds no derivatives. Each
 iteration matrix is recorded once, as the point, time and <span class="math inline">\(\gamma_p\)</span> of the factorization, and
-refactorized in the sweep once per run of steps that used it. Slot
-operators are cached by Nordsieck carry and step size, so the probe runs
-only where the controller changed the control state.</p>
+refactorized in the sweep once per run of steps that used it; a
+<code>bdf</code> step whose corrector adjoint does not meet the test
+against it within ten iterations adds one, built at the accepted state.
+Slot operators are cached by Nordsieck carry and step size, so the probe
+runs only where the controller changed the control state.</p>
 <p>An observation at an interpolated time goes through the continuous
 extension of the step containing it. After the tail the probe holds a
 valid interpolant, whose value at the observation time is the row <span class="math inline">\(\partial x_{\text{interp}} / \partial
@@ -351,20 +382,25 @@ differentiates: it is the derivative of the steps the forward solver
 took. The continuous adjoint of <code><a href="../reference/cvode.html">cvode()</a></code>, the adjoint
 sensitivity analysis (ASA) of CVODES, differentiates, then discretizes:
 a second integrator with separate step-size control solves <a href="#eq-adjoint-ode">(2)</a> and <a href="#eq-adjoint-quadrature">(5)</a> backwards over forward states
-interpolated between checkpoints <span class="citation"><a href="#ref-cao2003adjoint">[3]</a></span> (<a href="methods-cvode.html#asa">cvode() and the CVODES adjoint</a>).</p>
-<p>With <span class="math inline">\(L\)</span> the objective of the
-exact solution and <span class="math inline">\(L_h\)</span> the value
-the solver returns, the discrete adjoint is <span class="math inline">\(\nabla_\theta L_h\)</span> on the value-run grid,
-with corrector iterations and matrices as taken. For every method it
-equals the forward sensitivities on the same grid
-(<code>sensErrCon = FALSE</code>) up to rounding. The continuous adjoint
-approximates <span class="math inline">\(\nabla_\theta L\)</span> to the
-discretization error of both solves, <span class="math inline">\(O(\mathrm{tol})\)</span> away from <span class="math inline">\(\nabla_\theta L_h\)</span>; in the Euler example
-it would approximate <span class="math inline">\(-0.368\)</span>, not
-<span class="math inline">\(-0.5\)</span>.</p>
+interpolated between checkpoints <span class="citation"><a href="#ref-cao2003adjoint">[4]</a></span> (<a href="methods-cvode.html#asa">cvode() and the CVODES adjoint</a>).</p>
+<p>With <span class="math inline">\(\mathcal{J}\)</span> the objective
+of the exact solution and <span class="math inline">\(\mathcal{J}_h\)</span> that of the computed one,
+the discrete adjoint is <span class="math inline">\(\nabla_\theta
+\mathcal{J}_h\)</span> on the value-run grid. Under <code>adams</code>,
+<code>rb4</code> and <code>tsit5</code>, <span class="math inline">\(\mathcal{J}_h\)</span> is the value the solver
+returns, with corrector iterations and matrices as taken, and the
+adjoint equals the forward sensitivities on the same grid
+(<code>sensErrCon = FALSE</code>) up to rounding. Under
+<code>bdf</code>, <span class="math inline">\(\mathcal{J}_h\)</span> is
+the value of the method with the corrector equations solved, which the
+returned value meets to the corrector test; the forward sensitivities on
+the same grid differ from the adjoint by what their corrector iterations
+leave. The continuous adjoint approximates <span class="math inline">\(\nabla_\theta \mathcal{J}\)</span> to the
+discretization error of both solves, <span class="math inline">\(O(\mathrm{tol})\)</span> away from <span class="math inline">\(\nabla_\theta \mathcal{J}_h\)</span>; in the Euler
+example it would approximate <span class="math inline">\(-0.368\)</span>, not <span class="math inline">\(-0.5\)</span>.</p>
 <table class="table">
-<caption>The two adjoints. Both converge to <span class="math inline">\(\nabla_\theta L\)</span> as the tolerance is
-lowered.</caption>
+<caption>The two adjoints. Both converge to <span class="math inline">\(\nabla_\theta \mathcal{J}\)</span> as the
+tolerance is lowered.</caption>
 <colgroup>
 <col width="35%">
 <col width="30%">
@@ -401,8 +437,9 @@ interpolated</td>
 <tr class="odd">
 <td align="left">implicit step</td>
 <td align="left">
-<span class="math inline">\(k\)</span> transposed
-solves, forward iteration matrix</td>
+<code>bdf</code>: corrector equation solved;
+<code>adams</code>: <span class="math inline">\(k\)</span> transposed
+iterations</td>
 <td align="left">stiff linear ODE under error control</td>
 </tr>
 <tr class="even">
@@ -413,16 +450,17 @@ solves, forward iteration matrix</td>
 <tr class="odd">
 <td align="left">result</td>
 <td align="left">
-<span class="math inline">\(\nabla_\theta L_h\)</span>,
-as forward on the same grid</td>
+<span class="math inline">\(\nabla_\theta
+\mathcal{J}_h\)</span> on the forward grid</td>
 <td align="left">
-<span class="math inline">\(\nabla_\theta L\)</span> to
-<span class="math inline">\(O(\mathrm{tol})\)</span>
+<span class="math inline">\(\nabla_\theta
+\mathcal{J}\)</span> to <span class="math inline">\(O(\mathrm{tol})\)</span>
 </td>
 </tr>
 <tr class="even">
 <td align="left">consistent with value</td>
-<td align="left">up to rounding</td>
+<td align="left">up to rounding, <code>bdf</code> to the corrector
+test</td>
 <td align="left">to <span class="math inline">\(O(\mathrm{tol})\)</span>
 </td>
 </tr>
@@ -430,33 +468,33 @@ as forward on the same grid</td>
 </table>
 <p><strong>Consistency with the value.</strong> Line searches,
 trust-region ratios and gradient stopping tests assume the gradient is
-the derivative of the value. Near the optimum <span class="math inline">\(\nabla_\theta L\)</span> shrinks to the size of an
-<span class="math inline">\(O(\mathrm{tol})\)</span> error, and an
-inconsistent gradient points where the computed value does not decrease:
-the trust-region ratio degrades, the line search fails, and a gradient
-tolerance below the error is never reached. The discrete adjoint is the
-gradient of the value the optimizer sees.</p>
+the derivative of the value. Near the optimum <span class="math inline">\(\nabla_\theta \mathcal{J}\)</span> shrinks to the
+size of an <span class="math inline">\(O(\mathrm{tol})\)</span> error,
+and an inconsistent gradient points where the computed value does not
+decrease: the trust-region ratio degrades, the line search fails, and a
+gradient tolerance below the error is never reached. The discrete
+adjoint is the gradient of the value the optimizer sees, under
+<code>bdf</code> of that value with the corrector equations solved.</p>
 <p><strong>Refined sweep.</strong>
 <code>adjointControl(refine = TRUE)</code> holds the sweep to the
 tolerances and differentiates the flow, the solution map of the ODE,
 instead of the step map. Like the continuous adjoint, the result is
-closer to <span class="math inline">\(\nabla_\theta L\)</span> and
-differs from <span class="math inline">\(\nabla_\theta L_h\)</span> by
-the order of the discretization error. It pays off where the value grid
-is too coarse for the derivative, such as a trajectory at rest crossed
-in a few steps (<a href="methods-reverse-checks.html#state-error">Grid
-and refinement of the sweep</a>). A refined solve also returns
-<code>$correction</code>, per seed column the first-order change of the
-seeded functional from the computed to the differentiated trajectory;
-value plus correction and the refined gradient belong to one function
-(<a href="methods-reverse-checks.html#value-correction">Value correction
-of the refined sweep</a>).</p>
+closer to <span class="math inline">\(\nabla_\theta \mathcal{J}\)</span>
+and differs from <span class="math inline">\(\nabla_\theta
+\mathcal{J}_h\)</span> by the order of the discretization error. It pays
+off where the value grid is too coarse for the derivative, such as a
+trajectory at rest crossed in a few steps (<a href="methods-reverse-checks.html#state-error">Grid and refinement of
+the sweep</a>). A refined solve also returns <code>$correction</code>,
+per seed column the first-order change of the seeded functional from the
+computed to the differentiated trajectory; value plus correction and the
+refined gradient belong to one function (<a href="methods-reverse-checks.html#value-correction">Value correction of
+the refined sweep</a>).</p>
 </div>
 <div class="section level2">
 <h2 id="example-michaelis-menten-conversion">Example: Michaelis-Menten conversion<a class="anchor" aria-label="anchor" href="#example-michaelis-menten-conversion"></a>
 </h2>
 <p><span class="math inline">\(x\)</span> converts into <span class="math inline">\(y\)</span> by Michaelis-Menten kinetics, <span class="math inline">\(y\)</span> degrades at first order and is observed
-at eleven time points, <span class="math inline">\(L = \sum_o
+at eleven time points, <span class="math inline">\(\mathcal{J} = \sum_o
 \bigl(y(t_o) - d_o\bigr)^2\)</span>. The cotangent <span class="math inline">\(w_o\)</span> holds <span class="math inline">\(2\bigl(y(t_o) - d_o\bigr)\)</span> in the column
 of <span class="math inline">\(y\)</span>. The <code><a href="../reference/cppODE.html">cppODE()</a></code>
 models use <code>bdf</code> and <code>rb4</code>.</p>
@@ -512,9 +550,9 @@ cotangent.</p>
 <span><span class="va">exact</span></span>
 <span><span class="co">#&gt;          x          y         k1         Km         k2 </span></span>
 <span><span class="co">#&gt; -1.4861036 -0.8366524  0.7868458 -0.5163659  9.5726795</span></span></code></pre></div>
-<p>A forward solve at <code>reltol = 1e-12</code> stands in for <span class="math inline">\(\nabla_\theta L\)</span>. The tables give the
-largest difference over the five entries, relative to the largest
-entry.</p>
+<p>A forward solve at <code>reltol = 1e-12</code> stands in for <span class="math inline">\(\nabla_\theta \mathcal{J}\)</span>. The tables
+give the largest difference over the five entries, relative to the
+largest entry.</p>
 <div class="sourceCode" id="cb3"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">gap</span> <span class="op">&lt;-</span> <span class="kw">function</span><span class="op">(</span><span class="va">a</span>, <span class="va">b</span><span class="op">)</span> <span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">a</span> <span class="op">-</span> <span class="va">b</span><span class="op">)</span><span class="op">)</span> <span class="op">/</span> <span class="fu"><a href="https://rdrr.io/r/base/Extremes.html" class="external-link">max</a></span><span class="op">(</span><span class="fu"><a href="https://rdrr.io/r/base/MathFun.html" class="external-link">abs</a></span><span class="op">(</span><span class="va">b</span><span class="op">)</span><span class="op">)</span></span>
 <span><span class="va">tols</span> <span class="op">&lt;-</span> <span class="fl">10</span><span class="op">^</span><span class="op">-</span><span class="op">(</span><span class="fl">4</span><span class="op">:</span><span class="fl">10</span><span class="op">)</span></span>
@@ -690,9 +728,11 @@ entry.</p>
 </tr>
 </tbody>
 </table>
-<p>The discrete adjoint matches the forward sensitivities to rounding,
-both being <span class="math inline">\(\nabla_\theta L_h\)</span>. The
-refined sweep differs from them by the order of the tolerance, being the
+<p>Under <code>rb4</code> the discrete adjoint matches the forward
+sensitivities to rounding, both being <span class="math inline">\(\nabla_\theta \mathcal{J}_h\)</span>. Under
+<code>bdf</code> the two differ by what the corrector iterations of the
+forward run leave, a gap that falls with the tolerance. The refined
+sweep differs from them by the order of the tolerance, being the
 derivative of the value plus <code>$correction</code>.</p>
 </div>
 <div class="section level2">
@@ -756,8 +796,16 @@ Naumann, <em>The art of differentiating computer programs:
 <span>An</span> introduction to algorithmic differentiation</em>. in
 Software, environments, and tools, no. 24. SIAM, 2012. doi: <a href="https://doi.org/10.1137/1.9781611972078" class="external-link">10.1137/1.9781611972078</a>.</div>
 </div>
-<div id="ref-cao2003adjoint" class="csl-entry">
+<div id="ref-hindmarsh2005sundials" class="csl-entry">
 <div class="csl-left-margin">[3] </div>
+<div class="csl-right-inline">A.
+C. Hindmarsh <em>et al.</em>, <span>“<span>SUNDIALS</span>:
+<span>Suite</span> of nonlinear and differential/algebraic equation
+solvers,”</span> <em>ACM Transactions on Mathematical Software
+(TOMS)</em>, vol. 31, no. 3, pp. 363–396, 2005, doi: <a href="https://doi.org/10.1145/1089014.1089020" class="external-link">10.1145/1089014.1089020</a>.</div>
+</div>
+<div id="ref-cao2003adjoint" class="csl-entry">
+<div class="csl-left-margin">[4] </div>
 <div class="csl-right-inline">Y.
 Cao, S. Li, L. Petzold, and R. Serban, <span>“Adjoint sensitivity
 analysis for differential-algebraic equations: <span>The</span> adjoint

@@ -213,7 +213,7 @@ over reverse</a>: Hessian-vector products.</li>
 SUNDIALS backend.</li>
 <li>
 <a href="methods-cppfun.html">Derivative directions of cppFUN()</a>:
-observation maps and reparametrizations.</li>
+observation maps and reparameterizations.</li>
 <li>
 <a href="methods-ptc.html">Steady states by pseudo-transient
 continuation</a>: <code><a href="../reference/ptc.html">ptc()</a></code> under conservation laws, stability
@@ -271,45 +271,59 @@ x\)</span></td>
 <td align="left">state Jacobian</td>
 </tr>
 <tr class="even">
+<td align="left"><span class="math inline">\(y = g(x, p)\)</span></td>
+<td align="left">observables, the prediction compared with data; the
+algebraic function of <code><a href="../reference/cppFUN.html">cppFUN()</a></code>
+</td>
+</tr>
+<tr class="odd">
 <td align="left"><span class="math inline">\(\theta \in
 \mathbb{R}^{M}\)</span></td>
 <td align="left">parameters of the derivatives, with <span class="math inline">\(x_0(\theta)\)</span>, <span class="math inline">\(p(\theta)\)</span>; <span class="math inline">\(\theta = (x_0, p)\)</span>, <span class="math inline">\(M = n_x + n_p\)</span> under the identity
 tangent</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td align="left"><span class="math inline">\(\partial(x_0,
 p)/\partial\theta\)</span></td>
 <td align="left">tangent of the inputs, argument <code>tangent</code> of
 <code><a href="../reference/solveODE.html">solveODE()</a></code>
 </td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td align="left"><span class="math inline">\(S = \partial
 x/\partial\theta \in \mathbb{R}^{n_x \times M}\)</span></td>
 <td align="left">sensitivity matrix</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td align="left">
 <span class="math inline">\(t_o\)</span>, <span class="math inline">\(o = 1, \dots, n_{\mathrm{obs}}\)</span>
 </td>
 <td align="left">output times, rows of the returned trajectory</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td align="left"><span class="math inline">\(w \in
 \mathbb{R}^{n_{\mathrm{obs}} \times n_x}\)</span></td>
 <td align="left">cotangent of the outputs, row <span class="math inline">\(w_o\)</span> at <span class="math inline">\(t_o\)</span>
 </td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td align="left"><span class="math inline">\(\lambda \in
 \mathbb{R}^{n_x}\)</span></td>
 <td align="left">adjoint state</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td align="left">
 <span class="math inline">\(\bar\theta\)</span>, <span class="math inline">\(\bar x_0\)</span>, <span class="math inline">\(\bar p\)</span>
 </td>
 <td align="left">cotangent of the inputs, the gradient of <span class="math inline">\(\sum_o w_o^{\mathsf T} x(t_o)\)</span>
+</td>
+</tr>
+<tr class="even">
+<td align="left"><span class="math inline">\(\mathcal{J}(\theta)\)</span></td>
+<td align="left">objective function of a fit, a scalar functional of the
+outputs; <span class="math inline">\(\bar\theta = \nabla_\theta
+\mathcal{J}\)</span> for <span class="math inline">\(w_o =
+\partial\mathcal{J}/\partial x(t_o)\)</span>
 </td>
 </tr>
 <tr class="odd">
@@ -345,7 +359,7 @@ t_n\)</span></td>
 </td>
 </tr>
 <tr class="odd">
-<td align="left"><span class="math inline">\(g_e(x, t,
+<td align="left"><span class="math inline">\(h_e(x, t,
 \theta)\)</span></td>
 <td align="left">root function of an event or switch</td>
 </tr>
@@ -369,8 +383,8 @@ derivatives of <span class="math inline">\(t^{*}\)</span>
 </td>
 </tr>
 <tr class="odd">
-<td align="left"><span class="math inline">\(\dot g_e = \partial
-g_e/\partial t + \nabla_x g_e \cdot f\)</span></td>
+<td align="left"><span class="math inline">\(\dot h_e = \partial
+h_e/\partial t + \nabla_x h_e \cdot f\)</span></td>
 <td align="left">rate of the root function along the trajectory</td>
 </tr>
 <tr class="even">

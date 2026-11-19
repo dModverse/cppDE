@@ -323,7 +323,7 @@ control</td>
   \qquad
   \hat{x}_{n+1} \;=\; x_n + \sum_{i=1}^{s} \hat{m}_i\, k_i.
 \]</span> Each stage <a href="#eq-rosenbrock-stage">(6)</a> is one
-linear solve, no Newton iteration; an accepted step costs one <span class="math inline">\(J\)</span>, one factorization of <span class="math inline">\(W\)</span>, five right-hand-side evaluations and
+linear solve, no Newton iteration; an accepted step costs one <span class="math inline">\(J\)</span>, one factorization of <span class="math inline">\(W\)</span>, six right-hand-side evaluations and
 six back-substitutions. The <a href="methods-coefficients.html#ros-coeffs">order-<span class="math inline">\(4\)</span> coefficients</a> of Hairer and Wanner
 <span class="citation"><a href="#ref-hairer2010solving">[3, Sec.
 IV.7]</a></span>, also used by the <code>rosenbrock4</code> stepper of

@@ -112,9 +112,11 @@
     
     
 <p><code><a href="../reference/cppODE.html">cppODE()</a></code> computes Hessian-vector products of a scalar
-functional by differentiating the reverse sweep in forward mode. Symbols
-are those of the <a href="methods-overview.html#notation">notation
-table</a>. R interface: <code>derivMode = "forward-reverse"</code> of <a href="../reference/cppODE.html"><code>cppODE()</code></a> and
+functional <span class="math inline">\(\mathcal{J}(\theta)\)</span> of
+the solution, such as the objective function of a fit, by
+differentiating the reverse sweep in forward mode. Symbols are those of
+the <a href="methods-overview.html#notation">notation table</a>. R
+interface: <code>derivMode = "forward-reverse"</code> of <a href="../reference/cppODE.html"><code>cppODE()</code></a> and
 <code>cotangent</code>, <code>tangent</code> and <code>curvature</code>
 of <a href="../reference/solveODE.html"><code>solveODE()</code></a>.</p>
 <div class="section level2">
@@ -123,15 +125,15 @@ of <a href="../reference/solveODE.html"><code>solveODE()</code></a>.</p>
 <p>For a fixed cotangent, <a href="methods-reverse.html#eq-adjoint-contraction">Reverse (1)</a>
 defines the gradient map <span id="eq-gradient-map"></span> <span class="math display">\[
   \bar\theta : \mathbb{R}^{M} \to \mathbb{R}^{M},
-  \qquad \theta \mapsto \nabla_\theta L(\theta), \tag{1}
+  \qquad \theta \mapsto \nabla_\theta \mathcal{J}(\theta), \tag{1}
 \]</span> with Jacobian <span class="math inline">\(\nabla^2_\theta
-L\)</span>. The sweep evaluating <a href="#eq-gradient-map">(1)</a> is
-generic in the scalar type. On <span class="math inline">\(\mathtt{dual}\langle\mathtt{double}\rangle\)</span>
+\mathcal{J}\)</span>. The sweep evaluating <a href="#eq-gradient-map">(1)</a> is generic in the scalar type. On <span class="math inline">\(\mathtt{dual}\langle\mathtt{double}\rangle\)</span>
 with <span class="math inline">\(N\)</span> tangent slots, seeded with
 <span class="math inline">\(V \in \mathbb{R}^{M \times N}\)</span>, it
-returns the exact <span class="math inline">\((\nabla_\theta L,\;
-\nabla^2_\theta L\,V)\)</span> <span class="citation"><a href="#ref-pearlmutter1994fast">[1]</a></span>; <span class="math inline">\(V = I_M\)</span> gives the Hessian. For an ODE
-this is the second-order adjoint <span class="citation"><a href="#ref-wang1992second">[2]</a>, <a href="#ref-ozyurt2005cheap">[3]</a></span>. The result
+returns the exact <span class="math inline">\((\nabla_\theta
+\mathcal{J},\; \nabla^2_\theta \mathcal{J}\,V)\)</span> <span class="citation"><a href="#ref-pearlmutter1994fast">[1]</a></span>;
+<span class="math inline">\(V = I_M\)</span> gives the Hessian. For an
+ODE this is the second-order adjoint <span class="citation"><a href="#ref-wang1992second">[2]</a>, <a href="#ref-ozyurt2005cheap">[3]</a></span>. The result
 <code>curvature</code>, of shape <span class="math inline">\([n_x + n_p,
 N, n_{\text{seed}}]\)</span>, comes with the <code>cotangent</code> and
 <code>tangent</code> of the same run.</p>
@@ -166,8 +168,8 @@ argument, an array <span class="math inline">\([n_{\mathrm{obs}}, n_x,
 n_{\mathrm{seed}}, N]\)</span>; without it the Hessian misses the
 dependence of the cotangent on <span class="math inline">\(\theta\)</span>, the gradient not. Differentiating
 <a href="methods-reverse.html#eq-adjoint-quadrature">Reverse (5)</a>
-along <span class="math inline">\(v\)</span> gives the state half <span class="math inline">\(\mu(t_0)\)</span> of <span class="math inline">\(\nabla^2_\theta L\,v\)</span> and the parameter
-half <span id="eq-soa-quadrature"></span> <span class="math display">\[
+along <span class="math inline">\(v\)</span> gives the state half <span class="math inline">\(\mu(t_0)\)</span> of <span class="math inline">\(\nabla^2_\theta \mathcal{J}\,v\)</span> and the
+parameter half <span id="eq-soa-quadrature"></span> <span class="math display">\[
   \int_{t_0}^{T}\left(
       \sum_k \frac{\partial f_k}{\partial p_m}\,\mu_k
     + \sum_k \lambda_k \left(
@@ -251,10 +253,13 @@ solve applies the implicit function theorem with the transposed matrix
 (<code>cppde_ad_lu.hpp</code> dense, <code>cppde_sparse_ad_lu.hpp</code>
 sparse). The iteration matrix of a <code>bdf</code> or
 <code>adams</code> corrector has none: the sweep solves against it on
-values, with the tangents as further right-hand sides. A generated model
-body releases on return the tangent storage it allocated, so the sweep
-binds the tangent storage of every buffer before passing it to the
-model, as the stepper does for internal buffers.</p>
+values, with the tangents as further right-hand sides. Under
+<code>bdf</code> the sweep solves the corrector equation (<a href="methods-reverse.html#adjoint-of-the-step-map">Adjoint of the step
+map</a>) with a stopping test on the values, so every block of
+directions takes the same iterations. A generated model body releases on
+return the tangent storage it allocated, so the sweep binds the tangent
+storage of every buffer before passing it to the model, as the stepper
+does for internal buffers.</p>
 </div>
 <div class="section level2 unnumbered">
 <h2 class="unnumbered" id="references">References<a class="anchor" aria-label="anchor" href="#references"></a>

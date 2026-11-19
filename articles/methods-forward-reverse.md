@@ -1,9 +1,10 @@
 # Second derivatives: forward over reverse
 
 [`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md)
-computes Hessian-vector products of a scalar functional by
-differentiating the reverse sweep in forward mode. Symbols are those of
-the [notation
+computes Hessian-vector products of a scalar functional
+\\\mathcal{J}(\theta)\\ of the solution, such as the objective function
+of a fit, by differentiating the reverse sweep in forward mode. Symbols
+are those of the [notation
 table](https://dmodverse.github.io/cppDE/articles/methods-overview.html#notation).
 R interface: `derivMode = "forward-reverse"` of
 [`cppODE()`](https://dmodverse.github.io/cppDE/reference/cppODE.md) and
@@ -15,17 +16,17 @@ R interface: `derivMode = "forward-reverse"` of
 For a fixed cotangent, [Reverse
 (1)](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#eq-adjoint-contraction)
 defines the gradient map \\ \bar\theta : \mathbb{R}^{M} \to
-\mathbb{R}^{M}, \qquad \theta \mapsto \nabla\_\theta L(\theta), \tag{1}
-\\ with Jacobian \\\nabla^2\_\theta L\\. The sweep evaluating
-[(1)](#eq-gradient-map) is generic in the scalar type. On
-\\\mathtt{dual}\langle\mathtt{double}\rangle\\ with \\N\\ tangent slots,
-seeded with \\V \in \mathbb{R}^{M \times N}\\, it returns the exact
-\\(\nabla\_\theta L,\\ \nabla^2\_\theta L\\V)\\
-[\[1\]](#ref-pearlmutter1994fast); \\V = I_M\\ gives the Hessian. For an
-ODE this is the second-order adjoint [\[2\]](#ref-wang1992second),
-[\[3\]](#ref-ozyurt2005cheap). The result `curvature`, of shape
-\\\[n_x + n_p, N, n\_{\text{seed}}\]\\, comes with the `cotangent` and
-`tangent` of the same run.
+\mathbb{R}^{M}, \qquad \theta \mapsto \nabla\_\theta
+\mathcal{J}(\theta), \tag{1} \\ with Jacobian \\\nabla^2\_\theta
+\mathcal{J}\\. The sweep evaluating [(1)](#eq-gradient-map) is generic
+in the scalar type. On \\\mathtt{dual}\langle\mathtt{double}\rangle\\
+with \\N\\ tangent slots, seeded with \\V \in \mathbb{R}^{M \times N}\\,
+it returns the exact \\(\nabla\_\theta \mathcal{J},\\ \nabla^2\_\theta
+\mathcal{J}\\V)\\ [\[1\]](#ref-pearlmutter1994fast); \\V = I_M\\ gives
+the Hessian. For an ODE this is the second-order adjoint
+[\[2\]](#ref-wang1992second), [\[3\]](#ref-ozyurt2005cheap). The result
+`curvature`, of shape \\\[n_x + n_p, N, n\_{\text{seed}}\]\\, comes with
+the `cotangent` and `tangent` of the same run.
 
 ## Second-order adjoint system
 
@@ -51,7 +52,7 @@ of the cotangent on \\\theta\\, the gradient not. Differentiating
 [Reverse
 (5)](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#eq-adjoint-quadrature)
 along \\v\\ gives the state half \\\mu(t_0)\\ of \\\nabla^2\_\theta
-L\\v\\ and the parameter half \\ \int\_{t_0}^{T}\left( \sum_k
+\mathcal{J}\\v\\ and the parameter half \\ \int\_{t_0}^{T}\left( \sum_k
 \frac{\partial f_k}{\partial p_m}\\\mu_k + \sum_k \lambda_k \left(
 \sum_j \frac{\partial^2 f_k}{\partial p_m\\ \partial x_j}\\\sigma_j +
 \sum_l \frac{\partial^2 f_k}{\partial p_m\\ \partial p_l}\\v_l
@@ -94,9 +95,14 @@ applies the implicit function theorem with the transposed matrix
 (`cppde_ad_lu.hpp` dense, `cppde_sparse_ad_lu.hpp` sparse). The
 iteration matrix of a `bdf` or `adams` corrector has none: the sweep
 solves against it on values, with the tangents as further right-hand
-sides. A generated model body releases on return the tangent storage it
-allocated, so the sweep binds the tangent storage of every buffer before
-passing it to the model, as the stepper does for internal buffers.
+sides. Under `bdf` the sweep solves the corrector equation ([Adjoint of
+the step
+map](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#adjoint-of-the-step-map))
+with a stopping test on the values, so every block of directions takes
+the same iterations. A generated model body releases on return the
+tangent storage it allocated, so the sweep binds the tangent storage of
+every buffer before passing it to the model, as the stepper does for
+internal buffers.
 
 ## References
 

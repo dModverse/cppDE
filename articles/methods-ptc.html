@@ -132,9 +132,10 @@ stable steady state, not any root.</p>
 <div class="section level2">
 <h2 id="continuation-step">Continuation step<a class="anchor" aria-label="anchor" href="#continuation-step"></a>
 </h2>
-<p>With <span class="math inline">\(M\)</span> the identity on the rows
-of <span class="math inline">\(f\)</span> and zero on the rows of <span class="math inline">\(C\)</span>, every step solves</p>
-<p><span class="math display">\[\left(\frac{M}{\Delta t} -
+<p>With <span class="math inline">\(I_f\)</span> the identity on the
+rows of <span class="math inline">\(f\)</span> and zero on the rows of
+<span class="math inline">\(C\)</span>, every step solves</p>
+<p><span class="math display">\[\left(\frac{I_f}{\Delta t} -
 \frac{\partial G}{\partial x}\right) d = G(x) \tag{2}\]</span></p>
 <p>for the step <span class="math inline">\(d\)</span> <span class="citation"><a href="#ref-kelley1998convergence">[1]</a>, <a href="#ref-coffey2003pseudotransient">[2]</a></span>. For small <span class="math inline">\(\Delta t\)</span>, (2) is an implicit Euler step
 of <span class="math inline">\(\dot x = f\)</span> on <span class="math inline">\(C x = b\)</span>; for <span class="math inline">\(\Delta t \to \infty\)</span> it is Newton’s method
@@ -157,9 +158,10 @@ back onto <span class="math inline">\(C x = b\)</span> by <span class="math inli
 <h2 id="pseudo-time-step-control">Pseudo-time step control<a class="anchor" aria-label="anchor" href="#pseudo-time-step-control"></a>
 </h2>
 <p>The first step is <span class="math inline">\(\Delta t_0 =
-\mathrm{dtInit} / \max_i |J_{ii}|\)</span>. The local error of an
-implicit Euler step is estimated as</p>
-<p><span class="math display">\[e = \left(\frac{M}{\Delta t} -
+\mathrm{dtInit} / \max_i |J_{ii}|\)</span> with
+<code>flow = TRUE</code>, <span class="math inline">\(\mathrm{dtInit}\)</span> otherwise. The local
+error of an implicit Euler step is estimated as</p>
+<p><span class="math display">\[e = \left(\frac{I_f}{\Delta t} -
 \frac{\partial G}{\partial x}\right)^{-1}
       \begin{pmatrix} \tfrac12 \bigl(f(x + d, p) - f(x, p)\bigr) \\ 0
 \end{pmatrix} , \tag{3}\]</span></p>

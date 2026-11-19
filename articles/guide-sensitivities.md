@@ -68,19 +68,19 @@ dimnames(solveODE(chain, times, parms, fixed = c("A", "B"))$tangent)$sens
 #> [1] "k1" "k2"
 ```
 
-## Reparametrization by a tangent
+## Reparameterization by a tangent
 
 `tangent` of
 [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md)
 is the Jacobian \\\partial(x_0, p)/\partial\theta\\ of a
-reparametrization. The result is then \\\partial x/\partial\theta\\, one
-column per direction, and the cost grows with the number of columns.
+reparameterization. The result is then \\\partial x/\partial\theta\\,
+one column per direction, and the cost grows with the number of columns.
 Three shapes are told apart by the rows:
 
 | rows | meaning |
 |:---|:---|
 | a subset of states and parameters, by name | partial: the missing rows are zero |
-| all states and parameters, states first | full: the whole Jacobian of the reparametrization |
+| all states and parameters, states first | full: the whole Jacobian of the reparameterization |
 | the states only | state-only: the parameter rows are the identity on the sensitivities |
 
 A partial tangent with the unit vectors of `k1` and `k2` gives the
@@ -197,7 +197,7 @@ out2$hessian[101, "B", , ]
 
 `hessian` of
 [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md)
-is the second derivative of the reparametrization, with the rows of
+is the second derivative of the reparameterization, with the rows of
 `tangent` and two dimensions of directions; the default treats the
 inputs as affine in \\\theta\\. On the log scale \\\partial^2
 k_i/\partial\theta_i^2 = k_i\\:

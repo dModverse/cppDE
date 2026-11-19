@@ -78,8 +78,8 @@ The [Guide](https://dmodverse.github.io/cppDE/articles/guide-model.md)
 treats events, second-order and reverse-mode derivatives, steady states,
 batches of conditions, algebraic functions and the SUNDIALS backend;
 [dMod2](https://dmodverse.github.io/dMod2/) builds observation
-functions, parameter transformations, objectives, optimizers and profile
-likelihoods on cppDE.
+functions, parameter transformations, objective functions, optimizers
+and profile likelihoods on cppDE.
 
 ## Helper for the figures
 

@@ -187,19 +187,22 @@ reduction.</caption>
 <p><em>Source.</em> Hindmarsh et al. <span class="citation"><a href="#ref-hindmarsh2005sundials">[2]</a></span>, the <span class="math inline">\(\ell\)</span>-vector formulation of CVODE;
 implemented in <code>cppde_multistepper.hpp</code> by
 <code>adams_set_coefficients()</code>.</p>
-<p>The coefficients depend on the step-size history and are recomputed
-from the Nordsieck array every step. With <span class="math inline">\(\xi_j = (t_{n+1} - t_{n+1-j})/h_n\)</span>, the
-recurrence <span class="math display">\[
-  \ell_0(q) \;=\; 1,
+<p>The coefficients depend on the past step sizes and are recomputed
+every step. With <span class="math inline">\(\xi_j = (t_{n+1} -
+t_{n+1-j})/h_n\)</span>, the correction vector <span class="math inline">\((\ell_0, \dots, \ell_q)\)</span> of the Nordsieck
+array holds the coefficients of the polynomial <span class="math inline">\(\Lambda(u) = \sum_{j=0}^{q} \ell_j u^j\)</span>
+with <span class="math display">\[
+  \Lambda(-1) \;=\; 0,
   \qquad
-  \ell_j(q) \;=\; \ell_{j-1}(q) \;+\; \xi_j^{-1},
-  \qquad j = 1, \dots, q,
-\]</span> followed by a polynomial expansion, yields the corrector
-weights <span class="math inline">\(\beta_0, \dots, \beta_q\)</span>. At
-constant step size they are the fixed-step values of <span class="citation"><a href="#ref-hairer2008solving">[3]</a>, Table
-III.1.1</span>. The controller selects <span class="math inline">\(q \in
-\{1, \dots, 12\}\)</span>; <span class="math inline">\(q_{\max} =
-12\)</span> is the CVODE default.</p>
+  \Lambda(0) \;=\; 1,
+  \qquad
+  \Lambda'(u) \;\propto\; \prod_{j=1}^{q-1} \bigl(1 + u/\xi_j\bigr),
+\]</span> and the weight of the implicit term is <span class="math inline">\(\beta_0 = 1/\ell_1\)</span>. At constant step size
+the corrector weights <span class="math inline">\(\beta_0, \dots,
+\beta_q\)</span> are the fixed-step values of <span class="citation"><a href="#ref-hairer2008solving">[3]</a>, Table III.1.1</span>. The
+controller selects <span class="math inline">\(q \in \{1, \dots,
+12\}\)</span>; <span class="math inline">\(q_{\max} = 12\)</span> is the
+CVODE default.</p>
 </div>
 <div class="section level2">
 <h2 id="ros-coeffs">Rosenbrock4 coefficients<a class="anchor" aria-label="anchor" href="#ros-coeffs"></a>

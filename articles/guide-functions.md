@@ -4,7 +4,7 @@
 compiles a system of algebraic equations \\y = g(x, p)\\, evaluated on
 the rows of a matrix of variables \\x\\ with parameters \\p\\ shared by
 all rows, with first and second derivatives. Typical uses are
-observation functions and reparametrizations of the inputs of
+observation functions and reparameterizations of the inputs of
 [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md).
 The equations follow the [expression
 language](https://dmodverse.github.io/cppDE/reference/expressions.md) of
@@ -34,7 +34,7 @@ joint
 [`compile()`](https://dmodverse.github.io/cppDE/reference/compile.md).
 
 The guide uses an observable \\y = s(A + B)\\ of the decay chain and the
-fraction \\z = B/(A + B)\\, a reparametrization \\k_i =
+fraction \\z = B/(A + B)\\, a reparameterization \\k_i =
 \exp(\lambda_i)\\, and an error model \\\sigma = \sqrt{a^2 + b^2 B^2}\\.
 
 ``` r
@@ -145,9 +145,9 @@ A tangent not given as an argument is taken from attribute `"deriv"` of
 the variables or parameters, a second derivative from attribute
 `"deriv2"`.
 
-## Reparametrization
+## Reparameterization
 
-A function of the parameters alone has no variables and one row. Its
+A function of the parameters alone has no variables and one row. The
 Jacobian, rows named by the outputs, is a partial `tangent` of
 [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md):
 the sensitivities are then derivatives in the logarithms \\\lambda_i\\

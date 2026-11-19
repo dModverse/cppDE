@@ -115,7 +115,7 @@
 a system of algebraic equations <span class="math inline">\(y = g(x,
 p)\)</span>, evaluated on the rows of a matrix of variables <span class="math inline">\(x\)</span> with parameters <span class="math inline">\(p\)</span> shared by all rows, with first and
 second derivatives. Typical uses are observation functions and
-reparametrizations of the inputs of <code><a href="../reference/solveODE.html">solveODE()</a></code>. The
+reparameterizations of the inputs of <code><a href="../reference/solveODE.html">solveODE()</a></code>. The
 equations follow the <a href="../reference/expressions.html">expression
 language</a> of <code><a href="../reference/cppODE.html">cppODE()</a></code>; the generated code is described
 in <a href="methods-cppfun.html">Derivative directions of
@@ -141,7 +141,7 @@ time. As with <code><a href="../reference/cppODE.html">cppODE()</a></code>, <cod
 the default) writes the source to <code>outdir</code> for a joint
 <code><a href="../reference/compile.html">compile()</a></code>.</p>
 <p>The guide uses an observable <span class="math inline">\(y = s(A +
-B)\)</span> of the decay chain and the fraction <span class="math inline">\(z = B/(A + B)\)</span>, a reparametrization <span class="math inline">\(k_i = \exp(\lambda_i)\)</span>, and an error model
+B)\)</span> of the decay chain and the fraction <span class="math inline">\(z = B/(A + B)\)</span>, a reparameterization <span class="math inline">\(k_i = \exp(\lambda_i)\)</span>, and an error model
 <span class="math inline">\(\sigma = \sqrt{a^2 + b^2 B^2}\)</span>.</p>
 <div class="sourceCode" id="cb2"><pre class="downlit sourceCode r">
 <code class="sourceCode R"><span><span class="va">eqns</span>  <span class="op">&lt;-</span> <span class="fu"><a href="https://rdrr.io/r/base/c.html" class="external-link">c</a></span><span class="op">(</span>A <span class="op">=</span> <span class="st">"-k1*A"</span>, B <span class="op">=</span> <span class="st">"k1*A - k2*B"</span><span class="op">)</span></span>
@@ -237,9 +237,9 @@ s)\)</span>:</p>
 from attribute <code>"deriv2"</code>.</p>
 </div>
 <div class="section level2">
-<h2 id="reparametrization">Reparametrization<a class="anchor" aria-label="anchor" href="#reparametrization"></a>
+<h2 id="reparameterization">Reparameterization<a class="anchor" aria-label="anchor" href="#reparameterization"></a>
 </h2>
-<p>A function of the parameters alone has no variables and one row. Its
+<p>A function of the parameters alone has no variables and one row. The
 Jacobian, rows named by the outputs, is a partial <code>tangent</code>
 of <code><a href="../reference/solveODE.html">solveODE()</a></code>: the sensitivities are then derivatives in
 the logarithms <span class="math inline">\(\lambda_i\)</span> of the

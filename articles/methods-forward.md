@@ -22,9 +22,9 @@ primal and sensitivities. As a first-order Taylor expansion in
 \\\varepsilon\\, with \\\tilde y = y + y'\varepsilon\\, \\ \tilde x +
 \tilde y = (x+y) + (x'+y')\varepsilon, \qquad \tilde x \cdot \tilde y =
 xy + (xy' + x'y)\varepsilon, \\ and for any smooth scalar function
-\\g\\, \\ g(\tilde x) = g(x) + g'(x)\\x'\\\varepsilon. \\ By
-composition, \\f\\ called with dual inputs returns \\f\\ with the
-directional derivative.
+\\\varphi\\, \\ \varphi(\tilde x) = \varphi(x) +
+\varphi'(x)\\x'\\\varepsilon. \\ By composition, \\f\\ called with dual
+inputs returns \\f\\ with the directional derivative.
 
 ## Tangent storage
 
@@ -56,7 +56,7 @@ cost proportional to \\n_p\\, without forming \\\partial f/\partial x\\.
 
 ## Seeding of the tangent
 
-For a reparametrization \\(x_0, p) = \Phi(\theta)\\, \\\theta \in
+For a reparameterization \\(x_0, p) = \Phi(\theta)\\, \\\theta \in
 \mathbb{R}^M\\, \\ S\_\theta = \frac{\partial x}{\partial \theta} \in
 \mathbb{R}^{n_x \times M}, \\ and by the chain rule
 [(1)](#eq-sensitivity-p) becomes \\ \dot S\_\theta = \frac{\partial
@@ -91,7 +91,10 @@ The BDF/NDF corrector uses the same maximum, so an unconverged
 sensitivity direction forces further iterations or a smaller step. With
 `sensErrCon = FALSE`, error test, order selection, corrector test and
 initial-step estimate use the state only, and steps and iteration counts
-are those of a value run.
+are those of a value run up to rounding: the values over dual numbers
+and over double can differ in the last bits, and on a long stiff run the
+controller amplifies such a difference until a step decision parts the
+two sequences.
 
 ## Corrector iterations
 
@@ -101,8 +104,9 @@ run on dual numbers: each tangent takes the iterations of the values,
 against the same \\W\\ and without the derivative of \\W\\, which like
 the step size is a solver decision. With `sensErrCon = FALSE` the
 sensitivities are the derivative of the computed solution on the grid of
-a value run, as the reverse mode returns ([Reverse
-mode](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#discrete-and-continuous-adjoints)).
+a value run, as the reverse mode of `adams` returns; that of `bdf`
+solves the corrector equations instead ([Reverse
+mode](https://dmodverse.github.io/cppDE/articles/methods-reverse.html#adjoint-of-the-step-map)).
 
 ## References
 

@@ -150,9 +150,13 @@ scheme that produced it.</p>
 the maximum over the sensitivity columns, <a href="methods-forward.html#eq-wrms-sens">Forward (4)</a>, since their
 errors accumulate (as <code>CVodeSetSensErrCon</code>). The grid is
 finer and the values differ from a value run by <span class="math inline">\(O(\mathrm{tol})\)</span>.</li>
-<li>Reverse: the value pass takes the value-run grid, as the forward run
-of the CVODES adjoint does, so the gradient is the derivative of the
-trajectory a value run returns.</li>
+<li>Reverse: the value pass is a value run, as the forward run of the
+CVODES adjoint is, so the gradient is the derivative of the scheme on
+the grid a value run takes, under <code>bdf</code> with the corrector
+equations solved.</li>
+<li>Forward with <code>sensErrCon = FALSE</code>: the decisions of a
+value run, taken on dual numbers. Rounding can part the two step
+sequences on a long stiff run.</li>
 </ul>
 </div>
 <div class="section level2">
@@ -234,27 +238,29 @@ j\)</span> steps of <span class="math inline">\(h_j = H/n_j\)</span>,
   \bigl(h_j^{-1} I - J_0\bigr)\, D_k = f(x_k, t_k), \qquad x_{k+1} = x_k
 + D_k, \tag{3}
 \]</span> with <span class="math inline">\(J_0\)</span> the Jacobian at
-the interval start. As a W-method, consistent for any matrix in place of
-the Jacobian, a chain has an error expansion in powers of <span class="math inline">\(h_j\)</span>, and the Aitken-Neville tableau <span class="math inline">\(T_{j,k} = T_{j,k-1} + (T_{j,k-1} - T_{j-1,k-1}) /
+the start of the interval or of a later interval of the same length, at
+most ten intervals back. As a W-method, consistent for any matrix in
+place of the Jacobian, a chain has an error expansion in powers of <span class="math inline">\(h_j\)</span>, and the Aitken-Neville tableau <span class="math inline">\(T_{j,k} = T_{j,k-1} + (T_{j,k-1} - T_{j-1,k-1}) /
 (n_j/n_{j-k} - 1)\)</span> raises the order by one per column. Chain
-<span class="math inline">\(j\)</span> costs one factorization of <span class="math inline">\(h_j^{-1} I - J_0\)</span> (a diagonal change of
-one Jacobian), <span class="math inline">\(n_j\)</span> right-hand sides
-and <span class="math inline">\(n_j\)</span> solves.</p>
+<span class="math inline">\(j\)</span> costs <span class="math inline">\(n_j\)</span> right-hand sides, <span class="math inline">\(n_j\)</span> solves and one factorization of <span class="math inline">\(h_j^{-1} I - J_0\)</span>, which serves every
+interval of the same length on that <span class="math inline">\(J_0\)</span>.</p>
 <p><span class="math inline">\(T_{j,j}\)</span> is a fixed linear
 combination of the chain end states, so the tableau is built on the
 chain adjoints (start-state cotangent and interval gradient share), each
 swept back on the factorization of that chain. A step of <a href="#eq-lie-chain">(3)</a> passes <span class="math inline">\(\mu_k =
-(h_j^{-1} I - J_0)^{-\mathsf T} \lambda_{k+1}\)</span> to <span class="math inline">\(x_k\)</span> through <span class="math inline">\(J(x_k)^{\mathsf T} \mu_k\)</span>, to <span class="math inline">\(\theta\)</span> through <span class="math inline">\((\partial f/\partial\theta)(x_k)^{\mathsf T}
-\mu_k\)</span>, and through <span class="math inline">\(J_0\)</span> to
-the start of the interval: <span class="math inline">\(\sum_k
-\mu_k^{\mathsf T} (\partial J_0)\, D_k\)</span> is one bilinear form
-over the Jacobian pattern, <span class="math inline">\(B_{rc} = \sum_k
-\mu_{k,r} D_{k,c}\)</span>, pulled back by the generated code in one
-evaluation. <span class="math inline">\(e_j = T_{j,j} -
-T_{j,j-1}\)</span> estimates the error of <span class="math inline">\(T_{j,j-1}\)</span>; the returned <span class="math inline">\(T_{j,j}\)</span> has the error estimate <span class="math inline">\(e_j \min(1, e_j/e_{j-1})\)</span>, the rate of the
-last two differences applied one column on, as CVODES estimates the
-error of the solution it returns. The first column passing <a href="#eq-refine-test">(2)</a> is taken. An interval failing at the
-eighth column is halved, and an observation inside an interval cuts it;
+(h_j^{-1} I - J_0)^{-\mathsf T} \lambda_{k+1}\)</span> to <span class="math inline">\(x_k\)</span> through <span class="math inline">\(J(x_k)^{\mathsf T} \mu_k\)</span> and to <span class="math inline">\(\theta\)</span> through <span class="math inline">\((\partial f/\partial\theta)(x_k)^{\mathsf T}
+\mu_k\)</span>; <span class="math inline">\(J_0\)</span> is a constant
+of the map. Several seed columns share the chains and the
+factorizations, the tableau holds the adjoints of all of them, and an
+interval passes when every column passes. <span class="math inline">\(e_j = T_{j,j} - T_{j,j-1}\)</span> estimates the
+error of <span class="math inline">\(T_{j,j-1}\)</span>; the returned
+<span class="math inline">\(T_{j,j}\)</span> has the error estimate
+<span class="math inline">\(e_j \min(1, e_j/e_{j-1})\)</span>, the rate
+of the last two differences applied one column on, as CVODES estimates
+the error of the solution it returns. The first column passing <a href="#eq-refine-test">(2)</a> is taken. An interval failing at the
+eighth column on a <span class="math inline">\(J_0\)</span> from a later
+interval is swept again on the Jacobian at the interval start, and
+halved if it fails there too. An observation inside an interval cuts it;
 the new piece starts from the state reached forward under the state
 error test.</p>
 <p><strong>Limits.</strong> A one-step step takes at most 1024 substeps,
@@ -270,10 +276,10 @@ error.</p>
 <p>The refined sweep replaces each step or interval by the map whose
 adjoint passed the test, linearized at the stored states. With the
 observation seeds <span class="math inline">\(w_o\)</span> it
-differentiates <span class="math inline">\(J = \sum_o w_o^{\mathsf T}
-x(t_o)\)</span>, whose first-order change equals that of a nonlinear
-<span class="math inline">\(L\)</span> with <span class="math inline">\(w_o = \partial L/\partial x(t_o)\)</span>. A
-refined solve returns this change per seed column as
+differentiates the linear functional <span class="math inline">\(\sum_o
+w_o^{\mathsf T} x(t_o)\)</span>, whose first-order change equals that of
+a nonlinear <span class="math inline">\(\mathcal{J}\)</span> with <span class="math inline">\(w_o = \partial \mathcal{J}/\partial
+x(t_o)\)</span>. A refined solve returns this change per seed column as
 <code>$correction</code>, <span id="eq-value-correction"></span> <span class="math display">\[
   C = \sum_n \Bigl[\lambda_{n+1}^{\mathsf T}\bigl(\tilde\Phi_n(x^h_n) -
 x^h_{n+1}\bigr)

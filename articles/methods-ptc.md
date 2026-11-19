@@ -23,10 +23,10 @@ stable steady state, not any root.
 
 ## Continuation step
 
-With \\M\\ the identity on the rows of \\f\\ and zero on the rows of
+With \\I_f\\ the identity on the rows of \\f\\ and zero on the rows of
 \\C\\, every step solves
 
-\\\left(\frac{M}{\Delta t} - \frac{\partial G}{\partial x}\right) d =
+\\\left(\frac{I_f}{\Delta t} - \frac{\partial G}{\partial x}\right) d =
 G(x) \tag{2}\\
 
 for the step \\d\\ [\[1\]](#ref-kelley1998convergence),
@@ -48,10 +48,11 @@ residual scale of (4), columns by \\\|x_i\| + \mathrm{abstol}\\.
 
 ## Pseudo-time step control
 
-The first step is \\\Delta t_0 = \mathrm{dtInit} / \max_i \|J\_{ii}\|\\.
-The local error of an implicit Euler step is estimated as
+The first step is \\\Delta t_0 = \mathrm{dtInit} / \max_i \|J\_{ii}\|\\
+with `flow = TRUE`, \\\mathrm{dtInit}\\ otherwise. The local error of an
+implicit Euler step is estimated as
 
-\\e = \left(\frac{M}{\Delta t} - \frac{\partial G}{\partial
+\\e = \left(\frac{I_f}{\Delta t} - \frac{\partial G}{\partial
 x}\right)^{-1} \begin{pmatrix} \tfrac12 \bigl(f(x + d, p) - f(x,
 p)\bigr) \\ 0 \end{pmatrix} , \tag{3}\\
 

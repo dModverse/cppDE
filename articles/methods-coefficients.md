@@ -39,15 +39,17 @@ since the BDF5 angle of \\51^\circ\\ leaves no room for reduction.
 \\\ell\\-vector formulation of CVODE; implemented in
 `cppde_multistepper.hpp` by `adams_set_coefficients()`.
 
-The coefficients depend on the step-size history and are recomputed from
-the Nordsieck array every step. With \\\xi_j = (t\_{n+1} -
-t\_{n+1-j})/h_n\\, the recurrence \\ \ell_0(q) \\=\\ 1, \qquad \ell_j(q)
-\\=\\ \ell\_{j-1}(q) \\+\\ \xi_j^{-1}, \qquad j = 1, \dots, q, \\
-followed by a polynomial expansion, yields the corrector weights
-\\\beta_0, \dots, \beta_q\\. At constant step size they are the
-fixed-step values of [\[3\]](#ref-hairer2008solving), Table III.1.1. The
-controller selects \\q \in \\1, \dots, 12\\\\; \\q\_{\max} = 12\\ is the
-CVODE default.
+The coefficients depend on the past step sizes and are recomputed every
+step. With \\\xi_j = (t\_{n+1} - t\_{n+1-j})/h_n\\, the correction
+vector \\(\ell_0, \dots, \ell_q)\\ of the Nordsieck array holds the
+coefficients of the polynomial \\\Lambda(u) = \sum\_{j=0}^{q} \ell_j
+u^j\\ with \\ \Lambda(-1) \\=\\ 0, \qquad \Lambda(0) \\=\\ 1, \qquad
+\Lambda'(u) \\\propto\\ \prod\_{j=1}^{q-1} \bigl(1 + u/\xi_j\bigr), \\
+and the weight of the implicit term is \\\beta_0 = 1/\ell_1\\. At
+constant step size the corrector weights \\\beta_0, \dots, \beta_q\\ are
+the fixed-step values of [\[3\]](#ref-hairer2008solving), Table III.1.1.
+The controller selects \\q \in \\1, \dots, 12\\\\; \\q\_{\max} = 12\\ is
+the CVODE default.
 
 ## Rosenbrock4 coefficients
 

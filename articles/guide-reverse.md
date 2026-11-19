@@ -4,9 +4,11 @@ Reverse mode returns the gradient of a functional of the trajectory in
 one backward sweep, at a cost independent of the number of parameters.
 cppDE differentiates the discretization itself ([discrete
 adjoint](https://dmodverse.github.io/cppDE/articles/methods-reverse.md)):
-forward and reverse derivatives agree to the integration tolerance, and
-to rounding with `sensErrCon = FALSE` in forward mode, which puts both
-on the step grid of the values.
+forward and reverse derivatives agree to the integration tolerance.
+`sensErrCon = FALSE` puts the forward mode on the step grid of the
+values as well; the two then agree to rounding under `adams` and up to
+the corrector iterations under `bdf`, whose sweep solves the corrector
+equations.
 
 ``` r
 
@@ -91,9 +93,10 @@ solveODE(rev, times, parms, cotangent = W)$cotangent
 
 ## Gradient of an objective
 
-For \\L = \sum_t (B(t) - y_t)^2\\ the cotangent is \\\partial L /
-\partial B(t) = 2\\(B(t) - y_t)\\. It depends on the solution, so the
-forward pass runs first: with `keepStore = TRUE` and no cotangent,
+For \\\mathcal{J} = \sum_t (B(t) - y_t)^2\\ the cotangent is \\\partial
+\mathcal{J} / \partial B(t) = 2\\(B(t) - y_t)\\. It depends on the
+solution, so the forward pass runs first: with `keepStore = TRUE` and no
+cotangent,
 [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md)
 returns the values and keeps the checkpoints as `$store`. A solve given
 the `store` at the same `times` and `parms` integrates nothing and runs

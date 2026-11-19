@@ -14,8 +14,8 @@ and second derivatives of \\g\\, named as the derivatives of
 [`solveODE()`](https://dmodverse.github.io/cppDE/reference/solveODE.md).
 The variables \\x\\ are the rows of an \\n\_{\mathrm{obs}} \times n_x\\
 matrix, one per observation; the parameters \\p\\ are shared by all
-rows. Typical uses: observation maps and reparametrizations \\(x_0, p) =
-\Phi(\theta)\\, the Jacobian being the tangent of [Forward
+rows. Typical uses: observation maps and reparameterizations \\(x_0, p)
+= \Phi(\theta)\\, the Jacobian being the tangent of [Forward
 (2)](https://dmodverse.github.io/cppDE/articles/methods-forward.html#eq-sensitivity-theta).
 
 From the [expression

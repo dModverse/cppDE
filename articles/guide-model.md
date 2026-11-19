@@ -78,8 +78,8 @@ is the independent variable and `pi` the number.
 [`compile()`](https://dmodverse.github.io/cppDE/reference/compile.md)
 builds the generated sources. With `output` they link into one shared
 object in the directory of the first source; `cores` runs the compiler
-jobs in parallel, `args` appends compiler or linker flags,
-`verbose = TRUE` shows the commands.
+jobs in parallel, `args` appends compiler flags, `verbose = TRUE` shows
+the commands.
 
 ``` r
 
