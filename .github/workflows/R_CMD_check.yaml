@@ -1,12 +1,30 @@
 # Workflow derived from https://github.com/r-lib/actions/tree/v2/examples
 # Need help debugging build failures? Start at https://github.com/r-lib/actions#where-to-find-help
+# Runs on push to master and on every pull request; docs-only changes run no check.
 on:
   push:
     branches: [main, master]
+    paths-ignore:
+      - 'vignettes/articles/**'
+      - 'dev/**'
+      - 'benchmarks/**'
+      - '**.md'
+      - '_pkgdown.yml'
+      - 'pkgdown/**'
   pull_request:
-  # No tags and no devel branches: a tag push would double the run of the
-  # commit it points at. Dispatch one when a branch is ready to be judged.
+    paths-ignore:
+      - 'vignettes/articles/**'
+      - 'dev/**'
+      - 'benchmarks/**'
+      - '**.md'
+      - '_pkgdown.yml'
+      - 'pkgdown/**'
   workflow_dispatch:
+
+# a new push cancels the outdated run of the same branch or pull request
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 name: R-CMD-check
 
