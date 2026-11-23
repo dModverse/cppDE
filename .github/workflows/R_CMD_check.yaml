@@ -44,6 +44,7 @@ jobs:
           - {os: windows-latest, r: 'release'}
           - {os: ubuntu-latest,   r: 'devel', http-user-agent: 'release'}
           - {os: ubuntu-latest,   r: 'release'}
+          - {os: ubuntu-latest,   r: 'oldrel-1'}
 
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
@@ -90,7 +91,7 @@ jobs:
       - uses: r-lib/actions/check-r-package@v2
         with:
           upload-snapshots: true
-          build_args: '"--no-manual"'
+          build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
 
   # R on FlexiBLAS, with SymPy/SUNDIALS/KLU packaged: the only job that runs the
   # test suite, i.e. the generate -> compile -> dyn.load path.
