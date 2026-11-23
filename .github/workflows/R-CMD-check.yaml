@@ -31,7 +31,23 @@ name: R-CMD-check
 permissions: read-all
 
 jobs:
+  # a tree that already passed this workflow, e.g. a pull request merged by fast-forward, is not
+  # checked again; the skipped jobs count as passed
+  pre:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip.outputs.should_skip }}
+    steps:
+      - id: skip
+        uses: fkirc/skip-duplicate-actions@v5
+        with:
+          skip_after_successful_duplicate: 'true'
+          concurrent_skipping: 'never'
+          do_not_skip: '["workflow_dispatch", "schedule"]'
+
   R-CMD-check:
+    needs: pre
+    if: needs.pre.outputs.should_skip != 'true'
     runs-on: ${{ matrix.config.os }}
 
     name: ${{ matrix.config.os }} (${{ matrix.config.r }})
@@ -96,6 +112,8 @@ jobs:
   # R on FlexiBLAS, with SymPy/SUNDIALS/KLU packaged: the only job that runs the
   # test suite, i.e. the generate -> compile -> dyn.load path.
   fedora:
+    needs: pre
+    if: needs.pre.outputs.should_skip != 'true'
     runs-on: ubuntu-latest
 
     name: fedora (R release, gcc/FlexiBLAS)
