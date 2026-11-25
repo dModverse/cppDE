@@ -1,5 +1,11 @@
 # Changelog
 
+## cppDE 0.13.16
+
+- A product with a constant and a quotient by a constant have finite
+  first and second derivatives where the other operand is infinite:
+  `exp10(x)` at `x = -Inf` gives 0, not NaN.
+
 ## cppDE 0.13.15
 
 - The reverse and forward-reverse modes of `bdf` solve the corrector

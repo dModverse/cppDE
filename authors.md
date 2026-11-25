@@ -26,13 +26,13 @@ Source:
 [`DESCRIPTION`](https://github.com/dModverse/cppDE/blob/master/DESCRIPTION)
 
 Beyer S (2026). *cppDE: 'C++' Code Generation for ODEs with Sensitivity
-Propagation*. R package version 0.13.15,
+Propagation*. R package version 0.13.16,
 <https://dmodverse.github.io/cppDE/>.
 
     @Manual{,
       title = {cppDE: 'C++' Code Generation for ODEs with Sensitivity Propagation},
       author = {Simon Beyer},
       year = {2026},
-      note = {R package version 0.13.15},
+      note = {R package version 0.13.16},
       url = {https://dmodverse.github.io/cppDE/},
     }

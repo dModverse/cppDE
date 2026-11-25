@@ -13,7 +13,7 @@
 
     <a class="navbar-brand me-2" href="../index.html">cppDE</a>
 
-    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.13.15</small>
+    <small class="nav-text text-muted me-auto" data-bs-toggle="tooltip" data-bs-placement="bottom" title="">0.13.16</small>
 
 
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbar" aria-controls="navbar" aria-expanded="false" aria-label="Toggle navigation">
@@ -78,6 +78,10 @@
       <small>Source: <a href="https://github.com/dModverse/cppDE/blob/master/NEWS.md" class="external-link"><code>NEWS.md</code></a></small>
     </div>
 
+    <div class="section level2">
+<h2 class="pkg-version" data-toc-text="0.13.16" id="cppde-01316">cppDE 0.13.16<a class="anchor" aria-label="anchor" href="#cppde-01316"></a></h2>
+<ul><li>A product with a constant and a quotient by a constant have finite first and second derivatives where the other operand is infinite: <code>exp10(x)</code> at <code>x = -Inf</code> gives 0, not NaN.</li>
+</ul></div>
     <div class="section level2">
 <h2 class="pkg-version" data-toc-text="0.13.15" id="cppde-01315">cppDE 0.13.15<a class="anchor" aria-label="anchor" href="#cppde-01315"></a></h2>
 <ul><li>The reverse and forward-reverse modes of <code>bdf</code> solve the corrector equation of every step in the backward sweep, to a tenth of the local error test of the backward problem against <code>reltol</code> and <code>abstol</code>, tested on the values: against the iteration matrix of the forward run and, where that cannot reach the test within ten iterations, against the iteration matrix at the accepted state. The gradient is the derivative of the method with the corrector equations solved, and so is the Hessian of forward-reverse. The forward sensitivities with <code>sensErrCon = FALSE</code> take the corrector iterations of the value run and differ from it by what those iterations leave unconverged. Under <code>adams</code> the sweep transposes the iterations taken: the exactly solved Adams-Moulton step can be unstable on a stiff model at the step sizes of the value run.</li>
