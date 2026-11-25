@@ -119,6 +119,9 @@ struct ScalarLeaf2 : Expr2nd<ScalarLeaf2<T>> {
   CPPDE_ET2_INLINE unsigned width() const { return 0u; }
 };
 
+template<class X> struct is_scalar_leaf2 : std::false_type {};
+template<class T> struct is_scalar_leaf2<ScalarLeaf2<T>> : std::true_type {};
+
 // ===========================================================================
 // Op tags for binary arithmetic. Each provides static methods:
 //   value(av, bv)                       -> y
@@ -200,12 +203,19 @@ struct BinExpr2 : Expr2nd<BinExpr2<L, R, Op>> {
       dep_(l_.any_depend() || r_.any_depend()) {}
 
   CPPDE_ET2_INLINE value_type eval_value() const { return y_; }
+  // a constant factor or divisor adds no derivative term, also where the other operand is infinite
   CPPDE_ET2_INLINE value_type eval_d1(unsigned i) const {
-    return Op::d1(l_.eval_value(), r_.eval_value(),
-                  l_.eval_d1(i), r_.eval_d1(i), y_);
+    if constexpr (std::is_same_v<Op, MulOp2> && is_scalar_leaf2<L>::value) return l_.eval_value() * r_.eval_d1(i);
+    else if constexpr (std::is_same_v<Op, MulOp2> && is_scalar_leaf2<R>::value) return l_.eval_d1(i) * r_.eval_value();
+    else if constexpr (std::is_same_v<Op, DivOp2> && is_scalar_leaf2<R>::value) return l_.eval_d1(i) / r_.eval_value();
+    else return Op::d1(l_.eval_value(), r_.eval_value(),
+                       l_.eval_d1(i), r_.eval_d1(i), y_);
   }
   CPPDE_ET2_INLINE value_type eval_d2(unsigned i, unsigned j) const {
-    return Op::d2(l_.eval_value(), r_.eval_value(),
+    if constexpr (std::is_same_v<Op, MulOp2> && is_scalar_leaf2<L>::value) return l_.eval_value() * r_.eval_d2(i, j);
+    else if constexpr (std::is_same_v<Op, MulOp2> && is_scalar_leaf2<R>::value) return l_.eval_d2(i, j) * r_.eval_value();
+    else if constexpr (std::is_same_v<Op, DivOp2> && is_scalar_leaf2<R>::value) return l_.eval_d2(i, j) / r_.eval_value();
+    else return Op::d2(l_.eval_value(), r_.eval_value(),
                   l_.eval_d1(i), r_.eval_d1(i),
                   l_.eval_d1(j), r_.eval_d1(j),
                   l_.eval_d2(i, j), r_.eval_d2(i, j), y_);

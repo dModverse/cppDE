@@ -19,7 +19,12 @@ d2prim <- cppFUN(prims, parameters = pars, deriv = TRUE, deriv2 = TRUE,
                  derivMode = "forward", modelname = "d2prim")
 d1prim <- cppFUN(prims, parameters = pars, deriv = TRUE,
                  derivMode = "forward", modelname = "d1prim")
-compile(d2prim, d1prim, output = "test_dual2nd_primitives", cores = test_cores())
+# a constant times or over a parameter at -Inf
+infs <- c(ten = "exp10(x)", mul = "exp(2*x)", mulr = "exp(x*2)", div = "exp(x/2)", lin = "2*x")
+d2inf <- cppFUN(infs, parameters = "x", deriv = TRUE, deriv2 = TRUE,
+                derivMode = "forward", modelname = "d2inf")
+d1inf <- cppFUN(infs, parameters = "x", deriv = TRUE, derivMode = "forward", modelname = "d1inf")
+compile(d2prim, d1prim, d2inf, d1inf, output = "test_dual2nd_primitives", cores = test_cores())
 
 # Points away from every singularity of the primitives above, one per row,
 # with a and b positive so that the oracles of atan2 hold.
@@ -66,4 +71,13 @@ test_that("the Hessian comes out symmetric entry by entry", {
   out <- do.call(d2prim$hess, as.list(pts[1, ]))
   for (nm in names(prims))
     expect_identical(out[1, nm, , ], t(out[1, nm, , ]), info = nm)
+})
+
+test_that("a constant factor or divisor gives finite derivatives at an infinite parameter", {
+  dy <- c(ten = 0, mul = 0, mulr = 0, div = 0, lin = 2)
+  expect_equal(d1inf$jac(x = -Inf)[1, names(infs), "x"], dy)
+  out <- d2inf$evaluate(x = -Inf, tangentP = matrix(1, 1, 1, dimnames = list("x", "x")),
+                        hessianP = array(0, c(1, 1, 1), dimnames = list("x", "x", "x")), deriv2 = TRUE)
+  expect_equal(out$tangent[1, names(infs), "x"], dy)
+  expect_equal(out$hessian[1, names(infs), "x", "x"], setNames(numeric(5), names(infs)))
 })

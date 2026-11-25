@@ -142,6 +142,9 @@ struct ScalarLeaf : Expr<ScalarLeaf<T>> {
 // tangent() takes the cached operand vals + per-index operand tangents + the
 // node's own cached y_ where useful (Div).
 // =============================================================================
+template<class X> struct is_scalar_leaf : std::false_type {};
+template<class T> struct is_scalar_leaf<ScalarLeaf<T>> : std::true_type {};
+
 struct AddOp {
   template<class T> static T value(const T& a, const T& b) { return a + b; }
   template<class T> static T tangent(const T&, const T&,
@@ -196,8 +199,12 @@ struct BinExpr : Expr<BinExpr<L, R, Op>> {
   CPPDE_ET_INLINE value_type val()      const { return y_; }
   CPPDE_ET_INLINE unsigned   tan_size() const { return sz_; }
   CPPDE_ET_INLINE bool       depends()  const { return dep_; }
+  // a constant factor or divisor adds no tangent term, also where the other operand is infinite
   CPPDE_ET_INLINE value_type tan(unsigned i) const {
-    return Op::tangent(l_.val(), r_.val(), l_.tan(i), r_.tan(i), y_);
+    if constexpr (std::is_same_v<Op, MulOp> && is_scalar_leaf<L>::value) return l_.val() * r_.tan(i);
+    else if constexpr (std::is_same_v<Op, MulOp> && is_scalar_leaf<R>::value) return l_.tan(i) * r_.val();
+    else if constexpr (std::is_same_v<Op, DivOp> && is_scalar_leaf<R>::value) return l_.tan(i) / r_.val();
+    else return Op::tangent(l_.val(), r_.val(), l_.tan(i), r_.tan(i), y_);
   }
 };
 
